@@ -23,7 +23,8 @@
         {% endif %}
     </div>
 
-    <form method="POST" action="{{ action_url }}" class="space-y-6">
+    <form method="POST" action="{{ action_url }}" class="space-y-6"
+          {% if is_new %}x-data="{ step: 1, totalSteps: 3 }"{% endif %}>
         {% include "components/forms/csrf_input.html" %}
         {% if error %}
         <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
@@ -44,7 +45,28 @@
         <input type="hidden" name="account_id" value="{{ subscription.account_id }}">
         {% endif %}
 
-        {# Main subscription details #}
+        {# ── Step Indicator (new subscriptions only) ── #}
+        {% if is_new %}
+        <div class="flex items-center justify-center gap-2">
+            <template x-for="s in totalSteps" :key="s">
+                <div class="flex items-center gap-2">
+                    <button type="button" @click="step = s"
+                            :class="s <= step ? 'bg-violet-600 text-white shadow-sm' : 'bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400'"
+                            class="flex h-8 w-8 items-center justify-center rounded-full text-xs font-bold transition-all"
+                            x-text="s"></button>
+                    <span :class="s <= step ? 'text-slate-900 dark:text-white' : 'text-slate-400 dark:text-slate-500'"
+                          class="text-xs font-medium hidden sm:inline transition-colors"
+                          x-text="s === 1 ? 'Plan' : s === 2 ? 'Provisioning' : 'Options'"></span>
+                    <div x-show="s < totalSteps" class="mx-1 h-px w-8 bg-slate-300 dark:bg-slate-600"></div>
+                </div>
+            </template>
+        </div>
+        {% endif %}
+
+        {# ══════════════════════════════════════════════
+           STEP 1: Plan Selection
+           ══════════════════════════════════════════════ #}
+        <div {% if is_new %}x-show="step === 1" x-transition{% endif %}>
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Plan Selection</h2>
@@ -142,7 +164,7 @@
         </div>
 
         {# Advanced options - collapsible #}
-        <div x-data="{ open: {{ 'true' if subscription.id else 'false' }} }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div x-data="{ open: {{ 'true' if subscription.id else 'false' }} }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800 mt-6">
             <button type="button" @click="open = !open" class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Advanced Options</h2>
                 <svg class="h-5 w-5 text-slate-400 transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -192,8 +214,11 @@
                 </div>
             </div>
         </div>
+        </div>{# end step 1 wrapper #}
 
-        {# Technical/Provisioning - only show for edit or power users #}
+        {# ══════════════════════════════════════════════
+           STEP 2 (edit: always visible): Service Provisioning
+           ══════════════════════════════════════════════ #}
         {% if subscription.id %}
         <div x-data="{ open: false }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <button type="button" @click="open = !open" class="flex w-full items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
@@ -257,7 +282,7 @@
         </div>
         {% endif %}
 
-        {# Service Provisioning fields (kept near end for generated values) #}
+        <div {% if is_new %}x-show="step === 2" x-transition{% endif %}>
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Service Provisioning</h2>
@@ -398,9 +423,13 @@
                 </div>
             </div>
         </div>
+        </div>{# end step 2 wrapper #}
 
-        {# Quick Options for new subscriptions #}
+        {# ══════════════════════════════════════════════
+           STEP 3 (new only): Quick Options + Submit
+           ══════════════════════════════════════════════ #}
         {% if is_new %}
+        <div x-show="step === 3" x-transition>
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Quick Options</h2>
@@ -432,22 +461,43 @@
                 </label>
             </div>
         </div>
+        </div>{# end step 3 wrapper #}
         {% endif %}
 
-        <div class="flex items-center justify-end gap-3">
-            {% if subscription.subscriber_id %}
-            <a href="/admin/subscribers/{{ subscription.subscriber_id }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                Cancel
-            </a>
-            {% else %}
-            <a href="/admin/subscribers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                Cancel
-            </a>
-            {% endif %}
-            <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                {{ 'Save Changes' if subscription.id else 'Add Subscription' }}
-            </button>
+        {# ── Navigation + Submit ── #}
+        <div class="flex items-center justify-between gap-3">
+            <div>
+                {% if is_new %}
+                <button type="button" x-show="step > 1" @click="step--"
+                        class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                    Back
+                </button>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-3">
+                {% if subscription.subscriber_id %}
+                <a href="/admin/subscribers/{{ subscription.subscriber_id }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    Cancel
+                </a>
+                {% else %}
+                <a href="/admin/subscribers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    Cancel
+                </a>
+                {% endif %}
+                {% if is_new %}
+                <button type="button" x-show="step < totalSteps" @click="step++"
+                        class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700">
+                    Continue
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                </button>
+                {% endif %}
+                <button type="submit" {% if is_new %}x-show="step === totalSteps"{% endif %}
+                        class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-primary-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    {{ 'Save Changes' if subscription.id else 'Add Subscription' }}
+                </button>
+            </div>
         </div>
     </form>
 </div>

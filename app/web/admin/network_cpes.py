@@ -267,6 +267,25 @@ def cpe_detail(
 # ── CPE TR-069 Remote Management ─────────────────────────────────
 
 
+@router.get(
+    "/cpes/{cpe_id}/quick-status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def cpe_quick_status(
+    request: Request, cpe_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: lightweight TR-069 status for CPE overview sidebar."""
+    from app.services.network.cpe_tr069 import CpeTR069
+
+    summary = CpeTR069.get_device_summary(db, cpe_id)
+    context = _base_context(request, db, active_page="cpes")
+    context["status"] = summary
+    return templates.TemplateResponse(
+        "admin/network/cpes/_quick_status_partial.html", context
+    )
+
+
 def _cpe_action_response(result: object) -> JSONResponse:
     """Build a JSON response with HX-Trigger toast header from an ActionResult."""
     from app.services.network.ont_action_common import ActionResult

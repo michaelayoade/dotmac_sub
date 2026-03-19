@@ -156,6 +156,27 @@
             </div>
 
             <div class="space-y-6">
+                {# TR-069 Quick Status — lazy-loaded #}
+                <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <div class="flex items-center gap-2">
+                            <div class="flex h-6 w-6 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600">
+                                <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                            </div>
+                            <h2 class="font-semibold text-slate-900 dark:text-white">Device Status</h2>
+                        </div>
+                    </div>
+                    <div id="cpe-quick-status"
+                         hx-get="/admin/network/cpes/{{ cpe.id }}/quick-status"
+                         hx-trigger="load"
+                         hx-swap="innerHTML">
+                        <div class="flex items-center justify-center py-8">
+                            <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span class="ml-2 text-xs text-slate-400">Checking TR-069...</span>
+                        </div>
+                    </div>
+                </div>
+
                 <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                     <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                         <h2 class="font-semibold text-slate-900 dark:text-white">Lifecycle</h2>
