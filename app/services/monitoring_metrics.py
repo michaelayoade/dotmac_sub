@@ -289,8 +289,8 @@ def count_affected_subscribers(db: Session, device: NetworkDevice) -> int:
                     RadiusAccountingSession.stop_time.is_(None),
                 )
             ) or 0
-        except Exception:
-            logger.debug("Could not count RADIUS sessions for device %s", device.name)
+        except Exception as exc:
+            logger.warning("Could not count RADIUS sessions for device %s: %s", device.name, exc)
 
     return count
 

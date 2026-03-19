@@ -65,12 +65,12 @@ def poll_all_olt_signals() -> dict[str, int]:
                 offline=onu.get("offline", 0),
                 low_signal=onu.get("low_signal", 0),
             )
-        except Exception:
-            logger.debug("Failed to push ONU metrics to VictoriaMetrics")
+        except Exception as exc:
+            logger.warning("Failed to push ONU metrics to VictoriaMetrics: %s", exc)
 
         return result
     except Exception as e:
-        logger.error("OLT signal polling task failed: %s", e)
+        logger.error("OLT signal polling task failed: %s", e, exc_info=True)
         db.rollback()
         raise
     finally:

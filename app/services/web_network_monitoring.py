@@ -151,7 +151,7 @@ def _vm_instant_query(query: str) -> list[dict[str, Any]]:
             if isinstance(result, list):
                 return result
     except Exception as exc:
-        logger.debug("VictoriaMetrics query failed (%s): %s", query[:60], exc)
+        logger.warning("VictoriaMetrics instant query failed (%s): %s", query[:60], exc)
     return []
 
 
@@ -183,7 +183,7 @@ def _vm_range_query(
             if isinstance(result, list):
                 return result
     except Exception as exc:
-        logger.debug("VictoriaMetrics range query failed (%s): %s", query[:60], exc)
+        logger.warning("VictoriaMetrics range query failed (%s): %s", query[:60], exc)
     return []
 
 

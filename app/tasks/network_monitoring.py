@@ -74,8 +74,8 @@ def refresh_core_device_snmp() -> dict[str, int]:
                             )
 
                             poll_custom_snmp_oids(session, device)
-                        except Exception:
-                            logger.debug("Custom OID poll failed for %s", device.id)
+                        except Exception as exc:
+                            logger.warning("Custom OID poll failed for %s: %s", device.id, exc)
                         # Update subscriber impact count
                         try:
                             from app.services.monitoring_metrics import (
@@ -83,24 +83,24 @@ def refresh_core_device_snmp() -> dict[str, int]:
                             )
 
                             update_device_subscriber_count(session, device)
-                        except Exception:
-                            logger.debug("Subscriber count update failed for %s", device.id)
+                        except Exception as exc:
+                            logger.warning("Subscriber count update failed for %s: %s", device.id, exc)
                         updated += 1
                     else:
                         failed += 1
+                session.commit()
             except Exception:
                 session.rollback()
                 failed += 1
                 logger.exception("SNMP refresh failed for device %s", device.id)
-                # Re-open a clean transaction after rollback and mark failure if possible.
                 try:
                     device_fresh = session.get(NetworkDevice, device.id)
                     if device_fresh:
                         core_runtime_service.mark_discovery_failure(session, device_fresh)
+                        session.commit()
                 except Exception:
+                    logger.warning("Failed to mark discovery failure for device %s", device.id)
                     session.rollback()
-            finally:
-                session.commit()
 
         return {"checked": checked, "updated": updated, "failed": failed}
     except Exception:

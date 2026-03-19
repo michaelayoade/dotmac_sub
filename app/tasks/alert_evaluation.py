@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
@@ -55,6 +56,7 @@ def evaluate_alert_rules() -> dict[str, int]:
             ).all()
         )
 
+        errors = 0
         for rule in rules:
             rules_checked += 1
             try:
@@ -62,8 +64,13 @@ def evaluate_alert_rules() -> dict[str, int]:
                     created, resolved = _evaluate_rule(db, rule)
                     alerts_created += created
                     alerts_resolved += resolved
+            except OperationalError:
+                logger.exception("DB connection error evaluating rule %s — aborting", rule.id)
+                errors += 1
+                break  # Session is dead, no point continuing
             except Exception:
                 logger.exception("Error evaluating alert rule %s", rule.id)
+                errors += 1
 
         db.commit()
     except Exception:
@@ -77,6 +84,7 @@ def evaluate_alert_rules() -> dict[str, int]:
         "rules_checked": rules_checked,
         "alerts_created": alerts_created,
         "alerts_resolved": alerts_resolved,
+        "errors": errors,
     }
     logger.info("Alert rule evaluation complete: %s", stats)
     return stats
@@ -110,6 +118,7 @@ def _evaluate_rule(db: Session, rule: AlertRule) -> tuple[int, int]:
     # Evaluate threshold condition
     op_fn = _OPERATORS.get(rule.operator)
     if not op_fn:
+        logger.warning("Unknown operator %s for alert rule %s", rule.operator, rule.id)
         return 0, 0
 
     breached = op_fn(metric.value, rule.threshold)
