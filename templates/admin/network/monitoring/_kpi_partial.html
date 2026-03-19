@@ -1,6 +1,15 @@
 {# HTMX partial: Auto-refreshing KPI cards for monitoring dashboard #}
 {% from "components/ui/macros.html" import stats_card %}
 
+{# Live indicator — pulses to show data is fresh #}
+<div class="flex items-center justify-end gap-2 mb-2">
+    <span class="relative flex h-2 w-2">
+        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+        <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+    </span>
+    <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums">Live &middot; {{ now.strftime('%H:%M:%S') if now else '' }}</span>
+</div>
+
 {# Device KPIs #}
 <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
     {{ stats_card("Devices Online", stats.devices_online, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}

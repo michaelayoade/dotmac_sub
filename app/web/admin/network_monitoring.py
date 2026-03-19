@@ -102,12 +102,15 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
     onu_summary = get_onu_status_summary(db)
     pon_outages = get_pon_outage_summary(db)
     alarms_data = web_network_monitoring_service.alarms_page_data(db, severity=None, status=None)
+    from datetime import UTC, datetime
+
     context = {
         "request": request,
         "stats": stats.get("stats", {}),
         "onu_summary": onu_summary,
         "pon_outages": pon_outages,
         "alarms": alarms_data.get("alarms", []),
+        "now": datetime.now(UTC),
     }
     return templates.TemplateResponse("admin/network/monitoring/_kpi_partial.html", context)
 
