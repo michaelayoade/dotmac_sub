@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -81,7 +82,7 @@ def evaluate_alert_rules() -> dict[str, int]:
     return stats
 
 
-def _evaluate_rule(db, rule: AlertRule) -> tuple[int, int]:
+def _evaluate_rule(db: Session, rule: AlertRule) -> tuple[int, int]:
     """Evaluate a single alert rule. Returns (created, resolved)."""
     created = 0
     resolved = 0

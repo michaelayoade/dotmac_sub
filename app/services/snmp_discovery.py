@@ -101,9 +101,21 @@ def _run_snmp_command(args: list[str], timeout: int) -> list[str]:
     if os.getenv("SNMP_DEBUG") == "1":
         stdout_lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
         stderr_lines = [line.strip() for line in result.stderr.splitlines() if line.strip()]
+        # Redact credentials from logged command (-c community, -A auth, -X priv)
+        safe_args = []
+        skip_next = False
+        for i, a in enumerate(args):
+            if skip_next:
+                safe_args.append("********")
+                skip_next = False
+            elif a in ("-c", "-A", "-X"):
+                safe_args.append(a)
+                skip_next = True
+            else:
+                safe_args.append(a)
         logger.info(
             "SNMP debug: cmd=%s rc=%s stdout=%s stderr=%s",
-            " ".join(args),
+            " ".join(safe_args),
             result.returncode,
             stdout_lines[:10],
             stderr_lines[:10],
@@ -385,5 +397,5 @@ def apply_interface_snapshot(
             )
         for iface in stale_interfaces:
             db.delete(iface)
-    db.commit()
+    db.flush()
     return created, updated

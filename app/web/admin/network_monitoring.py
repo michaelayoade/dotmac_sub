@@ -10,13 +10,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.domain_settings import SettingDomain
 from app.services import web_network_alarm_rules as web_network_alarm_rules_service
 from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_monitoring as web_network_monitoring_service
 from app.services.audit_helpers import build_audit_activities_for_types
 from app.services.auth_dependencies import require_permission
-from app.services.settings_spec import resolve_value
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
@@ -125,35 +123,16 @@ def monitoring_page(
     refresh: str | None = None,
     db: Session = Depends(get_db),
 ):
-    try:
-        ping_interval_seconds = int(
-            str(resolve_value(db, SettingDomain.network_monitoring, "core_device_ping_interval_seconds") or 120)
-        )
-    except (TypeError, ValueError):
-        ping_interval_seconds = 120
-    try:
-        snmp_interval_seconds = int(
-            str(
-                resolve_value(
-                    db,
-                    SettingDomain.network_monitoring,
-                    "core_device_snmp_walk_interval_seconds",
-                )
-                or 300
-            )
-        )
-    except (TypeError, ValueError):
-        snmp_interval_seconds = 300
+    # Force-refresh dispatches a Celery task instead of blocking the request
     force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
-    monitoring_devices = web_network_monitoring_service.active_monitoring_devices(db)
-    web_network_core_runtime_service.refresh_stale_devices_health(
-        db,
-        monitoring_devices,
-        ping_interval_seconds=ping_interval_seconds,
-        snmp_interval_seconds=snmp_interval_seconds,
-        include_snmp=True,
-        force=force_refresh,
-    )
+    if force_refresh:
+        try:
+            from app.celery_app import celery_app as _celery
+
+            _celery.send_task("app.tasks.network_monitoring.refresh_core_device_ping")
+            _celery.send_task("app.tasks.network_monitoring.refresh_core_device_snmp")
+        except Exception:
+            logger.debug("Could not dispatch monitoring refresh task")
 
     page_data = web_network_monitoring_service.monitoring_page_data(
         db,

@@ -111,10 +111,11 @@ def poll_custom_snmp_oids(db: Session, device: NetworkDevice) -> dict[str, int]:
 
 def _snmp_get_single(device: NetworkDevice, oid: str) -> float | None:
     """Perform a single SNMP GET on a device. Returns numeric value or None."""
+    from app.services.credential_crypto import decrypt_credential
     from app.services.snmp_client import snmp_get
 
     mgmt_ip = device.mgmt_ip
-    community = device.snmp_community or "public"
+    community = decrypt_credential(device.snmp_community) if device.snmp_community else "public"
     if not mgmt_ip:
         return None
 
@@ -470,10 +471,10 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
             continue
 
         try:
-            sync_nas_to_monitoring(db, str(nas.id))
+            with db.begin_nested():  # savepoint — isolates per-NAS
+                sync_nas_to_monitoring(db, str(nas.id))
             synced += 1
         except Exception as exc:
-            db.rollback()
             errors += 1
             logger.warning("Failed to sync NAS %s to monitoring: %s", nas.name, exc)
 

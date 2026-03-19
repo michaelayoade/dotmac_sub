@@ -246,6 +246,9 @@ def test_apply_interface_snapshot_removes_stale_interfaces():
         def commit(self):
             self.committed = True
 
+        def flush(self):
+            self.committed = True
+
     session = _Session()
     created, updated = snmp_discovery_service.apply_interface_snapshot(
         session,
