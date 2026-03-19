@@ -473,6 +473,7 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
             sync_nas_to_monitoring(db, str(nas.id))
             synced += 1
         except Exception as exc:
+            db.rollback()
             errors += 1
             logger.warning("Failed to sync NAS %s to monitoring: %s", nas.name, exc)
 

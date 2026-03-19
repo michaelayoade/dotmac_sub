@@ -1052,7 +1052,8 @@ def bulk_update_status(
                     actor_id=actor_id,
                 )
                 count += 1
-        except Exception:
+        except Exception as exc:
+            logger.error("Bulk status update failed for subscription %s: %s", sub_id, exc)
             continue
 
     return count

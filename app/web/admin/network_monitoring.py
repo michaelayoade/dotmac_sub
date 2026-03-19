@@ -85,8 +85,12 @@ def _get_vpn_tunnel_status() -> list[dict]:
                 "up": not stale and handshake_ts > 0,
                 "stale": stale,
             })
+    except FileNotFoundError:
+        logger.warning("WireGuard 'wg' command not found — VPN status unavailable")
+    except PermissionError:
+        logger.warning("Insufficient permissions to read WireGuard status")
     except Exception as exc:
-        logger.debug("Failed to read WireGuard status: %s", exc)
+        logger.warning("Failed to read WireGuard status: %s", exc)
     return tunnels
 
 

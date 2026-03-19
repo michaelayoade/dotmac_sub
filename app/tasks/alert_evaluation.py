@@ -57,12 +57,12 @@ def evaluate_alert_rules() -> dict[str, int]:
         for rule in rules:
             rules_checked += 1
             try:
-                created, resolved = _evaluate_rule(db, rule)
-                alerts_created += created
-                alerts_resolved += resolved
+                with db.begin_nested():  # savepoint — isolates per-rule
+                    created, resolved = _evaluate_rule(db, rule)
+                    alerts_created += created
+                    alerts_resolved += resolved
             except Exception:
                 logger.exception("Error evaluating alert rule %s", rule.id)
-                db.rollback()
 
         db.commit()
     except Exception:
