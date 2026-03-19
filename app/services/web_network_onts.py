@@ -100,23 +100,46 @@ def ont_form_dependencies(db: Session) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Firmware Images
+# ---------------------------------------------------------------------------
+
+
+def get_active_firmware_images(db: Session) -> list:
+    """Return active ONT firmware images for the bulk upgrade dropdown."""
+    from sqlalchemy import select
+
+    from app.models.network import OntFirmwareImage
+
+    return list(
+        db.scalars(
+            select(OntFirmwareImage)
+            .where(OntFirmwareImage.is_active.is_(True))
+            .order_by(OntFirmwareImage.vendor, OntFirmwareImage.version.desc())
+        ).all()
+    )
+
+
+# ---------------------------------------------------------------------------
 # Bulk ONT Operations
 # ---------------------------------------------------------------------------
 
-_BULK_ACTIONS = {"reboot", "refresh", "factory_reset"}
+_BULK_ACTIONS = {"reboot", "refresh", "factory_reset", "firmware_upgrade"}
 
 
 def execute_bulk_action(
     db: Session,
     ont_ids: list[str],
     action: str,
+    *,
+    firmware_image_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a bulk action on multiple ONTs via TR-069.
 
     Args:
         db: Database session.
         ont_ids: List of OntUnit IDs.
-        action: One of 'reboot', 'refresh', 'factory_reset'.
+        action: One of 'reboot', 'refresh', 'factory_reset', 'firmware_upgrade'.
+        firmware_image_id: Required when action is 'firmware_upgrade'.
 
     Returns:
         Stats dict with succeeded/failed/skipped counts and per-ONT results.
@@ -155,6 +178,8 @@ def execute_bulk_action(
                 result = OntActions.refresh_status(db, ont_id)
             elif action == "factory_reset":
                 result = OntActions.factory_reset(db, ont_id)
+            elif action == "firmware_upgrade" and firmware_image_id:
+                result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
             else:
                 continue
 

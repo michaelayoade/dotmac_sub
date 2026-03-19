@@ -935,6 +935,7 @@ def onts_list(
     )
     context = _base_context(request, db, active_page="onts")
     context.update(page_data)
+    context["firmware_images"] = web_network_onts_service.get_active_firmware_images(db)
     return templates.TemplateResponse("admin/network/onts/index.html", context)
 
 
@@ -943,10 +944,13 @@ def onts_bulk_action(
     request: Request,
     action: str = Form(""),
     ont_ids: list[str] = Form(default=[]),
+    firmware_image_id: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """Execute a bulk action (reboot/refresh/factory_reset) on selected ONTs."""
-    stats = web_network_onts_service.execute_bulk_action(db, ont_ids, action)
+    """Execute a bulk action (reboot/refresh/factory_reset/firmware_upgrade) on selected ONTs."""
+    stats = web_network_onts_service.execute_bulk_action(
+        db, ont_ids, action, firmware_image_id=firmware_image_id or None
+    )
     error = stats.get("error")
     if error:
         summary = f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{error}</div>'
@@ -2151,6 +2155,21 @@ def ont_iphost_config(
 # ────────────────────────────────────────────────────────────────────
 # OLT profile display routes (Phase 3)
 # ────────────────────────────────────────────────────────────────────
+
+
+@router.get("/olts/{olt_id}/events", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def olt_device_events(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: ONT device events (online/offline/signal) for this OLT."""
+    data = web_network_olts_service.olt_device_events_context(db, olt_id)
+    context = _base_context(request, db, active_page="olts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/olts/_events_partial.html", context
+    )
 
 
 @router.get("/olts/{olt_id}/profiles/line", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])

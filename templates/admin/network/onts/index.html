@@ -181,7 +181,7 @@
             </div>
 
             {# Bulk Action Bar #}
-            <div x-data="{ selected: [], bulkAction: '' }" id="bulk-container">
+            <div x-data="{ selected: [], bulkAction: '', firmwareImageId: '' }" id="bulk-container">
                 <div x-show="selected.length > 0" x-transition
                      class="flex items-center gap-3 border-b border-blue-200 bg-blue-50 px-6 py-3 dark:border-blue-800 dark:bg-blue-900/20">
                     <span class="text-sm font-medium text-blue-700 dark:text-blue-300" x-text="selected.length + ' selected'"></span>
@@ -191,6 +191,14 @@
                         <option value="reboot">Reboot</option>
                         <option value="refresh">Refresh Status</option>
                         <option value="factory_reset">Factory Reset</option>
+                        <option value="firmware_upgrade">Firmware Upgrade</option>
+                    </select>
+                    <select x-show="bulkAction === 'firmware_upgrade'" x-model="firmwareImageId" x-cloak
+                        class="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:ring-blue-500 dark:border-blue-600 dark:bg-slate-800 dark:text-slate-300">
+                        <option value="">Select firmware...</option>
+                        {% for fw in firmware_images or [] %}
+                        <option value="{{ fw.id }}">{{ fw.vendor }} {{ fw.model or '' }} v{{ fw.version }}</option>
+                        {% endfor %}
                     </select>
                     <form id="bulk-form"
                           hx-post="/admin/network/onts/bulk-action"
@@ -203,8 +211,9 @@
                             <input type="hidden" name="ont_ids" :value="id">
                         </template>
                         <input type="hidden" name="action" :value="bulkAction">
-                        <button type="submit" :disabled="!bulkAction"
-                            x-on:click="if (bulkAction === 'factory_reset' && !confirm('Factory reset will ERASE ALL configuration on ' + selected.length + ' ONTs. Continue?')) $event.preventDefault()"
+                        <input type="hidden" name="firmware_image_id" :value="firmwareImageId || ''">
+                        <button type="submit" :disabled="!bulkAction || (bulkAction === 'firmware_upgrade' && !firmwareImageId)"
+                            x-on:click="if (bulkAction === 'factory_reset' && !confirm('Factory reset will ERASE ALL configuration on ' + selected.length + ' ONTs. Continue?')) $event.preventDefault(); if (bulkAction === 'firmware_upgrade' && !confirm('Push firmware to ' + selected.length + ' ONTs? Each will download and reboot.')) $event.preventDefault()"
                             class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                             Execute

@@ -1,0 +1,73 @@
+{# HTMX partial: ONT device events for this OLT (online/offline/signal/discovered) #}
+{% from "components/ui/macros.html" import card, empty_state %}
+
+{% set event_icons = {
+    'ont.online': '<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30"><svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg></span>',
+    'ont.offline': '<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/30"><svg class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg></span>',
+    'ont.signal_degraded': '<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30"><svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg></span>',
+    'ont.discovered': '<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30"><svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg></span>',
+} %}
+
+{% set event_labels = {
+    'ont.online': 'ONT Online',
+    'ont.offline': 'ONT Offline',
+    'ont.signal_degraded': 'Signal Degraded',
+    'ont.discovered': 'ONT Discovered',
+    'ont.provisioned': 'ONT Provisioned',
+    'ont.config_updated': 'Config Updated',
+    'ont.moved': 'ONT Moved',
+} %}
+
+{% if events %}
+<div class="space-y-6">
+    <div class="flex items-center justify-between">
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+            Showing {{ events | length }} recent device event{{ 's' if events | length != 1 else '' }}
+        </p>
+        {% if has_more %}
+        <span class="text-xs text-slate-400">Older events available in system logs</span>
+        {% endif %}
+    </div>
+
+    <div class="space-y-2">
+        {% for event in events %}
+        <div class="flex items-start gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
+            {{ event_icons.get(event.event_type, '<span class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-700"><svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg></span>') | safe }}
+            <div class="flex-1 min-w-0">
+                <div class="flex items-center gap-2">
+                    <p class="text-sm font-medium text-slate-900 dark:text-white">
+                        {{ event_labels.get(event.event_type, event.event_type) }}
+                    </p>
+                    {% if event.payload.get('serial_number') %}
+                    <a href="/admin/network/onts?search={{ event.payload.get('serial_number') }}"
+                       class="text-xs font-mono text-blue-600 hover:text-blue-700 dark:text-blue-400">
+                        {{ event.payload.get('serial_number') }}
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                    {% if event.payload.get('pon_port') %}
+                    <span>PON {{ event.payload.get('pon_port') }}</span>
+                    {% endif %}
+                    {% if event.payload.get('signal_level') %}
+                    <span class="font-mono">{{ event.payload.get('signal_level') }} dBm</span>
+                    {% endif %}
+                    {% if event.payload.get('reason') %}
+                    <span>Reason: {{ event.payload.get('reason') }}</span>
+                    {% endif %}
+                </div>
+            </div>
+            <span class="flex-shrink-0 text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">
+                {{ event.created_at.strftime('%b %d, %H:%M') if event.created_at else '' }}
+            </span>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% else %}
+<div class="rounded-xl border border-slate-200 bg-slate-50 p-8 text-center dark:border-slate-700 dark:bg-slate-800/60">
+    <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+    <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No device events</p>
+    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">ONT online/offline events will appear here as they're detected during SNMP polling.</p>
+</div>
+{% endif %}

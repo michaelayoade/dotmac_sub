@@ -118,6 +118,12 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 Activity
             </button>
+            <button data-tab="events" @click="activeTab = 'events'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/events', {target: '#olt-events-content', swap: 'innerHTML'}) }"
+                    :class="activeTab === 'events' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                Events
+            </button>
             <button data-tab="profiles" @click="activeTab = 'profiles'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/olts/{{ olt.id }}/profiles/line', {target: '#profiles-content', swap: 'innerHTML'}) }"
                     :class="activeTab === 'profiles' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
@@ -1144,6 +1150,16 @@
         <p class="text-sm text-slate-500 dark:text-slate-400">No config backups yet. Backups run automatically on a schedule.</p>
         {% endif %}
         {% endcall %}
+    </div>
+
+    {# ===================== EVENTS TAB ===================== #}
+    <div x-show="activeTab === 'events'" x-transition x-cloak>
+        <div id="olt-events-content">
+            <div class="flex items-center justify-center py-12">
+                <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device events...</span>
+            </div>
+        </div>
     </div>
 
     {# ===================== PROFILES TAB ===================== #}

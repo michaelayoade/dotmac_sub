@@ -1952,3 +1952,37 @@ def handle_rebind_tr069_profiles(
 
     stats["errors"] = errors_list
     return stats
+
+
+def olt_device_events_context(db: Session, olt_id: str) -> dict:
+    """Build context for the OLT device events tab.
+
+    Queries ONT-related events (online/offline/signal/discovered) from the
+    EventStore where the payload contains this OLT's ID.
+
+    Args:
+        db: Database session.
+        olt_id: OLT device ID.
+
+    Returns:
+        Dict with events list and has_more flag.
+    """
+    from sqlalchemy import select
+
+    from app.models.event_store import EventStore
+
+    ont_event_types = [
+        "ont.online", "ont.offline", "ont.signal_degraded",
+        "ont.discovered", "ont.provisioned", "ont.config_updated", "ont.moved",
+    ]
+    stmt = (
+        select(EventStore)
+        .where(
+            EventStore.event_type.in_(ont_event_types),
+            EventStore.payload["olt_id"].astext == olt_id,
+        )
+        .order_by(EventStore.created_at.desc())
+        .limit(100)
+    )
+    events = list(db.scalars(stmt).all())
+    return {"events": events, "has_more": len(events) >= 100}
