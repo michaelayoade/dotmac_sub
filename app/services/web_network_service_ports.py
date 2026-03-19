@@ -60,10 +60,17 @@ def _resolve_ont_olt_context(
     else:
         return ont, olt, None, None
 
-    # ONT-ID is the external_id or we parse it
+    # ONT-ID extraction from external_id
+    # Formats: "5" (plain), "huawei:4194320640.5" (SNMP), "smartolt:SERIAL" (no ID)
     ont_id_on_olt: int | None = None
-    if ont.external_id and ont.external_id.isdigit():
-        ont_id_on_olt = int(ont.external_id)
+    ext = (ont.external_id or "").strip()
+    if ext.isdigit():
+        ont_id_on_olt = int(ext)
+    elif "." in ext:
+        # SNMP format: "huawei:4194320640.5" → ONT-ID is the part after the dot
+        dot_part = ext.rsplit(".", 1)[-1]
+        if dot_part.isdigit():
+            ont_id_on_olt = int(dot_part)
 
     return ont, olt, fsp, ont_id_on_olt
 

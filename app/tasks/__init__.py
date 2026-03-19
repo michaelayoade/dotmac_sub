@@ -1,3 +1,4 @@
+from app.tasks.alert_evaluation import evaluate_alert_rules
 from app.tasks.bandwidth import (
     aggregate_to_metrics as aggregate_bandwidth_to_metrics,
 )
@@ -17,6 +18,9 @@ from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.integrations import run_integration_job
 from app.tasks.invoice_pdf import generate_invoice_pdf_export
+from app.tasks.monitoring_cleanup import (
+    cleanup_old_device_metrics as cleanup_device_metrics,
+)
 from app.tasks.mrr import snapshot_mrr
 from app.tasks.nas import (
     check_nas_health,
@@ -131,4 +135,6 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "provision_ont_async",
+    "evaluate_alert_rules",
+    "cleanup_device_metrics",
 ]
