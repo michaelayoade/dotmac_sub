@@ -209,6 +209,29 @@
 {% if subscriber and subscriber.id %}
     {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ subscriber.id %}
 {% endif %}
+{# Dunning Warning Banner #}
+{% if dunning_cases %}
+{% set open_cases = dunning_cases | selectattr('status', 'defined') | selectattr('status.value', 'equalto', 'open') | list %}
+{% if open_cases %}
+<div class="mb-4 rounded-xl border border-rose-200 bg-gradient-to-r from-rose-50 to-amber-50 px-5 py-4 shadow-sm dark:border-rose-900/50 dark:from-rose-900/20 dark:to-amber-900/10">
+    <div class="flex items-start gap-3">
+        <svg class="h-5 w-5 text-rose-600 mt-0.5 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        <div class="flex-1">
+            <p class="text-sm font-semibold text-rose-800 dark:text-rose-200">Active Dunning Case</p>
+            <p class="mt-1 text-sm text-rose-700 dark:text-rose-300">
+                This subscriber has {{ open_cases | length }} open dunning case{{ 's' if open_cases | length > 1 else '' }}.
+                {% if open_cases[0].current_step is not none %}Step {{ open_cases[0].current_step }}.{% endif %}
+                Started {{ open_cases[0].started_at.strftime('%b %d, %Y') if open_cases[0].started_at else 'recently' }}.
+            </p>
+        </div>
+        <a href="/admin/billing/dunning/{{ open_cases[0].id }}" class="rounded-lg border border-rose-300 bg-white px-3 py-1.5 text-xs font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300 dark:hover:bg-slate-700">
+            View Case
+        </a>
+    </div>
+</div>
+{% endif %}
+{% endif %}
+
 {% set requested_tab = request.query_params.get('tab', 'information') %}
 {% if requested_tab not in ['information', 'services', 'billing', 'statistics'] %}
     {% set requested_tab = 'information' %}
@@ -527,6 +550,191 @@
                 {% endif %}
             </div>
         </div>
+
+        {# Access Credentials (PPPoE / RADIUS) #}
+        {% if access_credentials %}
+        <div x-show="activeTab === 'services'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 250ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md">
+                        <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">PPPoE / RADIUS Credentials</h2>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-800/50">
+                        <tr>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Username</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Auth</th>
+                            <th class="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                        {% for cred in access_credentials %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-5 py-3 text-sm font-mono text-slate-900 dark:text-white">{{ cred.username }}</td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ cred.connection_type.value | default('pppoe') | upper if cred.connection_type else 'PPPoE' }}</td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ cred.last_auth_at.strftime('%b %d, %Y %H:%M') if cred.last_auth_at else '—' }}</td>
+                            <td class="px-5 py-3 text-center">
+                                {% if cred.is_active %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Active</span>
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Inactive</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {# Service Orders #}
+        {% if service_orders %}
+        <div x-show="activeTab === 'services'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 275ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 shadow-md">
+                        <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01"/></svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Service Orders</h2>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ service_orders | length }}</span>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-800/50">
+                        <tr>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Order</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Type</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Created</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                        {% for order in service_orders %}
+                        {% set order_status = order.status.value if order.status is not string and order.status else (order.status | default('pending')) %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-5 py-3 text-sm">
+                                <a href="/admin/provisioning/orders/{{ order.id }}" class="font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ order.order_number | default((order.id | string)[:8]) }}</a>
+                            </td>
+                            <td class="px-5 py-3 text-sm text-slate-600 dark:text-slate-300">{{ order.order_type.value | default('install') | replace('_', ' ') | title if order.order_type else 'Install' }}</td>
+                            <td class="px-5 py-3 text-sm">
+                                {% if order_status == 'completed' %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Completed</span>
+                                {% elif order_status == 'in_progress' %}
+                                <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">In Progress</span>
+                                {% elif order_status == 'failed' %}
+                                <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900 dark:text-rose-200">Failed</span>
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ order_status | title }}</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ order.created_at.strftime('%b %d, %Y') if order.created_at else '—' }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        {# Inactive Subscriptions (Suspended/Canceled) #}
+        {% set inactive_subs = all_subscriptions | rejectattr('status', 'equalto', 'active') | list if all_subscriptions else [] %}
+        {% if inactive_subs %}
+        <div x-show="activeTab === 'services'" x-data="{ showInactive: false }" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 300ms;">
+            <button @click="showInactive = !showInactive" class="flex w-full items-center justify-between px-5 py-4">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-slate-400 to-slate-500 shadow-md">
+                        <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Inactive Subscriptions</h2>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ inactive_subs | length }}</span>
+                </div>
+                <svg :class="showInactive ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </button>
+            <div x-show="showInactive" x-transition x-cloak class="border-t border-slate-200/60 dark:border-slate-700/60 divide-y divide-slate-100 dark:divide-slate-700/50">
+                {% for sub in inactive_subs %}
+                {% set sub_status = sub.status.value if sub.status is not string and sub.status else (sub.status | default('canceled')) %}
+                <div class="flex items-center justify-between px-5 py-3 opacity-60">
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ sub.offer.name if sub.offer else 'Subscription' }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            {% if sub.canceled_at %}Canceled {{ sub.canceled_at.strftime('%b %d, %Y') }}{% elif sub.end_at %}Ended {{ sub.end_at.strftime('%b %d, %Y') }}{% endif %}
+                            {% if sub.cancel_reason %} — {{ sub.cancel_reason[:50] }}{% endif %}
+                        </p>
+                    </div>
+                    {% if sub_status == 'suspended' %}
+                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">Suspended</span>
+                    {% elif sub_status == 'canceled' %}
+                    <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900 dark:text-rose-200">Canceled</span>
+                    {% elif sub_status == 'expired' %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Expired</span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ sub_status | title }}</span>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+        {% endif %}
+
+        {# Payments Table (Billing tab) #}
+        {% if payments %}
+        <div x-show="activeTab === 'billing'" class="section-card rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 200ms;">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-8 w-8 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-md">
+                        <svg class="h-4 w-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                    </div>
+                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Payment History</h2>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ payments | length }}</span>
+                </div>
+                <a href="/admin/billing/payments/new?subscriber={{ subscriber.id }}" class="text-sm font-semibold text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Record Payment</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-800/50">
+                        <tr>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Date</th>
+                            <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
+                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Reference</th>
+                            <th class="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
+                        {% for pay in payments %}
+                        {% set pay_status = pay.status.value if pay.status is not string and pay.status else (pay.status | default('pending')) %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400 whitespace-nowrap">{{ pay.paid_at.strftime('%b %d, %Y') if pay.paid_at else pay.created_at.strftime('%b %d, %Y') if pay.created_at else '—' }}</td>
+                            <td class="px-5 py-3 text-sm text-right font-mono tabular-nums font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(pay.amount or 0) }}</td>
+                            <td class="px-5 py-3 text-sm font-mono text-slate-500 dark:text-slate-400">
+                                <a href="/admin/billing/payments/{{ pay.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">{{ pay.external_id or pay.receipt_number or (pay.id | string)[:8] }}</a>
+                            </td>
+                            <td class="px-5 py-3 text-center">
+                                {% if pay_status == 'succeeded' %}
+                                <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Paid</span>
+                                {% elif pay_status == 'pending' %}
+                                <span class="inline-flex items-center rounded-full bg-blue-100 px-2.5 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">Pending</span>
+                                {% elif pay_status == 'failed' %}
+                                <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900 dark:text-rose-200">Failed</span>
+                                {% elif pay_status == 'refunded' %}
+                                <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">Refunded</span>
+                                {% else %}
+                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ pay_status | title }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
 
         <!-- Bandwidth Usage Chart -->
         {% if subscriptions and subscriptions|length > 0 %}

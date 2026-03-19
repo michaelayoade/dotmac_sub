@@ -229,6 +229,8 @@ def subscribers_list(
         db=db,
         subscriber_type=subscriber_type if subscriber_type else None,
         organization_id=None,
+        status=status if status else None,
+        search=search if search else None,
         order_by="created_at",
         order_dir="desc",
         limit=per_page,
@@ -238,6 +240,8 @@ def subscribers_list(
     total = subscriber_service.subscribers.count(
         db=db,
         subscriber_type=subscriber_type if subscriber_type else None,
+        status=status if status else None,
+        search=search if search else None,
     )
     total_pages = (total + per_page - 1) // per_page
 

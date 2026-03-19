@@ -3,7 +3,7 @@ import logging
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import TaxRate
@@ -292,11 +292,87 @@ class Subscribers(ListResponseMixin):
         limit: int,
         offset: int,
         person_id: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
     ):
         query = db.query(Subscriber).options(
             selectinload(Subscriber.addresses),
         )
         query = query.filter(Subscriber.user_type != UserType.system_user)
+        # Status filter
+        if status:
+            normalized_status = status.strip().lower()
+            if normalized_status == "inactive":
+                query = query.filter(Subscriber.is_active.is_(False))
+            elif normalized_status in ("active", "suspended", "canceled"):
+                query = query.filter(Subscriber.status == normalized_status)
+        # Full-text search across subscriber + related tables
+        if search:
+            term = search.strip()
+            if term:
+                from app.models.catalog import AccessCredential, Subscription
+                from app.models.network import OntAssignment, OntUnit
+
+                like = f"%{term}%"
+                # Direct subscriber fields
+                direct_conditions = or_(
+                    Subscriber.first_name.ilike(like),
+                    Subscriber.last_name.ilike(like),
+                    Subscriber.display_name.ilike(like),
+                    Subscriber.email.ilike(like),
+                    Subscriber.phone.ilike(like),
+                    Subscriber.subscriber_number.ilike(like),
+                    Subscriber.account_number.ilike(like),
+                    Subscriber.address_line1.ilike(like),
+                    Subscriber.city.ilike(like),
+                    Subscriber.notes.ilike(like),
+                )
+                # Subscription fields (IP, login, MAC)
+                sub_match = (
+                    db.query(Subscription.subscriber_id)
+                    .filter(or_(
+                        Subscription.login.ilike(like),
+                        Subscription.ipv4_address.ilike(like),
+                        Subscription.ipv6_address.ilike(like),
+                        Subscription.mac_address.ilike(like),
+                    ))
+                    .correlate(Subscriber)
+                    .exists()
+                )
+                # PPPoE/RADIUS username
+                cred_match = (
+                    db.query(AccessCredential.subscriber_id)
+                    .filter(
+                        AccessCredential.subscriber_id == Subscriber.id,
+                        AccessCredential.username.ilike(like),
+                    )
+                    .correlate(Subscriber)
+                    .exists()
+                )
+                # ONT serial number
+                ont_match = (
+                    db.query(OntAssignment.id)
+                    .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+                    .filter(
+                        OntAssignment.subscriber_id == Subscriber.id,
+                        OntUnit.serial_number.ilike(like),
+                    )
+                    .correlate(Subscriber)
+                    .exists()
+                )
+                query = query.filter(or_(
+                    direct_conditions,
+                    Subscriber.id.in_(
+                        db.query(Subscription.subscriber_id).filter(or_(
+                            Subscription.login.ilike(like),
+                            Subscription.ipv4_address.ilike(like),
+                            Subscription.ipv6_address.ilike(like),
+                            Subscription.mac_address.ilike(like),
+                        ))
+                    ),
+                    cred_match,
+                    ont_match,
+                ))
         # Backwards-compat: allow filtering by legacy "person_id" keyword.
         if person_id:
             query = query.filter(Subscriber.id == coerce_uuid(person_id))
@@ -430,11 +506,55 @@ class Subscribers(ListResponseMixin):
         db: Session,
         subscriber_type: str | None = None,
         organization_id: str | None = None,
+        status: str | None = None,
+        search: str | None = None,
     ) -> int:
         """Return total count of subscribers matching filters."""
         query = db.query(func.count(Subscriber.id)).filter(
             Subscriber.user_type != UserType.system_user
         )
+        if status:
+            normalized_status = status.strip().lower()
+            if normalized_status == "inactive":
+                query = query.filter(Subscriber.is_active.is_(False))
+            elif normalized_status in ("active", "suspended", "canceled"):
+                query = query.filter(Subscriber.status == normalized_status)
+        if search:
+            term = search.strip()
+            if term:
+                from app.models.catalog import AccessCredential, Subscription
+                from app.models.network import OntAssignment, OntUnit
+
+                like = f"%{term}%"
+                query = query.filter(or_(
+                    Subscriber.first_name.ilike(like),
+                    Subscriber.last_name.ilike(like),
+                    Subscriber.display_name.ilike(like),
+                    Subscriber.email.ilike(like),
+                    Subscriber.phone.ilike(like),
+                    Subscriber.subscriber_number.ilike(like),
+                    Subscriber.account_number.ilike(like),
+                    Subscriber.address_line1.ilike(like),
+                    Subscriber.city.ilike(like),
+                    Subscriber.id.in_(
+                        db.query(Subscription.subscriber_id).filter(or_(
+                            Subscription.login.ilike(like),
+                            Subscription.ipv4_address.ilike(like),
+                            Subscription.ipv6_address.ilike(like),
+                            Subscription.mac_address.ilike(like),
+                        ))
+                    ),
+                    Subscriber.id.in_(
+                        db.query(AccessCredential.subscriber_id).filter(
+                            AccessCredential.username.ilike(like),
+                        )
+                    ),
+                    Subscriber.id.in_(
+                        db.query(OntAssignment.subscriber_id).join(
+                            OntUnit, OntUnit.id == OntAssignment.ont_unit_id,
+                        ).filter(OntUnit.serial_number.ilike(like))
+                    ),
+                ))
         if organization_id:
             query = query.filter(
                 Subscriber.organization_id == coerce_uuid(organization_id)

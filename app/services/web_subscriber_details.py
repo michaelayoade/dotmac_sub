@@ -281,23 +281,28 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
 def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     """Collect subscriber detail page data from multiple services."""
     subscriptions = []
+    all_subscriptions = []
     online_status = {}
     try:
-        subscriptions = catalog_service.subscriptions.list(
+        all_subscriptions = catalog_service.subscriptions.list(
             db=db,
             subscriber_id=str(subscriber.id),
             offer_id=None,
-            status=SubscriptionStatus.active.value,
+            status=None,
             order_by="created_at",
             order_dir="desc",
-            limit=10,
+            limit=50,
             offset=0,
         )
-        subscriptions = sorted(
-            subscriptions,
+        all_subscriptions = sorted(
+            all_subscriptions,
             key=lambda item: item.created_at or item.id,
             reverse=True,
-        )[:10]
+        )
+        subscriptions = [
+            s for s in all_subscriptions
+            if getattr(s, "status", None) == SubscriptionStatus.active
+        ][:10]
         for sub in subscriptions:
             latest_session = (
                 db.query(RadiusAccountingSession)
@@ -320,6 +325,7 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         )
         db.rollback()
         subscriptions = []
+        all_subscriptions = []
         online_status = {}
 
     accounts = []
@@ -389,6 +395,57 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         balance_due = Decimal("0.00")
         available_credit = Decimal("0.00")
         current_balance = Decimal("0.00")
+
+    # Dunning cases
+    dunning_cases = []
+    try:
+        from app.models.collections import DunningCase
+
+        dunning_cases = (
+            db.query(DunningCase)
+            .filter(DunningCase.account_id == subscriber.id)
+            .order_by(DunningCase.created_at.desc())
+            .limit(10)
+            .all()
+        )
+    except Exception:
+        logger.exception("Failed to load dunning cases for subscriber %s", subscriber_id)
+        db.rollback()
+
+    # Payments
+    payments = []
+    try:
+        from app.models.billing import Payment
+
+        payments = (
+            db.query(Payment)
+            .filter(
+                Payment.account_id == subscriber.id,
+                Payment.is_active.is_(True),
+            )
+            .order_by(Payment.created_at.desc())
+            .limit(20)
+            .all()
+        )
+    except Exception:
+        logger.exception("Failed to load payments for subscriber %s", subscriber_id)
+        db.rollback()
+
+    # Service orders
+    service_orders = []
+    try:
+        from app.models.provisioning import ServiceOrder
+
+        service_orders = (
+            db.query(ServiceOrder)
+            .filter(ServiceOrder.subscriber_id == subscriber.id)
+            .order_by(ServiceOrder.created_at.desc())
+            .limit(10)
+            .all()
+        )
+    except Exception:
+        logger.exception("Failed to load service orders for subscriber %s", subscriber_id)
+        db.rollback()
 
     notifications = []
     try:
@@ -493,8 +550,12 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     return {
         "accounts": accounts,
         "subscriptions": subscriptions,
+        "all_subscriptions": all_subscriptions,
         "online_status": online_status,
         "invoices": invoices,
+        "payments": payments,
+        "dunning_cases": dunning_cases,
+        "service_orders": service_orders,
         "notifications": notifications,
         "stats": stats,
         "addresses": addresses,

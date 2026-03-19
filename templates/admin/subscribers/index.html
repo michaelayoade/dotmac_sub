@@ -33,7 +33,7 @@
     <form id="subscribers-filters" data-table-filters="subscribers" class="flex flex-col gap-4 lg:flex-row lg:items-end">
         <div class="flex-1">
             <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search Subscribers</label>
-            {{ search_input("search", search or '', "Search by name, email, or subscriber ID...", "amber", {}) }}
+            {{ search_input("search", search or '', "Search by name, email, phone, IP address, PPPoE username, ONT serial, location...", "amber", {}) }}
         </div>
         <div class="w-full lg:w-48">
             {{ filter_select("subscriber_type", [
@@ -46,7 +46,9 @@
             {{ filter_select("status", [
                 {"value": "", "label": "All Status"},
                 {"value": "active", "label": "Active"},
-                {"value": "inactive", "label": "Inactive"}
+                {"value": "suspended", "label": "Suspended"},
+                {"value": "canceled", "label": "Canceled"},
+                {"value": "inactive", "label": "Inactive (is_active=false)"}
             ], status or '', "Status", "amber") }}
         </div>
         {% if search or subscriber_type or status %}
