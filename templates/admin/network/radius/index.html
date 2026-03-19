@@ -18,6 +18,7 @@
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Authentication, Authorization, and Accounting</p>
         </div>
         <form method="post" action="/admin/network/radius/import-credentials">
+            {% include "components/forms/csrf_input.html" %}
             <button type="submit" class="inline-flex items-center rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-400">
                 Import PPPoE Credentials
             </button>

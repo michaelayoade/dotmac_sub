@@ -1,6 +1,6 @@
 """Admin catalog management web routes."""
 
-
+import logging
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -22,6 +22,7 @@ from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog", tags=["web-admin-catalog"])
 
@@ -640,6 +641,7 @@ def catalog_subscription_send_credentials(
             status_code=303,
         )
     except Exception as exc:
+        logger.error("Failed to send credentials for subscription %s: %s", subscription_id, exc)
         return RedirectResponse(
             f"/admin/catalog/subscriptions/{subscription_id}/edit?error={quote_plus(str(exc))}",
             status_code=303,

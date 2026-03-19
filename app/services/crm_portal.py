@@ -98,7 +98,8 @@ def _cache_get(key: str) -> str | None:
     try:
         val = r.get(key)
         return str(val) if val is not None else None
-    except Exception:
+    except Exception as exc:
+        logger.warning("Redis cache get failed for key %s: %s", key, exc)
         return None
 
 
@@ -109,8 +110,8 @@ def _cache_set(key: str, value: str, ttl: int) -> None:
         return
     try:
         r.setex(key, ttl, value)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Redis cache set failed for key %s: %s", key, exc)
 
 
 def resolve_crm_subscriber_id(db: Session, subscriber_id: str) -> str | None:

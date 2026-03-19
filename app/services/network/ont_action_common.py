@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -9,6 +10,8 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
 from app.services.network._resolve import resolve_genieacs_with_reason
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -60,7 +63,12 @@ def detect_data_model_root(
         ont.tr069_data_model = root
         db.flush()
         return root
-    except GenieACSError:
+    except GenieACSError as exc:
+        logger.warning(
+            "Could not detect data model for ONT %s, defaulting to IGD: %s",
+            ont.serial_number,
+            exc,
+        )
         return TR069_ROOT_IGD
 
 

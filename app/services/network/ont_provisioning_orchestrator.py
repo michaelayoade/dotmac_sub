@@ -51,6 +51,25 @@ from app.services.web_network_service_ports import _resolve_ont_olt_context
 
 logger = logging.getLogger(__name__)
 
+_CREDENTIAL_KEYWORDS = ("password", "secret", "Password")
+
+
+def _mask_credentials(cmd: str) -> str:
+    """Mask credential values in OLT CLI command strings for safe logging/display."""
+    for kw in _CREDENTIAL_KEYWORDS:
+        idx = cmd.find(f" {kw} ")
+        if idx != -1:
+            prefix = cmd[: idx + len(kw) + 2]
+            rest = cmd[idx + len(kw) + 2 :]
+            # Mask until next space or end of string
+            next_space = rest.find(" ")
+            if next_space == -1:
+                cmd = prefix + "********"
+            else:
+                cmd = prefix + "********" + rest[next_space:]
+    return cmd
+
+
 # Bootstrap polling constants
 _BOOTSTRAP_TIMEOUT_SEC = 120
 _BOOTSTRAP_POLL_INTERVAL_SEC = 10
@@ -93,7 +112,11 @@ class ProvisioningJobResult:
                 for s in self.steps
             ],
             "command_preview": [
-                {"step": cs.step, "commands": cs.commands, "description": cs.description}
+                {
+                    "step": cs.step,
+                    "commands": [_mask_credentials(c) for c in cs.commands],
+                    "description": cs.description,
+                }
                 for cs in self.command_sets
             ],
         }
@@ -654,4 +677,5 @@ def _finalize_ont(
         db.flush()
         logger.info("ONT %s provisioning finalized", ont.serial_number)
     except Exception as e:
-        logger.error("Error finalizing ONT %s: %s", ont.serial_number, e)
+        logger.error("Error finalizing ONT %s: %s", ont.serial_number, e, exc_info=True)
+        raise

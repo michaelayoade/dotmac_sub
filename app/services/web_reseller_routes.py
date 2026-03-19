@@ -59,7 +59,7 @@ def reseller_dashboard(
                 db, str(context["reseller"].id), account_ids
             )
     except Exception:
-        logger.debug("Could not fetch CRM open tickets for reseller dashboard")
+        logger.warning("Could not fetch CRM open tickets for reseller dashboard", exc_info=True)
 
     return templates.TemplateResponse(
         "reseller/dashboard/index.html",

@@ -1,5 +1,6 @@
 """Admin network RADIUS web routes."""
 
+import logging
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Request
@@ -20,6 +21,7 @@ from app.services.audit_helpers import (
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
@@ -70,6 +72,7 @@ def radius_import_credentials(_request: Request, db: Session = Depends(get_db)):
             status_code=303,
         )
     except Exception as exc:
+        logger.error("RADIUS credential import failed: %s", exc)
         return RedirectResponse(
             f"/admin/network/radius?error={quote_plus(str(exc))}",
             status_code=303,
