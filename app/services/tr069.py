@@ -331,6 +331,7 @@ class CpeDevices(ListResponseMixin):
 
         # Auto-link to ONTs by serial number
         auto_linked = 0
+        serial_updated = 0
         try:
             from app.models.network import OntUnit
 
@@ -345,8 +346,10 @@ class CpeDevices(ListResponseMixin):
             for cpe_dev in unlinked_devices:
                 if not cpe_dev.serial_number:
                     continue
-                # Link ONT's tr069_acs_server_id if it doesn't have one
-                normalized_cpe_serial = normalize_tr069_serial(cpe_dev.serial_number)
+                cpe_serial = str(cpe_dev.serial_number).strip()
+                normalized_cpe_serial = normalize_tr069_serial(cpe_serial)
+
+                # Strategy 1: Direct normalized serial match
                 ont = (
                     db.query(OntUnit)
                     .filter(
@@ -356,12 +359,43 @@ class CpeDevices(ListResponseMixin):
                     .filter(OntUnit.is_active.is_(True))
                     .first()
                 )
-                if ont and not ont.tr069_acs_server_id:
-                    ont.tr069_acs_server_id = server.id
-                    auto_linked += 1
-            if auto_linked:
+
+                # Strategy 2: Decode Huawei hex serial to display format
+                # e.g., 485754437D4733C3 → first 8 hex chars decode to ASCII
+                # vendor prefix "HWTC" or "HWTT", used in some ONT serial fields
+                if not ont and len(cpe_serial) == 16:
+                    try:
+                        vendor_ascii = bytes.fromhex(cpe_serial[:8]).decode("ascii")
+                        display_serial = vendor_ascii + cpe_serial[8:]
+                        normalized_display = normalize_tr069_serial(display_serial)
+                        ont = (
+                            db.query(OntUnit)
+                            .filter(
+                                _normalized_serial_expr(OntUnit.serial_number)
+                                == normalized_display
+                            )
+                            .filter(OntUnit.is_active.is_(True))
+                            .first()
+                        )
+                    except (ValueError, UnicodeDecodeError):
+                        pass
+
+                if ont:
+                    if not ont.tr069_acs_server_id:
+                        ont.tr069_acs_server_id = server.id
+                        auto_linked += 1
+                    # Update synthetic serials with real GenieACS serial
+                    current = str(ont.serial_number or "")
+                    if current.startswith("HW-") and cpe_serial != current:
+                        ont.serial_number = cpe_serial[:120]
+                        serial_updated += 1
+
+            if auto_linked or serial_updated:
                 db.commit()
-                logger.info("Auto-linked %d ONTs to ACS server %s", auto_linked, server.name)
+                logger.info(
+                    "Auto-link: %d ONTs linked to ACS %s, %d serials updated",
+                    auto_linked, server.name, serial_updated,
+                )
         except Exception as e:
             logger.warning("Auto-link ONTs after sync failed: %s", e)
             db.rollback()

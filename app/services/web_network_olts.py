@@ -508,6 +508,45 @@ def update_olt(
         return None, integrity_error_message(exc)
 
 
+def _auto_init_tr069_profile(olt: OLTDevice) -> None:
+    """Best-effort: create DotMac-ACS TR-069 profile on a new OLT.
+
+    Runs after OLT creation. Silently skips if SSH is not configured
+    or if profile creation fails (admin can use the Init TR-069 button later).
+    """
+    if not olt.ssh_username or not olt.ssh_password:
+        logger.info("Skipping auto TR-069 init for %s — no SSH credentials", olt.name)
+        return
+    try:
+        from app.services.network.olt_ssh import (
+            create_tr069_server_profile,
+            get_tr069_server_profiles,
+        )
+
+        ok, _msg, profiles = get_tr069_server_profiles(olt)
+        if not ok:
+            return
+        for p in profiles:
+            if "dotmac" in p.name.lower() or "10.10.41.1" in (p.acs_url or ""):
+                logger.info("TR-069 profile already exists on %s: %s", olt.name, p.name)
+                return
+
+        ok, msg = create_tr069_server_profile(
+            olt,
+            profile_name="DotMac-ACS",
+            acs_url="http://10.10.41.1:7547",
+            username="acs",
+            password="acs",  # noqa: S106
+            inform_interval=300,
+        )
+        if ok:
+            logger.info("Auto-created TR-069 profile on %s", olt.name)
+        else:
+            logger.warning("Auto TR-069 profile creation failed on %s: %s", olt.name, msg)
+    except Exception as exc:
+        logger.warning("Auto TR-069 init error on %s: %s", olt.name, exc)
+
+
 def create_olt_with_audit(
     db: Session,
     request: Request,
@@ -527,6 +566,10 @@ def create_olt_with_audit(
         actor_id=actor_id,
         metadata={"name": olt.name, "mgmt_ip": olt.mgmt_ip or None},
     )
+
+    # Auto-create DotMac-ACS TR-069 profile on the new OLT (best-effort)
+    _auto_init_tr069_profile(olt)
+
     return olt, None
 
 

@@ -126,6 +126,36 @@ _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
 
 
+def _auto_bind_tr069_after_authorize(
+    olt: OLTDevice, fsp: str, ont_id: int | None
+) -> None:
+    """Best-effort: bind newly authorized ONT to DotMac-ACS TR-069 profile.
+
+    Called after successful ONT authorization. Silently skips if no
+    DotMac-ACS profile exists or if binding fails.
+    """
+    if ont_id is None:
+        return
+    try:
+        ok, _msg, profiles = get_tr069_server_profiles(olt)
+        if not ok:
+            return
+        dotmac_id = None
+        for p in profiles:
+            if "dotmac" in p.name.lower() or "10.10.41.1" in (p.acs_url or ""):
+                dotmac_id = p.profile_id
+                break
+        if dotmac_id is None:
+            return
+        ok, msg = bind_tr069_server_profile(olt, fsp=fsp, ont_id=ont_id, profile_id=dotmac_id)
+        if ok:
+            logger.info("Auto-bound ONT %d on %s to TR-069 profile %d", ont_id, fsp, dotmac_id)
+        else:
+            logger.warning("Auto-bind TR-069 failed for ONT %d on %s: %s", ont_id, fsp, msg)
+    except Exception as exc:
+        logger.warning("Auto-bind TR-069 error for ONT %d: %s", ont_id, exc)
+
+
 def _validate_fsp(fsp: str) -> tuple[bool, str]:
     """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1')."""
     if not _FSP_RE.match(fsp):
@@ -336,6 +366,9 @@ def authorize_ont(
                 "Authorized ONT %s on OLT %s port %s",
                 serial_number, olt.name, fsp,
             )
+            # Auto-bind to DotMac-ACS TR-069 profile if it exists
+            _auto_bind_tr069_after_authorize(olt, fsp, ont_id)
+
             message = f"ONT {serial_number} authorized on port {fsp}"
             if ont_id is not None:
                 message += f" (ONT-ID {ont_id})"
