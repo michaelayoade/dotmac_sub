@@ -339,6 +339,11 @@ def apply_generated_service_credentials(db: Session, subscription: dict[str, obj
     try:
         subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
     except Exception:
+        logger.warning(
+            "Subscriber lookup failed during credential generation for %s",
+            subscriber_id,
+            exc_info=True,
+        )
         return
     if not str(subscription.get("login") or "").strip():
         subscription["login"] = _generated_service_login(subscriber)
@@ -518,6 +523,11 @@ def _reconcile_active_subscription_after_credential_sync(
     try:
         subscription = catalog_service.subscriptions.get(db=db, subscription_id=str(subscription_id))
     except Exception:
+        logger.warning(
+            "Subscription lookup failed during RADIUS reconcile for %s",
+            subscription_id,
+            exc_info=True,
+        )
         return
     if subscription.status != SubscriptionStatus.active:
         return
@@ -815,6 +825,11 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str) -> str:
             label = f"{label} ({subscriber.subscriber_number})"
         return str(label)
     except Exception:
+        logger.warning(
+            "Failed to resolve subscriber label for %s",
+            subscriber_id,
+            exc_info=True,
+        )
         return ""
 
 
@@ -911,6 +926,7 @@ def subscription_form_context(
         try:
             subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
         except Exception:
+            logger.warning("Subscriber lookup failed for form context: %s", subscriber_id, exc_info=True)
             subscriber = None
         if subscriber:
             credential_targets = _credential_contact_targets(subscriber)
@@ -922,6 +938,7 @@ def subscription_form_context(
                 catalog_service.nas_devices.get(db, provisioning_nas_device_id)
             )
         except Exception:
+            logger.warning("NAS device lookup failed for %s", provisioning_nas_device_id, exc_info=True)
             selected_router_label = ""
     apply_generated_service_credentials(db, subscription)
     if not subscription.get("ipv4_method"):

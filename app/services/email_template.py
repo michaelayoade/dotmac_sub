@@ -34,14 +34,19 @@ def wrap_email_html(
     Returns:
         Full HTML email document with branded header/footer.
     """
+    from html import escape
+
     base = base_url or _DEFAULT_BASE_URL
+    safe_subject = escape(subject)
+    safe_company = escape(company_name)
+    safe_support = escape(support_email)
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{subject}</title>
+<title>{safe_subject}</title>
 <style>
 body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; background-color: #f8fafc; color: #1e293b; }}
 .wrapper {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
@@ -59,7 +64,7 @@ body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, '
     <!-- Header with branded banner -->
     <div class="header">
         <img src="{base}/static/illustrations/email-header.png" alt="" style="max-width: 100%; height: 40px; object-fit: contain;">
-        <div class="header-fallback" style="margin-top: 8px;">{company_name}</div>
+        <div class="header-fallback" style="margin-top: 8px;">{safe_company}</div>
     </div>
 
     <!-- Email body -->
@@ -69,8 +74,8 @@ body {{ margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, '
 
     <!-- Footer -->
     <div class="footer">
-        <p>&copy; {company_name}</p>
-        <p>Need help? <a href="mailto:{support_email}">{support_email}</a></p>
+        <p>&copy; {safe_company}</p>
+        <p>Need help? <a href="mailto:{safe_support}">{safe_support}</a></p>
     </div>
 </div>
 </body>

@@ -29,9 +29,16 @@ logger = logging.getLogger(__name__)
 
 
 def _ssh_query(query: str) -> str:
+    import os
+
+    ssh_host = os.environ.get("SPLYNX_SSH_HOST", "")
+    ssh_user = os.environ.get("SPLYNX_SSH_USER", "root")
+    if not ssh_host:
+        logger.warning("SPLYNX_SSH_HOST not set — skipping SSH query")
+        return ""
     cmd = [
-        "ssh", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=no",
-        "root@138.68.165.175",
+        "ssh", "-o", "ConnectTimeout=10",
+        f"{ssh_user}@{ssh_host}",
         f'mysql -u root -N -B -e "{query}" splynx',
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -45,7 +52,7 @@ def generate_ipv6_prefixes(db: Session, dry_run: bool) -> dict[str, int]:
     Each /48 contains 65536 possible /64 prefixes.
     We pre-generate the first 1000 per pool for allocation.
     """
-    from app.models.network import IPVersion, IpPool, IPv6Address
+    from app.models.network import IpPool, IPv6Address, IPVersion
 
     pools = db.query(IpPool).filter(
         IpPool.ip_version == IPVersion.ipv6,
@@ -144,7 +151,7 @@ def import_ipv4_from_splynx(db: Session, dry_run: bool) -> dict[str, int]:
     Reads assigned IPs from Splynx ipv4_networks_ip table and creates
     IPv4Address records in the matching pool.
     """
-    from app.models.network import IPVersion, IpPool, IPv4Address
+    from app.models.network import IpPool, IPv4Address, IPVersion
 
     # Fetch assigned IPs from Splynx
     raw = _ssh_query(
@@ -214,16 +221,15 @@ def import_ipv4_from_splynx(db: Session, dry_run: bool) -> dict[str, int]:
 
 def assign_ipv6_to_subscribers(db: Session, dry_run: bool) -> dict[str, int]:
     """Assign IPv6 /64 prefixes to active subscriptions that have IPv4 but no IPv6."""
+    # Find active subscriptions with IPv4 but no IPv6
+    from sqlalchemy import select
+
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.models.network import (
         IPAssignment,
-        IPVersion,
-        IpPool,
         IPv6Address,
+        IPVersion,
     )
-
-    # Find active subscriptions with IPv4 but no IPv6
-    from sqlalchemy import select
 
     active_subs = db.scalars(
         select(Subscription).where(
