@@ -5,13 +5,13 @@
 {% block auth_content %}
 <div class="sm:mx-auto sm:w-full sm:max-w-md">
     <div class="flex justify-center">
-        <div class="h-12 w-12 rounded-xl bg-primary-600 flex items-center justify-center">
-            <svg class="h-8 w-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/>
-            </svg>
-        </div>
+        <img src="/static/illustrations/customer-hero.webp"
+             alt=""
+             class="h-24 w-24 object-contain"
+             loading="eager"
+             onerror="this.src='/static/illustrations/customer-hero.png'">
     </div>
-    <h2 class="mt-6 text-center text-2xl font-bold leading-9 tracking-tight text-slate-900 dark:text-white">
+    <h2 class="mt-4 text-center text-2xl font-bold leading-9 tracking-tight text-slate-900 dark:text-white">
         Sign in to your account
     </h2>
     <p class="mt-2 text-center text-sm text-slate-600 dark:text-slate-400">

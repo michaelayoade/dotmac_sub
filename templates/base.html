@@ -10,8 +10,21 @@
         if sidebar_stats is defined and sidebar_stats and sidebar_stats.favicon_url
         else (branding_favicon_url if branding_favicon_url is defined and branding_favicon_url else "/favicon.ico")
     ) %}
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/branding/favicon/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/branding/favicon/favicon-16.png" />
     <link rel="icon" href="{{ resolved_favicon }}" />
     <link rel="shortcut icon" href="{{ resolved_favicon }}" />
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/branding/favicon/apple-touch-icon.png" />
+    <link rel="manifest" href="/static/manifest.json" />
+    <meta name="theme-color" content="#3b82f6" />
+    {% block meta_social %}
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="{% block og_title %}{{ self.title() }}{% endblock %}" />
+    <meta property="og:description" content="{% block og_description %}Fiber internet subscription management{% endblock %}" />
+    <meta property="og:image" content="/static/illustrations/og-image.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="/static/illustrations/og-image.png" />
+    {% endblock %}
 
     <!-- Apply dark mode immediately to prevent flash -->
     <script>
