@@ -719,6 +719,66 @@ async def olt_tr069_rebind(
     )
 
 
+@router.post("/olts/{olt_id}/init-tr069", dependencies=[Depends(require_permission("network:write"))])
+def olt_init_tr069(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Create or verify DotMac-ACS TR-069 profile on the OLT."""
+    from app.models.network import OLTDevice as OLTModel
+
+    olt = db.get(OLTModel, olt_id)
+    if not olt:
+        return RedirectResponse(f"/admin/network/olts/{olt_id}?error=OLT+not+found", status_code=303)
+
+    # Check if profile already exists
+    from app.services.network.olt_ssh import (
+        create_tr069_server_profile,
+        get_tr069_server_profiles,
+    )
+
+    ok, msg, profiles = get_tr069_server_profiles(olt)
+    if not ok:
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?error={quote_plus(msg)}", status_code=303
+        )
+
+    for p in profiles:
+        if "dotmac" in p.name.lower() or "10.10.41.1" in (p.acs_url or ""):
+            return RedirectResponse(
+                f"/admin/network/olts/{olt_id}?notice={quote_plus(f'TR-069 profile already exists: {p.name} (ID {p.profile_id})')}",
+                status_code=303,
+            )
+
+    # Create profile
+    ok, msg = create_tr069_server_profile(
+        olt,
+        profile_name="DotMac-ACS",
+        acs_url="http://10.10.41.1:7547",
+        username="acs",
+        password="acs",  # noqa: S106
+        inform_interval=300,
+    )
+
+    from app.web.admin import get_current_user
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="init_tr069",
+        entity_type="olt",
+        entity_id=olt_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"success": ok, "message": msg},
+    )
+
+    status = "notice" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?{status}={quote_plus(msg)}", status_code=303
+    )
+
+
 @router.post("/olts/{olt_id}/firmware-upgrade", dependencies=[Depends(require_permission("network:write"))])
 def olt_firmware_upgrade(
     request: Request,

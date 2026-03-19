@@ -1384,53 +1384,47 @@ def create_tr069_server_profile(
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
         config_prompt = r"[#)]\s*$"
-        interactive_or_config = r"[#)]\s*$|\}:\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
 
         # Huawei MA56xx uses an interactive wizard for `add`.
-        # Strategy: create the profile by answering each wizard prompt,
-        # then skip optional prompts with Ctrl+K (0x0b).
-        CTRL_K = "\x0b"
-
+        # Each prompt looks like: { url<K> }: or { user-password<S> }:
+        # We extract the prompt text between { } to determine the response.
+        # Key: match ONLY the { } prompt content, not echoed output.
         channel.send(f'ont tr069-server-profile add profile-name "{profile_name}"\n')
-        time.sleep(1)
 
-        # The wizard prompts in order: url, user, password, periodic-inform-interval.
-        # Each prompt looks like: { url<K> }:
-        # We read raw output and respond to each prompt.
-        wizard_responses = [
-            ("url", acs_url),
-            ("user", username or CTRL_K),
-            ("pass", password or CTRL_K),
-            ("interval", str(inform_interval) if inform_interval and inform_interval > 0 else CTRL_K),
-        ]
-
-        for keyword, response in wizard_responses:
+        for _attempt in range(8):
+            time.sleep(2)
             raw = b""
-            deadline = time.time() + 8
-            while time.time() < deadline:
-                if channel.recv_ready():
-                    raw += channel.recv(4096)
-                    time.sleep(0.2)
-                else:
-                    time.sleep(0.3)
-                decoded = raw.decode("ascii", errors="replace")
-                if "}:" in decoded or re.search(config_prompt, decoded):
-                    break
-
+            while channel.recv_ready():
+                raw += channel.recv(4096)
+                time.sleep(0.1)
             decoded = raw.decode("ascii", errors="replace")
-            if "}:" in decoded:
-                channel.send(f"{response}\n")
-                time.sleep(1)
-            elif re.search(config_prompt, decoded):
-                # Already at config prompt — wizard ended early
-                break
 
-        # Drain any remaining output until we're back at config prompt
-        try:
-            _read_until_prompt(channel, config_prompt, timeout_sec=5)
-        except Exception:
-            pass
+            # Extract the wizard prompt: { ... }:
+            prompt_match = re.search(r"\{([^}]+)\}\s*:", decoded)
+            if prompt_match:
+                prompt_text = prompt_match.group(1).lower().strip()
+
+                if "url" in prompt_text and "user" not in prompt_text:
+                    channel.send(f'url "{acs_url}"\n')
+                elif "user-password" in prompt_text or "password" in prompt_text:
+                    # <S> type prompt — send raw value, no keyword prefix
+                    channel.send(f"{password}\n" if password else "\n")
+                elif "user" in prompt_text:
+                    channel.send(f'user "{username}"\n' if username else "\n")
+                elif "interval" in prompt_text or "inform" in prompt_text:
+                    channel.send(f"{inform_interval}\n" if inform_interval else "\n")
+                elif "<cr>" in prompt_text:
+                    channel.send("\n")
+                else:
+                    channel.send("\n")
+            elif re.search(config_prompt, decoded):
+                break  # Back at config prompt — wizard complete
+
+        # Drain remaining output
+        time.sleep(1)
+        while channel.recv_ready():
+            channel.recv(4096)
 
         # Verify profile was created
         verify_output = _run_huawei_cmd(
