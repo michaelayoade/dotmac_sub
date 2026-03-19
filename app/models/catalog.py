@@ -129,11 +129,25 @@ class BillingMode(enum.Enum):
 
 
 class SubscriptionStatus(enum.Enum):
-    pending = "pending"
-    active = "active"
-    suspended = "suspended"
-    canceled = "canceled"
-    expired = "expired"
+    """Service/subscription status — mirrors Splynx service status lifecycle.
+
+    Splynx mapping:
+      pending  → pending (awaiting activation / provisioning)
+      active   → active (service running, can connect)
+      blocked  → suspended (temporarily blocked — non-payment)
+      stopped  → stopped (manually paused by admin, different from block)
+      disabled → disabled (service terminated by admin)
+      hidden   → archived (historical, not visible to customer)
+      deleted  → canceled (soft-deleted, record preserved)
+    """
+    pending = "pending"       # Awaiting activation / provisioning
+    active = "active"         # Service running, subscriber can connect
+    suspended = "suspended"   # Temporarily blocked (Splynx: blocked)
+    stopped = "stopped"       # Manually paused by admin (Splynx: stopped)
+    disabled = "disabled"     # Terminated by admin (Splynx: disabled)
+    archived = "archived"     # Historical, hidden from customer (Splynx: hidden)
+    canceled = "canceled"     # Soft-deleted / fully terminated
+    expired = "expired"       # Contract/prepaid period ended
 
 
 class NasVendor(enum.Enum):

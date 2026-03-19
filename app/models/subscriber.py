@@ -42,11 +42,21 @@ class ContactMethod(enum.Enum):
 
 
 class SubscriberStatus(enum.Enum):
-    """Account/billing status for subscriber."""
-    active = "active"
-    suspended = "suspended"
-    canceled = "canceled"
-    delinquent = "delinquent"
+    """Account status — mirrors Splynx customer status lifecycle.
+
+    Splynx mapping:
+      new      → new (signed up, not yet activated)
+      active   → active (paying, service running)
+      blocked  → suspended (temporarily blocked — non-payment or violation)
+      disabled → disabled (permanently deactivated by admin)
+      deleted  → canceled (soft-deleted, record preserved for audit)
+    """
+    new = "new"               # Signed up, awaiting activation
+    active = "active"         # Active, paying subscriber
+    suspended = "suspended"   # Temporarily blocked (Splynx: blocked)
+    disabled = "disabled"     # Permanently deactivated by admin (Splynx: disabled)
+    canceled = "canceled"     # Terminated / soft-deleted
+    delinquent = "delinquent" # Past due, pre-suspension
 
 
 # --- Deprecated aliases for backwards compatibility ---
