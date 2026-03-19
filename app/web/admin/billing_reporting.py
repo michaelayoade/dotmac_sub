@@ -75,6 +75,15 @@ def billing_tax_rate_create(
     return RedirectResponse(url="/admin/billing/tax-rates", status_code=303)
 
 
+@router.post("/tax-rates/{rate_id}/toggle", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:tax:write"))])
+def billing_tax_rate_toggle(
+    rate_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    billing_service.tax_rates.toggle_active(db, rate_id)
+    return RedirectResponse(url="/admin/billing/tax-rates", status_code=303)
+
+
 @router.get("/ar-aging", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:ledger:read"))])
 def billing_ar_aging(
     request: Request,

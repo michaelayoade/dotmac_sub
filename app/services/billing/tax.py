@@ -66,6 +66,18 @@ class TaxRates(ListResponseMixin):
         return rate
 
     @staticmethod
+    def toggle_active(db: Session, rate_id: str) -> TaxRate:
+        """Toggle a tax rate's active status."""
+        rate = get_by_id(db, TaxRate, rate_id)
+        if not rate:
+            raise HTTPException(status_code=404, detail="Tax rate not found")
+        rate.is_active = not rate.is_active
+        db.commit()
+        db.refresh(rate)
+        logger.info("Tax rate %s (%s) toggled to %s", rate.name, rate.id, rate.is_active)
+        return rate
+
+    @staticmethod
     def delete(db: Session, rate_id: str):
         rate = get_by_id(db, TaxRate, rate_id)
         if not rate:
