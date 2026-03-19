@@ -610,11 +610,13 @@ def seed_notification_templates(db: Session) -> None:
     ]
 
     for tmpl_data in templates:
-        existing = (
-            db.query(NotificationTemplate)
-            .filter(NotificationTemplate.code == tmpl_data["code"])
-            .first()
-        )
+        from sqlalchemy import select as sa_select
+
+        existing = db.scalars(
+            sa_select(NotificationTemplate).where(
+                NotificationTemplate.code == tmpl_data["code"]
+            )
+        ).first()
         if not existing:
             tmpl = NotificationTemplate(**tmpl_data)
             db.add(tmpl)
@@ -1326,11 +1328,13 @@ def seed_provisioning_workflows(db: Session) -> None:
     )
 
     workflow_name = "Fiber PPPoE Full Provisioning"
-    existing = (
-        db.query(ProvisioningWorkflow)
-        .filter(ProvisioningWorkflow.name == workflow_name)
-        .first()
-    )
+    from sqlalchemy import select as sa_select
+
+    existing = db.scalars(
+        sa_select(ProvisioningWorkflow).where(
+            ProvisioningWorkflow.name == workflow_name
+        )
+    ).first()
     if existing:
         return
 

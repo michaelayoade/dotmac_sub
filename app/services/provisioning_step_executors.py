@@ -41,16 +41,16 @@ def execute_create_olt_service_port(
 
     if not ont_unit_id and subscription_id:
         # Resolve ONT from subscription's assignment
+        from sqlalchemy import select
+
         from app.models.network import OntAssignment
 
-        assignment = (
-            db.query(OntAssignment)
-            .filter(
+        assignment = db.scalars(
+            select(OntAssignment).where(
                 OntAssignment.subscriber_id == context.get("subscriber_id"),
                 OntAssignment.active.is_(True),
             )
-            .first()
-        )
+        ).first()
         if assignment:
             ont_unit_id = str(assignment.ont_unit_id)
 
@@ -339,26 +339,18 @@ def execute_push_tr069_pppoe_credentials(
     if not username or not password:
         subscription_id = context.get("subscription_id")
         if subscription_id:
+            from sqlalchemy import select as sa_select
+
             from app.models.catalog import AccessCredential
 
-            cred = (
-                db.query(AccessCredential)
-                .filter(
-                    AccessCredential.subscription_id == subscription_id,
-                    AccessCredential.is_active.is_(True),
-                )
-                .first()
-            )
-            if not cred:
-                # Fallback: find by subscriber
-                cred = (
-                    db.query(AccessCredential)
-                    .filter(
-                        AccessCredential.subscriber_id == context.get("subscriber_id"),
+            subscriber_id = context.get("subscriber_id")
+            if subscriber_id:
+                cred = db.scalars(
+                    sa_select(AccessCredential).where(
+                        AccessCredential.subscriber_id == subscriber_id,
                         AccessCredential.is_active.is_(True),
                     )
-                    .first()
-                )
+                ).first()
             if cred:
                 username = username or cred.username
                 password = password or cred.password
@@ -388,11 +380,12 @@ def execute_push_tr069_pppoe_credentials(
             )
 
         if result.success:
-            logger.info("PPPoE credentials pushed via TR-069 for user %s", username)
+            masked = username[:3] + "***" if len(username) > 3 else "***"
+            logger.info("PPPoE credentials pushed via TR-069 for user %s", masked)
             return ProvisioningResult(
                 status="ok",
                 detail=result.message,
-                payload={"tr069_pppoe_pushed": True, "pppoe_username": username},
+                payload={"tr069_pppoe_pushed": True},
             )
         return ProvisioningResult(status="failed", detail=result.message)
     except Exception as exc:

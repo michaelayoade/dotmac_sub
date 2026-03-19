@@ -1153,51 +1153,15 @@ def device_vlans(
     request: Request, device_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """HTMX partial: VLAN interfaces on this NAS device."""
-    from app.models.catalog import NasDevice
-
-    device = db.get(NasDevice, device_id)
-    if not device:
-        return templates.TemplateResponse(
-            "admin/network/nas/_vlan_tab.html",
-            {**_base_context(request, db, "nas"), "device_id": device_id, "vlans": [], "error": "Device not found"},
-        )
-
-    from app.services.nas._mikrotik_vlan import (
-        list_ip_addresses,
-        list_pppoe_servers,
-        list_vlan_interfaces,
-    )
+    from app.services import web_nas_vlan
 
     try:
-        vlans = list_vlan_interfaces(device)
-        ips = list_ip_addresses(device)
-        pppoe_list = list_pppoe_servers(device)
+        data = web_nas_vlan.vlan_list_context(db, device_id)
     except Exception as exc:
-        return templates.TemplateResponse(
-            "admin/network/nas/_vlan_tab.html",
-            {**_base_context(request, db, "nas"), "device_id": device_id, "vlans": [], "error": str(exc)},
-        )
-
-    # Build lookup maps for the template
-    ip_map: dict[str, str] = {}
-    for ip in ips:
-        iface = ip.get("interface") or ""
-        if iface and not ip.get("disabled"):
-            ip_map[iface] = ip.get("address") or ""
-
-    pppoe_map: dict[str, str] = {}
-    for srv in pppoe_list:
-        iface = srv.get("interface") or ""
-        if iface:
-            pppoe_map[iface] = srv.get("service_name") or ""
+        data = {"device_id": device_id, "vlans": [], "error": str(exc)}
 
     context = _base_context(request, db, "nas")
-    context.update({
-        "device_id": device_id,
-        "vlans": vlans,
-        "ip_map": ip_map,
-        "pppoe_map": pppoe_map,
-    })
+    context.update(data)
     return templates.TemplateResponse("admin/network/nas/_vlan_tab.html", context)
 
 
@@ -1212,19 +1176,11 @@ def device_vlan_create(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Create a VLAN + IP + PPPoE server on the NAS device."""
-    from app.models.catalog import NasDevice
+    from app.services import web_nas_vlan
 
-    device = db.get(NasDevice, device_id)
-    if not device:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=vlans",
-            status_code=303,
-        )
-
-    from app.services.nas._mikrotik_vlan import provision_vlan_full
-
-    result = provision_vlan_full(
-        device,
+    result = web_nas_vlan.handle_vlan_create(
+        db,
+        device_id,
         vlan_id=vlan_id,
         parent_interface=parent_interface,
         ip_address=ip_address,
@@ -1245,13 +1201,13 @@ def device_vlan_create(
             "vlan_id": vlan_id,
             "parent_interface": parent_interface,
             "ip_address": ip_address,
-            "success": result.success,
-            "message": result.message,
+            "success": result["success"],
+            "message": result["message"],
         },
     )
 
-    msg = quote_plus(result.message)
-    status = "notice" if result.success else "error"
+    msg = quote_plus(result["message"])
+    status = "notice" if result["success"] else "error"
     return RedirectResponse(
         f"/admin/network/nas/devices/{device_id}?tab=vlans&{status}={msg}",
         status_code=303,
@@ -1267,18 +1223,11 @@ def device_vlan_delete(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Remove a VLAN interface (and its IP + PPPoE server) from the NAS."""
-    from app.models.catalog import NasDevice
+    from app.services import web_nas_vlan
 
-    device = db.get(NasDevice, device_id)
-    if not device:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=vlans",
-            status_code=303,
-        )
-
-    from app.services.nas._mikrotik_vlan import remove_vlan_interface
-
-    result = remove_vlan_interface(device, vlan_id=vlan_id, parent_interface=parent_interface)
+    result = web_nas_vlan.handle_vlan_delete(
+        db, device_id, vlan_id=vlan_id, parent_interface=parent_interface
+    )
 
     from app.web.admin import get_current_user
 
@@ -1290,11 +1239,11 @@ def device_vlan_delete(
         entity_type="nas_device",
         entity_id=device_id,
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"vlan_id": vlan_id, "success": result.success, "message": result.message},
+        metadata={"vlan_id": vlan_id, "success": result["success"], "message": result["message"]},
     )
 
-    msg = quote_plus(result.message)
-    status = "notice" if result.success else "error"
+    msg = quote_plus(result["message"])
+    status = "notice" if result["success"] else "error"
     return RedirectResponse(
         f"/admin/network/nas/devices/{device_id}?tab=vlans&{status}={msg}",
         status_code=303,
