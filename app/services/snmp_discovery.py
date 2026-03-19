@@ -42,7 +42,10 @@ def _snmpwalk_args(device: NetworkDevice, command: str = "snmpwalk", bulk: bool 
     args = [command, "-t", "5", "-r", "2", "-m", ""]
     if bulk:
         args.append("-Cr25")
-    if version in {"2c", "v2c"}:
+    if version in {"1", "v1"}:
+        community = decrypt_credential(device.snmp_community) if device.snmp_community else "public"
+        args += ["-v1", "-c", community]
+    elif version in {"2c", "v2c", "2"}:
         community = decrypt_credential(device.snmp_community) if device.snmp_community else "public"
         args += ["-v2c", "-c", community]
     elif version == "v3":
