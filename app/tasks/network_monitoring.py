@@ -67,6 +67,24 @@ def refresh_core_device_snmp() -> dict[str, int]:
                     core_runtime_service.snmp_check_device(session, str(device.id))
                     if device.last_snmp_ok:
                         core_runtime_service.discover_interfaces_and_health(session, device)
+                        # Poll custom SNMP OIDs
+                        try:
+                            from app.services.monitoring_metrics import (
+                                poll_custom_snmp_oids,
+                            )
+
+                            poll_custom_snmp_oids(session, device)
+                        except Exception:
+                            logger.debug("Custom OID poll failed for %s", device.id)
+                        # Update subscriber impact count
+                        try:
+                            from app.services.monitoring_metrics import (
+                                update_device_subscriber_count,
+                            )
+
+                            update_device_subscriber_count(session, device)
+                        except Exception:
+                            logger.debug("Subscriber count update failed for %s", device.id)
                         updated += 1
                     else:
                         failed += 1

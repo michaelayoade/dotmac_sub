@@ -53,6 +53,21 @@ def poll_all_olt_signals() -> dict[str, int]:
             result["total_updated"],
             result["total_errors"],
         )
+
+        # Push ONU status counts to VictoriaMetrics
+        try:
+            from app.services.monitoring_metrics import push_onu_status_metrics
+            from app.services.network_monitoring import get_onu_status_summary
+
+            onu = get_onu_status_summary(db)
+            push_onu_status_metrics(
+                online=onu.get("online", 0),
+                offline=onu.get("offline", 0),
+                low_signal=onu.get("low_signal", 0),
+            )
+        except Exception:
+            logger.debug("Failed to push ONU metrics to VictoriaMetrics")
+
         return result
     except Exception as e:
         logger.error("OLT signal polling task failed: %s", e)

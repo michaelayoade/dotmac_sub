@@ -2203,6 +2203,27 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=None,
         label="Default TR-069 ACS Server ID",
     ),
+    # ── Network Monitoring ─────────────────────────────────────────────
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="device_metrics_retention_days",
+        env_var="DEVICE_METRICS_RETENTION_DAYS",
+        value_type=SettingValueType.integer,
+        default=90,
+        label="Device Metrics Retention (days)",
+        min_value=7,
+        max_value=3650,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="alert_evaluation_interval_seconds",
+        env_var="ALERT_EVALUATION_INTERVAL_SECONDS",
+        value_type=SettingValueType.integer,
+        default=60,
+        label="Alert Evaluation Interval (seconds)",
+        min_value=10,
+        max_value=600,
+    ),
 ]
 
 DOMAIN_SETTINGS_SERVICE = {
