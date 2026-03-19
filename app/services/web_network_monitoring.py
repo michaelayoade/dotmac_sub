@@ -437,6 +437,54 @@ _ACTION_DISPLAY: dict[str, str] = {
 }
 
 
+def get_site_reachability(db: Session) -> list[dict[str, Any]]:
+    """Group monitored devices by management subnet and compute reachability."""
+    from sqlalchemy import select as sa_select
+
+    from app.models.network_monitoring import NetworkDevice
+
+    devices = list(
+        db.scalars(
+            sa_select(NetworkDevice).where(NetworkDevice.is_active.is_(True))
+        ).all()
+    )
+
+    sites: dict[str, dict[str, Any]] = {}
+    for d in devices:
+        if not d.mgmt_ip:
+            continue
+        octets = d.mgmt_ip.split(".")
+        if len(octets) < 3:
+            continue
+        subnet = f"{octets[0]}.{octets[1]}.0.0/16"
+        if subnet not in sites:
+            sites[subnet] = {"subnet": subnet, "name": "", "total": 0, "online": 0, "degraded": 0, "offline": 0}
+        s = sites[subnet]
+        s["total"] += 1
+        status = d.status.value if d.status else "offline"
+        if status == "online":
+            s["online"] += 1
+        elif status == "degraded":
+            s["degraded"] += 1
+        else:
+            s["offline"] += 1
+
+    subnet_names = {
+        "172.16.0.0/16": "Abuja Management",
+        "172.20.0.0/16": "OLT Management",
+        "172.21.0.0/16": "Lagos Management",
+        "102.220.0.0/16": "Public Edge (Lagos/Abuja)",
+        "160.119.0.0/16": "Core Infrastructure",
+    }
+    result = []
+    for subnet, data in sorted(sites.items(), key=lambda x: x[1]["total"], reverse=True):
+        data["name"] = subnet_names.get(subnet, subnet)
+        pct = round(((data["online"] + data["degraded"]) / data["total"]) * 100) if data["total"] > 0 else 0
+        data["reachable_pct"] = pct
+        result.append(data)
+    return result
+
+
 def _get_network_activity_feed(
     db: Session, limit: int = 15
 ) -> list[dict[str, Any]]:
