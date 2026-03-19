@@ -1864,6 +1864,30 @@ def ont_traceroute_diagnostic(
     )
 
 
+@router.post("/onts/{ont_id}/enable-ipv6", dependencies=[Depends(require_permission("network:write"))])
+def ont_enable_ipv6(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Enable IPv6 dual-stack on an ONT via TR-069."""
+    from app.services.network.ont_action_network import enable_ipv6_on_wan
+
+    result = enable_ipv6_on_wan(db, ont_id)
+    headers = {
+        "HX-Trigger": '{"showToast": {"message": "'
+        + result.message.replace('"', '\\"')
+        + '", "type": "'
+        + ("success" if result.success else "error")
+        + '"}}'
+    }
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=200 if result.success else 502,
+        headers=headers,
+    )
+
+
 @router.post("/onts/{ont_id}/connection-request", dependencies=[Depends(require_permission("network:write"))])
 def ont_connection_request(
     request: Request,

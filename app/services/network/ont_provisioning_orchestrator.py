@@ -530,6 +530,29 @@ class OntProvisioningOrchestrator:
 
             result.steps.extend(pppoe_results)
 
+        # ── Step 12.5: Enable IPv6 dual-stack via TR-069 (if profile requests it) ──
+        if spec.ipv6_enabled and tr069_enabled and device_found:
+            step_start = time.monotonic()
+            try:
+                from app.services.network.ont_action_network import enable_ipv6_on_wan
+
+                v6_result = enable_ipv6_on_wan(db, str(ont.id))
+                step_ms = int((time.monotonic() - step_start) * 1000)
+                result.steps.append(
+                    ProvisioningStepResult(
+                        12, "Enable IPv6 Dual-Stack", v6_result.success,
+                        v6_result.message, step_ms,
+                    )
+                )
+            except Exception as exc:
+                step_ms = int((time.monotonic() - step_start) * 1000)
+                result.steps.append(
+                    ProvisioningStepResult(
+                        12, "Enable IPv6 Dual-Stack", False,
+                        f"IPv6 enable failed: {exc}", step_ms,
+                    )
+                )
+
         # Check for any failed required steps
         # Steps 6 (internet-config) and 7 (wan-config) are best-effort — not critical
         critical_steps = {4, 5, 8, 11, 12}

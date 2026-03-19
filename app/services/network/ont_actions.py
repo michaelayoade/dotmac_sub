@@ -18,6 +18,7 @@ from app.services.network.ont_action_diagnostics import (
     run_traceroute_diagnostic,
 )
 from app.services.network.ont_action_network import (
+    enable_ipv6_on_wan,
     send_connection_request,
     set_connection_request_credentials,
     set_pppoe_credentials,
@@ -45,6 +46,7 @@ class OntActions:
     send_connection_request = staticmethod(send_connection_request)
     run_ping_diagnostic = staticmethod(run_ping_diagnostic)
     run_traceroute_diagnostic = staticmethod(run_traceroute_diagnostic)
+    enable_ipv6_on_wan = staticmethod(enable_ipv6_on_wan)
 
 
 ont_actions = OntActions()

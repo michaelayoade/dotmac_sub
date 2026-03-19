@@ -77,6 +77,7 @@ class WanServiceSpec:
     nat_enabled: bool = True
     user_vlan: int | str | None = None
     tag_transform: str = "translate"
+    ip_protocol: str = "ipv4"  # ipv4, dual_stack
 
 
 @dataclass
@@ -95,6 +96,7 @@ class ProvisioningSpec:
     internet_config_ip_index: int | None = None
     wan_config_profile_id: int | None = None
     pppoe_omci_vlan: int | None = None
+    ipv6_enabled: bool = False
 
 
 def _render_template(template: str, context: OntProvisioningContext) -> str:
@@ -399,6 +401,12 @@ def build_spec_from_profile(
         raw_pv = getattr(profile, "pppoe_omci_vlan", None)
         pppoe_omci_vlan = int(raw_pv) if raw_pv is not None else None
 
+    # Determine if dual-stack is enabled from profile ip_protocol
+    ipv6_enabled = False
+    if hasattr(profile, "ip_protocol") and profile.ip_protocol:
+        ip_proto = profile.ip_protocol.value if hasattr(profile.ip_protocol, "value") else str(profile.ip_protocol)
+        ipv6_enabled = ip_proto == "dual_stack"
+
     return ProvisioningSpec(
         wan_services=wan_services,
         mgmt_vlan_tag=profile.mgmt_vlan_tag,
@@ -407,6 +415,7 @@ def build_spec_from_profile(
         internet_config_ip_index=internet_config_ip_index,
         wan_config_profile_id=wan_config_profile_id,
         pppoe_omci_vlan=pppoe_omci_vlan,
+        ipv6_enabled=ipv6_enabled,
     )
 
 

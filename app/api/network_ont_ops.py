@@ -167,6 +167,18 @@ def set_pppoe_credentials(
 
 
 @router.post(
+    "/ont-units/{ont_id}/enable-ipv6",
+    response_model=OntActionResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def enable_ipv6_on_ont(
+    ont_id: str, db: Session = Depends(get_db)
+) -> OntActionResponse:
+    result = ont_actions.enable_ipv6_on_wan(db, ont_id)
+    return _action_response(result)
+
+
+@router.post(
     "/ont-units/{ont_id}/connection-request",
     response_model=OntActionResponse,
     dependencies=[Depends(require_permission("network:write"))],
