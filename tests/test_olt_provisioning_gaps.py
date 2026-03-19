@@ -429,6 +429,7 @@ class TestBuildSpecFromProfile:
             pppoe_static_password="secret123",
             cos_priority=None,
             nat_enabled=True,
+            t_cont_profile=None,
         )
         profile = SimpleNamespace(
             wan_services=[wan_svc],
@@ -463,6 +464,7 @@ class TestBuildSpecFromProfile:
             pppoe_static_password=None,
             cos_priority=None,
             nat_enabled=True,
+            t_cont_profile=None,
         )
         profile = SimpleNamespace(
             wan_services=[wan_svc],
@@ -493,6 +495,7 @@ class TestBuildSpecFromProfile:
             pppoe_static_password="plain:secret123",
             cos_priority=None,
             nat_enabled=True,
+            t_cont_profile=None,
         )
         profile = SimpleNamespace(
             wan_services=[wan_svc],
