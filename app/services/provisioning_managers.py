@@ -795,6 +795,26 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                     result = provisioner.push_config(step_context, step.config)
                 elif step.step_type == ProvisioningStepType.confirm_up:
                     result = provisioner.confirm_up(step_context, step.config)
+                elif step.step_type == ProvisioningStepType.create_olt_service_port:
+                    from app.services.provisioning_step_executors import (
+                        execute_create_olt_service_port,
+                    )
+                    result = execute_create_olt_service_port(db, step_context, step.config)
+                elif step.step_type == ProvisioningStepType.ensure_nas_vlan:
+                    from app.services.provisioning_step_executors import (
+                        execute_ensure_nas_vlan,
+                    )
+                    result = execute_ensure_nas_vlan(db, step_context, step.config)
+                elif step.step_type == ProvisioningStepType.push_tr069_wan_config:
+                    from app.services.provisioning_step_executors import (
+                        execute_push_tr069_wan_config,
+                    )
+                    result = execute_push_tr069_wan_config(db, step_context, step.config)
+                elif step.step_type == ProvisioningStepType.push_tr069_pppoe_credentials:
+                    from app.services.provisioning_step_executors import (
+                        execute_push_tr069_pppoe_credentials,
+                    )
+                    result = execute_push_tr069_pppoe_credentials(db, step_context, step.config)
                 else:
                     raise HTTPException(status_code=400, detail="Unsupported step type")
                 results.append(
