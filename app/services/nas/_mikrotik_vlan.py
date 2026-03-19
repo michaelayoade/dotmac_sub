@@ -74,9 +74,6 @@ def list_vlan_interfaces(device: NasDevice) -> list[dict[str, Any]]:
             for item in raw
             if isinstance(item, dict)
         ]
-    except Exception as exc:
-        logger.error("Failed to list VLANs on %s: %s", device.name, exc)
-        return []
     finally:
         pool.disconnect()
 
@@ -99,9 +96,6 @@ def list_ip_addresses(device: NasDevice) -> list[dict[str, Any]]:
             for item in raw
             if isinstance(item, dict)
         ]
-    except Exception as exc:
-        logger.error("Failed to list IPs on %s: %s", device.name, exc)
-        return []
     finally:
         pool.disconnect()
 
@@ -125,9 +119,6 @@ def list_pppoe_servers(device: NasDevice) -> list[dict[str, Any]]:
             for item in raw
             if isinstance(item, dict)
         ]
-    except Exception as exc:
-        logger.error("Failed to list PPPoE servers on %s: %s", device.name, exc)
-        return []
     finally:
         pool.disconnect()
 
@@ -385,6 +376,8 @@ def provision_vlan_full(
         device, interface_name=iface_name, address=ip_address
     )
     if not result.success:
+        if created_items:
+            result.message += f" (Note: {', '.join(created_items)} were created before this failure.)"
         return result
     if result.created:
         created_items.append(f"IP {ip_address}")
@@ -397,6 +390,8 @@ def provision_vlan_full(
         default_profile=pppoe_default_profile,
     )
     if not result.success:
+        if created_items:
+            result.message += f" (Note: {', '.join(created_items)} were created before this failure.)"
         return result
     if result.created:
         created_items.append("PPPoE server")

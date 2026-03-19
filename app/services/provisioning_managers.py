@@ -829,6 +829,10 @@ class ProvisioningRuns(CRUDManager[ProvisioningRun]):
                 if result.payload:
                     context.update(result.payload)
             except Exception as exc:
+                logger.error(
+                    "Provisioning step %s (%s) failed: %s",
+                    step.id, step.step_type.value, exc, exc_info=True,
+                )
                 status = ProvisioningRunStatus.failed
                 step_error_message = str(exc)
                 results.append(

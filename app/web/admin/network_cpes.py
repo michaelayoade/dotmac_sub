@@ -2,7 +2,7 @@
 
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -120,7 +120,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
 def cpe_edit(request: Request, cpe_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
     try:
         cpe = web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
-    except Exception:
+    except (HTTPException, ValueError, LookupError):
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "CPE not found"},
@@ -145,7 +145,7 @@ def cpe_edit(request: Request, cpe_id: str, db: Session = Depends(get_db)) -> HT
 def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     try:
         web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
-    except Exception:
+    except (HTTPException, ValueError, LookupError):
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "CPE not found"},
@@ -241,7 +241,7 @@ def cpe_detail(
 ) -> HTMLResponse:
     try:
         cpe = web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
-    except Exception:
+    except (HTTPException, ValueError, LookupError):
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "CPE not found"},
@@ -475,7 +475,10 @@ def cpe_ping_diagnostic(
     """Run ping diagnostic from CPE device via TR-069."""
     form = parse_form_data_sync(request)
     host = str(form.get("host") or "")
-    count = int(str(form.get("count") or 4))
+    try:
+        count = int(str(form.get("count") or 4))
+    except (ValueError, TypeError):
+        count = 4
     from app.services.network.cpe_actions import CpeActions
 
     result = CpeActions.run_ping_diagnostic(db, cpe_id, host, count)

@@ -148,6 +148,11 @@ class NotificationHandler:
                         name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
                     context["subscriber_name"] = name or "Valued Customer"
             except Exception:
+                logger.warning(
+                    "Failed to resolve subscriber name (account_id=%s)",
+                    event.account_id,
+                    exc_info=True,
+                )
                 context.setdefault("subscriber_name", "Valued Customer")
 
         # Resolve invoice details if invoice_id present
@@ -163,7 +168,11 @@ class NotificationHandler:
                     if invoice.due_at:
                         context.setdefault("due_date", invoice.due_at.strftime("%b %d, %Y"))
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to resolve invoice details (invoice_id=%s)",
+                    event.invoice_id,
+                    exc_info=True,
+                )
 
         # Normalize amount formatting
         if "amount" in context and not context["amount"].startswith("₦"):
