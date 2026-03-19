@@ -2,10 +2,11 @@
 
 import smtplib
 
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
-from app.services.domain_settings import notification_settings
 from app.services import email as email_service
+from app.services.domain_settings import notification_settings
 from tests.mocks import FakeSMTP
 
 
@@ -253,3 +254,98 @@ def test_get_smtp_config_falls_back_to_legacy_env(monkeypatch):
     assert config["host"] == "legacy.smtp.local"
     assert config["port"] == 587
     assert config["from_email"] == "legacy@example.com"
+
+
+def test_send_user_invite_email_uses_company_name_and_branding_logo(db_session, monkeypatch):
+    """Invite email should use configured company name and branded logo."""
+    captured: dict[str, str] = {}
+
+    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+        captured["to_email"] = to_email
+        captured["subject"] = subject
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        captured["activity"] = activity
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.ng")
+
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="company_name",
+                value_text="Dotmac Selfcare",
+                value_type=SettingValueType.string,
+            ),
+            DomainSetting(
+                domain=SettingDomain.comms,
+                key="sidebar_logo_url",
+                value_text="/branding/assets/logo-main.png",
+                value_type=SettingValueType.string,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = email_service.send_user_invite_email(
+        db_session,
+        "invitee@example.com",
+        "token-123",
+        person_name="John Doe",
+    )
+
+    assert result is True
+    assert captured["subject"] == "You're invited to Dotmac Selfcare"
+    assert "Welcome to Dotmac Selfcare" in captured["body_html"]
+    assert "https://selfcare.dotmac.ng/branding/assets/logo-main.png" in captured["body_html"]
+    assert "Welcome to Dotmac Selfcare." in captured["body_text"]
+    assert captured["activity"] == "auth_user_invite"
+
+
+def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
+    """Password reset email should use branded HTML and app logo."""
+    captured: dict[str, str] = {}
+
+    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+        captured["subject"] = subject
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        captured["activity"] = activity
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    monkeypatch.setenv("APP_URL", "https://selfcare.dotmac.ng")
+
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="company_name",
+                value_text="Dotmac Selfcare",
+                value_type=SettingValueType.string,
+            ),
+            DomainSetting(
+                domain=SettingDomain.comms,
+                key="sidebar_logo_url",
+                value_text="/branding/assets/logo-main.png",
+                value_type=SettingValueType.string,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = email_service.send_password_reset_email(
+        db_session,
+        "user@example.com",
+        "reset-456",
+        person_name="Jane Doe",
+    )
+
+    assert result is True
+    assert captured["subject"] == "Password Reset Request"
+    assert "Password Reset Request" in captured["body_html"]
+    assert "https://selfcare.dotmac.ng/branding/assets/logo-main.png" in captured["body_html"]
+    assert "We received a request to reset your password for Dotmac Selfcare." in captured["body_text"]
+    assert captured["activity"] == "auth_password_reset"

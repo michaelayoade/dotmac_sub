@@ -1363,42 +1363,67 @@ def create_tr069_server_profile(
         return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
+        import time
+
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
         config_prompt = r"[#)]\s*$"
+        interactive_or_config = r"[#)]\s*$|\}:\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
 
-        # Huawei syntax: ont tr069-server-profile add profile-name "X" url "Y"
-        add_cmd = (
-            f'ont tr069-server-profile add profile-name'
-            f' "{profile_name}" url "{acs_url}"'
+        # Huawei MA56xx uses an interactive wizard for `add`.
+        # Strategy: create the profile by answering each wizard prompt,
+        # then skip optional prompts with Ctrl+K (0x0b).
+        CTRL_K = "\x0b"
+
+        channel.send(f'ont tr069-server-profile add profile-name "{profile_name}"\n')
+        time.sleep(1)
+
+        # The wizard prompts in order: url, user, password, periodic-inform-interval.
+        # Each prompt looks like: { url<K> }:
+        # We read raw output and respond to each prompt.
+        wizard_responses = [
+            ("url", acs_url),
+            ("user", username or CTRL_K),
+            ("pass", password or CTRL_K),
+            ("interval", str(inform_interval) if inform_interval and inform_interval > 0 else CTRL_K),
+        ]
+
+        for keyword, response in wizard_responses:
+            raw = b""
+            deadline = time.time() + 8
+            while time.time() < deadline:
+                if channel.recv_ready():
+                    raw += channel.recv(4096)
+                    time.sleep(0.2)
+                else:
+                    time.sleep(0.3)
+                decoded = raw.decode("ascii", errors="replace")
+                if "}:" in decoded or re.search(config_prompt, decoded):
+                    break
+
+            decoded = raw.decode("ascii", errors="replace")
+            if "}:" in decoded:
+                channel.send(f"{response}\n")
+                time.sleep(1)
+            elif re.search(config_prompt, decoded):
+                # Already at config prompt — wizard ended early
+                break
+
+        # Drain any remaining output until we're back at config prompt
+        try:
+            _read_until_prompt(channel, config_prompt, timeout_sec=5)
+        except Exception:
+            pass
+
+        # Verify profile was created
+        verify_output = _run_huawei_cmd(
+            channel, "display ont tr069-server-profile all", prompt=config_prompt
         )
-        output = _run_huawei_cmd(channel, add_cmd, prompt=config_prompt)
-
-        if is_error_output(output):
+        if profile_name.lower() not in verify_output.lower():
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            return False, f"OLT rejected: {output.strip()[-200:]}"
-
-        # Modify profile to set credentials and inform interval
-        if username:
-            _run_huawei_cmd(
-                channel,
-                f'ont tr069-server-profile modify profile-name "{profile_name}" acs-username "{username}"',
-                prompt=config_prompt,
-            )
-        if password:
-            _run_huawei_cmd(
-                channel,
-                f'ont tr069-server-profile modify profile-name "{profile_name}" acs-password "{password}"',
-                prompt=config_prompt,
-            )
-        if inform_interval and inform_interval > 0:
-            _run_huawei_cmd(
-                channel,
-                f'ont tr069-server-profile modify profile-name "{profile_name}" inform-interval {inform_interval}',
-                prompt=config_prompt,
-            )
+            return False, f"Profile '{profile_name}' not found after creation. OLT may have rejected it."
 
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 

@@ -124,10 +124,18 @@
             {% endfor %}
         </div>
         {% else %}
-        <div class="text-center py-8">
-            <svg class="mx-auto h-12 w-12 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No active alarms</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">All systems are operating normally.</p>
+        <div class="text-center py-12">
+            {% from "components/illustrations.html" import all_clear %}
+            {{ all_clear("h-28 w-28 mx-auto") }}
+            <h3 class="mt-4 text-lg font-semibold text-slate-900 dark:text-white font-display">All Systems Clear</h3>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">No active alarms — all monitored devices are operating normally.</p>
+            <div class="mt-4 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-4 py-2 dark:bg-emerald-900/20">
+                <span class="relative flex h-2 w-2">
+                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+                </span>
+                <span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Monitoring {{ stats.critical + stats.warning + stats.info + stats.total_open }} rules across all devices</span>
+            </div>
         </div>
         {% endif %}
     {% endcall %}
@@ -171,10 +179,15 @@
             </table>
         </div>
         {% else %}
-        <div class="p-6 text-center py-8">
-            <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-            <h3 class="mt-2 text-sm font-medium text-slate-900 dark:text-white">No alert rules configured</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create rules to monitor network metrics and receive alerts.</p>
+        <div class="p-6 text-center py-10">
+            {% from "components/illustrations.html" import network_mesh %}
+            {{ network_mesh("h-24 w-24 mx-auto opacity-60") }}
+            <h3 class="mt-4 text-sm font-semibold text-slate-900 dark:text-white">No alert rules configured</h3>
+            <p class="mt-1 max-w-sm mx-auto text-sm text-slate-500 dark:text-slate-400">Create rules to monitor CPU, memory, signal levels, and bandwidth thresholds. Alerts trigger when metrics breach configured limits.</p>
+            <a href="/admin/network/alarms/rules/new" class="mt-4 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Create First Rule
+            </a>
         </div>
         {% endif %}
     {% endcall %}

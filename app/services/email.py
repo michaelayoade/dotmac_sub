@@ -1,10 +1,11 @@
+import html
 import logging
 import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 
 from sqlalchemy.orm import Session
 
@@ -107,7 +108,7 @@ def _legacy_smtp_config(db: Session | None) -> dict:
         "use_tls": use_tls,
         "use_ssl": use_ssl,
         "from_email": from_email,
-        "from_name": _env_value("SMTP_FROM_NAME") or _setting_value(db, "smtp_from_name") or "DotMac SM",
+        "from_name": _env_value("SMTP_FROM_NAME") or _setting_value(db, "smtp_from_name") or "Dotmac Selfcare",
         "user": username,
         "from_addr": from_email,
     }
@@ -184,7 +185,7 @@ def list_smtp_senders(db: Session | None) -> list[dict[str, Any]]:
                 "password": None,
                 "has_password": False,
                 "from_email": "",
-                "from_name": "DotMac SM",
+                "from_name": "Dotmac Selfcare",
                 "use_tls": True,
                 "use_ssl": False,
                 "is_active": True,
@@ -300,7 +301,12 @@ def upsert_smtp_sender(
         "port": (SettingValueType.integer, str(int(port)), None, False),
         "username": (SettingValueType.string, (username or "").strip(), None, False),
         "from_email": (SettingValueType.string, from_email.strip(), None, False),
-        "from_name": (SettingValueType.string, (from_name or "DotMac SM").strip() or "DotMac SM", None, False),
+        "from_name": (
+            SettingValueType.string,
+            (from_name or "Dotmac Selfcare").strip() or "Dotmac Selfcare",
+            None,
+            False,
+        ),
         "use_tls": (SettingValueType.boolean, "true" if use_tls else "false", use_tls, False),
         "use_ssl": (SettingValueType.boolean, "true" if use_ssl else "false", use_ssl, False),
         "is_active": (SettingValueType.boolean, "true" if is_active else "false", is_active, False),
@@ -406,6 +412,123 @@ def _get_app_url(db: Session | None) -> str:
     return _env_value("APP_URL") or _setting_value(db, "app_url") or "http://localhost:8000"
 
 
+def _get_company_name(db: Session | None) -> str:
+    if db is None:
+        return "Dotmac Selfcare"
+    try:
+        from app.services import web_system_company_info as web_system_company_info_service
+
+        company_name = (web_system_company_info_service.get_company_info(db).get("company_name") or "").strip()
+        if company_name:
+            return company_name
+    except Exception:
+        logger.debug("Failed to load company name for email branding", exc_info=True)
+    return "Dotmac Selfcare"
+
+
+def _absolute_asset_url(app_url: str, asset_url: str | None) -> str:
+    value = (asset_url or "").strip()
+    if not value:
+        return ""
+    if value.startswith(("http://", "https://")):
+        return value
+    if value.startswith("/"):
+        return urljoin(f"{app_url.rstrip('/')}/", value.lstrip("/"))
+    return value
+
+
+def _get_email_branding_logo_url(db: Session | None) -> str:
+    if db is None:
+        return ""
+    app_url = _get_app_url(db)
+    try:
+        logo_raw = resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
+        logo_url = _absolute_asset_url(app_url, str(logo_raw).strip() if logo_raw else "")
+        if logo_url:
+            return logo_url
+    except Exception:
+        logger.debug("Failed to load primary branding logo for email", exc_info=True)
+    try:
+        dark_logo_raw = resolve_value(db, SettingDomain.comms, "sidebar_logo_dark_url")
+        dark_logo_url = _absolute_asset_url(app_url, str(dark_logo_raw).strip() if dark_logo_raw else "")
+        if dark_logo_url:
+            return dark_logo_url
+    except Exception:
+        logger.debug("Failed to load dark branding logo for email", exc_info=True)
+    return ""
+
+
+def _render_action_email_html(
+    *,
+    company_name: str,
+    logo_url: str,
+    title: str,
+    accent_color: str,
+    greeting: str,
+    intro_html: str,
+    action_url: str,
+    action_label: str,
+    expiry_minutes: int,
+    details_html: str,
+    closing_html: str,
+    support_email: str,
+) -> str:
+    logo_block = ""
+    if logo_url:
+        logo_block = f"""
+  <div style="position: absolute; top: 15px; right: 15px;">
+    <img src="{html.escape(logo_url)}" alt="{html.escape(company_name)} logo" style="max-width: 150px; height: auto;">
+  </div>
+"""
+    support_href = html.escape(support_email)
+    safe_company_name = html.escape(company_name)
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin: 0; padding: 24px; background-color: #f4f4f9;">
+  <div style="font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; line-height: 1.8; color: #333; background-color: #f4f4f9; padding: 25px; border: 1px solid #ccc; border-radius: 10px; box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1); position: relative; max-width: 680px; margin: 0 auto;">
+{logo_block}
+    <div style="text-align: center; margin-bottom: 20px;">
+      <h1 style="color: {accent_color}; font-size: 24px; margin: 0;">{html.escape(title)}</h1>
+    </div>
+
+    <p style="font-size: 16px; color: {accent_color}; margin-top: 20px;">{html.escape(greeting)}</p>
+
+    <div style="font-size: 15px; color: #555; margin: 15px 0;">
+      {intro_html}
+    </div>
+
+    <div style="background-color: #fff; border: 2px solid #e2e2e2; border-radius: 8px; padding: 20px; margin-bottom: 20px;">
+      {details_html}
+      <p style="margin: 18px 0 0;">
+        <a href="{html.escape(action_url)}" style="display: inline-block; padding: 12px 24px; background-color: {accent_color}; color: #ffffff; text-decoration: none; border-radius: 6px; font-weight: 600;">{html.escape(action_label)}</a>
+      </p>
+      <p style="font-size: 14px; color: #666; margin: 16px 0 0;">If the button does not work, copy and paste this link into your browser:</p>
+      <p style="font-size: 14px; margin: 8px 0 0; word-break: break-all;"><a href="{html.escape(action_url)}" style="color: {accent_color}; text-decoration: none;">{html.escape(action_url)}</a></p>
+    </div>
+
+    <div style="font-size: 15px; color: #555; margin: 15px 0;">
+      {closing_html}
+      <p style="margin: 0;">For help, contact us via <a href="mailto:{support_href}" style="color: {accent_color}; text-decoration: none;">{support_href}</a>.</p>
+    </div>
+
+    <p style="font-size: 15px; color: #555; margin-bottom: 20px;">
+      Thank you for choosing <strong style="color: #c62828; font-size: 18px;">{safe_company_name}</strong>.
+    </p>
+
+    <p style="font-size: 15px; color: {accent_color}; text-align: right; font-style: italic;">
+      Best regards,<br>
+      <span style="color: #c62828; font-weight: bold;">{safe_company_name} Support Team</span>
+    </p>
+  </div>
+</body>
+</html>
+"""
+
+
 def _create_smtp_client(host: str, port: int, use_ssl: bool, timeout: int | None = None):
     if use_ssl:
         if timeout is None:
@@ -425,7 +548,7 @@ def send_email_with_config(
 ) -> bool:
     msg = MIMEMultipart("alternative")
     msg["Subject"] = subject
-    msg["From"] = f"{config.get('from_name', 'DotMac SM')} <{config.get('from_email', 'noreply@example.com')}>"
+    msg["From"] = f"{config.get('from_name', 'Dotmac Selfcare')} <{config.get('from_email', 'noreply@example.com')}>"
     msg["To"] = to_email
 
     if body_text:
@@ -642,51 +765,43 @@ def send_password_reset_email(db: Session, to_email: str, reset_token: str, pers
     # Get configurable expiry minutes
     expiry_minutes = resolve_value(db, SettingDomain.auth, "password_reset_expiry_minutes") or 60
 
-    greeting = f"Hi {person_name}," if person_name else "Hi,"
+    greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
+    company_name = _get_company_name(db)
+    logo_url = _get_email_branding_logo_url(db)
+    support_email = (_setting_value(db, "smtp_from_email") or "support@dotmac.ng").strip()
 
     subject = "Password Reset Request"
 
-    body_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .button {{
-            display: inline-block;
-            padding: 12px 24px;
-            background-color: #007bff;
-            color: #ffffff;
-            text-decoration: none;
-            border-radius: 4px;
-            margin: 20px 0;
-        }}
-        .footer {{ margin-top: 30px; font-size: 12px; color: #666; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2>Password Reset Request</h2>
-        <p>{greeting}</p>
-        <p>We received a request to reset your password. Click the button below to create a new password:</p>
-        <p><a href="{reset_url}" class="button">Reset Password</a></p>
-        <p>Or copy and paste this link into your browser:</p>
-        <p><a href="{reset_url}">{reset_url}</a></p>
-        <p>This link will expire in {expiry_minutes} minutes.</p>
-        <p>If you didn't request a password reset, you can safely ignore this email.</p>
-        <div class="footer">
-            <p>This is an automated message. Please do not reply to this email.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+    body_html = _render_action_email_html(
+        company_name=company_name,
+        logo_url=logo_url,
+        title="Password Reset Request",
+        accent_color="green",
+        greeting=greeting,
+        intro_html="""
+<p style="margin: 0 0 12px;">We received a request to reset your password for your portal access.</p>
+<p style="margin: 0;">Use the secure button below to create a new password and continue using your account.</p>
+""".strip(),
+        action_url=reset_url,
+        action_label="Reset Password",
+        expiry_minutes=expiry_minutes,
+        details_html=f"""
+<p style="font-size: 15px; margin: 0; line-height: 1.5;">
+  <strong style="color: #c62828;">Action:</strong> <span style="color: #555;">Reset your account password</span><br>
+  <strong style="color: #c62828;">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_minutes} minutes</span>
+</p>
+""".strip(),
+        closing_html="""
+<p style="margin: 0 0 12px;">If you did not request this password reset, you can safely ignore this email and your current password will remain unchanged.</p>
+<p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
+""".strip(),
+        support_email=support_email,
+    )
 
     body_text = f"""{greeting}
 
-We received a request to reset your password.
+We received a request to reset your password for {company_name}.
 
 Click the link below to create a new password:
 {reset_url}
@@ -736,50 +851,43 @@ def send_user_invite_email(
     # Get configurable expiry minutes
     expiry_minutes = resolve_value(db, SettingDomain.auth, "user_invite_expiry_minutes") or 60
 
-    greeting = f"Hi {person_name}," if person_name else "Hi,"
+    greeting = f"Dear {person_name}," if person_name else "Dear Customer,"
+    company_name = _get_company_name(db)
+    logo_url = _get_email_branding_logo_url(db)
+    support_email = (_setting_value(db, "smtp_from_email") or "support@dotmac.ng").strip()
 
-    subject = "You're invited to Dotmac SM"
+    subject = f"You're invited to {company_name}"
 
-    body_html = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; color: #333; }}
-        .container {{ max-width: 600px; margin: 0 auto; padding: 20px; }}
-        .button {{
-            display: inline-block;
-            padding: 12px 24px;
-            background-color: #007bff;
-            color: #ffffff;
-            text-decoration: none;
-            border-radius: 4px;
-            margin: 20px 0;
-        }}
-        .footer {{ margin-top: 30px; font-size: 12px; color: #666; }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2>Welcome to Dotmac SM</h2>
-        <p>{greeting}</p>
-        <p>Your account has been created. Use the button below to set your password and get started:</p>
-        <p><a href="{reset_url}" class="button">Set Password</a></p>
-        <p>Or copy and paste this link into your browser:</p>
-        <p><a href="{reset_url}">{reset_url}</a></p>
-        <p>This link will expire in {expiry_minutes} minutes.</p>
-        <div class="footer">
-            <p>This is an automated message. Please do not reply to this email.</p>
-        </div>
-    </div>
-</body>
-</html>
-"""
+    body_html = _render_action_email_html(
+        company_name=company_name,
+        logo_url=logo_url,
+        title=f"Welcome to {company_name}",
+        accent_color="green",
+        greeting=greeting,
+        intro_html="""
+<p style="margin: 0 0 12px;">Your account has been created successfully.</p>
+<p style="margin: 0;">Use the secure button below to set your password and complete your access to the portal.</p>
+""".strip(),
+        action_url=reset_url,
+        action_label="Set Password",
+        expiry_minutes=expiry_minutes,
+        details_html=f"""
+<p style="font-size: 15px; margin: 0; line-height: 1.5;">
+  <strong style="color: #c62828;">Portal:</strong> <span style="color: #555;">{html.escape(company_name)}</span><br>
+  <strong style="color: #c62828;">Email:</strong> <span style="color: #555;">{html.escape(to_email)}</span><br>
+  <strong style="color: #c62828;">Expires In:</strong> <span style="color: #555;">{expiry_minutes} minutes</span>
+</p>
+""".strip(),
+        closing_html="""
+<p style="margin: 0 0 12px;">If you need any assistance getting started, our support team is available to help you.</p>
+<p style="margin: 0 0 12px;">This is an automated message. Please do not reply directly to this email.</p>
+""".strip(),
+        support_email=support_email,
+    )
 
     body_text = f"""{greeting}
 
-Welcome to Dotmac SM.
+Welcome to {company_name}.
 
 Use the link below to set your password:
 {reset_url}
