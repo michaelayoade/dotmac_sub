@@ -1312,6 +1312,99 @@ def seed_provisioning_settings(db: Session) -> None:
     )
 
 
+def seed_provisioning_workflows(db: Session) -> None:
+    """Seed default provisioning workflows for fiber subscriber onboarding.
+
+    Creates a "Fiber PPPoE Full Provisioning" workflow with the standard
+    5-step automated sequence. Skips if a workflow with this name already exists.
+    """
+    from app.models.provisioning import (
+        ProvisioningStep,
+        ProvisioningStepType,
+        ProvisioningVendor,
+        ProvisioningWorkflow,
+    )
+
+    workflow_name = "Fiber PPPoE Full Provisioning"
+    existing = (
+        db.query(ProvisioningWorkflow)
+        .filter(ProvisioningWorkflow.name == workflow_name)
+        .first()
+    )
+    if existing:
+        return
+
+    workflow = ProvisioningWorkflow(
+        name=workflow_name,
+        vendor=ProvisioningVendor.huawei,
+        description=(
+            "End-to-end automated provisioning for Huawei FTTH with MikroTik NAS. "
+            "Creates OLT service-port, NAS VLAN/IP/PPPoE, pushes WAN config and "
+            "PPPoE credentials to ONT via TR-069, then verifies subscriber comes online."
+        ),
+        is_active=True,
+    )
+    db.add(workflow)
+    db.flush()
+
+    steps = [
+        {
+            "name": "Create OLT Service Port",
+            "step_type": ProvisioningStepType.create_olt_service_port,
+            "order_index": 10,
+            "config": {
+                "gem_index": 1,
+                "description": "Map ONT GEM port to service VLAN on OLT",
+            },
+        },
+        {
+            "name": "Ensure NAS VLAN",
+            "step_type": ProvisioningStepType.ensure_nas_vlan,
+            "order_index": 20,
+            "config": {
+                "parent_interface": "ether3",
+                "pppoe_default_profile": "default",
+                "description": "Create VLAN interface, IP, and PPPoE server on MikroTik NAS",
+            },
+        },
+        {
+            "name": "Push WAN Config via TR-069",
+            "step_type": ProvisioningStepType.push_tr069_wan_config,
+            "order_index": 30,
+            "config": {
+                "wan_mode": "pppoe",
+                "description": "Configure ONT WAN mode to PPPoE via GenieACS",
+            },
+        },
+        {
+            "name": "Push PPPoE Credentials via TR-069",
+            "step_type": ProvisioningStepType.push_tr069_pppoe_credentials,
+            "order_index": 40,
+            "config": {
+                "description": "Push subscriber PPPoE username/password to ONT via GenieACS",
+            },
+        },
+        {
+            "name": "Confirm Subscriber Online",
+            "step_type": ProvisioningStepType.confirm_up,
+            "order_index": 50,
+            "config": {
+                "description": "Verify subscriber has connected and is online via RADIUS",
+            },
+        },
+    ]
+
+    for step_data in steps:
+        step = ProvisioningStep(
+            workflow_id=workflow.id,
+            **step_data,
+        )
+        db.add(step)
+
+    db.commit()
+    logger.info("Seeded provisioning workflow: %s (%d steps)", workflow_name, len(steps))
+
+
 def seed_projects_settings(db: Session) -> None:
     """Seed minimal projects settings required by services/tests."""
     projects_settings = DomainSettings(SettingDomain.projects)

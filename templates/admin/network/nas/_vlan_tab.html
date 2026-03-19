@@ -1,0 +1,112 @@
+{# HTMX partial: VLAN management tab for NAS device detail page #}
+<div class="space-y-6">
+    {# Create VLAN Form #}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Create VLAN + PPPoE Server</h2>
+        </div>
+        <div class="p-6">
+            <form method="POST" action="/admin/network/nas/devices/{{ device_id }}/vlans/create"
+                  class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+                {% include "components/forms/csrf_input.html" %}
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">VLAN ID</label>
+                    <input type="number" name="vlan_id" min="1" max="4094" required placeholder="203"
+                           class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Parent Interface</label>
+                    <input type="text" name="parent_interface" value="ether3" required
+                           class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">IP Address (CIDR)</label>
+                    <input type="text" name="ip_address" required placeholder="172.16.110.1/24"
+                           class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">PPPoE Service Name</label>
+                    <input type="text" name="pppoe_service_name" placeholder="Auto-generated"
+                           class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="flex items-end">
+                    <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-blue-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Create
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    {# VLAN Interfaces Table #}
+    <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+            <div class="flex items-center justify-between">
+                <h2 class="font-semibold text-slate-900 dark:text-white">VLAN Interfaces</h2>
+                {% if vlans %}<span class="text-xs text-slate-400">{{ vlans | length }} interface{{ 's' if vlans | length != 1 else '' }}</span>{% endif %}
+            </div>
+        </div>
+        {% if vlans %}
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="bg-slate-50 dark:bg-slate-800/50">
+                    <tr>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">VLAN ID</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Parent</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">IP Address</th>
+                        <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">PPPoE Server</th>
+                        <th class="px-6 py-3 text-center text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                        <th class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for vlan in vlans %}
+                    {% set vlan_ip = ip_map.get(vlan.name) if ip_map else None %}
+                    {% set vlan_pppoe = pppoe_map.get(vlan.name) if pppoe_map else None %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-6 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ vlan.name }}</td>
+                        <td class="px-6 py-3 text-sm font-mono text-slate-600 dark:text-slate-300">{{ vlan.vlan_id }}</td>
+                        <td class="px-6 py-3 text-sm text-slate-600 dark:text-slate-300">{{ vlan.interface }}</td>
+                        <td class="px-6 py-3 text-sm font-mono text-slate-600 dark:text-slate-300">{{ vlan_ip or '—' }}</td>
+                        <td class="px-6 py-3 text-sm text-slate-600 dark:text-slate-300">{{ vlan_pppoe or '—' }}</td>
+                        <td class="px-6 py-3 text-center">
+                            {% if vlan.running %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Up</span>
+                            {% elif vlan.disabled %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Disabled</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">Down</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-6 py-3 text-right">
+                            <form method="POST" action="/admin/network/nas/devices/{{ device_id }}/vlans/{{ vlan.vlan_id }}/delete"
+                                  class="inline"
+                                  onsubmit="return confirm('Remove VLAN {{ vlan.vlan_id }} ({{ vlan.name }})? This will also remove its IP and PPPoE server.')">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="parent_interface" value="{{ vlan.interface }}">
+                                <button type="submit"
+                                        class="rounded-lg p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:text-rose-400 dark:hover:bg-rose-900/20 transition-colors"
+                                        title="Remove VLAN">
+                                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="px-6 py-12 text-center">
+            <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+            <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No VLAN interfaces</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                {% if error %}{{ error }}{% else %}Create a VLAN interface using the form above.{% endif %}
+            </p>
+        </div>
+        {% endif %}
+    </div>
+</div>

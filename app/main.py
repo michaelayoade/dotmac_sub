@@ -87,6 +87,7 @@ from app.services.settings_seed import (
     seed_notification_settings,
     seed_notification_templates,
     seed_provisioning_settings,
+    seed_provisioning_workflows,
     seed_radius_policy_settings,
     seed_radius_settings,
     seed_scheduler_settings,
@@ -136,6 +137,7 @@ def _seed_startup_settings() -> None:
         seed_scheduler_settings(db)
         seed_subscriber_settings(db)
         seed_provisioning_settings(db)
+        seed_provisioning_workflows(db)
         seed_tr069_settings(db)
         seed_network_policy_settings(db)
         seed_network_settings(db)

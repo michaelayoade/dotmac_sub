@@ -138,6 +138,10 @@
                class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'vendor-specific' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
                 Vendor-Specific
             </a>
+            <a href="/admin/network/nas/devices/{{ device.id }}?tab=vlans"
+               class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'vlans' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
+                VLANs
+            </a>
             <a href="/admin/network/nas/devices/{{ device.id }}?tab=device-log"
                class="border-b-2 px-4 py-3 text-sm font-medium transition-colors {% if active_tab == 'device-log' %}border-primary-500 text-primary-600 dark:text-primary-400{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300{% endif %}">
                 Device Log
@@ -422,6 +426,18 @@
                         <p><span class="text-slate-500">Default connection:</span> {{ device.default_connection_type.value|upper if device.default_connection_type else '-' }}</p>
                         <p><span class="text-slate-500">RADIUS pools:</span> {{ radius_pool_names | join(', ') if radius_pool_names else 'Any pool' }}</p>
                     </div>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if active_tab == 'vlans' %}
+            <div id="vlan-management"
+                 hx-get="/admin/network/nas/devices/{{ device.id }}/vlans"
+                 hx-trigger="load"
+                 hx-swap="innerHTML">
+                <div class="flex items-center justify-center py-12">
+                    <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                    <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading VLAN data from device...</span>
                 </div>
             </div>
             {% endif %}
