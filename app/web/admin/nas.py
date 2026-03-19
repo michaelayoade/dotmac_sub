@@ -1095,3 +1095,51 @@ def log_detail(request: Request, log_id: str, db: Session = Depends(get_db)):
             **page_data,
         },
     )
+
+
+# ── Monitoring Integration ────────────────────────────────────────────
+
+
+@router.post("/{device_id}/enable-monitoring")
+def enable_monitoring_for_nas(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+):
+    """Create a NetworkDevice from a NAS device and enable ping/SNMP monitoring."""
+    from app.services.monitoring_metrics import sync_nas_to_monitoring
+
+    try:
+        monitoring_device = sync_nas_to_monitoring(db, device_id)
+        db.commit()
+        return RedirectResponse(
+            f"/admin/nas/{device_id}?notice={quote_plus(f'Monitoring enabled — device linked as {monitoring_device.name}')}",
+            status_code=303,
+        )
+    except Exception as exc:
+        db.rollback()
+        return RedirectResponse(
+            f"/admin/nas/{device_id}?error={quote_plus(str(exc))}",
+            status_code=303,
+        )
+
+
+@router.post("/sync-all-monitoring")
+def sync_all_nas_monitoring(request: Request, db: Session = Depends(get_db)):
+    """Sync all active NAS devices into the monitoring system."""
+    from app.services.monitoring_metrics import sync_all_nas_to_monitoring
+
+    try:
+        result = sync_all_nas_to_monitoring(db)
+        notice = (
+            f"Monitoring sync complete: {result['synced']} synced, "
+            f"{result['skipped']} skipped, {result['errors']} errors"
+        )
+        return RedirectResponse(
+            f"/admin/nas?notice={quote_plus(notice)}",
+            status_code=303,
+        )
+    except Exception as exc:
+        db.rollback()
+        return RedirectResponse(
+            f"/admin/nas?error={quote_plus(str(exc))}",
+            status_code=303,
+        )

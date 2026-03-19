@@ -21,6 +21,9 @@ from app.tasks.invoice_pdf import generate_invoice_pdf_export
 from app.tasks.monitoring_cleanup import (
     cleanup_old_device_metrics as cleanup_device_metrics,
 )
+from app.tasks.monitoring_cleanup import (
+    sync_nas_to_monitoring as sync_nas_devices_to_monitoring,
+)
 from app.tasks.mrr import snapshot_mrr
 from app.tasks.nas import (
     check_nas_health,
@@ -137,4 +140,5 @@ __all__ = [
     "provision_ont_async",
     "evaluate_alert_rules",
     "cleanup_device_metrics",
+    "sync_nas_devices_to_monitoring",
 ]

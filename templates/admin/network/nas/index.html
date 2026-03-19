@@ -32,6 +32,28 @@
         </div>
     {% endcall %}
 
+    {# Sync All to Monitoring Banner #}
+    <div class="animate-fade-in-up" style="animation-delay: 40ms;">
+        <div class="rounded-xl border border-blue-200 bg-blue-50/50 px-4 py-3 dark:border-blue-800/50 dark:bg-blue-900/20">
+            <div class="flex items-center justify-between gap-4">
+                <div class="flex items-center gap-3">
+                    <svg class="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    <div>
+                        <p class="text-sm font-medium text-blue-800 dark:text-blue-200">Enable Network Monitoring</p>
+                        <p class="text-xs text-blue-600 dark:text-blue-400">Sync all NAS devices to the monitoring system for ping/SNMP health checks and alerts.</p>
+                    </div>
+                </div>
+                <form method="POST" action="/admin/nas/sync-all-monitoring" class="flex-shrink-0">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button type="submit" hx-confirm="Sync all active NAS devices to the monitoring system? This will create monitoring entries for devices that don't have one." class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                        Sync All to Monitoring
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
     {# Stats Cards by Status #}
     {% if stats and stats.by_status %}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">

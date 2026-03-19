@@ -338,3 +338,144 @@ def cleanup_old_device_metrics(db: Session, retention_days: int = 90) -> int:
         logger.info("Cleaned up %d device metrics older than %d days", total_deleted, retention_days)
 
     return total_deleted
+
+
+# ── NAS → Monitoring Sync ────────────────────────────────────────────────
+
+# Map NAS vendor to monitoring DeviceType
+_VENDOR_TO_DEVICE_TYPE = {
+    "mikrotik": "router",
+    "huawei": "switch",
+    "cisco": "router",
+    "juniper": "router",
+    "ubiquiti": "access_point",
+    "cambium": "access_point",
+    "nokia": "switch",
+    "zte": "switch",
+    "other": "other",
+}
+
+
+def sync_nas_to_monitoring(db: Session, nas_id: str) -> NetworkDevice:
+    """Create or update a NetworkDevice record from a NasDevice.
+
+    Links the NAS device to the monitoring system by:
+    1. Creating a NetworkDevice if one doesn't exist
+    2. Copying network config (IP, SNMP community, vendor, model)
+    3. Enabling ping and SNMP monitoring
+    4. Setting the NasDevice.network_device_id FK
+
+    Returns the NetworkDevice record.
+    """
+    from app.models.catalog import NasDevice
+    from app.models.network_monitoring import DeviceRole, DeviceType
+
+    nas = db.get(NasDevice, nas_id)
+    if not nas:
+        raise ValueError(f"NAS device {nas_id} not found")
+
+    # Check if already linked
+    if nas.network_device_id:
+        existing = db.get(NetworkDevice, nas.network_device_id)
+        if existing:
+            # Update fields from NAS
+            _sync_nas_fields_to_device(nas, existing)
+            db.flush()
+            return existing
+
+    # Check if a device already exists with this mgmt IP (dedup)
+    mgmt_ip = nas.management_ip or nas.ip_address
+    if mgmt_ip:
+        existing = db.scalars(
+            select(NetworkDevice).where(NetworkDevice.mgmt_ip == mgmt_ip)
+        ).first()
+        if existing:
+            nas.network_device_id = existing.id
+            _sync_nas_fields_to_device(nas, existing)
+            db.flush()
+            return existing
+
+    # Create new NetworkDevice
+    vendor_str = nas.vendor.value if nas.vendor else "other"
+    device_type_str = _VENDOR_TO_DEVICE_TYPE.get(vendor_str, "other")
+
+    device = NetworkDevice(
+        name=nas.name,
+        hostname=nas.name,
+        mgmt_ip=mgmt_ip,
+        vendor=nas.vendor.value if nas.vendor else None,
+        model=nas.model,
+        serial_number=nas.serial_number,
+        device_type=DeviceType(device_type_str),
+        role=DeviceRole.access,
+        ping_enabled=True,
+        snmp_enabled=bool(nas.snmp_community),
+        snmp_community=nas.snmp_community,
+        snmp_version=nas.snmp_version or "2c",
+        snmp_port=nas.snmp_port or 161,
+        pop_site_id=nas.pop_site_id,
+        max_concurrent_subscribers=nas.max_concurrent_subscribers,
+        notes=f"Auto-created from NAS device: {nas.name}",
+    )
+    db.add(device)
+    db.flush()
+
+    # Link back
+    nas.network_device_id = device.id
+    db.flush()
+
+    logger.info("Created monitoring device %s from NAS %s (%s)", device.id, nas.name, mgmt_ip)
+    return device
+
+
+def _sync_nas_fields_to_device(nas, device: NetworkDevice) -> None:
+    """Copy relevant fields from NAS to NetworkDevice."""
+    device.name = nas.name
+    device.mgmt_ip = nas.management_ip or nas.ip_address
+    device.vendor = nas.vendor.value if nas.vendor else device.vendor
+    device.model = nas.model or device.model
+    device.serial_number = nas.serial_number or device.serial_number
+    if nas.snmp_community and not device.snmp_community:
+        device.snmp_community = nas.snmp_community
+        device.snmp_enabled = True
+    if nas.pop_site_id:
+        device.pop_site_id = nas.pop_site_id
+    if nas.max_concurrent_subscribers:
+        device.max_concurrent_subscribers = nas.max_concurrent_subscribers
+
+
+def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
+    """Sync all active NAS devices to the monitoring system.
+
+    Returns:
+        {synced, skipped, errors}
+    """
+    from app.models.catalog import NasDevice
+
+    nas_devices = list(
+        db.scalars(
+            select(NasDevice).where(NasDevice.is_active.is_(True))
+        ).all()
+    )
+
+    synced = 0
+    skipped = 0
+    errors = 0
+
+    for nas in nas_devices:
+        # Skip NAS devices without a usable IP
+        mgmt_ip = nas.management_ip or nas.ip_address
+        if not mgmt_ip:
+            skipped += 1
+            continue
+
+        try:
+            sync_nas_to_monitoring(db, str(nas.id))
+            synced += 1
+        except Exception as exc:
+            errors += 1
+            logger.warning("Failed to sync NAS %s to monitoring: %s", nas.name, exc)
+
+    db.commit()
+    logger.info("NAS monitoring sync complete: synced=%d skipped=%d errors=%d", synced, skipped, errors)
+    return {"synced": synced, "skipped": skipped, "errors": errors}

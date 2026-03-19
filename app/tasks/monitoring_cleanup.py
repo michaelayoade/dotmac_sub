@@ -1,4 +1,4 @@
-"""Celery tasks for monitoring data maintenance."""
+"""Celery tasks for monitoring data maintenance and NAS sync."""
 
 from __future__ import annotations
 
@@ -8,6 +8,28 @@ from app.celery_app import celery_app
 from app.db import SessionLocal
 
 logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name="app.tasks.monitoring_cleanup.sync_nas_to_monitoring")
+def sync_nas_to_monitoring() -> dict[str, int]:
+    """Sync all active NAS devices into the network monitoring system.
+
+    Creates NetworkDevice records for NAS devices that don't have one,
+    links them via network_device_id FK, and copies SNMP/IP config.
+    """
+    logger.info("Starting NAS → monitoring sync")
+    db = SessionLocal()
+    try:
+        from app.services.monitoring_metrics import sync_all_nas_to_monitoring
+
+        result = sync_all_nas_to_monitoring(db)
+        return result
+    except Exception:
+        db.rollback()
+        logger.exception("NAS monitoring sync failed")
+        raise
+    finally:
+        db.close()
 
 
 @celery_app.task(name="app.tasks.monitoring_cleanup.cleanup_old_device_metrics")
