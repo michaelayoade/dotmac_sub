@@ -257,6 +257,10 @@ class CpeDevices(ListResponseMixin):
                 logger.warning("Skipping GenieACS device without serial number: %s", device_data.get("_id"))
                 continue
 
+            # Skip GenieACS discovery service probes — these are not real devices
+            if oui == "DISCOVERYSERVICE" or product_class == "DISCOVERYSERVICE":
+                continue
+
             # Extract connection request URL if available
             connection_url = client.extract_parameter_value(
                 device_data, "Device.ManagementServer.ConnectionRequestURL"

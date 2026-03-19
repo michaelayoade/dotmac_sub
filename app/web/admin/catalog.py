@@ -709,6 +709,25 @@ def subscription_bulk_cancel(
     return JSONResponse({"message": f"Canceled {count} subscriptions", "count": count})
 
 
+@router.post("/subscriptions/bulk/change-plan", dependencies=[Depends(require_permission("catalog:write"))])
+def subscription_bulk_change_plan(
+    request: Request,
+    subscription_ids: str = Form(...),
+    target_offer_id: str = Form(...),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Bulk change plan/offer for subscriptions."""
+    actor_id = _get_actor_id(request)
+    count = web_catalog_subscriptions_service.bulk_change_plan(
+        db,
+        subscription_ids,
+        target_offer_id,
+        request=request,
+        actor_id=actor_id,
+    )
+    return JSONResponse({"message": f"Changed plan for {count} subscriptions", "count": count})
+
+
 @router.get("/calculator", response_class=HTMLResponse)
 def pricing_calculator(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """Pricing calculator tool to test and validate offers."""

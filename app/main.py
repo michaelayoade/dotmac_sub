@@ -85,6 +85,7 @@ from app.services.settings_seed import (
     seed_network_policy_settings,
     seed_network_settings,
     seed_notification_settings,
+    seed_notification_templates,
     seed_provisioning_settings,
     seed_radius_policy_settings,
     seed_radius_settings,
@@ -126,6 +127,7 @@ def _seed_startup_settings() -> None:
         seed_usage_settings(db)
         seed_usage_policy_settings(db)
         seed_notification_settings(db)
+        seed_notification_templates(db)
         seed_collections_settings(db)
         seed_collections_policy_settings(db)
         seed_geocoding_settings(db)

@@ -990,8 +990,19 @@ def subscriptions_list_page_data(
     total: int = db.scalar(count_stmt) or 0
     total_pages = (total + per_page - 1) // per_page if total else 1
 
+    # Load active offers for bulk plan change modal
+    offers = catalog_service.offers.list(
+        db=db,
+        status="active",
+        order_by="name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
+    )
+
     return {
         "subscriptions": subscriptions,
+        "offers": offers,
         "status": status,
         "page": page,
         "per_page": per_page,
@@ -1042,6 +1053,52 @@ def bulk_update_status(
                 )
                 count += 1
         except Exception:
+            continue
+
+    return count
+
+
+def bulk_change_plan(
+    db: Session,
+    subscription_ids_csv: str,
+    target_offer_id: str,
+    request: object,
+    actor_id: str | None,
+) -> int:
+    """Bulk-change plan/offer for subscriptions, logging audit events.
+
+    Only changes active subscriptions. Returns count of updated subscriptions.
+    """
+    from app.models.catalog import CatalogOffer
+
+    target_offer = db.get(CatalogOffer, target_offer_id)
+    if not target_offer:
+        raise HTTPException(status_code=404, detail="Target offer not found")
+
+    count = 0
+    for sub_id in subscription_ids_csv.split(","):
+        sub_id = sub_id.strip()
+        if not sub_id:
+            continue
+        try:
+            sub = catalog_service.subscriptions.get(db, sub_id)
+            if sub and sub.status == SubscriptionStatus.active:
+                payload = SubscriptionUpdate(offer_id=target_offer_id)
+                catalog_service.subscriptions.update(
+                    db=db, subscription_id=sub_id, payload=payload
+                )
+                log_audit_event(
+                    db=db,
+                    request=request,
+                    action="change_plan",
+                    entity_type="subscription",
+                    entity_id=sub_id,
+                    actor_id=actor_id,
+                    metadata={"new_offer_id": target_offer_id, "offer_name": target_offer.name},
+                )
+                count += 1
+        except Exception as exc:
+            logger.error("Bulk plan change failed for subscription %s: %s", sub_id, exc)
             continue
 
     return count

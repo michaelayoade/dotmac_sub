@@ -24,7 +24,31 @@
     </div>
 
     <form method="POST" action="{{ action_url }}" class="space-y-6"
-          {% if is_new %}x-data="{ step: 1, totalSteps: 3 }"{% endif %}>
+          {% if is_new %}x-data="{
+              step: 1,
+              totalSteps: 3,
+              stepError: '',
+              validateAndNext() {
+                  this.stepError = '';
+                  if (this.step === 1) {
+                      const offer = document.getElementById('offer_id');
+                      if (!offer || !offer.value) {
+                          this.stepError = 'Please select a plan before continuing.';
+                          offer?.focus();
+                          return;
+                      }
+                      {% if not has_subscriber_context %}
+                      const account = document.getElementById('account_id');
+                      const subHidden = document.querySelector('[name=subscriber_id][data-typeahead-hidden]');
+                      if ((!account || !account.value) && (!subHidden || !subHidden.value)) {
+                          this.stepError = 'Please select an account or subscriber.';
+                          return;
+                      }
+                      {% endif %}
+                  }
+                  this.step++;
+              }
+          }"{% endif %}>
         {% include "components/forms/csrf_input.html" %}
         {% if error %}
         <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">
@@ -60,6 +84,13 @@
                     <div x-show="s < totalSteps" class="mx-1 h-px w-8 bg-slate-300 dark:bg-slate-600"></div>
                 </div>
             </template>
+        </div>
+        {% endif %}
+
+        {% if is_new %}
+        <div x-show="stepError" x-transition x-cloak
+             class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+            <span x-text="stepError"></span>
         </div>
         {% endif %}
 
@@ -486,7 +517,7 @@
                 </a>
                 {% endif %}
                 {% if is_new %}
-                <button type="button" x-show="step < totalSteps" @click="step++"
+                <button type="button" x-show="step < totalSteps" @click="validateAndNext()"
                         class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm hover:bg-violet-700">
                     Continue
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>

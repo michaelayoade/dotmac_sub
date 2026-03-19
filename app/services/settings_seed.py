@@ -367,6 +367,262 @@ def seed_notification_settings(db: Session) -> None:
     )
 
 
+def seed_notification_templates(db: Session) -> None:
+    """Seed default notification templates for key ISP events.
+
+    Uses upsert-by-code: creates if missing, skips if already exists
+    (admin may have customized the content).
+    """
+    from app.models.notification import NotificationChannel, NotificationTemplate
+
+    templates = [
+        {
+            "code": "subscription_created",
+            "name": "Subscription Created",
+            "channel": NotificationChannel.email,
+            "subject": "Your new service subscription",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your subscription to {offer_name} has been created. "
+                "A service order will be created for installation.\n\n"
+                "If you have questions, contact our support team.\n\n"
+                "Thank you for choosing us."
+            ),
+        },
+        {
+            "code": "subscription_activated",
+            "name": "Subscription Activated",
+            "channel": NotificationChannel.email,
+            "subject": "Your service is now active",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your {offer_name} subscription is now active. "
+                "You can start using your service immediately.\n\n"
+                "Your service credentials have been sent separately.\n\n"
+                "Welcome aboard!"
+            ),
+        },
+        {
+            "code": "subscription_suspended",
+            "name": "Subscription Suspended",
+            "channel": NotificationChannel.email,
+            "subject": "Service suspended — action required",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your {offer_name} subscription has been suspended. "
+                "This may be due to an outstanding balance or a policy violation.\n\n"
+                "Please contact our support team or make a payment to restore your service.\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "subscription_canceled",
+            "name": "Subscription Canceled",
+            "channel": NotificationChannel.email,
+            "subject": "Subscription canceled",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your {offer_name} subscription has been canceled. "
+                "If this was not expected, please contact our support team.\n\n"
+                "We hope to serve you again in the future."
+            ),
+        },
+        {
+            "code": "subscription_expiring",
+            "name": "Subscription Expiring",
+            "channel": NotificationChannel.email,
+            "subject": "Your subscription is expiring soon",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your {offer_name} subscription will expire soon. "
+                "Please renew to avoid service interruption.\n\n"
+                "You can renew by making a payment through our customer portal "
+                "or by contacting our support team.\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "invoice_created",
+            "name": "Invoice Created",
+            "channel": NotificationChannel.email,
+            "subject": "New invoice #{invoice_number}",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "A new invoice #{invoice_number} for {amount} has been generated "
+                "for your {offer_name} subscription.\n\n"
+                "Due date: {due_date}\n\n"
+                "You can view and pay this invoice through our customer portal.\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "invoice_sent",
+            "name": "Invoice Sent",
+            "channel": NotificationChannel.email,
+            "subject": "Invoice #{invoice_number} — payment due {due_date}",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Invoice #{invoice_number} for {amount} is due on {due_date}.\n\n"
+                "Please make your payment before the due date to avoid "
+                "service interruption.\n\n"
+                "Pay online: {portal_url}/billing\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "invoice_overdue",
+            "name": "Invoice Overdue",
+            "channel": NotificationChannel.email,
+            "subject": "Overdue invoice #{invoice_number} — immediate payment required",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Invoice #{invoice_number} for {amount} is now overdue. "
+                "Your service may be suspended if payment is not received promptly.\n\n"
+                "Please make your payment immediately to avoid disruption.\n\n"
+                "Pay online: {portal_url}/billing\n\n"
+                "If you have already paid, please disregard this notice."
+            ),
+        },
+        {
+            "code": "payment_received",
+            "name": "Payment Received",
+            "channel": NotificationChannel.email,
+            "subject": "Payment received — thank you",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "We have received your payment of {amount}. Thank you!\n\n"
+                "Your account balance has been updated accordingly.\n\n"
+                "If you have questions about your billing, please contact support."
+            ),
+        },
+        {
+            "code": "payment_failed",
+            "name": "Payment Failed",
+            "channel": NotificationChannel.email,
+            "subject": "Payment failed — please retry",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your recent payment attempt of {amount} was not successful. "
+                "Please try again or use a different payment method.\n\n"
+                "If you continue to experience issues, contact our support team.\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "usage_warning",
+            "name": "Usage Warning",
+            "channel": NotificationChannel.email,
+            "subject": "Data usage warning — {usage_percent}% used",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "You have used {usage_percent}% of your monthly data allowance "
+                "on your {offer_name} plan.\n\n"
+                "Consider upgrading your plan if you need more data.\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "usage_exhausted",
+            "name": "Usage Exhausted",
+            "channel": NotificationChannel.email,
+            "subject": "Data allowance exhausted",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your monthly data allowance on the {offer_name} plan has been exhausted. "
+                "Your speed may be reduced until the next billing cycle.\n\n"
+                "To restore full speed, consider upgrading your plan or purchasing a top-up.\n\n"
+                "Thank you."
+            ),
+        },
+        {
+            "code": "provisioning_completed",
+            "name": "Provisioning Completed",
+            "channel": NotificationChannel.email,
+            "subject": "Service installation complete",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your service installation has been completed successfully. "
+                "Your {offer_name} subscription is now ready to use.\n\n"
+                "If you experience any issues, please contact our support team.\n\n"
+                "Enjoy your service!"
+            ),
+        },
+        {
+            "code": "provisioning_failed",
+            "name": "Provisioning Failed",
+            "channel": NotificationChannel.email,
+            "subject": "Service installation issue",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "We encountered an issue while setting up your {offer_name} subscription. "
+                "Our technical team has been notified and will follow up shortly.\n\n"
+                "We apologize for the inconvenience."
+            ),
+        },
+        {
+            "code": "ont_offline",
+            "name": "ONT Offline Alert",
+            "channel": NotificationChannel.email,
+            "subject": "Network device offline — {device_serial}",
+            "body": (
+                "ONT {device_serial} has gone offline.\n\n"
+                "Subscriber: {subscriber_name}\n"
+                "Location: {location}\n\n"
+                "Please investigate the connectivity issue."
+            ),
+        },
+        {
+            "code": "ont_online",
+            "name": "ONT Online Alert",
+            "channel": NotificationChannel.email,
+            "subject": "Network device back online — {device_serial}",
+            "body": (
+                "ONT {device_serial} is back online.\n\n"
+                "Subscriber: {subscriber_name}\n"
+                "Downtime resolved."
+            ),
+        },
+        {
+            "code": "ont_signal_degraded",
+            "name": "ONT Signal Degraded",
+            "channel": NotificationChannel.email,
+            "subject": "Fiber signal degraded — {device_serial}",
+            "body": (
+                "ONT {device_serial} is reporting degraded optical signal levels.\n\n"
+                "Subscriber: {subscriber_name}\n"
+                "Signal level: {signal_level} dBm\n\n"
+                "Please check the fiber path for potential issues."
+            ),
+        },
+        {
+            "code": "ont_discovered",
+            "name": "ONT Discovered",
+            "channel": NotificationChannel.email,
+            "subject": "New ONT discovered — {device_serial}",
+            "body": (
+                "A new ONT has been discovered on the network.\n\n"
+                "Serial: {device_serial}\n"
+                "OLT: {olt_name}\n"
+                "PON Port: {pon_port}\n\n"
+                "This device is awaiting assignment to a subscriber."
+            ),
+        },
+    ]
+
+    for tmpl_data in templates:
+        existing = (
+            db.query(NotificationTemplate)
+            .filter(NotificationTemplate.code == tmpl_data["code"])
+            .first()
+        )
+        if not existing:
+            tmpl = NotificationTemplate(**tmpl_data)
+            db.add(tmpl)
+            logger.info("Seeded notification template: %s", tmpl_data["code"])
+
+    db.commit()
+
+
 def seed_collections_settings(db: Session) -> None:
     enabled_raw = os.getenv("DUNNING_ENABLED", "true")
     collections_settings.ensure_by_key(

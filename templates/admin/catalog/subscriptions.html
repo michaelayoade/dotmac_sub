@@ -4,7 +4,7 @@
 {% block title %}Subscriptions - Services - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data="subscriptionBulkActions()">
+<div class="space-y-6" x-data="subscriptionBulkActions()" x-cloak.remove>
     <!-- Bulk Action Bar -->
     <div x-show="selectedIds.length > 0" x-cloak
          class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50">
@@ -27,6 +27,11 @@
                     class="inline-flex items-center gap-2 rounded-lg bg-slate-600 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                 Cancel
+            </button>
+            <button type="button" @click="showChangePlanModal = true"
+                    class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+                Change Plan
             </button>
             <button type="button" @click="clearSelection()"
                     class="ml-2 text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
@@ -174,10 +179,47 @@
     </div>
 </div>
 
+{# Bulk Change Plan Modal #}
+<div x-show="showChangePlanModal" x-transition.opacity x-cloak
+     class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+     @keydown.escape.window="showChangePlanModal = false">
+    <div @click.outside="showChangePlanModal = false"
+         class="w-full max-w-md rounded-xl border border-slate-200 bg-white p-6 shadow-xl dark:border-slate-700 dark:bg-slate-800">
+        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Change Plan</h3>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+            Move <span x-text="selectedIds.length" class="font-bold"></span> selected subscription(s) to a new plan.
+        </p>
+        <div class="mt-4">
+            <label for="bulk-target-offer" class="block text-sm font-medium text-slate-700 dark:text-slate-300">New Plan</label>
+            <select id="bulk-target-offer" x-model="targetOfferId"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-violet-500 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select a plan</option>
+                {% for offer in offers or [] %}
+                <option value="{{ offer.id }}">{{ offer.name }}{% if offer.prices and offer.prices|length > 0 %} — ₦{{ "{:,.0f}".format(offer.prices[0].amount) }}/mo{% endif %}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="mt-6 flex justify-end gap-3">
+            <button @click="showChangePlanModal = false"
+                    class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
+                Cancel
+            </button>
+            <button @click="bulkChangePlan()"
+                    :disabled="!targetOfferId"
+                    :class="targetOfferId ? 'bg-violet-600 hover:bg-violet-700' : 'bg-slate-300 cursor-not-allowed'"
+                    class="rounded-lg px-4 py-2 text-sm font-medium text-white">
+                Apply Change
+            </button>
+        </div>
+    </div>
+</div>
+
 <script>
 function subscriptionBulkActions() {
     return {
         selectedIds: [],
+        showChangePlanModal: false,
+        targetOfferId: '',
         subscriptionIds: [{% for subscription in subscriptions %}'{{ subscription.id }}'{% if not loop.last %}, {% endif %}{% endfor %}],
 
         toggleSelection(id) {
@@ -249,6 +291,41 @@ function subscriptionBulkActions() {
         bulkCancel() {
             if (confirm(`Cancel ${this.selectedIds.length} selected subscriptions? This cannot be undone.`)) {
                 this.bulkAction('cancel');
+            }
+        },
+
+        async bulkChangePlan() {
+            if (!this.targetOfferId || this.selectedIds.length === 0) return;
+
+            const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content ||
+                             document.querySelector('[name="_csrf_token"]')?.value || '';
+
+            try {
+                const response = await fetch('/admin/catalog/subscriptions/bulk/change-plan', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded',
+                        'X-CSRF-Token': csrfToken
+                    },
+                    body: `subscription_ids=${this.selectedIds.join(',')}&target_offer_id=${this.targetOfferId}`
+                });
+
+                if (response.ok) {
+                    const result = await response.json();
+                    this.showChangePlanModal = false;
+                    this.targetOfferId = '';
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: result.message || 'Plan changed successfully', type: 'success' }
+                    }));
+                    window.location.reload();
+                } else {
+                    const error = await response.json();
+                    window.dispatchEvent(new CustomEvent('show-toast', {
+                        detail: { message: error.message || 'Failed to change plan', type: 'error' }
+                    }));
+                }
+            } catch (error) {
+                console.error('Bulk change plan error:', error);
             }
         }
     };

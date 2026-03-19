@@ -379,7 +379,7 @@ def test_sync_from_genieacs_truncates_long_oui(db_session, acs_server):
     """Sync should not fail when GenieACS _id has long OUI/product_class segments."""
     fake_devices = [
         {
-            "_id": "DISCOVERYSERVICE-DISCOVERYSERVICE-brxvwNZRjQ",
+            "_id": "LONGOUIVALUE-LongProductClass-SN12345",
             "_lastInform": "2026-03-03T23:54:59.764Z",
         }
     ]
@@ -389,9 +389,9 @@ def test_sync_from_genieacs_truncates_long_oui(db_session, acs_server):
         client.list_devices.return_value = fake_devices
         # Keep parser behavior that returns long segments.
         client.parse_device_id.return_value = (
-            "DISCOVERYSERVICE",
-            "DISCOVERYSERVICE",
-            "brxvwNZRjQ",
+            "LONGOUIVALUE",
+            "LongProductClass",
+            "SN12345",
         )
         client.extract_parameter_value.return_value = None
 
@@ -407,8 +407,32 @@ def test_sync_from_genieacs_truncates_long_oui(db_session, acs_server):
         limit=1,
         offset=0,
     )[0]
-    assert created.oui == "DISCOVER"
-    assert created.product_class == "DISCOVERYSERVICE"
+    assert created.oui == "LONGOUIV"  # truncated to 8 chars
+    assert created.product_class == "LongProductClass"
+
+
+def test_sync_from_genieacs_skips_discoveryservice(db_session, acs_server):
+    """Sync should skip DISCOVERYSERVICE phantom devices from GenieACS."""
+    fake_devices = [
+        {
+            "_id": "DISCOVERYSERVICE-DISCOVERYSERVICE-brxvwNZRjQ",
+            "_lastInform": "2026-03-03T23:54:59.764Z",
+        }
+    ]
+
+    with patch("app.services.tr069.GenieACSClient") as mock_client_cls:
+        client = mock_client_cls.return_value
+        client.list_devices.return_value = fake_devices
+        client.parse_device_id.return_value = (
+            "DISCOVERYSERVICE",
+            "DISCOVERYSERVICE",
+            "brxvwNZRjQ",
+        )
+        client.extract_parameter_value.return_value = None
+
+        result = tr069_service.cpe_devices.sync_from_genieacs(db_session, str(acs_server.id))
+
+    assert result["created"] == 0
 
 
 def test_create_acs_server_requires_reachable_genieacs(db_session):
