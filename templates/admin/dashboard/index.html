@@ -38,7 +38,8 @@
         </div>
     {% endcall %}
 
-    {# ── Network Health & Alarms Row ── #}
+    {# ── Network Health & Alarms Row (network-gated) ── #}
+    {% if show_network %}
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-4">
         {# Network Health Summary #}
         <div class="lg:col-span-1">
@@ -148,22 +149,8 @@
         </div>
     </div>
 
-    {# ── Key Metrics Row ── #}
+    {# ── Operations KPI Row ── #}
     <div class="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
-        {{ stats_card(
-            label="MRR",
-            value="₦" ~ "{:,.0f}".format(stats.mrr),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>',
-            color="emerald",
-            color2="green"
-        ) }}
-        {{ stats_card(
-            label="ARPU",
-            value="₦" ~ "{:,.0f}".format(stats.arpu),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>',
-            color="blue",
-            color2="indigo"
-        ) }}
         {{ stats_card(
             label="Subscribers",
             value=stats.active_subscribers,
@@ -172,11 +159,25 @@
             color2="orange"
         ) }}
         {{ stats_card(
-            label="Pending Orders",
-            value=stats.orders_new,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>',
-            color="rose",
-            color2="pink"
+            label="Devices Online",
+            value=monitoring_summary.devices_online,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald",
+            color2="teal"
+        ) }}
+        {{ stats_card(
+            label="ONTs Active",
+            value=onu_summary.online if onu_summary else 0,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a5 5 0 010-7.072m5.656 0a5 5 0 010 7.072M13 12a1 1 0 11-2 0 1 1 0 012 0z"/></svg>',
+            color="blue",
+            color2="indigo"
+        ) }}
+        {{ stats_card(
+            label="Sessions Online",
+            value=online_count,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>',
+            color="cyan",
+            color2="sky"
         ) }}
     </div>
 
@@ -224,7 +225,39 @@
         {% endif %}
     </div>
 
-    {# ── Revenue & Pipeline Row ── #}
+    {% endif %}{# end show_network #}
+
+    {# ── VPN Tunnel Status (network-gated) ── #}
+    {% if show_network %}
+    {% if vpn_tunnels %}
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">VPN Tunnels</h3>
+            <a href="/admin/network/monitoring" class="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Monitoring &rarr;</a>
+        </div>
+        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {% for tunnel in vpn_tunnels %}
+            <div class="flex items-center gap-2.5 rounded-lg border px-3 py-2 {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if tunnel.up else 'border-rose-200 bg-rose-50/50 dark:border-rose-800/40 dark:bg-rose-900/10' }}">
+                <span class="relative flex h-2 w-2 flex-shrink-0">
+                    {% if tunnel.up %}
+                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                    <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+                    {% else %}
+                    <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
+                    {% endif %}
+                </span>
+                <span class="text-sm font-medium text-slate-900 dark:text-white">{{ tunnel.name }}</span>
+                <span class="ml-auto text-xs text-slate-400 tabular-nums">{{ tunnel.handshake_ago }}</span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% endif %}{# end show_network vpn #}
+
+    {# ── Revenue & Pipeline Row (finance-gated) ── #}
+    {% if show_financials %}
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
         {# Revenue Trend Chart #}
         <div class="lg:col-span-2">
@@ -309,6 +342,8 @@
         </div>
     </div>
 
+    {% endif %}{# end show_financials #}
+
     {# ── Recent Activity & Subscribers Row ── #}
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
         {# Recent Activity #}
@@ -353,7 +388,8 @@
         {% endif %}
         {% endcall %}
 
-        {# Recent Subscribers #}
+        {# Recent Subscribers (subscriber-gated) #}
+        {% if show_subscribers %}
         {% call card("Recent Subscribers", color="blue",
             actions='<a href="/admin/subscribers" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
         ) %}
@@ -391,6 +427,7 @@
         </div>
         {% endif %}
         {% endcall %}
+        {% endif %}{# end show_subscribers #}
     </div>
 </div>
 

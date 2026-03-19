@@ -274,6 +274,18 @@ def dashboard(request: Request, db: Session):
     sidebar_stats = web_admin_service.get_sidebar_stats(db)
     current_user = web_admin_service.get_current_user(request)
 
+    # --- Permission-gated sections ---
+    from app.services.auth_dependencies import has_permission
+
+    auth = getattr(request.state, "auth", None) or {}
+
+    def _has(perm: str) -> bool:
+        return has_permission(auth, db, perm) if auth.get("principal_id") else False
+
+    show_financials = _has("billing:read")
+    show_network = _has("network:read") or _has("monitoring:read")
+    show_subscribers = _has("subscriber:read")
+
     # --- Who's Online (RADIUS active sessions) ---
     try:
         from app.models.radius_active_session import RadiusActiveSession
@@ -300,6 +312,29 @@ def dashboard(request: Request, db: Session):
         }
     except Exception:
         sync_status = {"last_sync": None, "total_mappings": 0, "is_healthy": False}
+
+    # --- Monitoring device summary (for operations dashboard) ---
+    monitoring_summary = {
+        "devices_online": net_stats.get("online_count", 0),
+        "devices_offline": net_stats.get("offline_count", 0),
+        "devices_degraded": net_stats.get("degraded_count", 0),
+        "devices_total": net_stats.get("total_count", 0),
+    }
+
+    # --- ONU status summary ---
+    try:
+        onu_summary = network_monitoring_service.get_onu_status_summary(db)
+    except Exception:
+        onu_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
+
+    # --- VPN tunnel status ---
+    vpn_tunnels = []
+    try:
+        from app.web.admin.network_monitoring import _get_vpn_tunnel_status
+
+        vpn_tunnels = _get_vpn_tunnel_status()
+    except Exception:
+        pass
 
     return templates.TemplateResponse(
         "admin/dashboard/index.html",
@@ -328,6 +363,12 @@ def dashboard(request: Request, db: Session):
             "server_health_status": server_health_status,
             "online_count": online_count,
             "sync_status": sync_status,
+            "show_financials": show_financials,
+            "show_network": show_network,
+            "show_subscribers": show_subscribers,
+            "monitoring_summary": monitoring_summary,
+            "onu_summary": onu_summary,
+            "vpn_tunnels": vpn_tunnels,
         },
     )
 
