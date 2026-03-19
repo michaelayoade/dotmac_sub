@@ -2,9 +2,9 @@ import argparse
 import json
 import math
 import zipfile
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from collections.abc import Callable, Iterable
 from xml.etree import ElementTree as ET
 
 try:
@@ -13,11 +13,13 @@ except ImportError:  # pragma: no cover - optional dependency for local env file
     load_dotenv: Callable[..., bool] | None = None
 else:
     load_dotenv = _load_dotenv
+from app.models.vendor import AsBuiltRoute
 from sqlalchemy import func
 
 from app.db import SessionLocal
 from app.models.gis import ServiceBuilding
 from app.models.network import (
+    FdhCabinet,
     FiberAccessPoint,
     FiberCableType,
     FiberSegment,
@@ -25,15 +27,12 @@ from app.models.network import (
     FiberSplice,
     FiberSpliceClosure,
     FiberSpliceTray,
-    FdhCabinet,
     PonPortSplitterLink,
     Splitter,
     SplitterPort,
     SplitterPortAssignment,
 )
-from app.models.vendor import AsBuiltRoute
 from app.models.wireless_mast import WirelessMast
-
 
 KML_NS = {"kml": "http://www.opengis.net/kml/2.2"}
 
@@ -72,7 +71,7 @@ def _read_kmz_kml(path: Path) -> ET.Element:
         kml_name = next((n for n in kmz.namelist() if n.lower().endswith(".kml")), None)
         if not kml_name:
             raise ValueError(f"No KML found inside {path}")
-        return ET.fromstring(kmz.read(kml_name))
+        return ET.fromstring(kmz.read(kml_name)) # noqa: S314
 
 
 def _collect_properties(placemark: ET.Element) -> dict[str, str | None]:

@@ -47,7 +47,7 @@ def _splynx_get(endpoint: str, params: dict | None = None) -> list | dict | None
         params=params,
         auth=(SPLYNX_API_KEY, SPLYNX_API_SECRET),
         headers={"Host": SPLYNX_HOST_HEADER, "Content-Type": "application/json"},
-        verify=False,
+        verify=False, # noqa: S501
         timeout=30,
     )
     if resp.status_code == 200:
@@ -184,7 +184,7 @@ def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
 
                 # IP address
                 ipv4 = svc.get("ipv4", "").strip()
-                if ipv4 and ipv4 != "0.0.0.0":
+                if ipv4 and ipv4 != "0.0.0.0": # noqa: S104
                     reply_attrs.append(("Framed-IP-Address", ":=", ipv4))
 
                 # Speed limits (MikroTik rate-limit format)

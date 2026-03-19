@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import SupportsInt, cast
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -51,7 +52,7 @@ def cleanup_old_device_metrics() -> dict[str, int]:
         try:
             val = resolve_value(db, SettingDomain.network_monitoring, "device_metrics_retention_days")
             if val is not None:
-                retention_days = int(val)
+                retention_days = int(cast(str | bytes | SupportsInt, val))
         except (TypeError, ValueError):
             pass
 

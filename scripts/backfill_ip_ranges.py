@@ -8,7 +8,6 @@ from app.db import SessionLocal
 from app.models.network import IpBlock, IpPool, IPv4Address
 from app.services import web_network_ip
 
-
 CSV_TEXT = """ID,Network,BM,RootNet,Used,Title,Location,Network type,Network category,Actions
 1,160.119.124.0,24,None,,Range 1,All,EndNet,Dev,
 2,160.119.125.0,24,None,,Range 2,All,EndNet,Dev,

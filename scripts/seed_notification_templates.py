@@ -14,7 +14,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from app.db import SessionLocal
 from app.models.notification import NotificationChannel, NotificationTemplate
 
-
 TEMPLATES = [
     # Billing Journey
     {

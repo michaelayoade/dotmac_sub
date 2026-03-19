@@ -1010,7 +1010,10 @@ def subscriptions_list_page_data(
     # Load active offers for bulk plan change modal
     offers = catalog_service.offers.list(
         db=db,
+        service_type=None,
+        access_type=None,
         status="active",
+        is_active=True,
         order_by="name",
         order_dir="asc",
         limit=200,
@@ -1101,7 +1104,7 @@ def bulk_change_plan(
         try:
             sub = catalog_service.subscriptions.get(db, sub_id)
             if sub and sub.status == SubscriptionStatus.active:
-                payload = SubscriptionUpdate(offer_id=target_offer_id)
+                payload = SubscriptionUpdate(offer_id=UUID(target_offer_id))
                 catalog_service.subscriptions.update(
                     db=db, subscription_id=sub_id, payload=payload
                 )

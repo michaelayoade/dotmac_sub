@@ -1,15 +1,16 @@
+from unittest.mock import patch
+
 import pytest
 from starlette.datastructures import FormData
-from unittest.mock import patch
 
 from app.models.catalog import AccessCredential
 from app.models.network import IPAssignment
 from app.models.subscriber import ChannelType, SubscriberChannel
+from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
-from app.services import web_network_ip as web_network_ip_service
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
-from app.schemas.catalog import SubscriptionCreate
+from app.services import web_network_ip as web_network_ip_service
 
 
 def test_apply_generated_service_credentials_keeps_custom_password_on_edit(

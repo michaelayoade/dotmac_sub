@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_features import OntFeatureService, _check_capability
 

@@ -4,8 +4,8 @@ from dotenv import load_dotenv
 
 from app.db import SessionLocal
 from app.models.domain_settings import DomainSetting
-from app.services.settings_spec import SETTINGS_SPECS, coerce_value, extract_db_value
 from app.services.secrets import is_openbao_ref
+from app.services.settings_spec import SETTINGS_SPECS, coerce_value, extract_db_value
 
 
 def _env_value(name: str) -> str | None:

@@ -1,7 +1,6 @@
-from scripts.seed_admin import seed_admin_user
-
 from app.models.auth import AuthProvider, UserCredential
 from app.services.auth_flow import verify_password
+from scripts.seed_admin import seed_admin_user
 
 
 def test_seed_admin_user_creates_local_credential(db_session, subscriber):

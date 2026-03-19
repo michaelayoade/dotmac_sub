@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services.nas._mikrotik_vlan import (
     VlanProvisioningResult,
     ensure_pppoe_server,

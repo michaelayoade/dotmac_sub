@@ -40,9 +40,13 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import TYPE_CHECKING, TypedDict, cast
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+
+if TYPE_CHECKING:
+    from app.models.network import OLTDevice
 
 # Bootstrap app context
 sys.path.insert(0, ".")
@@ -56,6 +60,29 @@ logger = logging.getLogger("bulk_rebind")
 
 # Checkpoint directory for resume capability
 CHECKPOINT_DIR = Path("scripts/migration/.rebind_checkpoints")
+
+
+class OntBatchItem(TypedDict):
+    serial_number: str
+    fsp: str
+    ont_id: int
+    frame_slot: str
+    port_num: str
+    online_status: str
+
+
+class BatchStats(TypedDict):
+    bound: int
+    skipped: int
+    errors: int
+    completed_serials: set[str]
+
+
+class RunTotals(TypedDict):
+    bound: int
+    skipped: int
+    errors: int
+    preflight_failed: int
 
 
 # ── Checkpoint helpers ──────────────────────────────────────────────────────
@@ -134,7 +161,7 @@ def _build_fsp(board: str | None, port: str | None) -> str | None:
 
 
 def _preflight_check_olt(
-    olt: object,
+    olt: OLTDevice,
     profile_id: int,
 ) -> tuple[bool, str]:
     """Verify SSH connectivity and that the TR-069 profile exists on the OLT.
@@ -199,14 +226,14 @@ _YN_PROMPT = re.compile(r"\[?[yY]/[nN]\]?|Are you sure|y/n", re.IGNORECASE)
 
 
 def _rebind_batch_on_olt(
-    olt: object,
-    onts: list[dict],
+    olt: OLTDevice,
+    onts: list[OntBatchItem],
     profile_id: int,
     *,
     dry_run: bool = True,
     delay_between: float = 1.0,
     already_done: set[str] | None = None,
-) -> dict[str, int | set]:
+) -> BatchStats:
     """Rebind a batch of ONTs on a single OLT using one SSH session.
 
     Args:
@@ -225,7 +252,7 @@ def _rebind_batch_on_olt(
     if already_done is None:
         already_done = set()
 
-    stats: dict[str, int | set] = {"bound": 0, "skipped": 0, "errors": 0, "completed_serials": set()}
+    stats: BatchStats = {"bound": 0, "skipped": 0, "errors": 0, "completed_serials": set()}
     completed: set[str] = set(already_done)
 
     # Filter out already-done ONTs
@@ -245,7 +272,7 @@ def _rebind_batch_on_olt(
                 "  [DRY RUN] Would rebind ONT %s (ONT-ID %d on %s) → profile %d",
                 ont["serial_number"], ont["ont_id"], ont["fsp"], profile_id,
             )
-            stats["bound"] = stats["bound"] + 1  # type: ignore[assignment]
+            stats["bound"] += 1
         stats["completed_serials"] = completed
         return stats
 
@@ -306,7 +333,7 @@ def _rebind_batch_on_olt(
                     "  FAILED bind for ONT %s (ID %d): %s",
                     serial, ont_id, output.strip()[-120:],
                 )
-                stats["errors"] = stats["errors"] + 1  # type: ignore[assignment]
+                stats["errors"] += 1
                 continue
 
             # Reset ONT to trigger re-registration with new ACS
@@ -322,7 +349,7 @@ def _rebind_batch_on_olt(
                 "  ✓ Rebound ONT %s (ID %d on %s) → profile %d",
                 serial, ont_id, ont["fsp"], profile_id,
             )
-            stats["bound"] = stats["bound"] + 1  # type: ignore[assignment]
+            stats["bound"] += 1
             completed.add(serial)
 
             # Save checkpoint every 10 ONTs
@@ -339,7 +366,7 @@ def _rebind_batch_on_olt(
 
     except Exception as exc:
         logger.error("SSH error on %s after %d ONTs: %s", olt.name, stats["bound"], exc)
-        stats["errors"] = stats["errors"] + 1  # type: ignore[assignment]
+        stats["errors"] += 1
     finally:
         transport.close()
         # Always save final checkpoint
@@ -361,7 +388,7 @@ def run(
     limit: int | None = None,
     resume: bool = False,
     skip_preflight: bool = False,
-) -> dict[str, int]:
+) -> RunTotals:
     """Run the bulk rebind across OLTs.
 
     Args:
@@ -386,9 +413,9 @@ def run(
 
     if not olts:
         logger.error("No OLTs found%s", f" matching '{olt_name}'" if olt_name else "")
-        return {"bound": 0, "skipped": 0, "errors": 0}
+        return {"bound": 0, "skipped": 0, "errors": 0, "preflight_failed": 0}
 
-    totals = {"bound": 0, "skipped": 0, "errors": 0, "preflight_failed": 0}
+    totals: RunTotals = {"bound": 0, "skipped": 0, "errors": 0, "preflight_failed": 0}
 
     for olt in olts:
         logger.info("━━━ %s ━━━", olt.name)
@@ -428,33 +455,39 @@ def run(
         rows = db.execute(stmt).fetchall()
 
         # Parse ONT-IDs and filter out unparseable ones
-        batch: list[dict] = []
+        batch: list[OntBatchItem] = []
         online_count = 0
         offline_count = 0
         for r in rows:
-            ont_id = _parse_ont_id_from_external(r.external_id)
-            fsp = _build_fsp(r.board, r.port)
+            serial_number = cast(str | None, r.serial_number)
+            external_id = cast(str | None, r.external_id)
+            board = cast(str | None, r.board)
+            port = cast(str | None, r.port)
+            online_status = cast(str | None, r.online_status)
+
+            ont_id = _parse_ont_id_from_external(external_id)
+            fsp = _build_fsp(board, port)
             if ont_id is None or fsp is None:
                 logger.warning(
                     "  Skipping %s — cannot resolve ONT-ID (external_id=%s, board=%s, port=%s)",
-                    r.serial_number, r.external_id, r.board, r.port,
+                    serial_number, external_id, board, port,
                 )
                 totals["skipped"] += 1
                 continue
 
-            if r.online_status == "online":
+            if online_status == "online":
                 online_count += 1
             else:
                 offline_count += 1
 
             parts = fsp.split("/")
             batch.append({
-                "serial_number": r.serial_number,
+                "serial_number": serial_number or "",
                 "fsp": fsp,
                 "ont_id": ont_id,
                 "frame_slot": f"{parts[0]}/{parts[1]}",
                 "port_num": parts[2],
-                "online_status": r.online_status or "unknown",
+                "online_status": online_status or "unknown",
             })
 
         logger.info(
@@ -478,9 +511,9 @@ def run(
             dry_run=dry_run,
             already_done=already_done,
         )
-        totals["bound"] += stats.get("bound", 0)
-        totals["skipped"] += stats.get("skipped", 0)
-        totals["errors"] += stats.get("errors", 0)
+        totals["bound"] += stats["bound"]
+        totals["skipped"] += stats["skipped"]
+        totals["errors"] += stats["errors"]
 
     return totals
 
@@ -488,7 +521,7 @@ def run(
 # ── GenieACS verification ─────────────────────────────────────────────────
 
 
-def verify_genieacs_informs(db: Session) -> dict[str, int]:
+def verify_genieacs_informs(db: Session) -> dict[str, int | str]:
     """Check GenieACS for ONTs that have informed since rebind.
 
     Compares rebound serial numbers (from checkpoints) against

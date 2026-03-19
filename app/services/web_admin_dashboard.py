@@ -294,11 +294,12 @@ def dashboard(request: Request, db: Session):
     elif user:
         # Web session auth — check user's role permissions
         try:
-            from app.models.auth import SystemUser
+            from app.models.system_user import SystemUser
 
             sys_user = db.get(SystemUser, str(user.get("subscriber_id") or user.get("id", "")))
-            if sys_user and hasattr(sys_user, "roles"):
-                role_names = {r.name for r in sys_user.roles} if sys_user.roles else set()
+            roles = getattr(sys_user, "roles", None)
+            if sys_user and roles is not None:
+                role_names = {getattr(r, "name", "") for r in roles} if roles else set()
                 # Admin role sees everything
                 is_admin = "admin" in role_names or "super_admin" in role_names
                 show_financials = is_admin or "finance" in role_names or "billing" in role_names

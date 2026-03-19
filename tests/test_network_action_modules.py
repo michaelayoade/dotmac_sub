@@ -12,8 +12,14 @@ def test_ont_actions_facade_exposes_split_methods() -> None:
 
 
 def test_focused_olt_action_modules_importable() -> None:
-    from app.services.network.olt_ssh_ont import bind_tr069_server_profile, configure_ont_iphost
-    from app.services.network.olt_ssh_profiles import get_line_profiles, get_tr069_server_profiles
+    from app.services.network.olt_ssh_ont import (
+        bind_tr069_server_profile,
+        configure_ont_iphost,
+    )
+    from app.services.network.olt_ssh_profiles import (
+        get_line_profiles,
+        get_tr069_server_profiles,
+    )
     from app.services.network.olt_ssh_service_ports import (
         create_single_service_port,
         delete_service_port,

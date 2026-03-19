@@ -6,19 +6,13 @@ import pytest
 
 from app.schemas.network_catalog import (
     NetworkZoneCreate,
-    NetworkZoneRead,
     NetworkZoneUpdate,
-    OntProvisioningProfileRead,
     OnuTypeCreate,
     OnuTypeRead,
     OnuTypeUpdate,
     SpeedProfileCreate,
-    SpeedProfileRead,
-    SpeedProfileUpdate,
     Tr069ParameterMapCreate,
-    Tr069ParameterMapRead,
     VendorCapabilityCreate,
-    VendorCapabilityRead,
     VendorCapabilityUpdate,
 )
 

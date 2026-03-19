@@ -230,6 +230,8 @@ def build_network_map_context(db: Session) -> dict:
             ont_online += 1
         else:
             ont_offline += 1
+        if ont.gps_longitude is None or ont.gps_latitude is None:
+            continue
         # Classify signal quality for marker color
         signal_quality = "unknown"
         if ont.olt_rx_signal_dbm is not None:

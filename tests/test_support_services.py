@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
@@ -8,7 +7,12 @@ from fastapi import HTTPException
 
 from app.models.notification import Notification
 from app.models.provisioning import ServiceOrder
-from app.models.support import TicketAssignee, TicketComment, TicketPriority, TicketStatus
+from app.models.support import (
+    TicketAssignee,
+    TicketComment,
+    TicketPriority,
+    TicketStatus,
+)
 from app.schemas.support import (
     TicketCommentCreate,
     TicketCreate,

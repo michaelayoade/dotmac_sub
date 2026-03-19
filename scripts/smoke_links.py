@@ -3,13 +3,11 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 from collections import deque
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlunparse
 
 import httpx
-
 
 DEFAULT_EXCLUDED_PATH_SNIPPETS = {
     "/logout",

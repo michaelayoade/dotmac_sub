@@ -1,5 +1,9 @@
 from app.models.catalog import AccessType, NasVendor, PriceBasis, ServiceType
-from app.schemas.catalog import CatalogOfferCreate, CatalogOfferUpdate, SubscriptionCreate
+from app.schemas.catalog import (
+    CatalogOfferCreate,
+    CatalogOfferUpdate,
+    SubscriptionCreate,
+)
 from app.schemas.settings import DomainSettingUpdate
 from app.services import catalog as catalog_service
 from app.services import settings_api

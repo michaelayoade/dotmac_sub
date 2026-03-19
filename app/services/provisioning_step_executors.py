@@ -76,15 +76,20 @@ def execute_create_olt_service_port(
         from app.services.web_network_service_ports import _resolve_ont_olt_context
 
         ont_ctx = _resolve_ont_olt_context(db, ont_unit_id)
-        if not ont_ctx:
+        if isinstance(ont_ctx, tuple):
+            ont, olt, fsp, olt_ont_id = ont_ctx
+        elif isinstance(ont_ctx, dict):
+            ont = ont_ctx.get("ont")
+            olt = ont_ctx.get("olt")
+            fsp = ont_ctx.get("fsp")
+            olt_ont_id = ont_ctx.get("olt_ont_id")
+        else:
+            ont = olt = fsp = olt_ont_id = None
+        if olt is None or fsp is None or olt_ont_id is None:
             return ProvisioningResult(
                 status="failed",
                 detail="Could not resolve ONT/OLT context for service-port creation.",
             )
-
-        olt = ont_ctx["olt"]
-        fsp = ont_ctx["fsp"]
-        olt_ont_id = ont_ctx["olt_ont_id"]
 
         success, message = create_single_service_port(
             olt=olt,
@@ -342,7 +347,9 @@ def execute_push_tr069_pppoe_credentials(
             from sqlalchemy import select as sa_select
 
             from app.models.catalog import AccessCredential
+            from app.services.credential_crypto import decrypt_credential
 
+            cred: AccessCredential | None = None
             subscriber_id = context.get("subscriber_id")
             if subscriber_id:
                 cred = db.scalars(
@@ -353,7 +360,7 @@ def execute_push_tr069_pppoe_credentials(
                 ).first()
             if cred:
                 username = username or cred.username
-                password = password or cred.password
+                password = password or decrypt_credential(cred.secret_hash)
 
     if not username or not password:
         return ProvisioningResult(

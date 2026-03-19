@@ -7,8 +7,7 @@ from starlette.datastructures import FormData
 from app.models.catalog import NasVendor, SubscriptionStatus
 from app.models.network import NetworkZone
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Organization, Reseller
-from app.models.subscriber import Address
+from app.models.subscriber import Address, Organization, Reseller
 from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service

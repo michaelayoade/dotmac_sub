@@ -13,7 +13,10 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
-from app.services.web_billing_payments import build_payments_list_data, render_payments_csv
+from app.services.web_billing_payments import (
+    build_payments_list_data,
+    render_payments_csv,
+)
 
 
 def _create_payment_method(db_session, account_id, method_type: PaymentMethodType) -> PaymentMethod:

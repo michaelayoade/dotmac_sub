@@ -11,9 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import logging
-import os
 import sys
 from pathlib import Path
 
@@ -143,14 +141,15 @@ def generate_with_gemini(prompt: str, api_key: str, model: str = "gemini-2.0-fla
 
 def optimize_image(data: bytes, output_path: Path, target_size: int = 512) -> None:
     """Resize and optimize a PNG image."""
-    from PIL import Image
     import io
 
-    img = Image.open(io.BytesIO(data))
+    from PIL import Image
+
+    img: Image.Image = Image.open(io.BytesIO(data))
 
     # Resize to target
     if img.width != target_size or img.height != target_size:
-        img = img.resize((target_size, target_size), Image.LANCZOS)
+        img = img.resize((target_size, target_size), Image.Resampling.LANCZOS)
 
     # Convert to RGBA for transparency support
     if img.mode != "RGBA":

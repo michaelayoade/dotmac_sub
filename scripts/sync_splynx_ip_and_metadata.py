@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import logging
 import subprocess
-import sys
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -46,7 +45,7 @@ def fix_ip_pool_metadata(db, dry_run: bool) -> dict[str, int]:
         "SELECT n.network, n.mask, n.title, n.type_of_usage "
         "FROM ipv4_networks n WHERE n.deleted = '0' ORDER BY INET_ATON(n.network)"
     )
-    splynx_nets = {}
+    splynx_nets: dict[str, dict[str, int | str]] = {}
     for line in raw.split("\n"):
         if not line.strip():
             continue
@@ -83,12 +82,14 @@ def fix_ip_pool_metadata(db, dry_run: bool) -> dict[str, int]:
 
         changed = False
         new_name = match["title"]
-        new_type = usage_map.get(match["usage"])
+        usage = match.get("usage")
+        new_type = usage_map.get(usage) if isinstance(usage, str) else None
 
         if new_name and pool.name != new_name:
             # Append subnet hint if name would collide (e.g. two "Point To Point IPs")
             unique_name = new_name
             from sqlalchemy import select as sa_select
+
             from app.models.network import IpPool
             existing_with_name = db.scalars(
                 sa_select(IpPool).where(IpPool.name == new_name, IpPool.id != pool.id)

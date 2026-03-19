@@ -1,8 +1,9 @@
 """Execute Step 1 of splynx_sync_complete.sql."""
 
-from app.db import SessionLocal
 from sqlalchemy import text
 from sqlalchemy.engine import CursorResult
+
+from app.db import SessionLocal
 
 
 def main() -> None:

@@ -8,7 +8,7 @@ def _request_with_cookie(name: str, value: str) -> Request:
         "type": "http",
         "method": "GET",
         "path": "/portal",
-        "headers": [(b"cookie", f"{name}={value}".encode("utf-8"))],
+        "headers": [(b"cookie", f"{name}={value}".encode())],
     }
     return Request(scope)
 

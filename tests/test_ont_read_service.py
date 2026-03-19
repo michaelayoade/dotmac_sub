@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services.network.ont_read import OntReadFacade, _classify_signal
 
 

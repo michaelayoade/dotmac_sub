@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-import pytest
 from starlette.requests import Request
 from starlette.responses import Response
 

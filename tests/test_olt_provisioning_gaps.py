@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import uuid
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 from unittest.mock import patch
 
 from fastapi import Request
@@ -26,11 +26,11 @@ from app.models.catalog import AccessCredential
 from app.models.network import (
     OLTDevice,
     OntAssignment,
-    PppoePasswordMode,
-    OntProvisioningStatus,
     OntProvisioningProfile,
+    OntProvisioningStatus,
     OntUnit,
     PonPort,
+    PppoePasswordMode,
     VlanMode,
 )
 from app.models.subscriber import Organization

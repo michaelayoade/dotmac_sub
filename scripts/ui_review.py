@@ -3,7 +3,7 @@
 from playwright.sync_api import sync_playwright
 
 BASE = "http://localhost:8001"
-SCREENSHOTS_DIR = "/tmp/ui_review"
+SCREENSHOTS_DIR = "/tmp/ui_review" # noqa: S108
 
 
 def main():
@@ -126,7 +126,7 @@ def main():
                 activity_tab.click()
                 page.wait_for_timeout(500)
                 page.screenshot(path=f"{SCREENSHOTS_DIR}/10_olt_activity_tab.png", full_page=True)
-                print(f"  Activity tab: FOUND and clicked")
+                print("  Activity tab: FOUND and clicked")
 
                 backup_heading = page.query_selector("text=Config Backup History")
                 print(f"  Config Backup History: {'FOUND' if backup_heading else 'MISSING'}")
@@ -157,7 +157,7 @@ def main():
                 tr069_tab.click()
                 page.wait_for_timeout(1000)
                 page.screenshot(path=f"{SCREENSHOTS_DIR}/12_ont_tr069_tab.png", full_page=True)
-                print(f"  TR-069 tab: FOUND and clicked")
+                print("  TR-069 tab: FOUND and clicked")
 
                 ssid_btn = page.query_selector("button:has-text('Change SSID')")
                 print(f"  Change SSID button: {'FOUND' if ssid_btn else 'MISSING'}")

@@ -5,13 +5,13 @@ from dotenv import load_dotenv
 
 from app.db import SessionLocal
 from app.schemas.settings import DomainSettingUpdate
+from app.services.secrets import is_openbao_ref
 from app.services.settings_spec import (
     DOMAIN_SETTINGS_SERVICE,
     SETTINGS_SPECS,
     coerce_value,
     normalize_for_db,
 )
-from app.services.secrets import is_openbao_ref
 
 
 def _env_value(name: str) -> str | None:

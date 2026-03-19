@@ -5,7 +5,10 @@ from decimal import Decimal
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.subscriber import Reseller, Subscriber
-from app.services.web_billing_overview import build_invoices_list_data, render_invoices_csv
+from app.services.web_billing_overview import (
+    build_invoices_list_data,
+    render_invoices_csv,
+)
 
 
 def _create_invoice(

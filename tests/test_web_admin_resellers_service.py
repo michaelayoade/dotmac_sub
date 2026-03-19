@@ -1,6 +1,6 @@
-from app.models.auth import AuthProvider, UserCredential
 import pytest
 
+from app.models.auth import AuthProvider, UserCredential
 from app.models.subscriber import Reseller, Subscriber, UserType
 from app.services import web_admin_resellers as web_admin_resellers_service
 

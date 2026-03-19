@@ -7,8 +7,8 @@ from pathlib import Path
 import pytest
 
 from app.models.audit import AuditEvent
-from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.scheduler import ScheduledTask
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import web_system_export_tool as export_service
 
 

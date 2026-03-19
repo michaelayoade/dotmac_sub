@@ -465,7 +465,7 @@ def migrate_routers(
 
 def migrate_ip_pools(conn, db) -> None:
     """Migrate Splynx ipv4_networks → IpPool (one per network)."""
-    from app.models.network import IPVersion, IpPool
+    from app.models.network import IpPool, IPVersion
 
     rows = fetch_all(conn, "SELECT * FROM ipv4_networks WHERE deleted='0' ORDER BY id")
     created = 0

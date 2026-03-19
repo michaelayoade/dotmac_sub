@@ -13,8 +13,9 @@ Requirements:
     - These are created during the initial Splynx migration process
 """
 
-from app.db import SessionLocal
 from sqlalchemy import text
+
+from app.db import SessionLocal
 
 
 def update_account_start_dates():
@@ -74,7 +75,7 @@ def update_account_start_dates():
             WHERE account_start_date IS NOT NULL
         """))
         row = result.fetchone()
-        print(f"\nVerification:")
+        print("\nVerification:")
         print(f"  Total with account_start_date: {row[0]}")
         print(f"  With different date than created_at: {row[1]}")
 

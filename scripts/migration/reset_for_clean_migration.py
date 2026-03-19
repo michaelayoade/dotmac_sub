@@ -178,7 +178,7 @@ def reset_database(dry_run: bool = True) -> None:
         logger.info("--- Current data counts ---")
         for table in TRUNCATE_TABLES:
             try:
-                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() # noqa: S608
                 if cnt and cnt > 0:
                     logger.info("  %s: %d rows (will truncate)", table, cnt)
             except Exception:
@@ -187,7 +187,7 @@ def reset_database(dry_run: bool = True) -> None:
         logger.info("--- Preserved data ---")
         for table in PRESERVE_TABLES:
             try:
-                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+                cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() # noqa: S608
                 logger.info("  %s: %d rows (keeping)", table, cnt)
             except Exception:
                 db.rollback()
@@ -264,7 +264,7 @@ def reset_database(dry_run: bool = True) -> None:
 
         # Verify
         for table in ["subscribers", "subscriptions", "invoices", "payments", "system_users"]:
-            cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+            cnt = db.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar() # noqa: S608
             logger.info("  POST-RESET %s: %d", table, cnt)
 
 

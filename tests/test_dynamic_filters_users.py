@@ -8,7 +8,11 @@ from app.models.auth import UserCredential
 from app.models.rbac import Role, SystemUserRole
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
-from app.services.dynamic_filters import FilterValidationError, build_filter_expression, parse_filter_payload
+from app.services.dynamic_filters import (
+    FilterValidationError,
+    build_filter_expression,
+    parse_filter_payload,
+)
 from app.services.web_system_users import USER_DOCTYPE, USER_FILTER_SPECS, list_users
 
 

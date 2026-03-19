@@ -3,6 +3,7 @@ import secrets
 from contextlib import asynccontextmanager
 from threading import Lock
 from time import monotonic
+from typing import TypedDict
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -214,14 +215,23 @@ async def audit_middleware(request: Request, call_next):
 # Reads selfcare_domain from settings to redirect / → /portal/ and block
 # admin paths when accessed via the selfcare domain.  Changes in the admin
 # UI (System → Config → Customer Portal) take effect within 30 s (cache TTL).
-_domain_routing_cache: dict[str, object] = {"ts": 0.0, "selfcare": "", "redirect": "/portal/"}
+class DomainRoutingCache(TypedDict):
+    ts: float
+    selfcare: str
+    redirect: str
+
+
+_domain_routing_cache: DomainRoutingCache = {"ts": 0.0, "selfcare": "", "redirect": "/portal/"}
 
 
 def _load_domain_routing(db: Session) -> dict[str, str]:
     """Return cached selfcare domain + redirect target."""
     now = monotonic()
-    if now - float(_domain_routing_cache["ts"]) < 30:
-        return _domain_routing_cache  # type: ignore[return-value]
+    if now - _domain_routing_cache["ts"] < 30:
+        return {
+            "selfcare": _domain_routing_cache["selfcare"],
+            "redirect": _domain_routing_cache["redirect"],
+        }
     from sqlalchemy import select
 
     from app.models.domain_settings import DomainSetting, SettingDomain
@@ -235,7 +245,10 @@ def _load_domain_routing(db: Session) -> dict[str, str]:
     _domain_routing_cache["selfcare"] = rows.get("selfcare_domain", "")
     _domain_routing_cache["redirect"] = rows.get("selfcare_redirect_root", "/portal/")
     _domain_routing_cache["ts"] = now
-    return _domain_routing_cache  # type: ignore[return-value]
+    return {
+        "selfcare": _domain_routing_cache["selfcare"],
+        "redirect": _domain_routing_cache["redirect"],
+    }
 
 
 @app.middleware("http")

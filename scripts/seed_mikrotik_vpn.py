@@ -18,13 +18,12 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from dotenv import load_dotenv
-
-from app.db import SessionLocal
 from app.models.vpn import VpnAuthDigest, VpnCipher, VpnProtocol, VpnServer
 from app.schemas.vpn import GenerateCertificatesRequest
 from app.services.vpn import VpnServerService
+from dotenv import load_dotenv
 
+from app.db import SessionLocal
 
 MIKROTIK_VPN_CONFIG = {
     "name": "MikroTik VPN Service",
@@ -33,7 +32,7 @@ MIKROTIK_VPN_CONFIG = {
         "Uses TCP protocol and AES-256-CBC for maximum RouterOS compatibility. "
         "Run this as a separate OpenVPN instance on port 1195."
     ),
-    "listen_address": "0.0.0.0",
+    "listen_address": "0.0.0.0", # noqa: S104
     "port": 1195,
     "protocol": VpnProtocol.tcp,
     "vpn_network": "10.9.0.0",

@@ -71,7 +71,7 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
         SELECT * FROM invoices
         WHERE real_create_datetime >= '{since_str}'
         ORDER BY id
-    """
+    """  # noqa: S608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -128,7 +128,7 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
         # Fetch and create invoice items
         items = fetch_all(
             conn,
-            f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'",
+            f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'", # noqa: S608
         )
         for item in items:
             price = Decimal(str(item.get("price") or "0"))
@@ -173,7 +173,7 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
     )
 
     since_str = since.strftime("%Y-%m-%d")
-    query = f"SELECT * FROM payments WHERE date >= '{since_str}' ORDER BY id"
+    query = f"SELECT * FROM payments WHERE date >= '{since_str}' ORDER BY id" # noqa: S608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -277,8 +277,8 @@ def run_incremental_sync(
             if dry_run:
                 since_str = since.strftime("%Y-%m-%d %H:%M:%S")
                 tables = [
-                    ("new invoices", f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'"),
-                    ("new payments", f"SELECT COUNT(*) as cnt FROM payments WHERE date >= '{since.strftime('%Y-%m-%d')}'"),
+                    ("new invoices", f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'"), # noqa: S608
+                    ("new payments", f"SELECT COUNT(*) as cnt FROM payments WHERE date >= '{since.strftime('%Y-%m-%d')}'"), # noqa: S608
                     ("status changes", "SELECT COUNT(*) as cnt FROM customers WHERE deleted='0' AND category != 'lead'"),
                 ]
                 for name, query in tables:

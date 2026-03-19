@@ -252,7 +252,10 @@ def assign_ipv6_to_subscribers(db: Session, dry_run: bool) -> dict[str, int]:
     # Load all IPv6 addresses not yet assigned, grouped by pool
     from collections import defaultdict
     available_by_pool: dict[str, list] = defaultdict(list)
-    all_v6 = db.query(IPv6Address).filter(IPv6Address.id.notin_(assigned_v6_ids) if assigned_v6_ids else True).all()
+    all_v6_query = db.query(IPv6Address)
+    if assigned_v6_ids:
+        all_v6_query = all_v6_query.filter(IPv6Address.id.notin_(assigned_v6_ids))
+    all_v6 = all_v6_query.all()
     for addr in all_v6:
         available_by_pool[str(addr.pool_id)].append(addr)
 

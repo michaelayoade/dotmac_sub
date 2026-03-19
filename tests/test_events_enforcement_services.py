@@ -20,8 +20,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from app.models.catalog import NasDevice, NasVendor, SubscriptionStatus
-from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.models.provisioning import ProvisioningVendor
+from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler

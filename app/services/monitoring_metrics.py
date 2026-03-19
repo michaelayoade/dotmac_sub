@@ -195,9 +195,9 @@ def poll_interface_traffic(db: Session, device: NetworkDevice) -> dict[str, int]
                     updated += 1
 
             # Store current counters for next delta calculation
-            iface.last_in_octets = in_octets  # type: ignore[assignment]
-            iface.last_out_octets = out_octets  # type: ignore[assignment]
-            iface.last_counter_at = now  # type: ignore[assignment]
+            iface.last_in_octets = in_octets
+            iface.last_out_octets = out_octets
+            iface.last_counter_at = now
 
         except Exception as exc:
             logger.debug("Interface traffic poll failed for %s/%s: %s", device.name, iface.name, exc)
@@ -276,17 +276,19 @@ def count_affected_subscribers(db: Session, device: NetworkDevice) -> int:
     """
     count = 0
 
-    if device.mgmt_ip:
+    linked_nas = getattr(device, "nas_device", None)
+    if linked_nas is not None:
         # Count active RADIUS sessions on this NAS
         try:
-            from app.models.radius import RadiusAccountingSession
+            from app.models.usage import AccountingStatus, RadiusAccountingSession
 
             count = db.scalar(
                 select(func.count())
                 .select_from(RadiusAccountingSession)
                 .where(
-                    RadiusAccountingSession.nas_ip_address == device.mgmt_ip,
-                    RadiusAccountingSession.stop_time.is_(None),
+                    RadiusAccountingSession.nas_device_id == linked_nas.id,
+                    RadiusAccountingSession.session_end.is_(None),
+                    RadiusAccountingSession.status_type != AccountingStatus.stop,
                 )
             ) or 0
         except Exception as exc:

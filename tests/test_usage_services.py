@@ -7,9 +7,9 @@ from app.models.catalog import AccessCredential
 from app.models.usage import UsageSource
 from app.schemas.usage import (
     QuotaBucketCreate,
+    QuotaBucketUpdate,
     RadiusAccountingSessionCreate,
     RadiusAccountingSessionUpdate,
-    QuotaBucketUpdate,
     UsageRecordCreate,
 )
 from app.services import usage as usage_service

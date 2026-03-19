@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from app.models.notification import Notification, NotificationChannel, NotificationStatus
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.tasks.notifications import _deliver_notification_queue
 
 

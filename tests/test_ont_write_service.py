@@ -5,9 +5,6 @@ from __future__ import annotations
 import uuid
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_write import OntWriteService
 
 FAKE_UUID = str(uuid.uuid4())

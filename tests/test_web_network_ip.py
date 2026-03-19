@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from types import SimpleNamespace
 
-from app.models.network import IPAssignment, IPVersion, IpBlock, IpPool, IPv4Address
+from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
 from app.services import web_network_ip
 
 
