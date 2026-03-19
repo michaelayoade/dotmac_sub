@@ -256,6 +256,7 @@ class CPEDevice(Base):
     mac_address: Mapped[str | None] = mapped_column(String(64))
     installed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     notes: Mapped[str | None] = mapped_column(Text)
+    tr069_data_model: Mapped[str | None] = mapped_column(String(40))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

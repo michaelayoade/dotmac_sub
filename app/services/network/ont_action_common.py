@@ -1,4 +1,4 @@
-"""Shared helpers for ONT actions executed through GenieACS."""
+"""Shared helpers for ONT and CPE actions executed through GenieACS."""
 
 from __future__ import annotations
 
@@ -8,8 +8,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.network import OntUnit
-from app.services.network._resolve import resolve_genieacs_with_reason
+from app.models.network import CPEDevice, OntUnit
+from app.services.network._resolve import (
+    resolve_genieacs_for_cpe_with_reason,
+    resolve_genieacs_with_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -40,14 +43,14 @@ TR069_ROOT_IGD = "InternetGatewayDevice"
 
 def detect_data_model_root(
     db: Session,
-    ont: OntUnit,
+    ont: OntUnit | CPEDevice,
     client: Any,
     device_id: str,
 ) -> str:
-    """Detect whether ONT uses Device (TR-181) or InternetGatewayDevice (TR-098).
+    """Detect whether device uses Device (TR-181) or InternetGatewayDevice (TR-098).
 
-    Checks the cached value on OntUnit first, then queries GenieACS.
-    Caches the result on the OntUnit model for future use.
+    Checks the cached value on the model first, then queries GenieACS.
+    Caches the result on the model for future use.
     """
     if ont.tr069_data_model in (TR069_ROOT_DEVICE, TR069_ROOT_IGD):
         return ont.tr069_data_model
@@ -107,5 +110,29 @@ def resolve_client_or_error(
         return None, ActionResult(
             success=False,
             message=reason or "No GenieACS server configured for this ONT.",
+        )
+    return resolved, None
+
+
+def get_cpe_or_error(
+    db: Session, cpe_id: str
+) -> tuple[CPEDevice | None, ActionResult | None]:
+    """Load a CPE device record or return a standard not-found result."""
+    cpe = db.get(CPEDevice, cpe_id)
+    if not cpe:
+        return None, ActionResult(success=False, message="CPE device not found.")
+    return cpe, None
+
+
+def resolve_cpe_client_or_error(
+    db: Session,
+    cpe: CPEDevice,
+) -> tuple[tuple[Any, str] | None, ActionResult | None]:
+    """Resolve the GenieACS client/device pair for a CPE device."""
+    resolved, reason = resolve_genieacs_for_cpe_with_reason(db, cpe)
+    if not resolved:
+        return None, ActionResult(
+            success=False,
+            message=reason or "No GenieACS server configured for this CPE device.",
         )
     return resolved, None

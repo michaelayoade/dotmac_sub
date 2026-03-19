@@ -1,4 +1,4 @@
-"""Shared GenieACS device resolution for ONT services."""
+"""Shared GenieACS device resolution for ONT and CPE services."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import CPEDevice, OLTDevice, OntUnit
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.services import settings_spec
 from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
@@ -174,3 +174,110 @@ def resolve_genieacs_with_reason(
             "No ACS server configured on OLT, ONT, linked TR-069 device, or default settings.",
         )
     return None, f"No matching GenieACS device found for ONT serial '{serial}'."
+
+
+def resolve_genieacs_for_cpe(
+    db: Session, cpe: CPEDevice
+) -> tuple[GenieACSClient, str] | None:
+    """Resolve GenieACS client and device ID for a CPE device."""
+    resolved, _reason = resolve_genieacs_for_cpe_with_reason(db, cpe)
+    return resolved
+
+
+def resolve_genieacs_for_cpe_with_reason(
+    db: Session, cpe: CPEDevice
+) -> tuple[tuple[GenieACSClient, str] | None, str]:
+    """Resolve GenieACS client and device ID for a CPE device.
+
+    Resolution tiers (simpler than ONT — no OLT hierarchy):
+    1. Linked Tr069CpeDevice by cpe_device_id FK
+    2. Linked Tr069CpeDevice by normalized serial number match
+    3. Default ACS server from settings
+
+    Returns:
+        Tuple of (client, device_id) or None if not resolvable.
+    """
+    serial = str(getattr(cpe, "serial_number", None) or "").strip()
+    if not serial:
+        return None, "CPE serial number is missing."
+
+    cpe_id = str(cpe.id) if cpe.id else ""
+
+    # 1) Linked Tr069CpeDevice by cpe_device_id FK
+    if cpe_id:
+        stmt = (
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.cpe_device_id == cpe.id)
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .limit(1)
+        )
+        linked = db.scalars(stmt).first()
+        if linked and linked.acs_server_id:
+            server = _resolve_server_by_id(db, str(linked.acs_server_id))
+            if server:
+                client = GenieACSClient(server.base_url)
+                try:
+                    device_id = _resolve_device_id_from_server(client, serial)
+                except GenieACSError:
+                    device_id = None
+                if not device_id:
+                    device_id = client.build_device_id(
+                        linked.oui or "", linked.product_class or "", linked.serial_number or ""
+                    )
+                return (client, device_id), "resolved_via_cpe_device_fk"
+
+    # 2) Linked Tr069CpeDevice by normalized serial number match
+    normalized_serial = normalize_tr069_serial(serial)
+    if normalized_serial:
+        stmt = (
+            select(Tr069CpeDevice)
+            .where(
+                _normalized_serial_expr(Tr069CpeDevice.serial_number)
+                == normalized_serial
+            )
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .limit(1)
+        )
+        cpe_tr069 = db.scalars(stmt).first()
+
+        if cpe_tr069 and cpe_tr069.acs_server_id:
+            server = _resolve_server_by_id(db, str(cpe_tr069.acs_server_id))
+            if server:
+                client = GenieACSClient(server.base_url)
+                try:
+                    device_id = _resolve_device_id_from_server(client, serial)
+                except GenieACSError:
+                    device_id = None
+                if not device_id:
+                    device_id = client.build_device_id(
+                        cpe_tr069.oui or "",
+                        cpe_tr069.product_class or "",
+                        cpe_tr069.serial_number or "",
+                    )
+                return (client, device_id), "resolved_via_tr069_serial_match"
+
+    # 3) Default ACS server from settings
+    default_server_id = settings_spec.resolve_value(
+        db,
+        SettingDomain.tr069,
+        "default_acs_server_id",
+    )
+    if default_server_id:
+        server = _resolve_server_by_id(db, str(default_server_id))
+        if server:
+            client = GenieACSClient(server.base_url)
+            try:
+                device_id = _resolve_device_id_from_server(client, serial)
+                if device_id:
+                    return (client, device_id), "resolved_via_default_acs"
+            except GenieACSError:
+                logger.warning(
+                    "Failed to search GenieACS for CPE %s", serial
+                )
+
+    if not default_server_id:
+        return (
+            None,
+            "No ACS server configured on linked TR-069 device or default settings.",
+        )
+    return None, f"No matching GenieACS device found for CPE serial '{serial}'."
