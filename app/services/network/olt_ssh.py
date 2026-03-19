@@ -1111,7 +1111,22 @@ def bind_tr069_server_profile(
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
-        _run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+
+        # Enter the interface context using /slot syntax.
+        # Try frame/slot first; if it fails (Board type is invalid),
+        # try common alternate slots (0/0, 0/1).
+        iface_entered = False
+        for candidate_slot in [frame_slot, f"{parts[0]}/1", f"{parts[0]}/0"]:
+            output = _run_huawei_cmd(
+                channel, f"interface gpon {candidate_slot}", prompt=config_prompt
+            )
+            if "invalid" not in output.lower() and "error" not in output.lower():
+                iface_entered = True
+                break
+
+        if not iface_entered:
+            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            return False, f"Could not enter interface gpon context for {fsp}"
 
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
