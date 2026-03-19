@@ -36,7 +36,8 @@
         {% for service in services %}
         <div class="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white p-6 shadow-premium card-hover dark:border-stone-700 dark:bg-stone-800">
             <!-- Background gradient based on status -->
-            <div class="absolute top-0 right-0 w-48 h-48 -mr-16 -mt-16 rounded-full {% if service.status == 'active' %}bg-emerald-500/5{% else %}bg-amber-500/5{% endif %} blur-3xl transition-all group-hover:scale-150"></div>
+            {% set svc_status_bg = service.status.value if service.status is not string and service.status else (service.status | default('active')) %}
+            <div class="absolute top-0 right-0 w-48 h-48 -mr-16 -mt-16 rounded-full {% if svc_status_bg == 'active' %}bg-emerald-500/5{% else %}bg-amber-500/5{% endif %} blur-3xl transition-all group-hover:scale-150"></div>
 
             <div class="relative">
                 <div class="flex items-start justify-between">
@@ -55,17 +56,18 @@
                         <p class="text-sm text-stone-500 dark:text-stone-400">{{ service.offer_version.name if service.offer_version else 'Standard Plan' }}</p>
                     </div>
                 </div>
+                    {% set svc_status = service.status.value if service.status is not string and service.status else (service.status | default('active')) %}
                     <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold
-                        {% if service.status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                        {% elif service.status == 'suspended' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
+                        {% if svc_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
+                        {% elif svc_status == 'suspended' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
                         {% else %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">
-                        {% if service.status == 'active' %}
+                        {% if svc_status == 'active' %}
                         <span class="relative flex h-2 w-2">
                             <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                             <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                         </span>
                         {% endif %}
-                        {{ service.status | default('Active') | capitalize }}
+                        {{ svc_status | capitalize }}
                     </span>
                 </div>
 

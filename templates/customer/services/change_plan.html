@@ -52,7 +52,7 @@
             <div class="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
                 {% set selectable_offers = namespace(count=0) %}
                 {% for offer in available_offers %}
-                {% if not current_offer or str(offer.id) != str(current_offer.id) %}
+                {% if not current_offer or (offer.id | string) != (current_offer.id | string) %}
                 {% set selectable_offers.count = selectable_offers.count + 1 %}
                 <label class="relative cursor-pointer">
                     <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required
