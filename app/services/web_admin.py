@@ -121,7 +121,9 @@ def get_sidebar_stats(db: Session) -> dict:
     except Exception:
         favicon_url = ""
     try:
-        from app.services import web_system_company_info as web_system_company_info_service
+        from app.services import (
+            web_system_company_info as web_system_company_info_service,
+        )
 
         app_name = (web_system_company_info_service.get_company_info(db).get("company_name") or "").strip()
     except Exception:

@@ -416,7 +416,9 @@ def _get_company_name(db: Session | None) -> str:
     if db is None:
         return "Dotmac Selfcare"
     try:
-        from app.services import web_system_company_info as web_system_company_info_service
+        from app.services import (
+            web_system_company_info as web_system_company_info_service,
+        )
 
         company_name = (web_system_company_info_service.get_company_info(db).get("company_name") or "").strip()
         if company_name:

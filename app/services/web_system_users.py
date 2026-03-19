@@ -349,9 +349,9 @@ def _serialize_filter_schema(db: Session) -> list[dict[str, object]]:
     schema: list[dict[str, object]] = []
     for field_name, spec in USER_FILTER_SPECS.items():
         operators = (
-            sorted(list(spec.operators))
+            sorted(spec.operators)
             if spec.operators is not None
-            else sorted(list(DEFAULT_OPERATORS_BY_TYPE.get(spec.field_type, {"="})))
+            else sorted(DEFAULT_OPERATORS_BY_TYPE.get(spec.field_type, {"="}))
         )
         schema.append(
             {

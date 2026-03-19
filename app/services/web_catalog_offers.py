@@ -26,13 +26,13 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.models.domain_settings import SettingDomain
 from app.models.offer_availability import (
     OfferBillingModeAvailability,
     OfferCategoryAvailability,
     OfferLocationAvailability,
     OfferResellerAvailability,
 )
-from app.models.domain_settings import SettingDomain
 from app.schemas.catalog import (
     CatalogOfferCreate,
     CatalogOfferUpdate,

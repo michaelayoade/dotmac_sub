@@ -177,13 +177,13 @@ def _latest_sync_eligible_subscription_for_subscriber(
 def _read_external_radius_credentials(config: dict) -> list[dict[str, str]]:
     radcheck = config["radcheck_table"]
     engine = create_engine(config["db_url"])
-    query = text(  # noqa: S608 — radcheck is from settings, not user input
+    query = text(
         f"""
         SELECT username, attribute, op, value
         FROM {radcheck}
         WHERE lower(attribute) IN ('cleartext-password', 'crypt-password')
         ORDER BY username
-        """
+        """  # noqa: S608 — radcheck is from admin settings, not user input
     )
     selected: dict[str, dict[str, str]] = {}
     priority = {"cleartext-password": 2, "crypt-password": 1}
