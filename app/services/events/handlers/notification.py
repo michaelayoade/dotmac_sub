@@ -87,16 +87,15 @@ class NotificationHandler:
             )
             return
 
-        # Create notification
-        # Include event context in the body for traceability
-        body = self._render_body(template, event)
+        # Build enriched context and render
+        context = self._build_render_context(db, event)
 
         notification = Notification(
             template_id=template.id,
             channel=template.channel or NotificationChannel.email,
             recipient=recipient,
-            subject=self._render_subject(template, event),
-            body=body,
+            subject=self._render_subject(template, event, context),
+            body=self._render_body(template, event, context),
             status=NotificationStatus.queued,
         )
         db.add(notification)
@@ -123,24 +122,97 @@ class NotificationHandler:
 
         return None
 
-    def _render_subject(self, template: NotificationTemplate, event: Event) -> str:
+    def _build_render_context(self, db: Session, event: Event) -> dict[str, str]:
+        """Build variable substitution context from event payload + resolved data.
+
+        Enriches the raw event payload with commonly needed variables
+        that templates reference but events don't carry directly:
+        subscriber_name, due_date, portal_url, device_serial, etc.
+        """
+        context: dict[str, str] = {}
+
+        # Start with raw payload
+        for key, value in event.payload.items():
+            if value is not None:
+                context[key] = str(value)
+
+        # Resolve subscriber name from account_id
+        if "subscriber_name" not in context and event.account_id:
+            try:
+                from app.models.subscriber import Subscriber
+
+                subscriber = db.get(Subscriber, event.account_id)
+                if subscriber:
+                    name = subscriber.full_name or subscriber.display_name or ""
+                    if not name and subscriber.first_name:
+                        name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
+                    context["subscriber_name"] = name or "Valued Customer"
+            except Exception:
+                context.setdefault("subscriber_name", "Valued Customer")
+
+        # Resolve invoice details if invoice_id present
+        if event.invoice_id and "invoice_number" not in context:
+            try:
+                from app.models.billing import Invoice
+
+                invoice = db.get(Invoice, event.invoice_id)
+                if invoice:
+                    context.setdefault("invoice_number", invoice.invoice_number or "")
+                    if invoice.total is not None:
+                        context.setdefault("amount", f"₦{invoice.total:,.2f}")
+                    if invoice.due_at:
+                        context.setdefault("due_date", invoice.due_at.strftime("%b %d, %Y"))
+            except Exception:
+                pass
+
+        # Normalize amount formatting
+        if "amount" in context and not context["amount"].startswith("₦"):
+            try:
+                from decimal import Decimal, InvalidOperation
+
+                amt = Decimal(context["amount"])
+                context["amount"] = f"₦{amt:,.2f}"
+            except (InvalidOperation, ValueError):
+                pass
+
+        # Map ONT payload keys to template variables
+        context.setdefault("device_serial", context.get("serial_number", ""))
+
+        # Usage percentage
+        if "threshold" in context and "usage_percent" not in context:
+            try:
+                pct = float(context["threshold"]) * 100
+                context["usage_percent"] = f"{pct:.0f}"
+            except (ValueError, TypeError):
+                pass
+
+        # Portal URL (configurable, with sensible default)
+        context.setdefault("portal_url", "/portal")
+
+        # Location placeholder for ONT events
+        context.setdefault("location", context.get("olt_name", ""))
+
+        # Fallback for subscriber_name
+        context.setdefault("subscriber_name", "Valued Customer")
+
+        return context
+
+    def _render_subject(self, template: NotificationTemplate, event: Event, context: dict[str, str]) -> str:
         """Render the notification subject with event data."""
         if not template.subject:
             return f"Notification: {event.event_type.value}"
 
-        # Simple variable substitution
         subject = template.subject
-        for key, value in event.payload.items():
-            subject = subject.replace(f"{{{key}}}", str(value))
+        for key, value in context.items():
+            subject = subject.replace(f"{{{key}}}", value)
         return subject
 
-    def _render_body(self, template: NotificationTemplate, event: Event) -> str:
+    def _render_body(self, template: NotificationTemplate, event: Event, context: dict[str, str]) -> str:
         """Render the notification body with event data."""
         if not template.body:
             return f"Event: {event.event_type.value}\n{event.payload}"
 
-        # Simple variable substitution
         body = template.body
-        for key, value in event.payload.items():
-            body = body.replace(f"{{{key}}}", str(value))
+        for key, value in context.items():
+            body = body.replace(f"{{{key}}}", value)
         return body

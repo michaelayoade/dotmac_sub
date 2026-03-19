@@ -825,7 +825,8 @@ class TestNotificationHandler:
             event_type=EventType.subscription_activated,
             payload={"plan_name": "Gold"},
         )
-        result = handler._render_subject(template, event)
+        context = {"plan_name": "Gold", "subscriber_name": "Test"}
+        result = handler._render_subject(template, event, context)
         assert result == "Your Gold subscription is ready"
 
     def test_render_subject_without_template(self):
@@ -836,7 +837,8 @@ class TestNotificationHandler:
             event_type=EventType.subscription_activated,
             payload={},
         )
-        result = handler._render_subject(template, event)
+        context = {"subscriber_name": "Test"}
+        result = handler._render_subject(template, event, context)
         assert "subscription.activated" in result
 
     def test_render_body_with_template(self):
@@ -847,7 +849,8 @@ class TestNotificationHandler:
             event_type=EventType.invoice_created,
             payload={"invoice_number": "INV-001"},
         )
-        result = handler._render_body(template, event)
+        context = {"invoice_number": "INV-001", "subscriber_name": "Test"}
+        result = handler._render_body(template, event, context)
         assert "INV-001" in result
 
     def test_render_body_without_template(self):
@@ -858,7 +861,8 @@ class TestNotificationHandler:
             event_type=EventType.invoice_created,
             payload={"amount": 100},
         )
-        result = handler._render_body(template, event)
+        context = {"amount": "100", "subscriber_name": "Test"}
+        result = handler._render_body(template, event, context)
         assert "invoice.created" in result
 
 
