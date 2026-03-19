@@ -1,11 +1,12 @@
-{% set status_colors = {
-    'draft': 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
-    'submitted': 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
-    'scheduled': 'bg-amber-100 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
-    'provisioning': 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
-    'active': 'bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300',
-    'canceled': 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400',
-    'failed': 'bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300'
+{% from "components/ui/macros.html" import status_badge %}
+{% set status_variants = {
+    'draft': 'draft',
+    'submitted': 'info',
+    'scheduled': 'warning',
+    'provisioning': 'pending',
+    'active': 'active',
+    'canceled': 'inactive',
+    'failed': 'error'
 } %}
 
 {% set orders_list = orders if orders is defined else recent_orders|default([]) %}
@@ -43,9 +44,7 @@
                     {{ (order.order_type or '-')|replace('_', ' ')|title }}
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm">
-                    <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ status_colors.get(order.status.value, 'bg-slate-100 text-slate-700') }}">
-                        {{ order.status.value|replace('_', ' ')|title }}
-                    </span>
+                    {{ status_badge(order.status.value|replace('_', ' ')|title, variant=status_variants.get(order.status.value, 'default')) }}
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                     {{ order.created_at.strftime('%Y-%m-%d %H:%M') if order.created_at else '-' }}

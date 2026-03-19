@@ -86,9 +86,9 @@
                     {% call info_row("Billed To") %}
                         {% if invoice.account and invoice.account.subscriber %}
                             {% if invoice.account.subscriber.person %}
-                                {{ invoice.account.first_name }} {{ invoice.account.last_name }}
+                                <a href="/admin/subscribers/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.first_name }} {{ invoice.account.last_name }}</a>
                             {% elif invoice.account.subscriber.organization %}
-                                {{ invoice.account.subscriber.organization.name }}
+                                <a href="/admin/subscribers/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.subscriber.organization.name }}</a>
                             {% else %}
                                 Account
                             {% endif %}
@@ -97,6 +97,11 @@
                         {% endif %}
                         <br><span class="text-slate-500 dark:text-slate-400 text-xs">{{ invoice.account.email if invoice.account and invoice.account.email else 'No email on file' }}</span>
                     {% endcall %}
+                    {% if invoice.subscription_id %}
+                    {% call info_row("Subscription") %}
+                        <a href="/admin/catalog/subscriptions/{{ invoice.subscription_id }}" class="font-mono text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.subscription_id | string | truncate(8, True, '') }}</a>
+                    {% endcall %}
+                    {% endif %}
                     {% call info_row("Dates") %}
                         Issued: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.issued_at.strftime('%b %d, %Y') if invoice.issued_at else 'N/A' }}</span><br>
                         Due: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'N/A' }}</span>

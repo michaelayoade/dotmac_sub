@@ -392,7 +392,11 @@
                         </div>
                         <div class="flex-1 min-w-0">
                             <div class="flex items-center gap-2">
-                                <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ sub.offer.name if sub.offer else 'Service #' ~ sub.id|string|truncate(8, True, '') }}</p>
+                                {% if sub.offer %}
+                                <a href="/admin/catalog/subscriptions/{{ sub.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 transition-colors">{{ sub.offer.name }}</a>
+                                {% else %}
+                                <p class="text-sm font-semibold text-slate-900 dark:text-white">Service #{{ sub.id|string|truncate(8, True, '') }}</p>
+                                {% endif %}
                                 {# Exception-based badges: only show when there's a problem #}
                                 {% if sub_status == 'active' and not is_online %}
                                 {# Active but offline - needs attention #}

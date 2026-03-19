@@ -109,7 +109,7 @@
             <div>
                 <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscription</p>
                 {% if order.subscription %}
-                <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ order.subscription.id|string|truncate(8, True, '') }}</p>
+                <a href="/admin/catalog/subscriptions/{{ order.subscription.id }}" class="mt-1 block text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 font-mono transition-colors">{{ order.subscription.id|string|truncate(8, True, '') }}</a>
                 {% else %}
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">-</p>
                 {% endif %}

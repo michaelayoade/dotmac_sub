@@ -1,19 +1,13 @@
 {% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
 
 {% block title %}Tax Rates - Admin{% endblock %}
 
 {% block content %}
+{{ ambient_background("emerald", "teal") }}
 <div class="space-y-6">
-    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-            <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/billing" class="hover:text-primary-600">Billing</a>
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">Tax Rates</span>
-            </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Tax Rates</h1>
-        </div>
-    </div>
+    {% call page_header("Tax Rates", subtitle="Manage tax rates applied to invoices and billing", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/></svg>', color="emerald", color2="teal", breadcrumbs=[{"href": "/admin/billing", "label": "Billing"}, {"href": "", "label": "Tax Rates"}]) %}
+    {% endcall %}
 
     {% if error %}
     <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-200">
