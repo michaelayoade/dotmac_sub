@@ -277,14 +277,47 @@ def dashboard(request: Request, db: Session):
     # --- Permission-gated sections ---
     from app.services.auth_dependencies import has_permission
 
+    # Permission-gated sections.
+    # Web session users: check via RBAC if auth state present, else default True
+    # (web admin middleware already verified authentication)
     auth = getattr(request.state, "auth", None) or {}
+    user = getattr(request.state, "user", None)
 
-    def _has(perm: str) -> bool:
-        return has_permission(auth, db, perm) if auth.get("principal_id") else False
+    if auth.get("principal_id"):
+        # API-style auth with explicit principal
+        def _has(perm: str) -> bool:
+            return has_permission(auth, db, perm)
 
-    show_financials = _has("billing:read")
-    show_network = _has("network:read") or _has("monitoring:read")
-    show_subscribers = _has("subscriber:read")
+        show_financials = _has("billing:read")
+        show_network = _has("network:read") or _has("monitoring:read")
+        show_subscribers = _has("subscriber:read")
+    elif user:
+        # Web session auth — check user's role permissions
+        try:
+            from app.models.auth import SystemUser
+
+            sys_user = db.get(SystemUser, str(user.get("subscriber_id") or user.get("id", "")))
+            if sys_user and hasattr(sys_user, "roles"):
+                role_names = {r.name for r in sys_user.roles} if sys_user.roles else set()
+                # Admin role sees everything
+                is_admin = "admin" in role_names or "super_admin" in role_names
+                show_financials = is_admin or "finance" in role_names or "billing" in role_names
+                show_network = is_admin or "noc" in role_names or "network" in role_names or "technician" in role_names
+                show_subscribers = is_admin or "support" in role_names or "sales" in role_names
+            else:
+                # No role info — show everything (admin default)
+                show_financials = True
+                show_network = True
+                show_subscribers = True
+        except Exception:
+            show_financials = True
+            show_network = True
+            show_subscribers = True
+    else:
+        # Fallback: show everything
+        show_financials = True
+        show_network = True
+        show_subscribers = True
 
     # --- Who's Online (RADIUS active sessions) ---
     try:

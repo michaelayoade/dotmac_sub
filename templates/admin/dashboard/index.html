@@ -38,6 +38,41 @@
         </div>
     {% endcall %}
 
+    {# ── Operations KPI Row (always visible, above the fold) ── #}
+    <div class="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 md:grid-cols-4">
+        {{ stats_card(
+            label="Active Subscribers",
+            value=stats.active_subscribers,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
+            color="amber",
+            color2="orange",
+            change=stats.subscribers_change if stats.subscribers_change else None,
+            change_type="positive"
+        ) }}
+        {{ stats_card(
+            label="Devices Online",
+            value=monitoring_summary.devices_online ~ " / " ~ monitoring_summary.devices_total,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+            color="emerald",
+            color2="teal"
+        ) }}
+        {{ stats_card(
+            label="ONTs Online",
+            value=(onu_summary.online if onu_summary else 0) ~ " / " ~ (onu_summary.total if onu_summary else 0),
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a5 5 0 010-7.072m5.656 0a5 5 0 010 7.072M13 12a1 1 0 11-2 0 1 1 0 012 0z"/></svg>',
+            color="blue",
+            color2="indigo"
+        ) }}
+        {{ stats_card(
+            label="Active Sessions",
+            value=online_count,
+            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>',
+            color="cyan",
+            color2="sky",
+            href="/admin/network/sessions"
+        ) }}
+    </div>
+
     {# ── Network Health & Alarms Row (network-gated) ── #}
     {% if show_network %}
     <div class="grid grid-cols-1 gap-5 lg:grid-cols-4">
@@ -149,82 +184,6 @@
         </div>
     </div>
 
-    {# ── Operations KPI Row ── #}
-    <div class="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4">
-        {{ stats_card(
-            label="Subscribers",
-            value=stats.active_subscribers,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
-            color="amber",
-            color2="orange"
-        ) }}
-        {{ stats_card(
-            label="Devices Online",
-            value=monitoring_summary.devices_online,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="emerald",
-            color2="teal"
-        ) }}
-        {{ stats_card(
-            label="ONTs Active",
-            value=onu_summary.online if onu_summary else 0,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a5 5 0 010-7.072m5.656 0a5 5 0 010 7.072M13 12a1 1 0 11-2 0 1 1 0 012 0z"/></svg>',
-            color="blue",
-            color2="indigo"
-        ) }}
-        {{ stats_card(
-            label="Sessions Online",
-            value=online_count,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>',
-            color="cyan",
-            color2="sky"
-        ) }}
-    </div>
-
-    {# ── Who's Online & Sync Status ── #}
-    <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
-        {# Who's Online #}
-        <a href="/admin/network/sessions" class="group rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Online Now</p>
-                    <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white font-display">{{ online_count }}</p>
-                </div>
-                <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-cyan-500 to-sky-600 shadow-lg shadow-cyan-500/25">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
-                </div>
-            </div>
-            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Active RADIUS sessions <span class="text-cyan-600 dark:text-cyan-400 group-hover:underline">View all &rarr;</span></p>
-        </a>
-
-        {# Sync Status #}
-        {% if sync_status %}
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div>
-                    <p class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Splynx Sync</p>
-                    <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white font-display">{{ "{:,}".format(sync_status.total_mappings) }}</p>
-                </div>
-                <div class="flex h-12 w-12 items-center justify-center rounded-xl {% if sync_status.is_healthy %}bg-gradient-to-br from-emerald-500 to-teal-600 shadow-emerald-500/25{% else %}bg-gradient-to-br from-amber-500 to-orange-600 shadow-amber-500/25{% endif %} shadow-lg">
-                    <svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
-                </div>
-            </div>
-            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                {% if sync_status.last_sync %}
-                Last sync: {{ sync_status.last_sync.strftime('%b %d, %H:%M') }}
-                {% if sync_status.is_healthy %}
-                <span class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Healthy</span>
-                {% else %}
-                <span class="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Stale</span>
-                {% endif %}
-                {% else %}
-                No sync data
-                {% endif %}
-            </p>
-        </div>
-        {% endif %}
-    </div>
-
     {% endif %}{# end show_network #}
 
     {# ── VPN Tunnel Status (network-gated) ── #}
@@ -270,33 +229,28 @@
             {% endcall %}
         </div>
 
-        {# Service Orders Pipeline #}
-        {% call card("Order Pipeline", color="indigo",
-            actions='<a href="/admin/provisioning/orders" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
+        {# Churn & Growth Summary (replaces Order Pipeline) #}
+        {% call card("Subscriber Health", color="indigo",
+            actions='<a href="/admin/subscribers" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
         ) %}
         <div class="grid grid-cols-3 gap-2 mb-4">
-            <div class="rounded-lg bg-slate-50 p-2 text-center dark:bg-slate-700/50">
-                <p class="text-lg font-bold text-slate-900 dark:text-white">{{ stats.orders_new }}</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">New</p>
-            </div>
-            <div class="rounded-lg bg-indigo-50 p-2 text-center dark:bg-indigo-900/30">
-                <p class="text-lg font-bold text-indigo-600 dark:text-indigo-400">{{ stats.orders_in_progress }}</p>
-                <p class="text-xs text-indigo-600/70 dark:text-indigo-400/70">Active</p>
-            </div>
             <div class="rounded-lg bg-emerald-50 p-2 text-center dark:bg-emerald-900/30">
-                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ stats.orders_completed_today }}</p>
-                <p class="text-xs text-emerald-600/70 dark:text-emerald-400/70">Done</p>
+                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ stats.active_subscribers }}</p>
+                <p class="text-xs text-emerald-600/70 dark:text-emerald-400/70">Active</p>
+            </div>
+            <div class="rounded-lg bg-amber-50 p-2 text-center dark:bg-amber-900/30">
+                <p class="text-lg font-bold text-amber-600 dark:text-amber-400">{{ stats.suspended_accounts }}</p>
+                <p class="text-xs text-amber-600/70 dark:text-amber-400/70">Suspended</p>
+            </div>
+            <div class="rounded-lg bg-slate-50 p-2 text-center dark:bg-slate-700/50">
+                <p class="text-lg font-bold text-slate-900 dark:text-white">{{ stats.subscribers_change }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400">New (30d)</p>
             </div>
         </div>
-        <div class="chart-container" style="height: 180px;">
-            <canvas id="pipelineChart"></canvas>
-        </div>
-        {% set total_orders = stats.orders_new + stats.orders_in_progress + stats.orders_scheduled + stats.orders_pending_activation %}
-        {% if total_orders > 0 %}
-        <div class="mt-4">
-            {{ progress_bar(stats.orders_new + stats.orders_in_progress, max=total_orders, label="Pipeline", color="indigo") }}
-        </div>
+        {% if stats.churn_rate is defined and stats.churn_rate %}
+        {{ metric_row("Churn Rate", "{:.1f}%".format(stats.churn_rate), color="rose") }}
         {% endif %}
+        {{ metric_row("Total Subscribers", stats.total_subscribers, color="blue") }}
         {% endcall %}
     </div>
 
@@ -438,10 +392,6 @@
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
             New Subscriber
         </a>
-        <a href="/admin/provisioning/orders/new" class="flex items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium text-slate-300 hover:bg-white/10 hover:text-white transition">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-            Service Order
-        </a>
         <div class="h-6 w-px bg-slate-700 mx-1"></div>
         <a href="/admin/billing" class="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-white/10 hover:text-white transition">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
@@ -488,16 +438,6 @@ document.addEventListener('DOMContentLoaded', function() {
                 fillColor: colors.amber[500] + '20',
             }]
         });
-    }
-
-    // Pipeline Chart
-    const pipelineCtx = document.getElementById('pipelineChart');
-    if (pipelineCtx && typeof DotmacCharts !== 'undefined') {
-        DotmacCharts.createDoughnutChart(pipelineCtx, {
-            labels: ['New', 'In Progress', 'Scheduled', 'Pending'],
-            values: [{{ stats.orders_new }}, {{ stats.orders_in_progress }}, {{ stats.orders_scheduled }}, {{ stats.orders_pending_activation }}],
-            colors: [colors.slate[400], colors.indigo[500], colors.blue[500], colors.amber[500]]
-        }, { plugins: { legend: { display: false } } });
     }
 
     // AR Aging Chart
