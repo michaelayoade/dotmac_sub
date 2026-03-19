@@ -1073,7 +1073,7 @@ def bulk_change_plan(
 
     target_offer = db.get(CatalogOffer, target_offer_id)
     if not target_offer:
-        raise HTTPException(status_code=404, detail="Target offer not found")
+        raise ValueError("Target offer not found")
 
     count = 0
     for sub_id in subscription_ids_csv.split(","):

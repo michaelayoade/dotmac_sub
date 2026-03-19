@@ -545,6 +545,7 @@ class OntProvisioningOrchestrator:
                     )
                 )
             except Exception as exc:
+                logger.error("IPv6 dual-stack enable failed for ONT %s: %s", ont.serial_number, exc)
                 step_ms = int((time.monotonic() - step_start) * 1000)
                 result.steps.append(
                     ProvisioningStepResult(

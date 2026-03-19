@@ -19,6 +19,10 @@ import argparse
 import ipaddress
 import logging
 import subprocess
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -34,7 +38,7 @@ def _ssh_query(query: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
-def generate_ipv6_prefixes(db, dry_run: bool) -> dict[str, int]:
+def generate_ipv6_prefixes(db: Session, dry_run: bool) -> dict[str, int]:
     """Generate /64 delegation prefixes inside each /48 IPv6 pool.
 
     ISP pattern: /48 per POP → /64 per subscriber.
@@ -104,7 +108,7 @@ def generate_ipv6_prefixes(db, dry_run: bool) -> dict[str, int]:
     return {"created": total_created}
 
 
-def set_ipv6_on_radius_profiles(db, dry_run: bool) -> dict[str, int]:
+def set_ipv6_on_radius_profiles(db: Session, dry_run: bool) -> dict[str, int]:
     """Set ipv6_pool_name on RADIUS profiles based on POP-to-pool mapping.
 
     FreeRADIUS uses Delegated-IPv6-Prefix-Pool to assign /64 prefixes.
@@ -134,7 +138,7 @@ def set_ipv6_on_radius_profiles(db, dry_run: bool) -> dict[str, int]:
     return {"updated": updated}
 
 
-def import_ipv4_from_splynx(db, dry_run: bool) -> dict[str, int]:
+def import_ipv4_from_splynx(db: Session, dry_run: bool) -> dict[str, int]:
     """Import IPv4 address assignments from Splynx into ip pools.
 
     Reads assigned IPs from Splynx ipv4_networks_ip table and creates
@@ -208,7 +212,7 @@ def import_ipv4_from_splynx(db, dry_run: bool) -> dict[str, int]:
     return {"imported": imported, "skipped": skipped}
 
 
-def assign_ipv6_to_subscribers(db, dry_run: bool) -> dict[str, int]:
+def assign_ipv6_to_subscribers(db: Session, dry_run: bool) -> dict[str, int]:
     """Assign IPv6 /64 prefixes to active subscriptions that have IPv4 but no IPv6."""
     from app.models.catalog import Subscription, SubscriptionStatus
     from app.models.network import (
@@ -288,30 +292,30 @@ def main():
 
     from app.db import SessionLocal
     db = SessionLocal()
+    try:
+        logger.info("=== Step 1: Generate IPv6 /64 delegation prefixes ===")
+        r1 = generate_ipv6_prefixes(db, args.dry_run)
+        logger.info("Result: %s\n", r1)
 
-    logger.info("=== Step 1: Generate IPv6 /64 delegation prefixes ===")
-    r1 = generate_ipv6_prefixes(db, args.dry_run)
-    logger.info("Result: %s\n", r1)
+        logger.info("=== Step 2: Set IPv6 pool on RADIUS profiles ===")
+        r2 = set_ipv6_on_radius_profiles(db, args.dry_run)
+        logger.info("Result: %s\n", r2)
 
-    logger.info("=== Step 2: Set IPv6 pool on RADIUS profiles ===")
-    r2 = set_ipv6_on_radius_profiles(db, args.dry_run)
-    logger.info("Result: %s\n", r2)
+        logger.info("=== Step 3: Import IPv4 addresses from Splynx ===")
+        r3 = import_ipv4_from_splynx(db, args.dry_run)
+        logger.info("Result: %s\n", r3)
 
-    logger.info("=== Step 3: Import IPv4 addresses from Splynx ===")
-    r3 = import_ipv4_from_splynx(db, args.dry_run)
-    logger.info("Result: %s\n", r3)
+        logger.info("=== Step 4: Assign IPv6 to active subscribers ===")
+        r4 = assign_ipv6_to_subscribers(db, args.dry_run)
+        logger.info("Result: %s\n", r4)
 
-    logger.info("=== Step 4: Assign IPv6 to active subscribers ===")
-    r4 = assign_ipv6_to_subscribers(db, args.dry_run)
-    logger.info("Result: %s\n", r4)
-
-    logger.info("=== COMPLETE ===")
-    logger.info("IPv6 prefixes generated: %d", r1["created"])
-    logger.info("RADIUS profiles updated: %d", r2["updated"])
-    logger.info("IPv4 addresses imported: %d", r3["imported"])
-    logger.info("Subscribers assigned IPv6: %d", r4["assigned"])
-
-    db.close()
+        logger.info("=== COMPLETE ===")
+        logger.info("IPv6 prefixes generated: %d", r1["created"])
+        logger.info("RADIUS profiles updated: %d", r2["updated"])
+        logger.info("IPv4 addresses imported: %d", r3["imported"])
+        logger.info("Subscribers assigned IPv6: %d", r4["assigned"])
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
