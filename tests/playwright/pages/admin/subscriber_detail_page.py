@@ -1,4 +1,4 @@
-"""Subscriber detail page object."""
+"""Customer detail page object kept under the legacy subscriber name."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ from tests.playwright.pages.base_page import BasePage
 
 
 class SubscriberDetailPage(BasePage):
-    """Page object for the subscriber detail page."""
+    """Page object for the customer detail page."""
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/admin/subscribers") -> None:
-        """Navigate to a specific subscriber's detail page."""
+    def goto(self, path: str = "/admin/customers") -> None:
+        """Navigate to a specific customer detail page."""
         # Backwards compatible with existing tests: `goto(subscriber_id)`.
         if path and not path.startswith("/"):
-            super().goto(f"/admin/subscribers/{path}")
+            super().goto(f"/admin/customers/person/{path}")
             return
         super().goto(path)
 
@@ -26,8 +26,9 @@ class SubscriberDetailPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the detail page is loaded."""
-        # Detail page shows subscriber info section
-        expect(self.page.locator(".subscriber-info, [data-testid='subscriber-detail']").first).to_be_visible()
+        expect(self.page.get_by_role("link", name="Customers").or_(
+            self.page.get_by_role("link", name="Edit")
+        ).first).to_be_visible()
 
     def expect_subscriber_name(self, name: str) -> None:
         """Assert the subscriber name is displayed."""

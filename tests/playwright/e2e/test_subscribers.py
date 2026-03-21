@@ -12,10 +12,10 @@ from tests.playwright.pages.admin import (
 
 
 class TestSubscribersList:
-    """Tests for the subscribers list page."""
+    """Tests for the customers list page through the legacy subscriber facade."""
 
     def test_subscribers_page_loads(self, admin_page: Page, settings):
-        """Subscribers list page should load."""
+        """Customers list page should load."""
         page = SubscribersPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
@@ -28,11 +28,11 @@ class TestSubscribersList:
         expect(admin_page.locator("table")).to_be_visible()
 
     def test_new_subscriber_button(self, admin_page: Page, settings):
-        """New subscriber button should navigate to form."""
+        """New customer button should navigate to form."""
         page = SubscribersPage(admin_page, settings.base_url)
         page.goto()
         page.click_new_subscriber()
-        admin_page.wait_for_url("**/subscribers/new**")
+        admin_page.wait_for_url("**/customers/new**")
 
     def test_search_subscribers(self, admin_page: Page, settings, test_identities):
         """Search should filter subscriber list."""
@@ -64,12 +64,12 @@ class TestSubscriberForm:
         expect(admin_page.locator("form")).to_be_visible()
 
     def test_subscriber_form_cancel(self, admin_page: Page, settings):
-        """Cancel should return to list."""
+        """Cancel should return to customers list."""
         form = SubscriberFormPage(admin_page, settings.base_url)
         form.goto_new()
         form.expect_loaded()
         form.cancel()
-        admin_page.wait_for_url("**/subscribers**")
+        admin_page.wait_for_url("**/customers**")
 
 
 class TestSubscriberDetail:
@@ -82,8 +82,7 @@ class TestSubscriberDetail:
 
         detail = SubscriberDetailPage(admin_page, settings.base_url)
         detail.goto(subscriber_id)
-        # Should show subscriber details
-        admin_page.wait_for_timeout(1000)
+        detail.expect_loaded()
 
     def test_subscriber_edit_navigation(self, admin_page: Page, settings, test_identities):
         """Edit button should navigate to edit form."""
@@ -93,7 +92,7 @@ class TestSubscriberDetail:
         detail = SubscriberDetailPage(admin_page, settings.base_url)
         detail.goto(subscriber_id)
         detail.click_edit()
-        admin_page.wait_for_url(f"**/subscribers/{subscriber_id}/edit**")
+        admin_page.wait_for_url(f"**/customers/person/{subscriber_id}/edit**")
 
     def test_subscriber_has_sections(self, admin_page: Page, settings, test_identities):
         """Detail page should show related data sections."""
@@ -102,8 +101,7 @@ class TestSubscriberDetail:
 
         detail = SubscriberDetailPage(admin_page, settings.base_url)
         detail.goto(subscriber_id)
-        # Should have at least basic content visible
-        admin_page.wait_for_timeout(1000)
+        detail.expect_loaded()
 
 
 class TestSubscriberEdit:
@@ -129,7 +127,7 @@ class TestSubscriberEdit:
         form.fill_notes("E2E test note update")
         form.submit()
         # Should redirect back to detail
-        admin_page.wait_for_url(f"**/subscribers/{subscriber_id}**")
+        admin_page.wait_for_url(f"**/customers/person/{subscriber_id}**")
 
 
 class TestSubscriberAPI:

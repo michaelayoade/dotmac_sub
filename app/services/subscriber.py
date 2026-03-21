@@ -49,6 +49,11 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 _validate_enum = validate_enum
+_RESTRICTED_STATUSES = {
+    SubscriberStatus.blocked,
+    SubscriberStatus.suspended,
+    SubscriberStatus.disabled,
+}
 
 
 def _metadata_flag(value: object) -> bool:
@@ -125,6 +130,28 @@ def _metadata_datetime(metadata: dict | None, key: str) -> datetime | None:
         logger.debug("Could not parse metadata datetime key=%s value=%r", key, value)
         return None
     return _coerce_utc_datetime(parsed)
+
+
+def _update_restricted_status_metadata(
+    subscriber: Subscriber,
+    *,
+    previous_status: SubscriberStatus | None,
+    next_status: SubscriberStatus | None,
+) -> None:
+    metadata = dict(subscriber.metadata_ or {})
+    was_restricted = previous_status in _RESTRICTED_STATUSES
+    is_restricted = next_status in _RESTRICTED_STATUSES
+    now = datetime.now(UTC)
+
+    if is_restricted:
+        if not was_restricted or not _metadata_datetime(metadata, "restricted_since"):
+            metadata["restricted_since"] = now.isoformat()
+        metadata["restricted_status"] = next_status.value if next_status else None
+    elif was_restricted:
+        metadata["last_restricted_status"] = previous_status.value if previous_status else None
+        metadata["last_restricted_ended_at"] = now.isoformat()
+
+    subscriber.metadata_ = metadata
 
 
 def get_effective_created_at(subscriber: Subscriber) -> datetime | None:
@@ -575,6 +602,7 @@ class Subscribers(ListResponseMixin):
         subscriber = db.get(Subscriber, subscriber_id)
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
+        previous_status = subscriber.status
         data = payload.model_dump(exclude_unset=True)
         category = data.pop("category", None)
         data.pop("organization_id", None)
@@ -584,6 +612,11 @@ class Subscribers(ListResponseMixin):
             subscriber.category = (
                 category if isinstance(category, SubscriberCategory) else str(category)
             )
+        _update_restricted_status_metadata(
+            subscriber,
+            previous_status=previous_status,
+            next_status=subscriber.status,
+        )
         db.commit()
         db.refresh(subscriber)
 

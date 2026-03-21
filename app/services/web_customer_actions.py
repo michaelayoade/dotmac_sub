@@ -76,6 +76,7 @@ def _billing_override_payload(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
+    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     payment_method: str | None,
 ) -> dict[str, Any]:
@@ -86,6 +87,7 @@ def _billing_override_payload(
         "min_balance": _optional_decimal(min_balance),
         "tax_rate_id": _normalize_optional(tax_rate_id),
         "payment_method": _normalize_optional(payment_method),
+        "captive_redirect_enabled": captive_redirect_enabled == "true",
     }
     normalized_enabled = _normalize_optional(billing_enabled_override)
     if normalized_enabled == "true":
@@ -412,6 +414,7 @@ def create_customer_from_form(
                 "status": form_data.get("status") or "active",
                 "is_active": form_data.get("is_active") == "true",
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",
+                "captive_redirect_enabled": form_data.get("captive_redirect_enabled") == "true",
                 "notes": _normalize_optional(form_data.get("notes")),
                 "metadata_": form_data.get("metadata_json"),
             },
@@ -579,6 +582,7 @@ def update_person_customer(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
+    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     payment_method: str | None,
     metadata_json: dict | None,
@@ -620,6 +624,7 @@ def update_person_customer(
             payment_due_days=payment_due_days,
             grace_period_days=grace_period_days,
             min_balance=min_balance,
+            captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             payment_method=payment_method,
         )
@@ -671,6 +676,7 @@ def update_organization_customer(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
+    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     payment_method: str | None,
 ):
@@ -703,6 +709,7 @@ def update_organization_customer(
                 payment_due_days=payment_due_days,
                 grace_period_days=grace_period_days,
                 min_balance=min_balance,
+                captive_redirect_enabled=captive_redirect_enabled,
                 tax_rate_id=tax_rate_id,
                 payment_method=payment_method,
             )

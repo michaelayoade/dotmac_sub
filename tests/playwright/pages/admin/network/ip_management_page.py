@@ -18,7 +18,7 @@ class IPManagementPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the IP management page is loaded."""
-        expect(self.page.get_by_role("heading", name="IP", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="IP Address Management", exact=True)).to_be_visible()
 
     def click_new_pool(self) -> None:
         """Click new IP pool button."""

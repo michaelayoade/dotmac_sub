@@ -162,6 +162,22 @@ class FupRule(Base):
         Float, nullable=True
     )
 
+    # Rule chaining: rules can require a prior rule to have fired
+    # and can specify a follow-up rule to evaluate next.
+    enabled_by_rule_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("fup_rules.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    cooldown_minutes: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Time-of-day override: rule-level window (overrides policy if set)
+    time_start: Mapped[time | None] = mapped_column(Time, nullable=True)
+    time_end: Mapped[time | None] = mapped_column(Time, nullable=True)
+    days_of_week: Mapped[list[int] | None] = mapped_column(
+        ARRAY(Integer).with_variant(JSON, "sqlite"), nullable=True
+    )
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     created_at: Mapped[datetime] = mapped_column(

@@ -1,4 +1,4 @@
-"""Subscriber form page object."""
+"""Customer form page object kept under the legacy subscriber name."""
 
 from __future__ import annotations
 
@@ -8,18 +8,18 @@ from tests.playwright.pages.base_page import BasePage
 
 
 class SubscriberFormPage(BasePage):
-    """Page object for the subscriber create/edit form."""
+    """Page object for the customer create/edit form."""
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
     def goto_new(self) -> None:
-        """Navigate to the new subscriber form."""
-        super().goto("/admin/subscribers/new")
+        """Navigate to the new customer form."""
+        super().goto("/admin/customers/new")
 
     def goto_edit(self, subscriber_id: str) -> None:
-        """Navigate to edit a specific subscriber."""
-        super().goto(f"/admin/subscribers/{subscriber_id}/edit")
+        """Navigate to edit a specific person customer."""
+        super().goto(f"/admin/customers/person/{subscriber_id}/edit")
 
     def expect_loaded(self) -> None:
         """Assert the form is loaded."""
@@ -27,11 +27,13 @@ class SubscriberFormPage(BasePage):
 
     def expect_create_mode(self) -> None:
         """Assert form is in create mode."""
-        expect(self.page.get_by_role("heading", name="New Subscriber", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="New Customer", exact=True)).to_be_visible()
 
     def expect_edit_mode(self) -> None:
         """Assert form is in edit mode."""
-        expect(self.page.get_by_role("heading", name="Edit Subscriber", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="Edit Person", exact=True).or_(
+            self.page.get_by_role("heading", name="Edit Customer", exact=True)
+        ).first).to_be_visible()
 
     def search_customer(self, query: str) -> None:
         """Search for a customer (person or organization)."""

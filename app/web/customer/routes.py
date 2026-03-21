@@ -18,6 +18,10 @@ from app.models.catalog import Subscription
 from app.services import crm_portal, customer_portal
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.bandwidth import bandwidth_samples
+from app.services.customer_portal_context import (
+    get_restricted_dashboard_context,
+    is_subscriber_restricted,
+)
 from app.services.metrics_store import get_metrics_store
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
@@ -75,23 +79,29 @@ def _resolve_allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
     return [fallback] if fallback else []
 
 
+def _render_dashboard(request: Request, db: Session, customer: dict, next_url: str) -> Response:
+    """Render full or restricted dashboard based on subscriber status."""
+    subscriber_id = customer.get("subscriber_id")
+    if subscriber_id and is_subscriber_restricted(db, subscriber_id):
+        ctx = get_restricted_dashboard_context(db, customer)
+        return templates.TemplateResponse(
+            "customer/dashboard/restricted.html",
+            {"request": request, "customer": customer, **ctx, "active_page": "dashboard"},
+        )
+    dashboard_context = customer_portal.get_dashboard_context(db, customer)
+    return templates.TemplateResponse(
+        "customer/dashboard/index.html",
+        {"request": request, "customer": customer, **dashboard_context, "active_page": "dashboard"},
+    )
+
+
 @router.get("", response_class=HTMLResponse)
 def portal_home(request: Request, db: Session = Depends(get_db)) -> Response:
     """Customer portal dashboard."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal", status_code=303)
-
-    dashboard_context = customer_portal.get_dashboard_context(db, customer)
-    return templates.TemplateResponse(
-        "customer/dashboard/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            **dashboard_context,
-            "active_page": "dashboard",
-        },
-    )
+    return _render_dashboard(request, db, customer, "/portal")
 
 
 @router.get("/dashboard", response_class=HTMLResponse)
@@ -99,21 +109,8 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
     """Customer dashboard with account overview."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(
-            url="/portal/auth/login?next=/portal/dashboard", status_code=303
-        )
-
-    dashboard_context = customer_portal.get_dashboard_context(db, customer)
-
-    return templates.TemplateResponse(
-        "customer/dashboard/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            **dashboard_context,
-            "active_page": "dashboard",
-        },
-    )
+        return RedirectResponse(url="/portal/auth/login?next=/portal/dashboard", status_code=303)
+    return _render_dashboard(request, db, customer, "/portal/dashboard")
 
 
 @router.get("/support", response_class=HTMLResponse)

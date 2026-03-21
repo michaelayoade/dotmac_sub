@@ -3,43 +3,257 @@
 {% block title %}FUP Configuration - {{ offer.name }} - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6">
-    <!-- Header with breadcrumbs -->
+<div class="space-y-8" x-data="{ activeTab: 'config' }">
+    <!-- Header -->
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
-                <a href="/admin/catalog" class="hover:text-primary-600">Tariff Plans</a>
+                <a href="/admin/catalog" class="hover:text-primary-600">Catalog</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <a href="/admin/catalog/offers/{{ offer.id }}" class="hover:text-primary-600">{{ offer.name }}</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">FUP</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Fair Usage Policy</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure traffic shaping rules for {{ offer.name }}</p>
+            <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-white">Fair Usage Policy</h1>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Configure and test traffic shaping rules for {{ offer.name }}</p>
         </div>
-        <div class="flex items-center gap-2">
-            <a href="/admin/catalog/offers/{{ offer.id }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-                Back to Offer
-            </a>
-        </div>
+        <a href="/admin/catalog/offers/{{ offer.id }}" class="inline-flex items-center gap-2 rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+            Back to Offer
+        </a>
     </div>
 
-    <!-- Tab navigation -->
+    <!-- Tabs -->
     <div class="border-b border-slate-200 dark:border-slate-700">
-        <nav class="-mb-px flex gap-6" aria-label="Tabs">
-            <a href="/admin/catalog/offers/{{ offer.id }}/fup" class="border-b-2 border-violet-500 px-1 pb-3 text-sm font-medium text-violet-600 dark:text-violet-400">
-                FUP Configuration
-            </a>
-            <span class="border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-slate-400 cursor-not-allowed dark:text-slate-500" title="Coming soon">
-                FUP Preview &amp; Test
-            </span>
-            <span class="border-b-2 border-transparent px-1 pb-3 text-sm font-medium text-slate-400 cursor-not-allowed dark:text-slate-500" title="Coming soon">
-                CAP
-            </span>
+        <nav class="-mb-px flex gap-6">
+            <button @click="activeTab = 'config'" :class="activeTab === 'config' ? 'border-violet-500 text-violet-600 dark:text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'" class="border-b-2 px-1 pb-3 text-sm font-medium transition-colors">
+                Rules &amp; Settings
+            </button>
+            <button @click="activeTab = 'simulate'" :class="activeTab === 'simulate' ? 'border-violet-500 text-violet-600 dark:text-violet-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400'" class="border-b-2 px-1 pb-3 text-sm font-medium transition-colors">
+                Simulate &amp; Test
+            </button>
         </nav>
     </div>
 
-    {% include "admin/catalog/_fup_sections.html" %}
+    <!-- Config Tab -->
+    <div x-show="activeTab === 'config'" x-cloak>
+        {% include "admin/catalog/_fup_sections.html" %}
+    </div>
+
+    <!-- Simulate Tab -->
+    <div x-show="activeTab === 'simulate'" x-cloak
+         x-data="{
+             usageGb: 50,
+             hour: 14,
+             day: -1,
+             billingDay: 15,
+             cycleDays: 30,
+             results: null,
+             loading: false,
+             async simulate() {
+                 this.loading = true;
+                 const fd = new FormData();
+                 fd.append('usage_gb', this.usageGb);
+                 fd.append('hour', this.hour);
+                 fd.append('day', this.day);
+                 fd.append('billing_day_elapsed', this.billingDay);
+                 fd.append('billing_cycle_days', this.cycleDays);
+                 try {
+                     const resp = await fetch('/admin/catalog/offers/{{ offer.id }}/fup/simulate', {method: 'POST', body: fd});
+                     this.results = await resp.json();
+                 } catch(e) {
+                     this.results = {error: e.message};
+                 }
+                 this.loading = false;
+             }
+         }"
+         x-init="simulate()">
+
+        <div class="grid gap-6 lg:grid-cols-[1fr_1.5fr]">
+            <!-- Controls -->
+            <div class="space-y-6">
+                <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Simulation Parameters</h3>
+                    <div class="space-y-4">
+                        <div>
+                            <label class="flex items-center justify-between text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                                <span>Current Usage</span>
+                                <span class="font-mono tabular-nums" x-text="usageGb + ' GB'"></span>
+                            </label>
+                            <input type="range" x-model="usageGb" @input.debounce.300ms="simulate()" min="0" max="200" step="1"
+                                   class="w-full accent-violet-600">
+                            <div class="flex justify-between text-xs text-slate-400 mt-1">
+                                <span>0 GB</span><span>100 GB</span><span>200 GB</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="flex items-center justify-between text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                                <span>Time of Day</span>
+                                <span class="font-mono tabular-nums" x-text="hour + ':00'"></span>
+                            </label>
+                            <input type="range" x-model="hour" @input.debounce.300ms="simulate()" min="0" max="23" step="1"
+                                   class="w-full accent-violet-600">
+                            <div class="flex justify-between text-xs text-slate-400 mt-1">
+                                <span>00:00</span><span>12:00</span><span>23:00</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">Day of Week</label>
+                            <select x-model="day" @change="simulate()"
+                                    class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="-1">Any day</option>
+                                <option value="0">Monday</option>
+                                <option value="1">Tuesday</option>
+                                <option value="2">Wednesday</option>
+                                <option value="3">Thursday</option>
+                                <option value="4">Friday</option>
+                                <option value="5">Saturday</option>
+                                <option value="6">Sunday</option>
+                            </select>
+                        </div>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">Days Elapsed</label>
+                                <input type="number" x-model="billingDay" @input.debounce.300ms="simulate()" min="0" max="365"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-1 block">Cycle Days</label>
+                                <input type="number" x-model="cycleDays" @input.debounce.300ms="simulate()" min="1" max="365"
+                                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Summary Card -->
+                <template x-if="results && results.summary">
+                    <div class="rounded-2xl border p-5 shadow-sm transition-colors"
+                         :class="{
+                             'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-900/20': results.summary.status === 'ok',
+                             'border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20': results.summary.status === 'warning',
+                             'border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-900/20': results.summary.status === 'throttled',
+                             'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20': results.summary.status === 'blocked',
+                         }">
+                        <div class="flex items-center gap-3 mb-3">
+                            <template x-if="results.summary.status === 'ok'">
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-bold text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Normal</span>
+                            </template>
+                            <template x-if="results.summary.status === 'warning'">
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-bold text-amber-800 dark:bg-amber-900 dark:text-amber-200"><span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>Warning</span>
+                            </template>
+                            <template x-if="results.summary.status === 'throttled'">
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-bold text-orange-800 dark:bg-orange-900 dark:text-orange-200"><span class="h-1.5 w-1.5 rounded-full bg-orange-500 animate-pulse"></span>Throttled</span>
+                            </template>
+                            <template x-if="results.summary.status === 'blocked'">
+                                <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-bold text-rose-800 dark:bg-rose-900 dark:text-rose-200"><span class="h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse"></span>Blocked</span>
+                            </template>
+                            <span class="text-xs text-slate-500" x-text="results.summary.triggered_count + '/' + results.summary.total_rules + ' rules triggered'"></span>
+                        </div>
+                        <!-- Usage bar -->
+                        <div class="h-2 w-full rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div class="h-full rounded-full transition-all duration-500"
+                                 :class="{
+                                     'bg-emerald-500': results.summary.status === 'ok',
+                                     'bg-amber-500': results.summary.status === 'warning',
+                                     'bg-orange-500': results.summary.status === 'throttled',
+                                     'bg-rose-500': results.summary.status === 'blocked',
+                                 }"
+                                 :style="'width: ' + Math.min(results.summary.usage_percent, 100) + '%'"></div>
+                        </div>
+                        <p class="mt-2 text-sm font-mono tabular-nums" x-text="results.summary.current_usage_gb + ' / ' + results.summary.max_threshold_gb + ' GB (' + results.summary.usage_percent + '%)'"></p>
+                        <template x-if="results.projection">
+                            <div class="mt-3 grid grid-cols-2 gap-2 text-xs text-slate-600 dark:text-slate-400">
+                                <div>Daily avg: <span class="font-mono font-medium text-slate-900 dark:text-white" x-text="results.projection.daily_average_gb + ' GB'"></span></div>
+                                <div>Projected: <span class="font-mono font-medium text-slate-900 dark:text-white" x-text="results.projection.projected_total_gb + ' GB'"></span></div>
+                                <div>Days left: <span class="font-mono font-medium text-slate-900 dark:text-white" x-text="results.projection.days_remaining"></span></div>
+                                <div>Days to cap: <span class="font-mono font-medium" :class="results.projection.will_exceed ? 'text-rose-600' : 'text-emerald-600'" x-text="results.projection.days_until_cap || '∞'"></span></div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Rule Chain Pipeline -->
+            <div class="space-y-3">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Rule Chain</h3>
+                <template x-if="results && results.rules && results.rules.length > 0">
+                    <div class="space-y-2">
+                        <template x-for="(rule, idx) in results.rules" :key="rule.rule_id">
+                            <div class="relative">
+                                <!-- Arrow connector -->
+                                <template x-if="idx > 0">
+                                    <div class="absolute -top-2 left-6 h-2 w-px bg-slate-300 dark:bg-slate-600"></div>
+                                </template>
+                                <!-- Rule card -->
+                                <div class="flex items-start gap-3 rounded-xl border p-4 transition-all"
+                                     :class="{
+                                         'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/50 dark:bg-emerald-900/10': rule.status === 'ok',
+                                         'border-rose-200 bg-rose-50/50 dark:border-rose-800/50 dark:bg-rose-900/10': rule.status === 'triggered',
+                                         'border-slate-200 bg-slate-50/50 dark:border-slate-700 dark:bg-slate-800/50': rule.status === 'waiting' || rule.status === 'disabled',
+                                         'border-blue-200 bg-blue-50/50 dark:border-blue-800/50 dark:bg-blue-900/10': rule.status === 'time_skip' || rule.status === 'day_skip',
+                                     }">
+                                    <!-- Status indicator -->
+                                    <div class="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
+                                         :class="{
+                                             'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400': rule.status === 'ok',
+                                             'bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400': rule.status === 'triggered',
+                                             'bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500': rule.status === 'waiting' || rule.status === 'disabled',
+                                             'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400': rule.status === 'time_skip' || rule.status === 'day_skip',
+                                         }">
+                                        <template x-if="rule.status === 'ok'">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                                        </template>
+                                        <template x-if="rule.status === 'triggered'">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                                        </template>
+                                        <template x-if="rule.status === 'waiting'">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        </template>
+                                        <template x-if="rule.status === 'time_skip' || rule.status === 'day_skip'">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 5l7 7-7 7M5 5l7 7-7 7"/></svg>
+                                        </template>
+                                        <template x-if="rule.status === 'disabled'">
+                                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                                        </template>
+                                    </div>
+                                    <!-- Rule details -->
+                                    <div class="flex-1 min-w-0">
+                                        <div class="flex items-center gap-2">
+                                            <p class="text-sm font-semibold text-slate-900 dark:text-white" x-text="rule.name"></p>
+                                            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-mono text-slate-600 dark:bg-slate-700 dark:text-slate-400" x-text="rule.threshold_gb + ' GB'"></span>
+                                            <template x-if="rule.action === 'reduce_speed' && rule.status === 'triggered'">
+                                                <span class="rounded bg-orange-100 px-1.5 py-0.5 text-[10px] font-bold text-orange-700 dark:bg-orange-900/30 dark:text-orange-300" x-text="'−' + rule.speed_reduction_percent + '% speed'"></span>
+                                            </template>
+                                            <template x-if="rule.action === 'block' && rule.status === 'triggered'">
+                                                <span class="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">BLOCKED</span>
+                                            </template>
+                                            <template x-if="rule.action === 'notify' && rule.status === 'triggered'">
+                                                <span class="rounded bg-blue-100 px-1.5 py-0.5 text-[10px] font-bold text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">NOTIFIED</span>
+                                            </template>
+                                        </div>
+                                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400" x-text="rule.reason"></p>
+                                        <!-- Progress bar for threshold rules -->
+                                        <template x-if="rule.usage_percent !== undefined && rule.status !== 'waiting' && rule.status !== 'disabled'">
+                                            <div class="mt-2 h-1 w-full max-w-xs rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                                                <div class="h-full rounded-full transition-all duration-300"
+                                                     :class="rule.status === 'triggered' ? 'bg-rose-500' : 'bg-emerald-500'"
+                                                     :style="'width: ' + Math.min(rule.usage_percent, 100) + '%'"></div>
+                                            </div>
+                                        </template>
+                                    </div>
+                                </div>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+                <template x-if="!results || !results.rules || results.rules.length === 0">
+                    <div class="rounded-2xl border border-dashed border-slate-300 p-8 text-center dark:border-slate-600">
+                        <p class="text-sm text-slate-500 dark:text-slate-400">No FUP rules configured. Add rules in the "Rules & Settings" tab first.</p>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

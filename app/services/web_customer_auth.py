@@ -14,7 +14,7 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import customer_portal, radius_auth
 from app.services import module_manager as module_manager_service
 from app.services.auth_flow import verify_password
@@ -125,7 +125,7 @@ def customer_login_submit(
             authenticated_locally = True
 
             subscriber = db.get(Subscriber, local_credential.subscriber_id)
-            if subscriber and subscriber.is_active:
+            if subscriber and subscriber.status != SubscriberStatus.canceled:
                 subscriber_id = subscriber.id
                 account_id = subscriber.id
 

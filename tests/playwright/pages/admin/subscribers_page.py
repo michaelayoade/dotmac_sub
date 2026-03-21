@@ -1,4 +1,4 @@
-"""Subscribers list page object."""
+"""Customers list page object kept under the legacy subscriber name."""
 
 from __future__ import annotations
 
@@ -8,21 +8,21 @@ from tests.playwright.pages.base_page import BasePage
 
 
 class SubscribersPage(BasePage):
-    """Page object for the subscribers list page."""
+    """Page object for the customers list page."""
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
-    def goto(self, path: str = "/admin/subscribers") -> None:
-        """Navigate to the subscribers list."""
+    def goto(self, path: str = "/admin/customers") -> None:
+        """Navigate to the customers list."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
-        """Assert the subscribers page is loaded."""
-        expect(self.page.get_by_role("heading", name="Subscribers", exact=True)).to_be_visible()
+        """Assert the customers page is loaded."""
+        expect(self.page.get_by_role("heading", name="Customers", exact=True)).to_be_visible()
 
     def search(self, query: str) -> None:
-        """Search for subscribers."""
-        search_input = self.page.get_by_placeholder("Search by name, email, or ID")
+        """Search for customers."""
+        search_input = self.page.get_by_placeholder("Search by name, email, phone...")
         search_input.fill(query)
         self.page.keyboard.press("Enter")
 
@@ -31,8 +31,8 @@ class SubscribersPage(BasePage):
         self.page.get_by_label("Type").select_option(subscriber_type)
 
     def click_new_subscriber(self) -> None:
-        """Click the new subscriber button."""
-        self.page.get_by_role("link", name="Add Subscriber").first.click()
+        """Click the new customer button."""
+        self.page.get_by_role("link", name="Add Customer").first.click()
 
     def click_subscriber_row(self, identifier: str) -> None:
         """Click on a subscriber row by name or number."""
@@ -44,7 +44,9 @@ class SubscribersPage(BasePage):
 
     def expect_no_results(self) -> None:
         """Assert no results are shown."""
-        expect(self.page.get_by_text("No subscribers found")).to_be_visible()
+        expect(self.page.get_by_text("No customers found").or_(
+            self.page.get_by_text("No results")
+        ).first).to_be_visible()
 
     def get_subscriber_count(self) -> int:
         """Get the count of subscribers in the table."""

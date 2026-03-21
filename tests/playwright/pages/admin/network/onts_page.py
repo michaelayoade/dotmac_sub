@@ -18,7 +18,7 @@ class ONTsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the ONTs page is loaded."""
-        expect(self.page.get_by_role("heading", name="ONT", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="ONT Fleet", exact=True)).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search ONTs."""
@@ -28,7 +28,7 @@ class ONTsPage(BasePage):
 
     def click_new_ont(self) -> None:
         """Click new ONT button."""
-        self.page.get_by_role("link", name="New").first.click()
+        self.page.get_by_role("link", name="Add ONT").click()
 
     def click_ont_row(self, serial: str) -> None:
         """Click on an ONT row by serial number."""

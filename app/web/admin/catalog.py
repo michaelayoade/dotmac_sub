@@ -385,6 +385,45 @@ def offer_fup_clone_rules(
     return RedirectResponse(url=_redirect_to_fup_context(form, offer_id), status_code=303)
 
 
+@router.post(
+    "/offers/{offer_id}/fup/simulate",
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
+def offer_fup_simulate(
+    offer_id: str, request: Request, db: Session = Depends(get_db)
+):
+    """Simulate FUP rules for a given usage scenario. Returns JSON for HTMX."""
+    from app.services.fup import simulate_fup
+
+    form = parse_form_data_sync(request)
+    try:
+        usage_gb = float(form.get("usage_gb", 0))
+        hour = int(form.get("hour", 12))
+        day = int(form.get("day", -1))
+        billing_day = int(form.get("billing_day_elapsed", 15))
+        cycle_days = int(form.get("billing_cycle_days", 30))
+    except (ValueError, TypeError):
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
+
+    from datetime import UTC, datetime
+
+    sim_time = datetime.now(UTC).replace(hour=hour, minute=0, second=0, microsecond=0)
+
+    result = simulate_fup(
+        db,
+        offer_id,
+        current_usage_gb=usage_gb,
+        current_time=sim_time,
+        current_day=day if day >= 0 else None,
+        billing_day_elapsed=billing_day,
+        billing_cycle_days=cycle_days,
+    )
+
+    from fastapi.responses import JSONResponse
+    return JSONResponse(result)
+
+
 # ---------------------------------------------------------------------------
 # Tariff Plan Usage Graph
 # ---------------------------------------------------------------------------

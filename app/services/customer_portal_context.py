@@ -10,9 +10,15 @@ from typing import cast
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.billing import Invoice
 from app.models.catalog import CatalogOffer, PriceType, SubscriptionStatus
 from app.models.provisioning import InstallAppointment, ServiceOrder
-from app.models.subscriber import AccountStatus, Organization, Subscriber
+from app.models.subscriber import (
+    AccountStatus,
+    Organization,
+    Subscriber,
+    SubscriberStatus,
+)
 from app.models.support import Ticket, TicketStatus
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
@@ -175,6 +181,112 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         "services": services,
         "tickets": SimpleNamespace(open_count=open_count),
         "recent_activity": [],
+    }
+
+
+_RESTRICTED_STATUSES = {
+    SubscriberStatus.blocked,
+    SubscriberStatus.suspended,
+    SubscriberStatus.disabled,
+}
+
+STATUS_DISPLAY = {
+    "blocked": "Blocked — Non-payment",
+    "suspended": "Suspended",
+    "disabled": "Disabled by administrator",
+    "canceled": "Canceled",
+}
+
+
+def get_restricted_since(subscriber: Subscriber) -> datetime | None:
+    """Return when the subscriber most recently entered a restricted status."""
+    metadata = subscriber.metadata_ or {}
+    return subscriber_service._metadata_datetime(metadata, "restricted_since")  # type: ignore[attr-defined]
+
+
+def get_total_outstanding_balance(db: Session, account_id: object) -> float:
+    """Sum all active positive invoice balances for the account."""
+    total = (
+        db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
+        .filter(Invoice.account_id == coerce_uuid(account_id))
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.balance_due > 0)
+        .scalar()
+    )
+    return float(total or 0)
+
+
+def is_subscriber_restricted(db: Session, subscriber_id: object) -> bool:
+    """Check if a subscriber should see the restricted portal view."""
+    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+    if not subscriber:
+        return False
+    return subscriber.status in _RESTRICTED_STATUSES
+
+
+def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
+    """Build context for the restricted/expired subscriber portal view."""
+    subscriber_id = session.get("subscriber_id")
+    account_id = session.get("account_id")
+
+    subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
+    if not subscriber:
+        return {"restricted": True, "account_status": "Unknown"}
+
+    user_name = session.get("username") or "Customer"
+    if subscriber.first_name:
+        user_name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
+
+    # Outstanding balance from invoices
+    balance = 0.0
+    recent_invoices = []
+    if account_id:
+        balance = get_total_outstanding_balance(db, account_id)
+        invoices = billing_service.invoices.list(
+            db=db,
+            account_id=account_id,
+            status=None,
+            is_active=None,
+            order_by="issued_at",
+            order_dir="desc",
+            limit=5,
+            offset=0,
+        )
+        recent_invoices = [inv for inv in invoices if float(inv.balance_due or 0) > 0][:3]
+
+    # Subscriptions (all, not just active)
+    subscriptions = []
+    if account_id:
+        subscriptions = catalog_service.subscriptions.list(
+            db=db,
+            subscriber_id=account_id,
+            offer_id=None,
+            status=None,
+            order_by="created_at",
+            order_dir="desc",
+            limit=5,
+            offset=0,
+        )
+
+    plan_name = None
+    if subscriptions and subscriptions[0].offer:
+        plan_name = subscriptions[0].offer.name
+
+    status_value = subscriber.status.value if subscriber.status else "unknown"
+
+    return {
+        "restricted": True,
+        "user_name": user_name,
+        "subscriber_number": subscriber.subscriber_number or subscriber.account_number,
+        "account_status": status_value,
+        "account_status_display": STATUS_DISPLAY.get(status_value, status_value.title()),
+        "plan_name": plan_name,
+        "outstanding_balance": balance,
+        "recent_invoices": recent_invoices,
+        "account_start_date": subscriber.account_start_date,
+        "blocked_since": get_restricted_since(subscriber),
+        "email": subscriber.email,
+        "phone": subscriber.phone,
     }
 
 

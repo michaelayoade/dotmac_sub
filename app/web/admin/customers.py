@@ -90,6 +90,7 @@ def _load_tax_rates(db: Session):
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
     defaults = {
         "billing_enabled_override": "",
+        "captive_redirect_enabled": "",
         "billing_day": "",
         "payment_due_days": "",
         "grace_period_days": "",
@@ -133,6 +134,7 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
             "billing_enabled_override": (
                 "true" if subscriber.billing_enabled else "false"
             ) if subscriber.billing_enabled is not None else "",
+            "captive_redirect_enabled": "true" if subscriber.captive_redirect_enabled else "false",
             "billing_day": str(subscriber.billing_day or ""),
             "payment_due_days": str(subscriber.payment_due_days or ""),
             "grace_period_days": str(subscriber.grace_period_days or ""),
@@ -1076,6 +1078,7 @@ def person_update(
     payment_due_days: str | None = Form(None),
     grace_period_days: str | None = Form(None),
     min_balance: str | None = Form(None),
+    captive_redirect_enabled: str | None = Form(None),
     tax_rate_id: str | None = Form(None),
     payment_method: str | None = Form(None),
     metadata: str | None = Form(None),
@@ -1114,6 +1117,7 @@ def person_update(
             payment_due_days=payment_due_days,
             grace_period_days=grace_period_days,
             min_balance=min_balance,
+            captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             payment_method=payment_method,
             metadata_json=_parse_json(metadata, "metadata") if metadata is not None else None,

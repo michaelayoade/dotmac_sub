@@ -38,13 +38,13 @@ class TestAdminDashboard:
         dashboard.expect_sidebar_visible()
 
     def test_navigate_to_subscribers(self, admin_page: Page, settings):
-        """Clicking subscribers link should navigate to subscribers page."""
+        """Clicking customers link should navigate to customers page."""
         dashboard = AdminDashboardPage(admin_page, settings.base_url)
         dashboard.goto()
         dashboard.expect_loaded()
         dashboard.click_subscribers_link()
-        admin_page.wait_for_url("**/admin/subscribers**")
-        expect(admin_page.get_by_role("heading", name="Subscribers")).to_be_visible()
+        admin_page.wait_for_url("**/admin/customers**")
+        expect(admin_page.get_by_role("heading", name="Customers")).to_be_visible()
 
     def test_navigate_to_tickets(self, admin_page: Page, settings):
         """Clicking tickets link should navigate to tickets page."""
@@ -52,5 +52,5 @@ class TestAdminDashboard:
         dashboard.goto()
         dashboard.expect_loaded()
         dashboard.click_tickets_link()
-        admin_page.wait_for_url("**/admin/tickets**")
-        expect(admin_page.get_by_role("heading", name="Tickets")).to_be_visible()
+        admin_page.wait_for_url("**/admin/support/tickets**")
+        expect(admin_page.get_by_role("heading", name="Support Tickets")).to_be_visible()

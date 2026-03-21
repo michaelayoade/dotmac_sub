@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusClient, RadiusServer
+from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.services.common import coerce_uuid
 from app.services.enforcement import _sanitize_routeros_value
@@ -249,6 +250,13 @@ def enforce_subscription_reject_ip(
         return {"ok": True, "changed": False, "mode": "noop"}
 
     reject_key = normalize_reject_reason(reject_reason)
+
+    # Per-subscriber captive redirect: route to the "negative" pool
+    # (which has HTTP→portal NAT redirect rules) instead of "blocked" (drop)
+    subscriber = db.get(Subscriber, subscription.subscriber_id) if subscription.subscriber_id else None
+    if subscriber and subscriber.captive_redirect_enabled and reject_key == "blocked":
+        reject_key = "negative"
+
     target_network = networks.get(reject_key)
     if not target_network and reject_key != "blocked":
         reject_key = "blocked"

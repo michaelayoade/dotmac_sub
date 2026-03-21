@@ -18,7 +18,7 @@ class AdminDashboardPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
-        expect(self.page.get_by_role("heading", name="Operations Center", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="Infrastructure Overview", exact=True)).to_be_visible()
 
     def expect_stats_visible(self) -> None:
         """Assert stats cards are visible."""
@@ -26,7 +26,7 @@ class AdminDashboardPage(BasePage):
 
     def expect_activity_feed_visible(self) -> None:
         """Assert activity feed section is visible."""
-        expect(self.page.get_by_text("Recent Activity").first).to_be_visible()
+        expect(self.page.get_by_text("Recent Events").first).to_be_visible()
 
     def search(self, query: str) -> None:
         """Use the global search."""
@@ -44,13 +44,15 @@ class AdminDashboardPage(BasePage):
         expect(self.page.locator("nav, aside, .sidebar, [data-testid='sidebar']").first).to_be_visible()
 
     def click_subscribers_link(self) -> None:
-        """Click the link to subscribers page."""
-        self.page.get_by_role("link", name="Subscribers").first.click()
+        """Click the link to customers page."""
+        self.page.get_by_role("link", name="Customers").first.click()
 
     def click_tickets_link(self) -> None:
         """Click the link to tickets page."""
-        self.page.get_by_role("link", name="Tickets").first.click()
+        self.page.get_by_role("link", name="Support").first.click()
 
     def click_billing_link(self) -> None:
         """Click the link to billing page."""
-        self.page.get_by_role("link", name="Billing").first.click()
+        self.page.get_by_role("link", name="Invoices").or_(
+            self.page.get_by_role("link", name="Payments")
+        ).first.click()

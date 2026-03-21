@@ -18,11 +18,11 @@ class OLTsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the OLTs page is loaded."""
-        expect(self.page.get_by_role("heading", name="OLT", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="OLT Devices", exact=True)).to_be_visible()
 
     def click_new_olt(self) -> None:
         """Click new OLT button."""
-        self.page.get_by_role("link", name="New").first.click()
+        self.page.get_by_role("link", name="Add OLT").click()
 
     def click_olt_row(self, olt_name: str) -> None:
         """Click on an OLT row."""

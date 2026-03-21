@@ -174,14 +174,14 @@ class TestBillingWorkflows:
     """Tests for billing workflows."""
 
     def test_navigate_billing_from_dashboard(self, admin_page: Page, settings):
-        """Should navigate to billing from dashboard."""
+        """Should navigate to a billing surface from dashboard."""
         from tests.playwright.pages.admin.dashboard_page import AdminDashboardPage
 
         dashboard = AdminDashboardPage(admin_page, settings.base_url)
         dashboard.goto()
         dashboard.expect_loaded()
         dashboard.click_billing_link()
-        admin_page.wait_for_url("**/billing**")
+        admin_page.wait_for_url("**/billing/**")
 
     def test_billing_to_invoices_navigation(self, admin_page: Page, settings):
         """Should navigate from billing overview to invoices."""
