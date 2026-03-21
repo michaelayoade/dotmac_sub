@@ -80,7 +80,8 @@ def migrate_partners(conn, db) -> dict[int, uuid.UUID]:
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
     from app.models.subscriber import Reseller
 
-    rows = fetch_all(conn, "SELECT * FROM partners WHERE deleted='0' ORDER BY id")
+    # Include deleted partners so customers retain their reseller FK
+    rows = fetch_all(conn, "SELECT * FROM partners ORDER BY id")
     mapping: dict[int, uuid.UUID] = {}
     created = 0
 
@@ -95,10 +96,13 @@ def migrate_partners(conn, db) -> dict[int, uuid.UUID]:
             mapping[row["id"]] = existing.dotmac_id
             continue
 
+        is_deleted = row.get("deleted") == "1"
         reseller = Reseller(
             name=row["name"],
             code=f"SPL-{row['id']}",
-            is_active=True,
+            contact_email=(row.get("email") or "")[:255] or None,
+            contact_phone=(row.get("phone") or "")[:40] or None,
+            is_active=not is_deleted,
         )
         db.add(reseller)
         db.flush()
@@ -107,7 +111,7 @@ def migrate_partners(conn, db) -> dict[int, uuid.UUID]:
             entity_type=SplynxEntityType.partner,
             splynx_id=row["id"],
             dotmac_id=reseller.id,
-            metadata_={"splynx_name": row["name"]},
+            metadata_={"splynx_name": row["name"], "deleted": is_deleted},
         ))
         mapping[row["id"]] = reseller.id
         created += 1
@@ -504,7 +508,8 @@ def run_phase0(dry_run: bool = True) -> None:
                 logger.info("DRY RUN — counting source data only")
                 tables = [
                     ("locations", "SELECT COUNT(*) as cnt FROM locations WHERE deleted='0'"),
-                    ("partners", "SELECT COUNT(*) as cnt FROM partners WHERE deleted='0'"),
+                    ("partners (all)", "SELECT COUNT(*) as cnt FROM partners"),
+                    ("partners (deleted)", "SELECT COUNT(*) as cnt FROM partners WHERE deleted='1'"),
                     ("tax", "SELECT COUNT(*) as cnt FROM tax"),
                     ("tariffs_internet", "SELECT COUNT(*) as cnt FROM tariffs_internet"),
                     ("tariffs_custom", "SELECT COUNT(*) as cnt FROM tariffs_custom"),

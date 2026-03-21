@@ -33,7 +33,7 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-900 dark:text-white">
                     {% if order.subscriber %}
-                    <a href="/admin/subscribers/{{ order.subscriber_id }}" class="hover:text-primary-600 dark:hover:text-primary-400">
+                    <a href="/admin/customers/{{ 'organization/' ~ order.subscriber.organization_id if order.subscriber.organization_id else 'person/' ~ order.subscriber_id }}" class="hover:text-primary-600 dark:hover:text-primary-400">
                         {{ subscriber_label(order.subscriber) }}
                     </a>
                     {% else %}

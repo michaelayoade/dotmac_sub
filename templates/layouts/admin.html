@@ -15,7 +15,7 @@
         window.__adminSidebarResizeHandler = updateSidebar;
         window.addEventListener('resize', window.__adminSidebarResizeHandler);
      "
-     class="flex h-screen overflow-hidden">
+     class="flex h-screen overflow-hidden bg-slate-100 dark:bg-slate-950">
     {% set unread_notifications = sidebar_stats.notifications_unread if sidebar_stats is defined and sidebar_stats and sidebar_stats.notifications_unread is defined else 0 %}
 
     <!-- Sidebar -->
@@ -23,7 +23,7 @@
                sidebarOpen ? 'translate-x-0' : '-translate-x-full',
                (isDesktop && sidebarCollapsed) ? 'w-20' : 'w-64'
            ]"
-           class="fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-200 bg-white transition-all duration-300 dark:border-slate-800 dark:bg-slate-900 lg:static lg:translate-x-0">
+           class="fixed inset-y-0 left-0 z-40 flex flex-col border-r border-slate-200/80 bg-white/95 shadow-xl shadow-slate-200/30 backdrop-blur-md transition-all duration-300 dark:border-slate-800 dark:bg-slate-900/95 dark:shadow-black/20 lg:static lg:translate-x-0">
 
         <!-- Logo -->
         <div class="flex h-16 items-center justify-between px-4 border-b border-slate-200 dark:border-slate-800">
@@ -56,7 +56,7 @@
                     </svg>
                     {% endif %}
                 </div>
-                <span x-show="!sidebarCollapsed" class="text-[15px] font-semibold leading-5 tracking-tight text-slate-900 dark:text-white">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</span>
+                <span x-show="!sidebarCollapsed" class="font-display text-[15px] font-semibold leading-5 tracking-tight text-slate-900 dark:text-white">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</span>
             </a>
             <button x-on:click="sidebarCollapsed = !sidebarCollapsed"
                     aria-label="Toggle sidebar collapse"
@@ -72,31 +72,36 @@
         </div>
 
         <!-- Navigation -->
-        <nav class="flex-1 overflow-y-auto py-4 px-3">
+        <nav class="flex-1 overflow-y-auto px-2.5 py-3">
             {% include "components/navigation/admin_sidebar.html" %}
         </nav>
 
         <!-- Operator Context (bottom) -->
-        <div class="border-t border-slate-200 p-4 dark:border-slate-800">
-            <div class="rounded-2xl border border-slate-200/70 bg-slate-50/85 p-2.5 dark:border-slate-700/70 dark:bg-slate-800/60">
-                <div class="flex items-center gap-3">
+        <div :class="sidebarCollapsed ? 'p-3' : 'p-4'" class="border-t border-slate-200 dark:border-slate-800">
+            <div :class="sidebarCollapsed ? 'p-2' : 'p-2.5'" class="rounded-2xl border border-slate-200/70 bg-slate-50/85 dark:border-slate-700/70 dark:bg-slate-800/60">
+                <div :class="sidebarCollapsed ? 'justify-center' : ''" class="flex items-center gap-3">
                     <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-white">
                         {{ current_user.initials if current_user is defined and current_user else 'AD' }}
                     </div>
                     <div x-show="!sidebarCollapsed" class="min-w-0 flex-1">
-                        <p class="text-sm font-medium text-slate-900 truncate dark:text-white">{{ current_user.name if current_user is defined and current_user else 'Admin User' }}</p>
-                        <p class="text-xs text-slate-600 truncate dark:text-slate-300">{{ current_user.email if current_user is defined and current_user else 'admin@example.com' }}</p>
+                        <p class="text-sm font-semibold text-slate-900 truncate dark:text-white">{{ current_user.name if current_user is defined and current_user else 'Admin User' }}</p>
+                        <p class="text-[11px] font-medium text-slate-500 truncate dark:text-slate-400">{{ current_user.email if current_user is defined and current_user else 'admin@example.com' }}</p>
                     </div>
                 </div>
                 <div x-show="!sidebarCollapsed" class="mt-2.5 grid grid-cols-2 gap-2 text-xs">
                     <div class="rounded-xl border border-slate-200/70 bg-white/90 px-2.5 py-1.5 dark:border-slate-700/70 dark:bg-slate-900/65">
-                        <p class="font-semibold uppercase tracking-[0.12em] text-slate-600 dark:text-slate-300">Tenant</p>
-                        <p class="mt-1 truncate text-slate-800 dark:text-slate-100">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</p>
+                        <p class="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">Tenant</p>
+                        <p class="mt-1 truncate text-[12px] font-medium text-slate-600 dark:text-slate-300">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</p>
                     </div>
                     <div class="rounded-xl border border-slate-200/70 bg-white/90 px-2.5 py-1.5 dark:border-slate-700/70 dark:bg-slate-900/65">
-                        <p class="font-semibold uppercase tracking-[0.12em] text-slate-600 dark:text-slate-300">Unread</p>
-                        <p class="mt-1 tabular-nums text-slate-800 dark:text-slate-100">{{ unread_notifications }}</p>
+                        <p class="text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-500 dark:text-slate-400">Unread</p>
+                        <p class="mt-1 text-sm font-semibold tabular-nums text-slate-800 dark:text-slate-100">{{ unread_notifications }}</p>
                     </div>
+                </div>
+                <div x-show="sidebarCollapsed" x-cloak class="mt-2 flex justify-center">
+                    <span class="inline-flex min-w-[24px] items-center justify-center rounded-full bg-slate-200 px-2 py-1 text-[11px] font-semibold tabular-nums text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                        {{ unread_notifications }}
+                    </span>
                 </div>
             </div>
         </div>
@@ -117,7 +122,7 @@
     <!-- Main Content Area -->
     <div class="flex flex-1 flex-col overflow-hidden">
         <!-- Top Navigation -->
-        <header class="relative z-40 flex h-16 items-center justify-between border-b border-slate-200 bg-white px-4 pointer-events-auto dark:border-slate-700 dark:bg-slate-800">
+        <header class="relative z-40 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/85 px-4 backdrop-blur-md pointer-events-auto dark:border-slate-700/80 dark:bg-slate-900/80">
             <!-- Mobile menu button -->
             <button x-on:click="sidebarOpen = !sidebarOpen"
                     aria-label="Toggle navigation"
@@ -146,9 +151,22 @@
                     'ar-aging': 'AR Aging',
                     'payment_arrangements': 'Payment Arrangements',
                     'payment_providers': 'Payment Providers',
+                    'payment_channels': 'Payment Channels',
+                    'payment_channel_accounts': 'Payment Channel Mappings',
+                    'collection-accounts': 'Collection Accounts',
+                    'collection_accounts': 'Collection Accounts',
+                    'tax-rates': 'Tax Rates',
+                    'ledger': 'Ledger',
+                    'billing-setup': 'Billing Setup',
+                    'config-billing': 'Billing Settings',
+                    'config-payment-methods': 'Payment Methods',
+                    'config-tax': 'Tax Configuration',
+                    'config-reminders': 'Billing Reminders',
+                    'config-billing-notif': 'Billing Notifications',
                     'catalog': 'Catalog',
                     'catalog-offers': 'Offers',
-                    'catalog-subscriptions': 'Subscriptions',
+                    'catalog-subscriptions': 'Active Services',
+                    'catalog-settings': 'Catalog Components',
                     'catalog-add-ons': 'Add-ons',
                     'catalog-usage': 'Usage & FUP',
                     'resellers': 'Resellers',
@@ -441,8 +459,12 @@
         </header>
 
         <!-- Page Content -->
-        <main class="flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-900 bg-noise bg-mesh">
-            <div class="relative z-10 mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8 {% block content_container_class %}{% endblock %}">
+        <main class="relative flex-1 overflow-y-auto bg-slate-100 dark:bg-slate-950 bg-noise bg-mesh">
+            <div class="pointer-events-none absolute inset-0 overflow-hidden">
+                <div class="absolute -top-24 right-0 h-[420px] w-[420px] rounded-full bg-gradient-to-br from-amber-400/5 to-orange-500/5 blur-3xl dark:from-amber-500/5 dark:to-orange-500/5"></div>
+                <div class="absolute bottom-0 left-0 h-[360px] w-[360px] rounded-full bg-gradient-to-tr from-indigo-400/5 to-cyan-400/5 blur-3xl dark:from-indigo-500/5 dark:to-cyan-500/5"></div>
+            </div>
+            <div class="relative z-10 mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 {% block content_container_class %}{% endblock %}">
                 {% block page_header %}{% endblock %}
                 {% block content %}{% endblock %}
             </div>

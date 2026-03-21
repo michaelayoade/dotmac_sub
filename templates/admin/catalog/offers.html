@@ -1,9 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
-    ambient_background, page_header, action_button, status_badge,
+    ambient_background, page_header, action_button, status_badge, stats_card,
     data_table, table_head, table_row, row_actions, row_action, empty_state, pagination,
     filter_bar, search_input, filter_select,
-    icon_archive, icon_plus, icon_view, icon_edit
+    icon_archive, icon_plus, icon_view, icon_edit, icon_users, icon_chart_bar
 %}
 
 {% block title %}Offers - Catalog - Admin{% endblock %}
@@ -24,7 +24,37 @@
         {{ action_button("Create Offer", "/admin/catalog/offers/create", icon_plus(), "primary", "violet", "purple") }}
     {% endcall %}
 
+    {# ── KPI Summary ── #}
+    {% set total_offers = offers | length if offers else 0 %}
+    {% set active_offers = offers | selectattr('status') | selectattr('status.value', 'equalto', 'active') | list | length if offers else 0 %}
+    {% set total_subs = offer_subscription_counts.values() | sum if offer_subscription_counts else 0 %}
+    <section class="grid gap-3 sm:grid-cols-3">
+        {{ stats_card("Total Offers", total_offers, icon_archive(), "violet", "purple") }}
+        {{ stats_card("Active Subscriptions", "{:,}".format(total_subs), icon_users(), "emerald", "teal") }}
+        {{ stats_card("Avg per Offer", "{:,.0f}".format(total_subs / active_offers) if active_offers > 0 else '0', icon_chart_bar(), "purple", "violet") }}
+    </section>
+
     {# ── Status Filter Tabs ── #}
+    {% call filter_bar() %}
+    <form method="get" action="/admin/catalog/offers" class="space-y-4">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div class="grid flex-1 gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
+                {{ search_input(name="search", value=search|default(''), placeholder="Search offers, codes, or service types...", color="violet") }}
+                <div>
+                    {{ filter_select("status", [
+                        {"value": "", "label": "All statuses"},
+                        {"value": "active", "label": "Active"},
+                        {"value": "inactive", "label": "Inactive"},
+                        {"value": "archived", "label": "Archived"}
+                    ], value=status or '', label="Status", color="violet") }}
+                </div>
+            </div>
+            <div class="flex flex-wrap gap-2">
+                <button type="submit" class="inline-flex items-center rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-lg shadow-violet-500/20 transition hover:-translate-y-0.5 hover:shadow-violet-500/30">Apply</button>
+                <a href="/admin/catalog/offers" class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-violet-300 hover:text-violet-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-violet-600 dark:hover:text-violet-300">Reset</a>
+            </div>
+        </div>
+    </form>
     <div class="flex flex-wrap gap-2">
         {% set filters = [
             ("", "All"),
@@ -35,13 +65,12 @@
         {% for val, label in filters %}
         {% set is_active = (status or '') == val %}
         <a href="/admin/catalog/offers{% if val %}?status={{ val }}{% endif %}"
-           class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition
-                  {% if is_active %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400
-                  {% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+           class="inline-flex items-center rounded-full px-3 py-1.5 text-sm font-medium transition {% if is_active %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300{% else %}bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
             {{ label }}
         </a>
         {% endfor %}
     </div>
+    {% endcall %}
 
     {# ── Offers Table ── #}
     {% call data_table(title="Offers", icon=icon_archive(), color="violet", count=offers | length if offers else 0,

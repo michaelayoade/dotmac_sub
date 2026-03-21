@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("slate", "gray") }}
 
-<div class="relative space-y-6" x-data="settingsHub()">
+<div class="relative space-y-8" x-data="settingsHub({{ (selected_category or '') | tojson }})">
     {% call page_header(
         title="Settings Hub",
         subtitle="All configuration sections in one place",
@@ -55,10 +55,10 @@
 </div>
 
 <script>
-function settingsHub() {
+function settingsHub(defaultCategory) {
     return {
         search: '',
-        activeCategory: '',
+        activeCategory: defaultCategory || '',
         setCategory(categoryId) {
             this.activeCategory = categoryId || '';
         },

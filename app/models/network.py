@@ -467,6 +467,9 @@ class IpPool(Base):
     olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL"), index=True
     )
+    nas_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("nas_devices.id", ondelete="SET NULL"), index=True
+    )
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(

@@ -86,29 +86,32 @@
    ============================================ #}
 {% macro page_header(title, subtitle="", icon="", color="amber", color2=None, actions=None, breadcrumbs=None) %}
 {% set c2 = color2 or color %}
-<div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between animate-fade-in-up">
+<div class="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-gradient-to-br from-{{ color }}-50 via-white to-{{ c2 }}-50/70 px-6 py-6 shadow-sm animate-fade-in-up dark:border-slate-700/60 dark:from-{{ color }}-900/20 dark:via-slate-900 dark:to-{{ c2 }}-900/10">
+    <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-gradient-to-br from-{{ c2 }}-400/15 to-{{ color }}-500/5 blur-3xl dark:from-{{ c2 }}-500/10 dark:to-{{ color }}-500/5"></div>
+    <div class="pointer-events-none absolute -bottom-16 left-10 h-28 w-28 rounded-full bg-gradient-to-tr from-{{ color }}-300/10 to-transparent blur-2xl dark:from-{{ color }}-500/10"></div>
+    <div class="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
     <div class="flex items-center gap-4">
         {% if icon %}
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25">
+        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25 ring-1 ring-white/70 dark:ring-white/10">
             {{ icon|safe }}
         </div>
         {% endif %}
         <div>
             {% if breadcrumbs %}
-            <nav class="mb-1 flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
+            <nav class="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
                 {% for crumb in breadcrumbs %}
                 {% if not loop.last %}
-                <a href="{{ crumb.href }}" class="hover:text-{{ color }}-600 dark:hover:text-{{ color }}-400">{{ crumb.label }}</a>
+                <a href="{{ crumb.href }}" class="transition hover:text-{{ color }}-700 dark:hover:text-{{ color }}-300">{{ crumb.label }}</a>
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 {% else %}
-                <span class="text-slate-700 dark:text-slate-300">{{ crumb.label }}</span>
+                <span class="text-slate-700 dark:text-slate-200">{{ crumb.label }}</span>
                 {% endif %}
                 {% endfor %}
             </nav>
             {% endif %}
             <h1 class="text-2xl font-bold font-display tracking-tight text-slate-900 dark:text-white">{{ title }}</h1>
             {% if subtitle %}
-            <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
+            <p class="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
             {% endif %}
         </div>
     </div>
@@ -121,6 +124,7 @@
         {{ caller() }}
     </div>
     {% endif %}
+    </div>
 </div>
 {% endmacro %}
 
@@ -185,25 +189,26 @@
 {% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="") %}
 {% set c2 = color2 or color %}
 {% set is_link = href != "" %}
-<{% if is_link %}a href="{{ href }}"{% else %}div{% endif %} class="group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800">
+<{% if is_link %}a href="{{ href }}"{% else %}div{% endif %} class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:border-{{ color }}-200 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 dark:hover:border-{{ color }}-700/40">
+    <div class="absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-{{ color }}-400/40 to-transparent"></div>
     <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-{{ color }}-500/10 to-{{ c2 }}-500/10 blur-2xl transition-all group-hover:scale-150"></div>
     <div class="relative flex items-center justify-between">
         <div>
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">{{ label }}</p>
-            <p class="mt-1 text-[clamp(1.25rem,2vw,1.875rem)] font-bold leading-tight text-slate-900 dark:text-white">{{ value }}</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
+            <p class="mt-2.5 text-[clamp(1.25rem,2.2vw,1.8rem)] font-bold leading-none tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
             {% if change is not none %}
             {% set change_num = change %}
             {% if change is string %}
             {% set change_num = (change | replace('%', '') | float) %}
             {% endif %}
             {% set change_color = 'text-emerald-600 dark:text-emerald-400' if (change_type == 'positive' or change_num > 0) else 'text-red-600 dark:text-red-400' if (change_type == 'negative' or change_num < 0) else 'text-slate-500' %}
-            <p class="mt-1 text-xs font-medium {{ change_color }}">
+            <p class="mt-1.5 text-sm {{ change_color }}">
                 {% if change_num > 0 %}+{% endif %}{{ "%.1f"|format(change_num) }}% from last period
             </p>
             {% endif %}
         </div>
         {% if icon %}
-        <div class="flex h-12 w-12 items-center justify-center rounded-xl bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25">
+        <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25 ring-1 ring-white/70 dark:ring-white/10">
             {{ icon|safe }}
         </div>
         {% endif %}
@@ -305,12 +310,12 @@
    Table container with header and count badge
    ============================================ #}
 {% macro data_table(title="", icon="", color="slate", count=None, actions=None) %}
-<div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+<div class="animate-fade-in-up overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
     {% if title %}
-    <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+    <div class="flex items-center justify-between border-b border-slate-200/60 bg-gradient-to-r from-slate-50 via-white to-{{ color }}-50/40 px-6 py-4 dark:border-slate-700/60 dark:from-slate-800 dark:via-slate-800 dark:to-{{ color }}-900/10">
         <div class="flex items-center gap-3">
             {% if icon %}
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-{{ color }}-100 to-{{ color }}-200 dark:from-{{ color }}-900/40 dark:to-{{ color }}-800/30">
+            <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-100 to-{{ color }}-200 dark:from-{{ color }}-900/40 dark:to-{{ color }}-800/30">
                 {{ icon|safe }}
             </div>
             {% endif %}
@@ -318,13 +323,13 @@
         </div>
         <div class="flex items-center gap-3">
             {% if count is not none %}
-            <span class="text-xs font-semibold px-2.5 py-1 rounded-lg bg-{{ color }}-100 text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">{{ count }}</span>
+            <span class="rounded-full bg-{{ color }}-100 px-2.5 py-1 text-xs font-semibold tabular-nums text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">{{ count }}</span>
             {% endif %}
             {% if actions %}{{ actions|safe }}{% endif %}
         </div>
     </div>
     {% endif %}
-    <div class="overflow-x-auto">
+    <div class="overflow-x-auto bg-white dark:bg-slate-800">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
             {{ caller() }}
         </table>
@@ -339,7 +344,7 @@
    ============================================ #}
 {% macro table_head(columns) %}
 <thead>
-    <tr class="border-b border-slate-100 dark:border-slate-700/50">
+    <tr class="border-b border-slate-100 bg-slate-50/80 dark:border-slate-700/50 dark:bg-slate-900/20">
         {% for col in columns %}
         {% set align = col.align if col is mapping and col.align is defined else 'left' %}
         {% set label = col.label if col is mapping and col.label is defined else col %}
@@ -434,12 +439,12 @@
    ============================================ #}
 {% macro card(title="", icon="", color="slate", color2=None, actions=None, padding=True) %}
 {% set c2 = color2 or color %}
-<div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+<div class="animate-fade-in-up overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
     {% if title %}
-    <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+    <div class="relative flex items-center justify-between border-b border-slate-200/60 bg-gradient-to-r from-slate-50 via-white to-{{ c2 }}-50/35 px-6 py-4 dark:border-slate-700/60 dark:from-slate-800 dark:via-slate-800 dark:to-{{ c2 }}-900/10">
         <div class="flex items-center gap-3">
             {% if icon %}
-            <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-{{ color }}-100 to-{{ c2 }}-100 dark:from-{{ color }}-900/40 dark:to-{{ c2 }}-900/30">
+            <div class="flex h-10 w-10 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-100 to-{{ c2 }}-100 dark:from-{{ color }}-900/40 dark:to-{{ c2 }}-900/30">
                 {{ icon|safe }}
             </div>
             {% endif %}
@@ -448,7 +453,7 @@
         {% if actions %}{{ actions|safe }}{% endif %}
     </div>
     {% endif %}
-    <div class="{% if padding %}p-6{% endif %}">
+    <div class="{% if padding %}p-6{% endif %} bg-white dark:bg-slate-800">
         {{ caller() }}
     </div>
 </div>
@@ -470,7 +475,7 @@
            name="{{ name }}"
            value="{{ value }}"
            placeholder="{{ placeholder }}"
-           class="block w-full rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-400 selection:bg-{{ color }}-200 selection:text-slate-900 transition-all focus:border-{{ color }}-500 focus:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder-slate-500 dark:selection:bg-{{ color }}-700/60 dark:selection:text-white dark:focus:border-{{ color }}-500 dark:focus:bg-slate-700"
+           class="block w-full rounded-2xl border border-slate-200/80 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-400 shadow-sm selection:bg-{{ color }}-200 selection:text-slate-900 transition-all focus:border-{{ color }}-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600/80 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:selection:bg-{{ color }}-700/60 dark:selection:text-white dark:focus:border-{{ color }}-500 dark:focus:bg-slate-800"
            {% for key, val in hx_attrs.items() %}{{ key }}="{{ val }}"{% endfor %} />
 </div>
 {% endmacro %}
@@ -485,7 +490,7 @@
 <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</label>
 {% endif %}
 <select name="{{ name }}"
-        class="block w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-4 pr-10 text-sm text-slate-900 transition-all focus:border-{{ color }}-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:focus:border-{{ color }}-500"
+        class="block w-full appearance-none rounded-2xl border border-slate-200/80 bg-white py-2.5 pl-4 pr-10 text-sm text-slate-900 shadow-sm transition-all focus:border-{{ color }}-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600/80 dark:bg-slate-800 dark:text-white dark:focus:border-{{ color }}-500"
         {% if attrs %}{% for key, val in attrs.items() %}{{ key }}="{{ val }}"{% endfor %}{% endif %}>
     {% for opt in options %}
     <option value="{{ opt.value }}" {% if opt.value == value %}selected{% endif %}>{{ opt.label }}</option>
@@ -499,7 +504,7 @@
    Container for search and filters
    ============================================ #}
 {% macro filter_bar() %}
-<div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+<div class="animate-fade-in-up rounded-3xl border border-slate-200/60 bg-white/95 p-5 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/90">
     {{ caller() }}
 </div>
 {% endmacro %}

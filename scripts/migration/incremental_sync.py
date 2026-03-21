@@ -310,9 +310,9 @@ def sync_status_changes(conn, db) -> dict[str, int]:
 
     status_map = {
         "active": SubscriberStatus.active,
-        "blocked": SubscriberStatus.suspended,
-        "disabled": SubscriberStatus.canceled,
-        "new": SubscriberStatus.active,
+        "blocked": SubscriberStatus.blocked,
+        "disabled": SubscriberStatus.disabled,
+        "new": SubscriberStatus.new,
     }
 
     # Get all customer mappings
@@ -349,6 +349,89 @@ def sync_status_changes(conn, db) -> dict[str, int]:
     return {"updated": updated}
 
 
+def sync_deleted_customers(conn, db) -> dict[str, int]:
+    """Detect customers deleted in Splynx and soft-delete in DotMac."""
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+    from app.models.subscriber import Subscriber, SubscriberStatus
+
+    # Get all mapped customer IDs
+    customer_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+
+    if not customer_map:
+        return {"soft_deleted": 0}
+
+    # Find which mapped customers are now deleted in Splynx
+    splynx_ids = ",".join(str(sid) for sid in customer_map)
+    query = f"SELECT id FROM customers WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    deleted_rows = fetch_all(conn, query)
+    deleted_splynx_ids = {row["id"] for row in deleted_rows}
+
+    soft_deleted = 0
+    for splynx_id in deleted_splynx_ids:
+        dotmac_id = customer_map.get(splynx_id)
+        if not dotmac_id:
+            continue
+        subscriber = db.get(Subscriber, dotmac_id)
+        if subscriber and subscriber.is_active:
+            subscriber.is_active = False
+            subscriber.status = SubscriberStatus.canceled
+            # Update metadata to record the deletion source
+            metadata = subscriber.metadata_ or {}
+            metadata["splynx_deleted"] = True
+            subscriber.metadata_ = metadata
+            soft_deleted += 1
+
+    db.flush()
+    logger.info("Deleted customers synced: %d soft-deleted", soft_deleted)
+    return {"soft_deleted": soft_deleted}
+
+
+def sync_deleted_services(conn, db) -> dict[str, int]:
+    """Detect services deleted in Splynx and cancel in DotMac."""
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    # Get all mapped service IDs (internet services only, splynx_id < 200000)
+    service_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.service,
+                SplynxIdMapping.splynx_id < 200000,
+            )
+        ).all()
+    }
+
+    if not service_map:
+        return {"canceled": 0}
+
+    splynx_ids = ",".join(str(sid) for sid in service_map)
+    query = f"SELECT id FROM services_internet WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    deleted_rows = fetch_all(conn, query)
+    deleted_splynx_ids = {row["id"] for row in deleted_rows}
+
+    canceled = 0
+    for splynx_id in deleted_splynx_ids:
+        dotmac_id = service_map.get(splynx_id)
+        if not dotmac_id:
+            continue
+        subscription = db.get(Subscription, dotmac_id)
+        if subscription and subscription.status != SubscriptionStatus.canceled:
+            subscription.status = SubscriptionStatus.canceled
+            canceled += 1
+
+    db.flush()
+    logger.info("Deleted services synced: %d canceled", canceled)
+    return {"canceled": canceled}
+
+
 def run_incremental_sync(
     hours_back: int = 24,
     dry_run: bool = True,
@@ -365,6 +448,8 @@ def run_incremental_sync(
                     ("new invoices", f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'"), # noqa: S608
                     ("new payments", f"SELECT COUNT(*) as cnt FROM payments WHERE date >= '{since.strftime('%Y-%m-%d')}'"), # noqa: S608
                     ("status changes", "SELECT COUNT(*) as cnt FROM customers WHERE deleted='0' AND category != 'lead'"),
+                    ("deleted customers", "SELECT COUNT(*) as cnt FROM customers WHERE deleted='1' AND category != 'lead'"),
+                    ("deleted services", "SELECT COUNT(*) as cnt FROM services_internet WHERE deleted='1'"),
                 ]
                 for name, query in tables:
                     rows = fetch_all(conn, query)
@@ -384,12 +469,22 @@ def run_incremental_sync(
             status_result = sync_status_changes(conn, db)
             db.commit()
 
+            # Step 4: Detect deletions
+            del_cust_result = sync_deleted_customers(conn, db)
+            db.commit()
+
+            del_svc_result = sync_deleted_services(conn, db)
+            db.commit()
+
             logger.info("=== Incremental sync complete ===")
             logger.info(
-                "  Invoices: %d new | Payments: %d new | Status: %d updated",
+                "  Invoices: %d new | Payments: %d new | Status: %d updated"
+                " | Customers deleted: %d | Services canceled: %d",
                 inv_result["created"],
                 pay_result["created"],
                 status_result["updated"],
+                del_cust_result["soft_deleted"],
+                del_svc_result["canceled"],
             )
 
 

@@ -166,7 +166,7 @@
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscriber</dt>
                                 <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                     {% if cpe.subscriber %}
-                                    <a href="/admin/subscribers/{{ cpe.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700">{{ cpe.subscriber.full_name }}</a>
+                                    <a href="/admin/customers/{{ 'organization/' ~ cpe.subscriber.organization_id if cpe.subscriber.organization_id else 'person/' ~ cpe.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700">{{ cpe.subscriber.full_name }}</a>
                                     {% if cpe.subscriber.account_number %}<span class="text-slate-500"> ({{ cpe.subscriber.account_number }})</span>{% endif %}
                                     {% else %}
                                     -

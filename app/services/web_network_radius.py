@@ -213,10 +213,35 @@ def radius_page_data(db) -> dict[str, object]:
         limit=200,
         offset=0,
     )
+    recent_sessions = (
+        db.scalars(
+            select(RadiusActiveSession)
+            .options(
+                joinedload(RadiusActiveSession.subscriber),
+                joinedload(RadiusActiveSession.nas_device),
+            )
+            .order_by(RadiusActiveSession.session_start.desc())
+            .limit(5)
+        )
+        .unique()
+        .all()
+    )
+    recent_errors = (
+        db.scalars(
+            select(RadiusAuthError)
+            .order_by(RadiusAuthError.occurred_at.desc())
+            .limit(5)
+        )
+        .all()
+    )
     return {
         "profiles": profiles,
         "servers": servers,
         "clients": clients,
+        "recent_sessions": recent_sessions,
+        "recent_errors": recent_errors,
+        "total_online": db.scalar(select(func.count(RadiusActiveSession.id))) or 0,
+        "total_errors": db.scalar(select(func.count(RadiusAuthError.id))) or 0,
     }
 
 

@@ -53,7 +53,7 @@ def customer_logout_get(request: Request):
 
 
 @router.post("/stop-impersonation")
-def customer_stop_impersonation(request: Request, next: str = Form("/admin/subscribers")):
+def customer_stop_impersonation(request: Request, next: str = Form("/admin/customers")):
     """Stop customer impersonation and return to admin."""
     return web_customer_auth_service.customer_stop_impersonation(request, next)
 
@@ -66,7 +66,7 @@ def customer_stop_impersonation_get(request: Request, next: str | None = Query(d
     """
     return web_customer_auth_service.customer_stop_impersonation(
         request,
-        next or "/admin/subscribers",
+        next or "/admin/customers",
     )
 
 

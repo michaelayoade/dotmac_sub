@@ -98,7 +98,10 @@ def _pool_prefix_length(pool: IpPool | None) -> int | None:
 
 
 def _resolve_pool_for_version(
-    db: Session, ip_version: IPVersion, pool_id: str | None
+    db: Session,
+    ip_version: IPVersion,
+    pool_id: str | None,
+    nas_device_id: str | None = None,
 ) -> IpPool | None:
     if pool_id:
         try:
@@ -109,6 +112,22 @@ def _resolve_pool_for_version(
         if not pool or pool.ip_version != ip_version:
             raise HTTPException(status_code=404, detail="IP pool not found.")
         return pool
+
+    # Prefer a pool linked to the subscriber's NAS device
+    if nas_device_id:
+        nas_pool = cast(
+            IpPool | None,
+            db.query(IpPool)
+            .filter(IpPool.ip_version == ip_version)
+            .filter(IpPool.is_active.is_(True))
+            .filter(IpPool.nas_device_id == coerce_uuid(nas_device_id))
+            .order_by(IpPool.name.asc())
+            .first(),
+        )
+        if nas_pool:
+            return nas_pool
+
+    # Fallback: first active pool (alphabetical)
     return cast(
         IpPool | None,
         (
@@ -238,7 +257,8 @@ def _ensure_ip_assignment_for_version(
         return assignment, address
 
     address = None
-    pool = _resolve_pool_for_version(db, ip_version, override_pool_id)
+    nas_id = str(subscription.provisioning_nas_device_id) if getattr(subscription, "provisioning_nas_device_id", None) else context.get("nas_device_id")
+    pool = _resolve_pool_for_version(db, ip_version, override_pool_id, nas_device_id=nas_id)
 
     if override_address_id:
         address = _get_address_by_id(db, ip_version, override_address_id)

@@ -470,7 +470,11 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
                 {
                     "id": str(sub.id),
                     "label": _subscriber_label(sub),
-                    "url": f"/admin/subscribers/{sub.id}",
+                    "url": (
+                        f"/admin/customers/organization/{sub.organization_id}"
+                        if sub.organization_id
+                        else f"/admin/customers/person/{sub.id}"
+                    ),
                     "type": "customer",
                 }
                 for sub in customer_results

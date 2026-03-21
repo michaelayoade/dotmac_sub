@@ -44,16 +44,21 @@ class ContactMethod(enum.Enum):
 class SubscriberStatus(enum.Enum):
     """Account status — mirrors Splynx customer status lifecycle.
 
-    Splynx mapping:
+    Splynx mapping (1:1):
       new      → new (signed up, not yet activated)
       active   → active (paying, service running)
-      blocked  → suspended (temporarily blocked — non-payment or violation)
+      blocked  → blocked (temporarily blocked — non-payment or violation)
       disabled → disabled (permanently deactivated by admin)
       deleted  → canceled (soft-deleted, record preserved for audit)
+
+    DotMac-only statuses:
+      suspended — generic suspension (non-Splynx origin)
+      delinquent — past due, pre-suspension
     """
     new = "new"               # Signed up, awaiting activation
     active = "active"         # Active, paying subscriber
-    suspended = "suspended"   # Temporarily blocked (Splynx: blocked)
+    blocked = "blocked"       # Temporarily blocked (Splynx: blocked)
+    suspended = "suspended"   # Generic suspension (DotMac-native)
     disabled = "disabled"     # Permanently deactivated by admin (Splynx: disabled)
     canceled = "canceled"     # Terminated / soft-deleted
     delinquent = "delinquent" # Past due, pre-suspension
@@ -200,6 +205,11 @@ class Subscriber(Base):
     region: Mapped[str | None] = mapped_column(String(80))
     postal_code: Mapped[str | None] = mapped_column(String(20))
     country_code: Mapped[str | None] = mapped_column(String(2))
+
+    # Service location (POP site determines the NAS/IP pool for provisioning)
+    pop_site_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pop_sites.id", ondelete="SET NULL"), index=True
+    )
 
     # === Account Fields (from Subscriber + SubscriberAccount) ===
     subscriber_number: Mapped[str | None] = mapped_column(String(80), unique=True)

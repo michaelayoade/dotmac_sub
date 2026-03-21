@@ -256,6 +256,9 @@ def _emit_subscription_status_event(
 
     # Map status transitions to event types
     if to_status == SubscriptionStatus.active:
+        # Generate PPPoE BEFORE events so provisioning handler sees credentials
+        _auto_generate_pppoe_if_enabled(db, subscription)
+
         if from_status == SubscriptionStatus.suspended:
             emit_event(
                 db,
@@ -274,9 +277,6 @@ def _emit_subscription_status_event(
             )
             # Generate prorated invoice for new activations
             _generate_proration_if_enabled(db, subscription, from_status)
-
-        # Auto-generate PPPoE credential if enabled and none exists
-        _auto_generate_pppoe_if_enabled(db, subscription)
 
         # Sync credentials to RADIUS immediately on activation/resume
         _sync_credentials_to_radius(db, subscription.subscriber_id)
@@ -504,8 +504,11 @@ class Subscriptions(ListResponseMixin):
             account_id=subscription.subscriber_id,
         )
 
-        # If created as active, also emit activation event and generate credentials
+        # If created as active, generate credentials FIRST so the provisioning
+        # handler (triggered by the activation event) sees them.
         if subscription.status == SubscriptionStatus.active:
+            _auto_generate_pppoe_if_enabled(db, subscription)
+
             emit_event(
                 db,
                 EventType.subscription_activated,
@@ -518,7 +521,6 @@ class Subscriptions(ListResponseMixin):
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
             )
-            _auto_generate_pppoe_if_enabled(db, subscription)
             _sync_credentials_to_radius(db, subscription.subscriber_id)
 
         # SQLite drops tzinfo even when DateTime(timezone=True), and emit_event()

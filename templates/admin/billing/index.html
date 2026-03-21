@@ -1,9 +1,8 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
-    ambient_background, page_header, stats_card, card, data_table,
-    table_head, table_row, row_actions, row_action, status_badge,
-    empty_state, action_button, metric_row,
-    icon_invoice, icon_plus, icon_view
+    ambient_background, page_header, stats_card, status_badge,
+    empty_state, action_button, metric_row, filter_bar,
+    icon_invoice, icon_download, icon_credit_card, icon_chart_bar, icon_view
 %}
 
 {% block title %}Revenue & Billing - Admin{% endblock %}
@@ -19,344 +18,166 @@
 {% set trend = revenue_trend|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'billed': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
 {% set pmb = payment_method_breakdown|default({'labels': [], 'values': []}) %}
 {% set dp = daily_payments|default({'labels': [], 'values': []}) %}
-{% set ipo = invoicing_period_overlay|default({'labels': [], 'paid': [], 'unpaid': [], 'paid_on_time': [], 'paid_overdue': []}) %}
-{% set tp = top_payers|default({'labels': [], 'values': []}) %}
-{% set mrr = mrr_trend|default({'labels': [], 'values': []}) %}
-{% set arpu = arpu_trend|default({'labels': [], 'values': []}) %}
 {% set cd = chart_data|default({'labels': ['Paid','Pending','Overdue','Draft'], 'values': [0,0,0,0], 'colors': ['#10b981','#3b82f6','#f59e0b','#94a3b8']}) %}
 
-{# ── Local macro: Finance KPI card ── #}
-{% macro finance_kpi(label, amount, count, href, color) %}
-<a href="{{ href }}" class="group rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm transition hover:shadow-md hover:border-{{ color }}-200 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-{{ color }}-700/40">
-    <div class="flex items-center justify-between">
-        <div>
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
-            <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(amount) }}</p>
-        </div>
-        {% if count is not none %}
-        <span class="rounded-lg bg-{{ color }}-100 px-2.5 py-1 text-lg font-bold tabular-nums text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">{{ count }}</span>
-        {% endif %}
-    </div>
-</a>
-{% endmacro %}
-
-<div class="space-y-6">
-    {# ── Page Header ── #}
+<div class="space-y-8">
+    {# ═══ Header ═══ #}
     {% call(content) page_header(
         "Revenue & Billing",
-        subtitle="Financial overview and billing operations",
+        subtitle="Financial performance, receivables, and billing operations.",
         icon=icon_invoice(),
         color="emerald",
         color2="teal"
     ) %}
-        {{ action_button("Export", href="#", icon=icon_plus("h-4 w-4"), variant="secondary", color="emerald") }}
+        {{ action_button("Export", href="#", icon=icon_download("h-4 w-4"), variant="secondary", color="emerald") }}
     {% endcall %}
 
-    {# ── Period Filter ── #}
-    {% call card(color="emerald") %}
-    <form method="get" action="/admin/billing" class="flex flex-wrap items-end gap-3">
-        {% set period_options = [("this_month", "This Month"), ("last_month", "Last Month"), ("this_quarter", "This Quarter"), ("this_year", "Year to Date"), ("all", "All Time")] %}
-        <div class="w-full sm:w-48">
-            <label class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Period</label>
-            <select name="period" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+    {# ═══ Period Filter (compact) ═══ #}
+    {% set period_options = [("this_month", "This Month"), ("last_month", "Last Month"), ("this_quarter", "This Quarter"), ("this_year", "Year to Date"), ("all", "All Time")] %}
+    <form method="get" action="/admin/billing" class="flex flex-wrap items-end gap-3 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex-1 min-w-[140px]">
+            <label class="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">Period</label>
+            <select name="period" class="block w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                 {% for value, label in period_options %}
                 <option value="{{ value }}" {% if selected_period|default('this_month') == value %}selected{% endif %}>{{ label }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="w-full sm:w-48">
-            <label class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Partner</label>
-            <select name="partner_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        <div class="flex-1 min-w-[140px]">
+            <label class="mb-1 block text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500 dark:text-slate-400">Partner</label>
+            <select name="partner_id" class="block w-full rounded-xl border border-slate-200/80 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
                 <option value="">All Partners</option>
                 {% for partner in partner_options|default([]) %}
                 <option value="{{ partner.id }}" {% if selected_partner_id == partner.id %}selected{% endif %}>{{ partner.name }}</option>
                 {% endfor %}
             </select>
         </div>
-        <div class="w-full sm:w-48">
-            <label class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Location</label>
-            <select name="location" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">All Locations</option>
-                {% for loc in location_options|default([]) %}
-                <option value="{{ loc }}" {% if selected_location == loc %}selected{% endif %}>{{ loc }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div class="flex items-center gap-2">
-            <button type="submit" class="inline-flex items-center rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">Apply</button>
-            <a href="/admin/billing" class="text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Reset</a>
+        <div class="flex gap-2">
+            <button type="submit" class="rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5">Apply</button>
+            <a href="/admin/billing" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Reset</a>
         </div>
     </form>
-    {% endcall %}
 
-    {# ── KPI Cards ── #}
+    {# ═══ KPI Cards (4 in a row) ═══ #}
     {% set period_labels = {"this_month": "This Month", "last_month": "Last Month", "this_quarter": "This Quarter", "this_year": "Year to Date", "all": "All Time"} %}
-    {% if selected_period|default('this_month') != 'all' %}
-    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Showing: {{ period_labels.get(selected_period|default('this_month'), 'This Month') }}</p>
-    {% endif %}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {{ finance_kpi("Payments", stats.payments_amount|default(0), stats.payments_count|default(0), "/admin/billing/payments", "emerald") }}
-        {{ finance_kpi("Paid Invoices", stats.total_revenue|default(0), stats.paid_count|default(0), "/admin/billing/invoices?status=paid", "teal") }}
-        {{ finance_kpi("Unpaid Invoices", stats.unpaid_invoices_amount|default(0), stats.unpaid_invoices_count|default(0), "/admin/billing/invoices?status=unpaid", "amber") }}
-        {{ finance_kpi("Credit Notes", stats.credit_notes_total|default(0), stats.credit_notes_count|default(0), "/admin/billing/credits", "violet") }}
-        {{ finance_kpi("Planned Income", planned_income|default(0), none, "/admin/billing/invoices?status=pending", "blue") }}
-
-        {# Key Metrics (inline — unique layout) #}
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <p class="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Key Metrics</p>
-            <div class="grid grid-cols-3 gap-2">
+    <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card("Payments", "₦" ~ "{:,.0f}".format(stats.payments_amount|default(0)), icon_credit_card(), "emerald", "teal", href="/admin/billing/payments") }}
+        {{ stats_card("Paid Invoices", "₦" ~ "{:,.0f}".format(stats.total_revenue|default(0)), icon_invoice(), "teal", "emerald", href="/admin/billing/invoices?status=paid") }}
+        {{ stats_card("Unpaid", "₦" ~ "{:,.0f}".format(stats.unpaid_invoices_amount|default(0)), icon_invoice(), "amber", "orange", href="/admin/billing/invoices?status=unpaid") }}
+        <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">Key Metrics</p>
+            <div class="mt-3 grid grid-cols-3 gap-2">
                 <div class="text-center">
-                    <p class="text-base font-bold tabular-nums {% if (stats.collection_rate|default(0)) >= 80 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.1f}".format(stats.collection_rate|default(0)) }}%</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Collection</p>
+                    <p class="text-base font-bold tabular-nums {% if (stats.collection_rate|default(0)) >= 80 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.0f}".format(stats.collection_rate|default(0)) }}%</p>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400">Collection</p>
                 </div>
                 <div class="text-center">
                     <p class="text-base font-bold tabular-nums {% if (mrr_growth_rate|default(0)) >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">{{ "{:+.1f}".format(mrr_growth_rate|default(0)) }}%</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">MRR Growth</p>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400">MRR</p>
                 </div>
                 <div class="text-center">
-                    <p class="text-base font-bold tabular-nums {% if (net_revenue_retention|default(0)) >= 100 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.1f}".format(net_revenue_retention|default(0)) }}%</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">NRR</p>
+                    <p class="text-base font-bold tabular-nums {% if (net_revenue_retention|default(0)) >= 100 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.0f}".format(net_revenue_retention|default(0)) }}%</p>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400">NRR</p>
                 </div>
             </div>
         </div>
-    </div>
+    </section>
 
-    {# ── Period Comparison ── #}
-    {% call card("Period Comparison", color="emerald") %}
-    <div class="grid gap-4 md:grid-cols-3">
-        {% for period in period_comparison|default([]) %}
-        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ period.label }}</p>
-            <dl class="mt-3 space-y-1 text-sm">
-                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Payments</dt><dd class="font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(period.payments_amount|default(0)) }} ({{ period.payments_count|default(0) }})</dd></div>
-                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Paid Invoices</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ period.paid_invoices_count|default(0) }}</dd></div>
-                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Unpaid Invoices</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ period.unpaid_invoices_count|default(0) }}</dd></div>
-                <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Credit Notes</dt><dd class="font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(period.credit_notes_amount|default(0)) }} ({{ period.credit_notes_count|default(0) }})</dd></div>
-                <div class="flex items-center justify-between border-t border-slate-200 pt-1 dark:border-slate-700"><dt class="text-slate-600 dark:text-slate-300">Total Income</dt><dd class="font-bold text-emerald-700 dark:text-emerald-300">₦{{ "{:,.2f}".format(period.total_income|default(0)) }}</dd></div>
-            </dl>
-        </div>
-        {% endfor %}
-    </div>
-    {% endcall %}
-
-    {# ── Revenue Trend Chart ── #}
-    {% call card("Revenue Trend", color="emerald",
-        actions='<select class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option>Last 6 Months</option><option>Last 12 Months</option><option>This Year</option></select>'
-    ) %}
-    <div class="chart-container" style="min-height: 280px;">
-        <canvas id="revenue-trend-chart"></canvas>
-    </div>
-    {% endcall %}
-
-    {# ── Payment Methods & Daily Payments ── #}
-    <div class="grid gap-6 lg:grid-cols-2">
-        {% call card("Payment Method Breakdown", color="violet") %}
-        <div class="chart-container h-[320px] sm:h-[340px]">
-            <canvas id="payment-method-breakdown-chart"></canvas>
-        </div>
-        {% endcall %}
-
-        {% call card("Daily Payments (Current Month)", color="emerald") %}
-        <div class="chart-container" style="min-height: 280px;">
-            <canvas id="daily-payments-chart"></canvas>
-        </div>
-        {% endcall %}
-    </div>
-
-    {# ── Invoicing Overlay + MRR/ARPU + Top Payers ── #}
-    <div class="grid gap-6 lg:grid-cols-3">
-        <div class="lg:col-span-2">
-            {% call card("Invoicing Period Overlay", color="emerald") %}
-            <div class="chart-container" style="min-height: 280px;">
-                <canvas id="invoicing-period-overlay-chart"></canvas>
+    {# ═══ Revenue Trend (full width, no card wrapper) ═══ #}
+    <section>
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="font-display text-lg font-bold text-slate-900 dark:text-white">Revenue Trend</h2>
+            <div class="flex items-center gap-3">
+                <span class="inline-flex items-center gap-1.5 text-[10px] font-semibold text-teal-600 dark:text-teal-400"><span class="h-2 w-2 rounded-full bg-teal-500"></span> Billed</span>
+                <span class="inline-flex items-center gap-1.5 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400"><span class="h-2 w-2 rounded-full bg-emerald-500"></span> Collected</span>
             </div>
-            {% endcall %}
         </div>
-        {% call card("Top 10 Payers", color="violet") %}
-        <div class="chart-container h-[320px] sm:h-[340px]">
-            <canvas id="top-payers-chart"></canvas>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="chart-container" style="min-height: 260px;">
+                <canvas id="revenue-trend-chart"></canvas>
+            </div>
         </div>
-        {% endcall %}
-    </div>
+    </section>
 
-    <div class="grid gap-6 lg:grid-cols-2">
-        {% call card("Monthly Recurring Revenue (MRR)", color="emerald") %}
-        <div class="chart-container" style="min-height: 260px;">
-            <canvas id="mrr-trend-chart"></canvas>
-        </div>
-        {% endcall %}
-
-        {% call card("Average Revenue Per User (ARPU)", color="blue") %}
-        <div class="chart-container" style="min-height: 260px;">
-            <canvas id="arpu-trend-chart"></canvas>
-        </div>
-        {% endcall %}
-    </div>
-
-    {# ── Quick Actions & Invoice Status Chart ── #}
-    <div class="grid gap-6 lg:grid-cols-3">
-        {# Quick Actions #}
-        {% call card("Quick Actions", color="slate") %}
-        <div class="grid grid-cols-2 gap-3">
-            <a href="/admin/billing/invoices/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                    <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
-                </div>
-                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Create Invoice</span>
-            </a>
-            <a href="/admin/billing/payments/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                    <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                </div>
-                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Record Payment</span>
-            </a>
-            <a href="/admin/billing/credits/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
-                    <svg class="h-5 w-5 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Issue Credit</span>
-            </a>
-            <a href="/admin/billing/dunning" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                    <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
-                </div>
-                <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Dunning</span>
-            </a>
-        </div>
-        {% endcall %}
-
-        {# Invoice Status Chart #}
-        <div class="lg:col-span-2">
-            {% call card("Invoice Status", color="emerald",
-                actions='<a href="/admin/billing/invoices" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">View All Invoices</a>'
-            ) %}
-            {% if stats.total_invoices > 0 %}
-            <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                <div class="chart-container" style="min-height: 200px;">
-                    <canvas id="invoice-status-chart"></canvas>
-                </div>
-                <div class="flex flex-col justify-center space-y-1">
-                    {{ metric_row("Paid", stats.paid_count|default(0), color="green") }}
-                    {{ metric_row("Pending", stats.pending_count|default(0), color="blue") }}
-                    {{ metric_row("Overdue", stats.overdue_count|default(0), color="amber") }}
-                    {{ metric_row("Draft", stats.draft_count|default(0), color="slate") }}
+    {# ═══ Two-column charts ═══ #}
+    <section class="grid gap-6 lg:grid-cols-2">
+        <div>
+            <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Payment Methods</h3>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="chart-container h-[280px]">
+                    <canvas id="payment-method-breakdown-chart"></canvas>
                 </div>
             </div>
-            {% else %}
-            <div class="text-center py-8">
-                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No invoices yet</p>
-                <a href="/admin/billing/invoices/new" class="mt-3 inline-flex items-center gap-1 text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
-                    Create your first invoice
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                </a>
-            </div>
-            {% endif %}
-            {% endcall %}
         </div>
-    </div>
+        <div>
+            <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Daily Payments</h3>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="chart-container" style="min-height: 260px;">
+                    <canvas id="daily-payments-chart"></canvas>
+                </div>
+            </div>
+        </div>
+    </section>
 
-    {# ── Recent Invoices Table ── #}
-    {% call data_table(
-        title="Recent Invoices",
-        icon='<svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
-        color="emerald",
-        actions='<a href="/admin/billing/invoices" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">View All</a>'
-    ) %}
-    {% if invoices %}
-    <table class="min-w-full">
-        {{ table_head([
-            {'label': 'Invoice #'},
-            {'label': 'Account'},
-            {'label': 'Amount', 'align': 'right'},
-            {'label': 'Due Date'},
-            {'label': 'Status'},
-            {'label': 'Actions', 'align': 'right'}
-        ]) }}
-        <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
-            {% for invoice in invoices %}
-            {% call table_row(color="emerald") %}
-                <td class="whitespace-nowrap px-6 py-4 text-sm font-medium text-emerald-600 dark:text-emerald-400">
-                    <a href="/admin/billing/invoices/{{ invoice.id }}">{{ invoice.invoice_number|default('Invoice') }}</a>
-                </td>
-                <td class="px-6 py-4">
-                    <div class="flex items-center gap-3">
-                        <div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+    {# ═══ Recent Invoices Table (flat, no data_table wrapper) ═══ #}
+    <section>
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="font-display text-lg font-bold text-slate-900 dark:text-white">Recent Invoices</h2>
+            <a href="/admin/billing/invoices" class="text-xs font-semibold uppercase tracking-wider text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">View All</a>
+        </div>
+        <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            {% if invoices %}
+            <table class="w-full text-left text-sm">
+                <thead>
+                    <tr class="border-b border-slate-100 dark:border-slate-700/60">
+                        <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice #</th>
+                        <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Account</th>
+                        <th class="px-6 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Amount</th>
+                        <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Due Date</th>
+                        <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
+                    {% for invoice in invoices[:10] %}
+                    <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/30 cursor-pointer" onclick="window.location='/admin/billing/invoices/{{ invoice.id }}'">
+                        <td class="px-6 py-3 font-medium text-emerald-600 dark:text-emerald-400">{{ invoice.invoice_number|default('Invoice') }}</td>
+                        <td class="px-6 py-3 text-slate-900 dark:text-white">
                             {% if invoice.account %}
-                                {% if invoice.account.organization %}
-                                    {{ invoice.account.organization.name[0:2] | upper }}
-                                {% elif invoice.account.first_name %}
-                                    {{ (invoice.account.first_name[0] ~ (invoice.account.last_name[0] if invoice.account.last_name else ''))|upper }}
-                                {% else %}AC{% endif %}
-                            {% else %}AC{% endif %}
-                        </div>
-                        <span class="text-sm font-medium text-slate-900 dark:text-white">
-                            {% if invoice.account %}
-                                {% if invoice.account.organization %}
-                                    {{ invoice.account.organization.name }}
-                                {% elif invoice.account.first_name or invoice.account.last_name %}
-                                    {{ invoice.account.first_name or '' }} {{ invoice.account.last_name or '' }}
+                                {% if invoice.account.organization %}{{ invoice.account.organization.name }}
+                                {% elif invoice.account.first_name %}{{ invoice.account.first_name or '' }} {{ invoice.account.last_name or '' }}
                                 {% else %}Account{% endif %}
                             {% else %}Account{% endif %}
-                        </span>
-                    </div>
-                </td>
-                <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-semibold text-slate-900 dark:text-white font-mono tabular-nums">
-                    ₦{{ "{:,.2f}".format(invoice.total|default(0)) }}
-                </td>
-                <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                    {{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else 'Not set' }}
-                </td>
-                <td class="whitespace-nowrap px-6 py-4">
-                    {% set inv_status = invoice.status|default('draft') %}
-                    {% set status_val = inv_status.value if inv_status is not string else inv_status %}
-                    {% if status_val == 'paid' %}
-                        {{ status_badge("Paid", variant="paid") }}
-                    {% elif status_val == 'issued' or status_val == 'sent' %}
-                        {{ status_badge("Pending", variant="pending") }}
-                    {% elif status_val == 'overdue' %}
-                        {{ status_badge("Overdue", variant="overdue") }}
-                    {% elif status_val == 'draft' %}
-                        {{ status_badge("Draft", variant="draft") }}
-                    {% elif status_val == 'void' or status_val == 'cancelled' %}
-                        {{ status_badge("Voided", variant="inactive") }}
-                    {% else %}
-                        {{ status_badge(status_val|capitalize, variant="default") }}
-                    {% endif %}
-                </td>
-                {% call row_actions() %}
-                    {{ row_action(
-                        href="/admin/billing/invoices/" ~ invoice.id,
-                        icon=icon_view(),
-                        title="View",
-                        color="emerald"
-                    ) }}
-                {% endcall %}
-            {% endcall %}
-            {% endfor %}
-        </tbody>
-    </table>
-    {% else %}
-    <table class="min-w-full">
-        <tbody>
-            {{ empty_state(
-                title="No invoices found",
-                message="Get started by creating your first invoice.",
-                color="emerald",
-                color2="teal",
-                action_label="Create Invoice",
-                action_href="/admin/billing/invoices/new",
-                colspan=6
-            ) }}
-        </tbody>
-    </table>
-    {% endif %}
-    {% endcall %}
+                        </td>
+                        <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
+                        <td class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at.strftime('%b %d, %Y') if invoice.due_at else '—' }}</td>
+                        <td class="px-6 py-3">
+                            {% set inv_status = invoice.status|default('draft') %}
+                            {% set status_val = inv_status.value if inv_status is not string else inv_status %}
+                            {% if status_val == 'paid' %}{{ status_badge("Paid", variant="paid") }}
+                            {% elif status_val in ('issued', 'sent') %}{{ status_badge("Pending", variant="pending") }}
+                            {% elif status_val == 'overdue' %}{{ status_badge("Overdue", variant="overdue") }}
+                            {% elif status_val == 'draft' %}{{ status_badge("Draft", variant="draft") }}
+                            {% else %}{{ status_badge(status_val|capitalize, variant="default") }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="py-12 text-center">
+                <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <p class="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">No invoices yet</p>
+                <a href="/admin/billing/invoices/new" class="mt-2 inline-flex text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">Create your first invoice →</a>
+            </div>
+            {% endif %}
+        </div>
+    </section>
 </div>
+
 <script>
 document.addEventListener('DOMContentLoaded', function() {
     if (!window.DotmacCharts) return;
-
     const chartConfigs = [
         {
             id: 'revenue-trend-chart',
@@ -378,12 +199,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 values: {{ pmb["values"] | tojson | safe }},
                 colors: ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#94a3b8']
             },
-            options: {
-                legendPosition: 'bottom',
-                cutout: '62%',
-                layout: { padding: 20 },
-                plugins: { legend: { labels: { padding: 12 } } }
-            }
+            options: { legendPosition: 'bottom', cutout: '62%' }
         },
         {
             id: 'daily-payments-chart',
@@ -393,72 +209,13 @@ document.addEventListener('DOMContentLoaded', function() {
                 datasets: [{ label: 'Payments', data: {{ dp["values"] | tojson | safe }}, backgroundColor: '#10b981' }]
             },
             options: { plugins: { legend: { display: false } } }
-        },
-        {
-            id: 'invoicing-period-overlay-chart',
-            factory: 'createBarChart',
-            data: {
-                labels: {{ ipo["labels"] | tojson | safe }},
-                datasets: [
-                    { label: 'Paid', data: {{ ipo["paid"] | tojson | safe }}, backgroundColor: '#10b981' },
-                    { label: 'Unpaid', data: {{ ipo["unpaid"] | tojson | safe }}, backgroundColor: '#3b82f6' },
-                    { label: 'Paid On Time', data: {{ ipo["paid_on_time"] | tojson | safe }}, backgroundColor: '#22c55e' },
-                    { label: 'Paid Overdue', data: {{ ipo["paid_overdue"] | tojson | safe }}, backgroundColor: '#f59e0b' }
-                ]
-            },
-            options: { scales: { x: { stacked: true }, y: { stacked: true } } }
-        },
-        {
-            id: 'top-payers-chart',
-            factory: 'createDoughnutChart',
-            data: {
-                labels: {{ tp["labels"] | tojson | safe }},
-                values: {{ tp["values"] | tojson | safe }},
-                colors: ['#2563eb', '#0891b2', '#0ea5e9', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#db2777', '#8b5cf6', '#6366f1']
-            },
-            options: {
-                legendPosition: 'bottom',
-                cutout: '58%',
-                layout: { padding: 20 },
-                plugins: { legend: { labels: { padding: 10 } } }
-            }
-        },
-        {
-            id: 'mrr-trend-chart',
-            factory: 'createAreaChart',
-            data: {
-                labels: {{ mrr["labels"] | tojson | safe }},
-                datasets: [{ label: 'MRR', data: {{ mrr["values"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)', fill: true, tension: 0.35 }]
-            },
-            options: {}
-        },
-        {
-            id: 'arpu-trend-chart',
-            factory: 'createAreaChart',
-            data: {
-                labels: {{ arpu["labels"] | tojson | safe }},
-                datasets: [{ label: 'ARPU', data: {{ arpu["values"] | tojson | safe }}, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)', fill: true, tension: 0.35 }]
-            },
-            options: {}
-        },
-        {
-            id: 'invoice-status-chart',
-            factory: 'createDoughnutChart',
-            data: {
-                labels: {{ cd["labels"] | tojson | safe }},
-                values: {{ cd["values"] | tojson | safe }},
-                colors: {{ cd["colors"] | tojson | safe }}
-            },
-            options: { legendPosition: 'bottom', plugins: { legend: { display: false } } }
         }
     ];
-
     chartConfigs.forEach(function(config) {
         const ctx = document.getElementById(config.id);
         const factory = DotmacCharts[config.factory];
         if (!ctx || typeof factory !== 'function') return;
-        const chart = factory(ctx, config.data, config.options || {});
-        DotmacCharts.registerChart(config.id, chart);
+        DotmacCharts.registerChart(config.id, factory(ctx, config.data, config.options || {}));
     });
 });
 </script>

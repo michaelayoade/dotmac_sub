@@ -1,4 +1,4 @@
-"""Admin catalog settings management web routes."""
+"""Admin catalog component management web routes."""
 
 from typing import Any, cast
 
@@ -84,13 +84,13 @@ def add_ons_legacy_redirect(path: str) -> RedirectResponse:
 
 
 # =============================================================================
-# SETTINGS OVERVIEW
+# COMPONENTS OVERVIEW
 # =============================================================================
 
 
 @router.get("", response_class=HTMLResponse)
 def catalog_settings_index(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
-    """Settings overview with cards linking to each section."""
+    """Catalog component overview with cards linking to each section."""
     counts = settings_svc.settings_overview_counts(db)
     context = _base_context(request, db, active_page="catalog-settings")
     context.update(counts)

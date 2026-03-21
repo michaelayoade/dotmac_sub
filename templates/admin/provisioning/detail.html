@@ -59,7 +59,7 @@
 
 {% set status_html %}{{ status_badge(order.status.value|replace('_', ' ')|title, variant=status_variants.get(order.status.value, 'default')) }}{% endset %}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% call(content) detail_header(
         title="Service Order",
@@ -99,7 +99,7 @@
             <div>
                 <p class="text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Subscriber</p>
                 {% if order.subscriber %}
-                <a href="/admin/subscribers/{{ order.subscriber_id }}" class="mt-1 block text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
+                <a href="/admin/customers/{{ 'organization/' ~ order.subscriber.organization_id if order.subscriber.organization_id else 'person/' ~ order.subscriber_id }}" class="mt-1 block text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
                     {{ subscriber_label(order.subscriber) }}
                 </a>
                 {% else %}

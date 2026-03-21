@@ -4,17 +4,22 @@ from __future__ import annotations
 
 import logging
 import secrets
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
 
-from sqlalchemy import func, inspect, select
-from sqlalchemy.orm import Session
+from sqlalchemy import func, inspect, or_, select
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.auth import AuthProvider
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
+from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
+from app.models.offer_availability import OfferResellerAvailability
 from app.models.rbac import Role
 from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
+from app.models.support import Ticket, TicketStatus
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.rbac import SubscriberRoleCreate
 from app.schemas.subscriber import SubscriberCreate
@@ -26,6 +31,13 @@ from app.services.auth_flow import hash_password
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
+
+RESOLVED_TICKET_STATUSES = {
+    TicketStatus.resolved,
+    TicketStatus.closed,
+    TicketStatus.canceled,
+    TicketStatus.merged,
+}
 
 
 def _reseller_users_table_available(db: Session) -> bool:
@@ -295,6 +307,15 @@ def get_reseller_detail_context(
     reseller = get_reseller_by_id(db, reseller_id)
     if not reseller:
         return None
+    reseller_uuid = coerce_uuid(reseller_id)
+    linked_subscriber_query = (
+        select(Subscriber.id, Subscriber.status)
+        .where(Subscriber.reseller_id == reseller_uuid)
+        .where(Subscriber.user_type != UserType.reseller)
+        .where(Subscriber.user_type != UserType.system_user)
+    )
+    linked_subscriber_rows = list(db.execute(linked_subscriber_query).all())
+    linked_subscriber_ids = [row[0] for row in linked_subscriber_rows]
     total_subscribers = count_reseller_subscribers(db, reseller_id)
     safe_per_page = max(10, min(per_page, 200))
     safe_page = max(1, page)
@@ -308,10 +329,214 @@ def get_reseller_detail_context(
         limit=safe_per_page,
         offset=offset,
     )
+    subscriber_status_counts: dict[str, int] = {}
+    for _, status in linked_subscriber_rows:
+        key = getattr(status, "value", str(status))
+        subscriber_status_counts[key] = subscriber_status_counts.get(key, 0) + 1
+
+    reseller_portal_users = int(
+        db.scalar(
+            select(func.count(Subscriber.id))
+            .where(Subscriber.reseller_id == reseller_uuid)
+            .where(Subscriber.user_type == UserType.reseller)
+        )
+        or 0
+    )
+
+    active_services = 0
+    pending_services = 0
+    suspended_services = 0
+    subscriptions_total = 0
+    outstanding_balance = Decimal("0.00")
+    overdue_invoices = 0
+    recent_invoices: list[Invoice] = []
+    recent_payments: list[Payment] = []
+    recent_tickets: list[Ticket] = []
+    recent_subscriptions: list[Subscription] = []
+    explicit_available_offers: list[CatalogOffer] = []
+    explicit_available_offers_total = 0
+    payments_30d_total = Decimal("0.00")
+    payments_30d_count = 0
+    open_tickets = 0
+
+    if linked_subscriber_ids:
+        subscriptions_total = int(
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.subscriber_id.in_(linked_subscriber_ids)
+                )
+            )
+            or 0
+        )
+        active_services = int(
+            db.scalar(
+                select(func.count(Subscription.id))
+                .where(Subscription.subscriber_id.in_(linked_subscriber_ids))
+                .where(Subscription.status == SubscriptionStatus.active)
+            )
+            or 0
+        )
+        pending_services = int(
+            db.scalar(
+                select(func.count(Subscription.id))
+                .where(Subscription.subscriber_id.in_(linked_subscriber_ids))
+                .where(Subscription.status == SubscriptionStatus.pending)
+            )
+            or 0
+        )
+        suspended_services = int(
+            db.scalar(
+                select(func.count(Subscription.id))
+                .where(Subscription.subscriber_id.in_(linked_subscriber_ids))
+                .where(Subscription.status == SubscriptionStatus.suspended)
+            )
+            or 0
+        )
+        recent_subscriptions = list(
+            db.query(Subscription)
+            .options(joinedload(Subscription.offer), joinedload(Subscription.subscriber))
+            .filter(Subscription.subscriber_id.in_(linked_subscriber_ids))
+            .order_by(Subscription.created_at.desc())
+            .limit(5)
+            .all()
+        )
+
+        outstanding_balance = (
+            db.scalar(
+                select(func.coalesce(func.sum(Invoice.balance_due), 0))
+                .where(Invoice.account_id.in_(linked_subscriber_ids))
+                .where(
+                    Invoice.status.in_(
+                        [
+                            InvoiceStatus.issued,
+                            InvoiceStatus.partially_paid,
+                            InvoiceStatus.overdue,
+                        ]
+                    )
+                )
+            )
+            or Decimal("0.00")
+        )
+        overdue_invoices = int(
+            db.scalar(
+                select(func.count(Invoice.id))
+                .where(Invoice.account_id.in_(linked_subscriber_ids))
+                .where(Invoice.status == InvoiceStatus.overdue)
+            )
+            or 0
+        )
+        recent_invoices = list(
+            db.query(Invoice)
+            .options(joinedload(Invoice.account))
+            .filter(Invoice.account_id.in_(linked_subscriber_ids))
+            .order_by(Invoice.created_at.desc())
+            .limit(5)
+            .all()
+        )
+
+        payments_since = datetime.now(UTC) - timedelta(days=30)
+        payments_30d_total = (
+            db.scalar(
+                select(func.coalesce(func.sum(Payment.amount), 0))
+                .where(Payment.account_id.in_(linked_subscriber_ids))
+                .where(Payment.status == PaymentStatus.succeeded)
+                .where(Payment.created_at >= payments_since)
+            )
+            or Decimal("0.00")
+        )
+        payments_30d_count = int(
+            db.scalar(
+                select(func.count(Payment.id))
+                .where(Payment.account_id.in_(linked_subscriber_ids))
+                .where(Payment.status == PaymentStatus.succeeded)
+                .where(Payment.created_at >= payments_since)
+            )
+            or 0
+        )
+        recent_payments = list(
+            db.query(Payment)
+            .options(joinedload(Payment.account))
+            .filter(Payment.account_id.in_(linked_subscriber_ids))
+            .order_by(Payment.created_at.desc())
+            .limit(5)
+            .all()
+        )
+
+        ticket_scope = or_(
+            Ticket.subscriber_id.in_(linked_subscriber_ids),
+            Ticket.customer_account_id.in_(linked_subscriber_ids),
+            Ticket.customer_person_id.in_(linked_subscriber_ids),
+        )
+        open_tickets = int(
+            db.scalar(
+                select(func.count(Ticket.id))
+                .where(ticket_scope)
+                .where(Ticket.status.notin_(list(RESOLVED_TICKET_STATUSES)))
+            )
+            or 0
+        )
+        recent_tickets = list(
+            db.query(Ticket)
+            .filter(ticket_scope)
+            .order_by(Ticket.updated_at.desc())
+            .limit(5)
+            .all()
+        )
+
+    explicit_available_offers_total = int(
+        db.scalar(
+            select(func.count(OfferResellerAvailability.id))
+            .where(OfferResellerAvailability.reseller_id == reseller_uuid)
+            .where(OfferResellerAvailability.is_active.is_(True))
+        )
+        or 0
+    )
+    explicit_available_offers = list(
+        db.query(CatalogOffer)
+        .join(
+            OfferResellerAvailability,
+            OfferResellerAvailability.offer_id == CatalogOffer.id,
+        )
+        .filter(OfferResellerAvailability.reseller_id == reseller_uuid)
+        .filter(OfferResellerAvailability.is_active.is_(True))
+        .filter(CatalogOffer.is_active.is_(True))
+        .order_by(CatalogOffer.name.asc())
+        .limit(8)
+        .all()
+    )
     return {
         "reseller": reseller,
         "reseller_subscribers": reseller_subscribers,
         "reseller_subscribers_total": total_subscribers,
+        "reseller_portal_users": reseller_portal_users,
+        "subscriber_status_counts": subscriber_status_counts,
+        "active_services": active_services,
+        "pending_services": pending_services,
+        "suspended_services": suspended_services,
+        "subscriptions_total": subscriptions_total,
+        "outstanding_balance": outstanding_balance,
+        "overdue_invoices": overdue_invoices,
+        "payments_30d_total": payments_30d_total,
+        "payments_30d_count": payments_30d_count,
+        "open_tickets": open_tickets,
+        "recent_invoices": recent_invoices,
+        "recent_payments": recent_payments,
+        "recent_tickets": recent_tickets,
+        "recent_subscriptions": recent_subscriptions,
+        "explicit_available_offers": explicit_available_offers,
+        "explicit_available_offers_total": explicit_available_offers_total,
+        "reseller_urls": {
+            "billing_overview": f"/admin/billing?partner_id={reseller.id}",
+            "invoices": f"/admin/billing/invoices?partner_id={reseller.id}",
+            "payments": f"/admin/billing/payments?partner_id={reseller.id}",
+            "accounts": f"/admin/billing/accounts?reseller_id={reseller.id}",
+            "provisioning": f"/admin/provisioning/migrate?reseller_id={reseller.id}",
+            "settings": f"/admin/resellers/{reseller.id}#reseller-details",
+            "subscribers": f"/admin/resellers/{reseller.id}#linked-subscribers",
+            "support": f"/admin/resellers/{reseller.id}#support-activity",
+            "catalog": f"/admin/resellers/{reseller.id}#catalog-access",
+            "services": f"/admin/resellers/{reseller.id}#service-activity",
+        },
         "page": safe_page,
         "per_page": safe_per_page,
         "total_pages": total_pages,

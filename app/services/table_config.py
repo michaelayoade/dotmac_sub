@@ -12,8 +12,9 @@ from fastapi import HTTPException
 from sqlalchemy import case, func, literal, or_, select
 from sqlalchemy.orm import Query, Session
 
-from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
+from app.models.catalog import CatalogOffer, NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.network_monitoring import PopSite
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.table_column_config import TableColumnConfig
 from app.models.table_column_default_config import TableColumnDefaultConfig
@@ -188,9 +189,11 @@ class TableConfigurationService:
             if table_key == "customers" and "customer_name" in state:
                 preferred_order = [
                     "customer_name",
-                    "id",
+                    "account_number",
+                    "pppoe_login",
+                    "ipv4_address",
+                    "nas_name",
                     "status",
-                    "customer_type",
                 ]
                 base_order = len(preferred_order)
                 for key, config in state.items():
@@ -520,6 +523,14 @@ class TableConfigurationService:
 
         query = db.query(definition.model)
 
+        # Exclude Splynx soft-deleted imports and system users for subscriber tables
+        if definition.model is Subscriber:
+            from app.models.subscriber import UserType
+            from app.services.subscriber import splynx_deleted_import_clause
+
+            query = query.filter(Subscriber.user_type != UserType.system_user)
+            query = query.filter(~splynx_deleted_import_clause())
+
         q = request_params.get("q")
         if isinstance(q, str) and q.strip():
             like_term = f"%{q.strip()}%"
@@ -657,6 +668,66 @@ def _subscription_name_expression(model: type) -> Any:
     )
 
 
+def _pppoe_login_expression(model: type) -> Any:
+    """First non-null PPPoE login from subscriber's subscriptions."""
+    return (
+        select(Subscription.login)
+        .where(Subscription.subscriber_id == model.id)
+        .where(Subscription.login.is_not(None))
+        .where(Subscription.login != "")
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+        .correlate(model)
+        .scalar_subquery()
+    )
+
+
+def _ipv4_address_expression(model: type) -> Any:
+    """First non-null IPv4 address from subscriber's subscriptions."""
+    return (
+        select(Subscription.ipv4_address)
+        .where(Subscription.subscriber_id == model.id)
+        .where(Subscription.ipv4_address.is_not(None))
+        .where(Subscription.ipv4_address != "")
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+        .correlate(model)
+        .scalar_subquery()
+    )
+
+
+def _nas_name_expression(model: type) -> Any:
+    """NAS device name from subscriber's first subscription with a NAS assignment."""
+    return (
+        select(NasDevice.name)
+        .select_from(Subscription)
+        .join(NasDevice, NasDevice.id == Subscription.provisioning_nas_device_id)
+        .where(Subscription.subscriber_id == model.id)
+        .where(Subscription.provisioning_nas_device_id.is_not(None))
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+        .correlate(model)
+        .scalar_subquery()
+    )
+
+
+def _pop_site_name_expression(model: type) -> Any:
+    """POP site name via NAS device from subscriber's subscription."""
+    return (
+        select(PopSite.name)
+        .select_from(Subscription)
+        .join(NasDevice, NasDevice.id == Subscription.provisioning_nas_device_id)
+        .join(PopSite, PopSite.id == NasDevice.pop_site_id)
+        .where(Subscription.subscriber_id == model.id)
+        .where(Subscription.provisioning_nas_device_id.is_not(None))
+        .where(NasDevice.pop_site_id.is_not(None))
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+        .correlate(model)
+        .scalar_subquery()
+    )
+
+
 TableRegistry.register(
     table_key="customers",
     model=Subscriber,
@@ -733,9 +804,59 @@ TableRegistry.register(
             ),
             is_computed=True,
         ),
+        TableFieldDefinition(
+            key="pppoe_login",
+            label="PPPoE Login",
+            sortable=False,
+            filterable=False,
+            expression_resolver=_pppoe_login_expression,
+            is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="ipv4_address",
+            label="IP Address",
+            sortable=False,
+            filterable=False,
+            expression_resolver=_ipv4_address_expression,
+            is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="nas_name",
+            label="NAS Device",
+            sortable=False,
+            filterable=False,
+            expression_resolver=_nas_name_expression,
+            is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="pop_site_name",
+            label="Location",
+            sortable=False,
+            filterable=False,
+            expression_resolver=_pop_site_name_expression,
+            is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="reseller_name",
+            label="Reseller",
+            sortable=True,
+            filterable=False,
+            expression_resolver=_reseller_name_expression,
+            is_computed=True,
+            hidden_by_default=True,
+        ),
+        TableFieldDefinition(
+            key="subscription_name",
+            label="Subscription",
+            sortable=True,
+            filterable=False,
+            expression_resolver=_subscription_name_expression,
+            is_computed=True,
+            hidden_by_default=True,
+        ),
     ],
     field_overrides={
-        "id": {"label": "Customer ID", "filterable": False},
+        "id": {"label": "Customer ID", "filterable": False, "hidden_by_default": True},
         "first_name": {"label": "First Name", "hidden_by_default": True},
         "last_name": {"label": "Last Name", "hidden_by_default": True},
         "status": {"label": "Account Status"},

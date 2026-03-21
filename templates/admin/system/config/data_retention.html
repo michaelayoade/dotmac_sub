@@ -3,7 +3,7 @@
 {% block title %}Data Retention - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("slate", "gray") }}
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {% call page_header(title="Data Retention Policy", subtitle="Configure how long logs and statistics are kept before automatic cleanup", icon=icon_cog(), color="slate", color2="gray") %}{% endcall %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20 animate-fade-in-up" style="animation-delay: 30ms;"><p class="text-sm text-amber-700 dark:text-amber-300"><strong>Note:</strong> Retention policies should comply with local regulatory requirements (e.g., GDPR, telecom regulations). Consult your compliance officer before reducing retention periods.</p></div>
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">

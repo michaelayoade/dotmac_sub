@@ -3,7 +3,7 @@
 {% block title %}Billing Notifications - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {% call page_header(title="Billing Notifications", subtitle="Prepaid and recurring billing notification waves", icon=icon_cog(), color="emerald", color2="teal") %}{% endcall %}
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">

@@ -102,6 +102,126 @@ class Invoices(ListResponseMixin):
         return invoice
 
     @staticmethod
+    def create_for_subscription(
+        db: Session,
+        subscriber_id: str,
+        subscription_id: str,
+    ) -> Invoice:
+        """Create an invoice with line items auto-populated from a subscription's offer price.
+
+        Looks up the subscription's active offer price and creates an invoice
+        with a single line item for the recurring charge.  Tax is applied
+        according to the subscriber's tax rate if set.
+        """
+        from app.models.catalog import CatalogOffer, OfferPrice, Subscription
+        from app.models.subscriber import Subscriber
+
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        if not subscription:
+            raise HTTPException(status_code=404, detail="Subscription not found")
+
+        subscriber = db.get(Subscriber, coerce_uuid(subscriber_id))
+        if not subscriber:
+            raise HTTPException(status_code=404, detail="Subscriber not found")
+
+        offer = db.get(CatalogOffer, subscription.offer_id)
+        if not offer:
+            raise HTTPException(status_code=404, detail="Catalog offer not found")
+
+        # Find the active recurring price
+        offer_price = (
+            db.query(OfferPrice)
+            .filter(
+                OfferPrice.offer_id == offer.id,
+                OfferPrice.is_active.is_(True),
+                OfferPrice.price_type == "recurring",
+            )
+            .first()
+        )
+        if not offer_price:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No active recurring price for offer {offer.name}",
+            )
+
+        amount = Decimal(str(offer_price.amount))
+        currency = offer_price.currency or "NGN"
+
+        # Resolve tax
+        tax_rate_id = getattr(subscriber, "tax_rate_id", None)
+        tax_total = Decimal("0")
+        if tax_rate_id:
+            from app.models.billing import TaxRate
+
+            tax_rate = db.get(TaxRate, tax_rate_id)
+            if tax_rate and tax_rate.rate:
+                tax_total = (amount * Decimal(str(tax_rate.rate)) / Decimal("100")).quantize(Decimal("0.01"))
+
+        total = amount + tax_total
+
+        # Create invoice
+        invoice_number = numbering.generate_number(
+            db,
+            SettingDomain.billing,
+            "invoice_number",
+            "invoice_number_enabled",
+            "invoice_number_prefix",
+            "invoice_number_padding",
+            "invoice_number_start",
+        )
+        invoice = Invoice(
+            account_id=subscriber_id,
+            invoice_number=invoice_number,
+            currency=currency,
+            subtotal=amount,
+            tax_total=tax_total,
+            total=total,
+            balance_due=total,
+            status=InvoiceStatus.issued,
+        )
+        db.add(invoice)
+        db.flush()
+
+        # Create line item
+        line = InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription_id,
+            description=f"{offer.name} — monthly service",
+            quantity=Decimal("1"),
+            unit_price=amount,
+            amount=amount,
+            tax_rate_id=tax_rate_id,
+            tax_application=TaxApplication.exclusive,
+            is_active=True,
+        )
+        db.add(line)
+        db.commit()
+        db.refresh(invoice)
+
+        emit_event(
+            db,
+            EventType.invoice_created,
+            {
+                "invoice_id": str(invoice.id),
+                "invoice_number": invoice.invoice_number,
+                "total": str(invoice.total),
+                "currency": invoice.currency,
+                "status": invoice.status.value,
+            },
+            account_id=invoice.account_id,
+            invoice_id=invoice.id,
+        )
+
+        logger.info(
+            "Created invoice %s for subscription %s: %s %s",
+            invoice.invoice_number,
+            subscription_id,
+            currency,
+            total,
+        )
+        return invoice
+
+    @staticmethod
     def get(db: Session, invoice_id: str):
         invoice = get_by_id(
             db,

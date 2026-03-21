@@ -5,14 +5,14 @@ from __future__ import annotations
 import ipaddress
 import logging
 from datetime import UTC, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from uuid import UUID
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
-from app.models.billing import InvoiceStatus
+from app.models.billing import InvoiceStatus, TaxRate
 from app.models.catalog import (
     AccessCredential,
     BillingMode,
@@ -23,9 +23,14 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.domain_settings import SettingDomain
+from app.models.event_store import EventStore
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
-from app.models.subscriber import ChannelType, Subscriber
+from app.models.notification import Notification, NotificationTemplate
+from app.models.radius import RadiusClient, RadiusServer, RadiusSyncJob, RadiusSyncRun, RadiusUser
+from app.models.radius_active_session import RadiusActiveSession
+from app.models.radius_error import RadiusAuthError
+from app.models.subscriber import Address, ChannelType, Subscriber
 from app.schemas.billing import InvoiceCreate, InvoiceLineCreate
 from app.schemas.catalog import SubscriptionCreate, SubscriptionUpdate
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
@@ -35,6 +40,8 @@ from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import email as email_service
 from app.services import network as network_service
+from app.services import radius as radius_service
+from app.services import radius_reject as radius_reject_service
 from app.services import settings_spec
 from app.services import sms as sms_service
 from app.services import subscriber as subscriber_service
@@ -42,9 +49,242 @@ from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
 )
+from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
+
+
+def _coerce_setting_int(value: object | None) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_setting_bool(value: object | None, default: bool | None = None) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_setting_decimal(value: object | None) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int | float):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return Decimal(text)
+        except InvalidOperation:
+            return None
+    return None
+
+
+def _format_commercial_value(key: str, value: object | None) -> str:
+    if value is None:
+        return "Not set"
+    if key == "billing_enabled":
+        return "Enabled" if bool(value) else "Disabled"
+    if key == "billing_day":
+        return f"Day {value}"
+    if key in {"payment_due_days", "grace_period_days"}:
+        return f"{value} day(s)"
+    if key == "min_balance":
+        try:
+            return f"NGN {Decimal(value):,.2f}"
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _enum_raw_value(value: object | None) -> str:
+    if value is None:
+        return ""
+    return str(getattr(value, "value", value)).strip()
+
+
+def _billing_global_defaults(db: Session) -> dict[str, object | None]:
+    keys = {"billing_enabled", "billing_day", "minimum_balance"}
+    rows = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.billing)
+        .filter(DomainSetting.key.in_(keys))
+        .all()
+    )
+    raw = {
+        row.key: row.value_json if row.value_json is not None else row.value_text
+        for row in rows
+    }
+    return {
+        "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
+        "billing_day": _coerce_setting_int(raw.get("billing_day")),
+        "payment_due_days": resolve_payment_due_days(db),
+        "min_balance": _coerce_setting_decimal(raw.get("minimum_balance")),
+    }
+
+
+def _tax_rate_label(rate: TaxRate | None) -> str:
+    if not rate:
+        return "Not set"
+    percentage = (Decimal(rate.rate) * Decimal("100")).quantize(Decimal("0.01"))
+    return f"{rate.name} ({percentage}%)"
+
+
+def _subscription_commercial_policy(db: Session, subscription: Subscription) -> dict[str, object]:
+    subscriber = subscription.subscriber or db.get(Subscriber, subscription.subscriber_id)
+    global_defaults = _billing_global_defaults(db)
+
+    rows = [
+        {
+            "key": "billing_mode",
+            "label": "Billing Mode",
+            "effective": _format_commercial_value(
+                "billing_mode",
+                subscription.billing_mode.value.replace("_", " ").title()
+                if subscription.billing_mode
+                else None,
+            ),
+            "source": "Subscription",
+            "global": "Not set",
+            "override": _format_commercial_value(
+                "billing_mode",
+                subscription.billing_mode.value.replace("_", " ").title()
+                if subscription.billing_mode
+                else None,
+            ),
+        },
+        {
+            "key": "contract_term",
+            "label": "Contract Term",
+            "effective": _format_commercial_value(
+                "contract_term",
+                subscription.contract_term.value.replace("_", " ").title()
+                if subscription.contract_term
+                else None,
+            ),
+            "source": "Subscription",
+            "global": "Not set",
+            "override": _format_commercial_value(
+                "contract_term",
+                subscription.contract_term.value.replace("_", " ").title()
+                if subscription.contract_term
+                else None,
+            ),
+        },
+    ]
+
+    subscriber_fields = [
+        ("payment_method", "Payment Method", False),
+        ("billing_enabled", "Billing", True),
+        ("billing_day", "Billing Day", True),
+        ("payment_due_days", "Payment Due", True),
+        ("grace_period_days", "Grace Period", False),
+        ("min_balance", "Minimum Balance", True),
+    ]
+    for key, label, uses_global in subscriber_fields:
+        raw = getattr(subscriber, key, None) if subscriber else None
+        effective = raw if raw is not None else (global_defaults.get(key) if uses_global else None)
+        source = "Customer override" if raw is not None else ("Global default" if uses_global else "Not set")
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "effective": _format_commercial_value(key, effective),
+                "source": source,
+                "global": _format_commercial_value(key, global_defaults.get(key)) if uses_global else "Not set",
+                "override": _format_commercial_value(key, raw),
+            }
+        )
+
+    tax_source = "Not set"
+    tax_global = "Not set"
+    tax_override = "Not set"
+    tax_effective = "Not set"
+    tax_rate_id = None
+    if subscription.service_address_id:
+        address = db.get(Address, subscription.service_address_id)
+        if address and address.tax_rate_id:
+            tax_rate_id = address.tax_rate_id
+            tax_source = "Service address"
+    if tax_rate_id is None and subscriber and subscriber.tax_rate_id:
+        tax_rate_id = subscriber.tax_rate_id
+        tax_source = "Customer override"
+        tax_override = _tax_rate_label(db.get(TaxRate, subscriber.tax_rate_id))
+
+    effective_tax = db.get(TaxRate, tax_rate_id) if tax_rate_id else None
+    if effective_tax:
+        tax_effective = _tax_rate_label(effective_tax)
+    if tax_source == "Service address" and subscriber and subscriber.tax_rate_id:
+        tax_override = _tax_rate_label(db.get(TaxRate, subscriber.tax_rate_id))
+
+    rows.append(
+        {
+            "key": "tax_rate",
+            "label": "Tax Rate",
+            "effective": tax_effective,
+            "source": tax_source,
+            "global": tax_global,
+            "override": tax_override,
+        }
+    )
+
+    return {
+        "rows": rows,
+        "effective_tax_source": tax_source,
+    }
+
+
+def _subscription_policy_subject(
+    db: Session,
+    subscription_data: dict[str, object],
+    *,
+    default_billing_mode: str,
+) -> Subscription | None:
+    subscription_id = str(subscription_data.get("id") or "").strip()
+    if subscription_id:
+        try:
+            existing = db.get(Subscription, UUID(subscription_id))
+        except (TypeError, ValueError):
+            existing = None
+        if existing:
+            return existing
+
+    subscriber_id = str(subscription_data.get("subscriber_id") or "").strip()
+    if not subscriber_id:
+        return None
+
+    billing_mode_value = _enum_raw_value(subscription_data.get("billing_mode")) or default_billing_mode
+    contract_term_value = _enum_raw_value(subscription_data.get("contract_term")) or ContractTerm.month_to_month.value
+    service_address_id = str(subscription_data.get("service_address_id") or "").strip()
+    return Subscription(
+        subscriber_id=UUID(subscriber_id),
+        billing_mode=BillingMode(billing_mode_value),
+        contract_term=ContractTerm(contract_term_value),
+        service_address_id=UUID(service_address_id) if service_address_id else None,
+    )
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -914,6 +1154,297 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
     }
 
 
+def _password_sync_evidence(credential: AccessCredential | None) -> dict[str, str]:
+    if not credential or not credential.secret_hash:
+        return {
+            "label": "No synced password",
+            "attribute": "none",
+            "detail": "Credential is missing a service secret.",
+        }
+    password_row = radius_service._external_password_row(
+        credential,
+        default_attribute="Cleartext-Password",
+        default_op=":=",
+    )
+    if not password_row:
+        return {
+            "label": "Unsyncable password",
+            "attribute": "none",
+            "detail": "Stored secret cannot be pushed to external RADIUS as usable auth material.",
+        }
+    attribute = password_row[0]
+    if attribute == "Cleartext-Password":
+        detail = "External RADIUS can authenticate with the subscriber secret."
+    elif attribute == "Crypt-Password":
+        detail = "External RADIUS uses a legacy crypt-compatible password row."
+    else:
+        detail = f"External RADIUS sync uses {attribute}."
+    return {
+        "label": attribute,
+        "attribute": attribute,
+        "detail": detail,
+    }
+
+
+def _ip_assignment_mode(subscription: Subscription) -> tuple[str, str]:
+    mode = str(subscription.service_status_raw or "").strip().lower()
+    if mode == "dynamic":
+        return ("Dynamic pool", "IP is assigned from RADIUS/DHCP pool at session time.")
+    if mode == "permanent_static":
+        return ("Static assignment", "Subscription is configured with a fixed IPv4 assignment.")
+    if subscription.ipv4_address:
+        return ("Static assignment", "Subscription stores a fixed IPv4 address directly.")
+    if any(getattr(assignment, "is_active", False) for assignment in (subscription.ip_assignments or [])):
+        return ("Assigned IP", "Subscription has active IP assignments linked in inventory.")
+    return ("Unspecified", "No explicit IP assignment mode is recorded on the subscription.")
+
+
+def _humanize_label(value: object | None) -> str:
+    raw = str(getattr(value, "value", value) or "").strip()
+    if not raw:
+        return "Not set"
+    return raw.replace(".", " ").replace("_", " ").title()
+
+
+def _subscription_domain_events(db: Session, subscription: Subscription) -> list[dict[str, object]]:
+    rows = (
+        db.query(EventStore)
+        .filter(
+            or_(
+                EventStore.subscription_id == subscription.id,
+                EventStore.account_id == subscription.subscriber_id,
+            )
+        )
+        .order_by(EventStore.created_at.desc())
+        .limit(8)
+        .all()
+    )
+    events: list[dict[str, object]] = []
+    for row in rows:
+        payload = row.payload or {}
+        detail_parts: list[str] = []
+        if payload.get("from_status") and payload.get("to_status"):
+            detail_parts.append(f"{payload['from_status']} -> {payload['to_status']}")
+        if payload.get("reason"):
+            detail_parts.append(str(payload["reason"]))
+        if payload.get("offer_name"):
+            detail_parts.append(str(payload["offer_name"]))
+        failed_handlers = [
+            str(item.get("handler") or "").strip()
+            for item in (row.failed_handlers or [])
+            if str(item.get("handler") or "").strip()
+        ]
+        events.append(
+            {
+                "event_type": row.event_type,
+                "label": _humanize_label(row.event_type),
+                "status": _humanize_label(row.status),
+                "created_at": row.created_at,
+                "processed_at": row.processed_at,
+                "detail": " · ".join(detail_parts) if detail_parts else "System event persisted.",
+                "failed_handlers": failed_handlers,
+                "failed_handler_text": ", ".join(failed_handlers),
+            }
+        )
+    return events
+
+
+def _subscription_notifications(db: Session, subscription: Subscription) -> dict[str, object]:
+    subscriber = subscription.subscriber or db.get(Subscriber, subscription.subscriber_id)
+    targets = _credential_contact_targets(subscriber) if subscriber else {"email": [], "sms": []}
+    recipients = list(dict.fromkeys([*targets["email"], *targets["sms"]]))
+    if not recipients:
+        return {"targets": targets, "items": []}
+
+    template_codes = {
+        "subscription_created",
+        "subscription_activated",
+        "subscription_suspended",
+        "subscription_canceled",
+        "invoice_created",
+        "invoice_sent",
+        "invoice_overdue",
+        "payment_received",
+        "payment_failed",
+        "provisioning_completed",
+        "provisioning_failed",
+    }
+    rows = (
+        db.query(Notification, NotificationTemplate)
+        .outerjoin(NotificationTemplate, Notification.template_id == NotificationTemplate.id)
+        .filter(Notification.is_active.is_(True))
+        .filter(Notification.recipient.in_(recipients))
+        .filter(
+            or_(
+                NotificationTemplate.code.in_(template_codes),
+                Notification.template_id.is_(None),
+            )
+        )
+        .order_by(Notification.created_at.desc())
+        .limit(8)
+        .all()
+    )
+    items = [
+        {
+            "channel": _humanize_label(notification.channel),
+            "status": _humanize_label(notification.status),
+            "recipient": notification.recipient,
+            "subject": notification.subject or "No subject",
+            "template_code": template.code if template else "",
+            "created_at": notification.created_at,
+            "sent_at": notification.sent_at,
+            "last_error": notification.last_error or "",
+        }
+        for notification, template in rows
+    ]
+    return {"targets": targets, "items": items}
+
+
+def _subscription_radius_sync_evidence(
+    db: Session,
+    subscription: Subscription,
+    credential: AccessCredential | None,
+) -> dict[str, object]:
+    radius_user = None
+    if credential:
+        radius_user = (
+            db.query(RadiusUser)
+            .filter(
+                or_(
+                    RadiusUser.access_credential_id == credential.id,
+                    RadiusUser.subscription_id == subscription.id,
+                )
+            )
+            .order_by(RadiusUser.last_sync_at.desc(), RadiusUser.created_at.desc())
+            .first()
+        )
+
+    nas_clients: list[RadiusClient] = []
+    last_sync_run: RadiusSyncRun | None = None
+    if subscription.provisioning_nas_device_id:
+        nas_clients = (
+            db.query(RadiusClient)
+            .join(RadiusServer, RadiusServer.id == RadiusClient.server_id)
+            .filter(RadiusClient.nas_device_id == subscription.provisioning_nas_device_id)
+            .filter(RadiusClient.is_active.is_(True))
+            .filter(RadiusServer.is_active.is_(True))
+            .order_by(RadiusServer.name.asc())
+            .all()
+        )
+        last_sync_run = (
+            db.query(RadiusSyncRun)
+            .join(RadiusSyncJob, RadiusSyncJob.id == RadiusSyncRun.job_id)
+            .filter(RadiusSyncJob.is_active.is_(True))
+            .filter(RadiusSyncJob.sync_nas_clients.is_(True))
+            .order_by(RadiusSyncRun.finished_at.desc(), RadiusSyncRun.started_at.desc())
+            .first()
+        )
+
+    return {
+        "internal_user": radius_user,
+        "nas_clients": nas_clients,
+        "nas_client_count": len(nas_clients),
+        "last_sync_run": last_sync_run,
+    }
+
+
+def _subscription_enforcement_state(db: Session, subscription: Subscription) -> dict[str, object]:
+    runtime_state = radius_reject_service._load_runtime_state(db)
+    runtime_entry = runtime_state.get("subscriptions", {}).get(str(subscription.id), {})
+    last_event = (
+        db.query(EventStore)
+        .filter(EventStore.subscription_id == subscription.id)
+        .filter(
+            EventStore.event_type.in_(
+                [
+                    "subscription.suspended",
+                    "subscription.resumed",
+                    "subscription.activated",
+                    "invoice.overdue",
+                    "payment.received",
+                ]
+            )
+        )
+        .order_by(EventStore.created_at.desc())
+        .first()
+    )
+    if runtime_entry:
+        label = "Reject IP active"
+        detail = f"Traffic is currently pinned to {runtime_entry.get('reject_ipv4') or 'a reject IP'}."
+    elif subscription.status == SubscriptionStatus.active:
+        label = "Restored"
+        detail = "No reject-IP runtime state is active for this subscription."
+    else:
+        label = _humanize_label(subscription.status)
+        detail = "No reject-IP runtime state has been recorded."
+    return {
+        "label": label,
+        "detail": detail,
+        "runtime_entry": runtime_entry,
+        "last_event": last_event,
+    }
+
+
+def subscription_detail_context(db: Session, subscription: Subscription) -> dict[str, object]:
+    from app.services.connection_type_provisioning import build_radius_reply_attributes
+
+    credential = _current_access_credential(db, subscription.subscriber_id)
+    password_sync = _password_sync_evidence(credential)
+    commercial_policy = _subscription_commercial_policy(db, subscription)
+    reply_attributes = build_radius_reply_attributes(
+        db,
+        subscription,
+        profile=subscription.radius_profile,
+        nas_device=subscription.provisioning_nas_device,
+    )
+    active_session = (
+        db.query(RadiusActiveSession)
+        .filter(
+            (RadiusActiveSession.subscription_id == subscription.id)
+            | (RadiusActiveSession.subscriber_id == subscription.subscriber_id)
+        )
+        .order_by(RadiusActiveSession.session_start.desc())
+        .first()
+    )
+    recent_auth_errors = (
+        db.query(RadiusAuthError)
+        .filter(
+            (RadiusAuthError.subscription_id == subscription.id)
+            | (RadiusAuthError.subscriber_id == subscription.subscriber_id)
+        )
+        .order_by(RadiusAuthError.occurred_at.desc())
+        .limit(3)
+        .all()
+    )
+    lifecycle_events = sorted(
+        list(subscription.lifecycle_events or []),
+        key=lambda event: event.created_at or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    ip_assignment_mode, ip_assignment_detail = _ip_assignment_mode(subscription)
+    has_service_orders = bool(subscription.service_orders)
+    domain_events = _subscription_domain_events(db, subscription)
+    notification_evidence = _subscription_notifications(db, subscription)
+    radius_sync_evidence = _subscription_radius_sync_evidence(db, subscription, credential)
+    enforcement_state = _subscription_enforcement_state(db, subscription)
+    return {
+        "access_credential": credential,
+        "password_sync": password_sync,
+        "radius_reply_attributes": reply_attributes,
+        "active_session": active_session,
+        "recent_auth_errors": recent_auth_errors,
+        "lifecycle_events": lifecycle_events,
+        "ip_assignment_mode": ip_assignment_mode,
+        "ip_assignment_detail": ip_assignment_detail,
+        "direct_active_workflow": subscription.status == SubscriptionStatus.active and not has_service_orders,
+        "commercial_policy": commercial_policy,
+        "domain_events": domain_events,
+        "notification_evidence": notification_evidence,
+        "radius_sync_evidence": radius_sync_evidence,
+        "enforcement_state": enforcement_state,
+    }
+
+
 def _resolve_subscriber_label(db: Session, subscriber_id: str) -> str:
     """Look up a human-readable label for a subscriber."""
     if not subscriber_id:
@@ -1039,6 +1570,30 @@ def subscription_form_context(
             credential_targets = _credential_contact_targets(subscriber)
     selected_router_label = ""
     provisioning_nas_device_id = str(subscription.get("provisioning_nas_device_id") or "").strip()
+
+    # Auto-populate NAS from subscriber's POP site if not already set
+    if not provisioning_nas_device_id and subscriber_id:
+        try:
+            sub_obj = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+            if sub_obj and getattr(sub_obj, "pop_site_id", None):
+                pop_nas = (
+                    db.query(NasDevice)
+                    .filter(NasDevice.pop_site_id == sub_obj.pop_site_id)
+                    .filter(NasDevice.is_active.is_(True))
+                    .order_by(NasDevice.name)
+                    .first()
+                )
+                if pop_nas:
+                    provisioning_nas_device_id = str(pop_nas.id)
+                    subscription["provisioning_nas_device_id"] = provisioning_nas_device_id
+                    logger.debug(
+                        "Auto-selected NAS %s from subscriber POP site %s",
+                        pop_nas.name,
+                        sub_obj.pop_site_id,
+                    )
+        except Exception:
+            logger.debug("POP-based NAS auto-select failed for subscriber %s", subscriber_id, exc_info=True)
+
     if provisioning_nas_device_id:
         try:
             selected_router_label = _nas_device_label(
@@ -1082,6 +1637,18 @@ def subscription_form_context(
         "current_service_login": getattr(current_credential, "username", "") if current_credential else "",
         "current_service_password": current_password or "",
         "credential_targets": credential_targets or {"email": [], "sms": []},
+        "commercial_policy": (
+            _subscription_commercial_policy(
+                db,
+                _subscription_policy_subject(
+                    db,
+                    subscription,
+                    default_billing_mode=default_billing_mode,
+                ),
+            )
+            if subscriber_id
+            else {"rows": []}
+        ),
     }
     if error:
         context["error"] = error

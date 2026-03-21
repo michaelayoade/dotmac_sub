@@ -10,7 +10,7 @@
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {# ── Page Header ── #}
     {% call(content) page_header(
         title="Credit Notes",
@@ -115,7 +115,7 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if credit.account %}
-                            <a href="/admin/subscribers/{{ credit.account.subscriber_id }}" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
+                            <a href="/admin/customers/{{ 'organization/' ~ credit.account.organization_id if credit.account.organization_id else 'person/' ~ credit.account.subscriber_id }}" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
                                 {% if credit.account.subscriber and credit.account.subscriber.person %}
                                     {{ credit.account.display_name or credit.account.first_name }}
                                 {% else %}

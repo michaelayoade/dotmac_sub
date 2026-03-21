@@ -170,6 +170,15 @@
                 Subscriptions
                 <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ stats.total_subscriptions | default(0) }}</span>
             </button>
+            <button @click="activeTab = 'support'"
+                    :class="activeTab === 'support' ? 'border-amber-500 text-amber-600 dark:text-amber-400' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-4 4v-4z"/></svg>
+                Support
+                {% if relationship_summary.open_tickets or relationship_summary.recent_communications %}
+                <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ relationship_summary.open_tickets | default(0) }}/{{ relationship_summary.recent_communications | default(0) }}</span>
+                {% endif %}
+            </button>
         </nav>
     </div>
 
@@ -594,7 +603,7 @@
                             Convert
                         </button>
                         {% else %}
-                        <a href="/admin/subscribers/new?{{ customer_type }}_id={{ customer.id }}" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                        <a href="/admin/customers/new?type=organization" class="inline-flex items-center gap-1 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                             Add
                         </a>
@@ -603,7 +612,7 @@
                     {% if subscribers %}
                     <div class="divide-y divide-slate-100 dark:divide-slate-700">
                         {% for subscriber in subscribers %}
-                        <a href="/admin/subscribers/{{ subscriber.id }}" class="flex items-center justify-between px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <a href="/admin/customers/{{ 'organization/' ~ subscriber.organization_id if subscriber.organization_id else 'person/' ~ subscriber.id }}" class="flex items-center justify-between px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
                             <div class="flex items-center gap-4">
                                 <div class="relative">
                                     <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 text-blue-600 dark:from-blue-900/40 dark:to-blue-900/20 dark:text-blue-400">
@@ -644,7 +653,7 @@
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                         </button>
                         {% else %}
-                        <a href="/admin/subscribers/new?{{ customer_type }}_id={{ customer.id }}" class="mt-2 inline-flex items-center gap-1 text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
+                        <a href="/admin/customers/new?type=organization" class="mt-2 inline-flex items-center gap-1 text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">
                             Create subscriber account
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                         </a>
@@ -708,6 +717,77 @@
             </div>
         </div>
 
+        <div class="grid gap-6 xl:grid-cols-4">
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Support Load</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.open_tickets | default(0) }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Open tickets tied to this customer</p>
+                {% if support_tickets %}
+                <div class="mt-4 space-y-2">
+                    {% for ticket in support_tickets[:2] %}
+                    <a href="/admin/support/tickets/{{ ticket.id }}" class="block rounded-xl border border-slate-200/70 px-3 py-2 text-sm hover:bg-slate-50 dark:border-slate-700 dark:hover:bg-slate-700/40">
+                        <p class="font-medium text-slate-900 dark:text-white">{{ ticket.title }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ticket.status.value | replace('_', ' ') | title }} · {{ ticket.priority.value | title }}</p>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Communications</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.recent_communications | default(0) }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Recent logged messages and notifications</p>
+                {% if communication_logs %}
+                <div class="mt-4 space-y-2">
+                    {% for log in communication_logs[:2] %}
+                    <div class="rounded-xl border border-slate-200/70 px-3 py-2 dark:border-slate-700">
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ (log.subject or log.body or log.recipient or log.channel.value)[:52] }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Network & Access</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.active_network_assets | default(0) }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active ONTs, CPEs, and IP assignments</p>
+                <div class="mt-4 grid grid-cols-2 gap-2 text-xs">
+                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                        <p class="text-slate-500 dark:text-slate-400">Credentials</p>
+                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_credentials | default(0) }}</p>
+                    </div>
+                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                        <p class="text-slate-500 dark:text-slate-400">ONTs</p>
+                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_onts | default(0) }}</p>
+                    </div>
+                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                        <p class="text-slate-500 dark:text-slate-400">CPEs</p>
+                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_cpes | default(0) }}</p>
+                    </div>
+                    <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                        <p class="text-slate-500 dark:text-slate-400">IPs</p>
+                        <p class="mt-1 font-semibold text-slate-900 dark:text-white">{{ relationship_summary.active_ip_assignments | default(0) }}</p>
+                    </div>
+                </div>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Collections & Delivery</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_service_orders | default(0) }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active service orders and dunning follow-up</p>
+                <div class="mt-4 space-y-2 text-xs text-slate-600 dark:text-slate-300">
+                    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                        <span>Open dunning cases</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ relationship_summary.open_dunning_cases | default(0) }}</span>
+                    </div>
+                    <div class="flex items-center justify-between rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                        <span>Linked resellers</span>
+                        <span class="font-semibold text-slate-900 dark:text-white">{{ relationship_summary.linked_resellers | default(0) }}</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Activity Timeline -->
         <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
@@ -739,6 +819,22 @@
                             {% elif activity.type == 'subscription' %}
                             <div class="flex h-9 w-9 items-center justify-center rounded-full bg-indigo-100 text-indigo-600 ring-4 ring-white dark:bg-indigo-900/30 dark:text-indigo-400 dark:ring-slate-800">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                            </div>
+                            {% elif activity.type == 'ticket' %}
+                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-rose-100 text-rose-600 ring-4 ring-white dark:bg-rose-900/30 dark:text-rose-400 dark:ring-slate-800">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h8m-8 4h5m-7 7 2.293-2.293A1 1 0 019 18h11a1 1 0 001-1V4a1 1 0 00-1-1H4a1 1 0 00-1 1v13a1 1 0 001 1h3a1 1 0 01.707.293L10 21z"/></svg>
+                            </div>
+                            {% elif activity.type == 'communication' %}
+                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-blue-100 text-blue-600 ring-4 ring-white dark:bg-blue-900/30 dark:text-blue-400 dark:ring-slate-800">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 4.26a2 2 0 002.22 0L21 8m-18 8h18a2 2 0 002-2V8a2 2 0 00-2-2H3a2 2 0 00-2 2v6a2 2 0 002 2z"/></svg>
+                            </div>
+                            {% elif activity.type == 'service_order' %}
+                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-cyan-100 text-cyan-600 ring-4 ring-white dark:bg-cyan-900/30 dark:text-cyan-400 dark:ring-slate-800">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17V5l12-2v12M9 17a2 2 0 11-4 0 2 2 0 014 0zm12-2a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                            </div>
+                            {% elif activity.type == 'dunning' %}
+                            <div class="flex h-9 w-9 items-center justify-center rounded-full bg-orange-100 text-orange-600 ring-4 ring-white dark:bg-orange-900/30 dark:text-orange-400 dark:ring-slate-800">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M10.29 3.86l-7.5 13A1 1 0 003.66 18h16.68a1 1 0 00.87-1.5l-7.5-13a1 1 0 00-1.74 0z"/></svg>
                             </div>
                             {% else %}
                             <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-100 text-slate-500 ring-4 ring-white dark:bg-slate-700 dark:text-slate-400 dark:ring-slate-800">
@@ -844,6 +940,63 @@
             <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Total Paid</p>
                 <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(financials.total_paid | default(0)) }}</p>
+            </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <div>
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Billing Policy</h3>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective customer terms, override source, and global defaults.</p>
+                </div>
+                <a href="/admin/customers/{{ customer_type }}/{{ customer.id }}/edit"
+                   class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Edit customer</a>
+            </div>
+            <div class="px-5 py-4">
+                {% if billing_policy.has_mixed %}
+                <div class="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-300">
+                    This customer has mixed billing overrides across {{ billing_policy.account_count }} linked account{{ '' if billing_policy.account_count == 1 else 's' }}.
+                </div>
+                {% elif billing_policy.has_overrides %}
+                <div class="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-300">
+                    Customer-specific billing overrides are active.
+                </div>
+                {% endif %}
+
+                <div class="overflow-x-auto">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                        <thead>
+                            <tr class="text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                                <th class="py-2 pr-4">Setting</th>
+                                <th class="px-4 py-2">Effective</th>
+                                <th class="px-4 py-2">Source</th>
+                                <th class="px-4 py-2">Global Default</th>
+                                <th class="px-4 py-2">Customer Override</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                            {% for row in billing_policy.rows %}
+                            <tr>
+                                <td class="py-3 pr-4 font-medium text-slate-900 dark:text-white">{{ row.label }}</td>
+                                <td class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ row.effective }}</td>
+                                <td class="px-4 py-3">
+                                    {% if row.source == 'Customer override' %}
+                                    <span class="inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ row.source }}</span>
+                                    {% elif row.source == 'Global default' %}
+                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ row.source }}</span>
+                                    {% elif row.source == 'Mixed' %}
+                                    <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ row.source }}</span>
+                                    {% else %}
+                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ row.source }}</span>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
+                                <td class="px-4 py-3 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
@@ -1008,12 +1161,25 @@
                                 </div>
                             </div>
                         </div>
-                        <div class="text-right">
-                            {% if subscription.unit_price is not none %}
-                            <p class="text-lg font-bold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(subscription.unit_price) }}</p>
-                            <p class="text-xs text-slate-500 dark:text-slate-400">per month</p>
-                            {% else %}
-                            <p class="text-xs text-slate-400 dark:text-slate-500">Price not set</p>
+                        <div class="flex items-start gap-3">
+                            <div class="text-right">
+                                {% if subscription.unit_price is not none %}
+                                <p class="text-lg font-bold text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(subscription.unit_price) }}</p>
+                                <p class="text-xs text-slate-500 dark:text-slate-400">per month</p>
+                                {% else %}
+                                <p class="text-xs text-slate-400 dark:text-slate-500">Price not set</p>
+                                {% endif %}
+                            </div>
+                            {% if sub_status == 'active' %}
+                            <form method="POST" action="/admin/billing/invoices/generate-from-subscription" class="inline">
+                                {% include "components/forms/csrf_input.html" %}
+                                <input type="hidden" name="subscriber_id" value="{{ customer.id }}">
+                                <input type="hidden" name="subscription_id" value="{{ subscription.id }}">
+                                <button type="submit" title="Generate Invoice" class="rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 transition hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300">
+                                    <svg class="inline h-3.5 w-3.5 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                                    Invoice
+                                </button>
+                            </form>
                             {% endif %}
                         </div>
                     </div>
@@ -1033,6 +1199,204 @@
                 </a>
             </div>
             {% endif %}
+        </div>
+    </div>
+
+    <!-- Tab Content: Support -->
+    <div x-show="activeTab === 'support'" x-cloak class="space-y-6">
+        <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-rose-600 dark:text-rose-400">Open Tickets</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.open_tickets | default(0) }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">Communications</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.recent_communications | default(0) }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">Active Credentials</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_credentials | default(0) }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Service Orders</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ relationship_summary.active_service_orders | default(0) }}</p>
+            </div>
+        </div>
+
+        <div class="grid gap-6 xl:grid-cols-2">
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Support Tickets</h3>
+                    <a href="/admin/support/tickets" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Open Queue</a>
+                </div>
+                {% if support_tickets %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for ticket in support_tickets %}
+                    <a href="/admin/support/tickets/{{ ticket.id }}" class="block px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ ticket.title }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ticket.number or (ticket.id|string)[:8] }} · {{ ticket.priority.value | title }}</p>
+                            </div>
+                            <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ ticket.status.value | replace('_', ' ') | title }}</span>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No support tickets linked to this customer.</div>
+                {% endif %}
+            </div>
+
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Communications</h3>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">Email, SMS, WhatsApp, In-App</span>
+                </div>
+                {% if communication_logs %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for log in communication_logs %}
+                    <div class="px-5 py-4">
+                        <div class="flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ log.subject or log.recipient or log.channel.value | replace('_', ' ') | title }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }} · {{ log.status.value | title }}</p>
+                            </div>
+                            <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at).strftime('%b %d, %Y') if (log.sent_at or log.created_at) else 'N/A' }}</span>
+                        </div>
+                        {% if log.body %}
+                        <p class="mt-2 line-clamp-2 text-sm text-slate-600 dark:text-slate-300">{{ log.body }}</p>
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No communication history linked to this customer.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="grid gap-6 xl:grid-cols-3">
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Service Delivery</h3>
+                </div>
+                {% if service_orders %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for order in service_orders %}
+                    <a href="/admin/provisioning/orders/{{ order.id }}" class="block px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ order.order_type.value | replace('_', ' ') | title if order.order_type else 'Service Order' }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ order.status.value | replace('_', ' ') | title }} · {{ order.created_at.strftime('%b %d, %Y') if order.created_at else 'N/A' }}</p>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">
+                    {% if subscriptions %}
+                    No service orders found. This can be expected for direct-active workflows.
+                    {% else %}
+                    No service orders found.
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Network & Access</h3>
+                </div>
+                <div class="p-5 space-y-4">
+                    {% if access_credentials %}
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Credentials</p>
+                        <div class="mt-2 space-y-2">
+                            {% for credential in access_credentials[:3] %}
+                            <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ credential.username }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ 'Active' if credential.is_active else 'Inactive' }}{% if credential.connection_type %} · {{ credential.connection_type.value | upper }}{% endif %}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if ont_assignments %}
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">ONTs</p>
+                        <div class="mt-2 space-y-2">
+                            {% for assignment in ont_assignments[:2] %}
+                            <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ assignment.ont_unit.serial_number if assignment.ont_unit else 'ONT Assignment' }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ 'Active' if assignment.active else 'Inactive' }}{% if assignment.pon_port and assignment.pon_port.name %} · {{ assignment.pon_port.name }}{% endif %}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if cpe_devices %}
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">CPEs</p>
+                        <div class="mt-2 space-y-2">
+                            {% for cpe in cpe_devices[:2] %}
+                            <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ cpe.serial_number or cpe.mac_address or 'CPE Device' }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ [cpe.vendor, cpe.model]|select|join(' / ') or 'Unknown device' }}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if ip_assignments %}
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IP Assignments</p>
+                        <div class="mt-2 space-y-2">
+                            {% for assignment in ip_assignments[:3] %}
+                            <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ assignment.ipv4_address.address if assignment.ipv4_address else assignment.ipv6_address.address if assignment.ipv6_address else 'IP Assignment' }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ assignment.ip_version.value | upper }} · {{ 'Active' if assignment.is_active else 'Inactive' }}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Collections & Partners</h3>
+                </div>
+                <div class="p-5 space-y-4">
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Dunning</p>
+                        {% if dunning_cases %}
+                        <div class="mt-2 space-y-2">
+                            {% for case in dunning_cases[:3] %}
+                            <div class="rounded-xl bg-slate-50 px-3 py-2 dark:bg-slate-900/40">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ case.status.value | title }} case</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Step {{ case.current_step or 0 }} · {{ case.started_at.strftime('%b %d, %Y') if case.started_at else 'N/A' }}</p>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No dunning cases.</p>
+                        {% endif %}
+                    </div>
+                    <div>
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Linked Resellers</p>
+                        {% if linked_resellers %}
+                        <div class="mt-2 space-y-2">
+                            {% for reseller in linked_resellers %}
+                            <a href="/admin/resellers/{{ reseller.id }}" class="block rounded-xl bg-slate-50 px-3 py-2 text-sm font-medium text-slate-900 transition hover:bg-slate-100 dark:bg-slate-900/40 dark:text-white dark:hover:bg-slate-700/40">
+                                {{ reseller.name }}
+                            </a>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No reseller relationship linked.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

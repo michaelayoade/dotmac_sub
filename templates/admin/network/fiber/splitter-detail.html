@@ -101,7 +101,7 @@
                                     {% if port.assignments %}
                                         {% for assignment in port.assignments if assignment.active %}
                                             {% if assignment.account %}
-                                            <a href="/admin/subscribers/accounts/{{ assignment.account.id }}" class="text-primary-600 hover:text-primary-700">{{ assignment.account.account_number }}</a>
+                                            <a href="/admin/billing/accounts/{{ assignment.account.id }}" class="text-primary-600 hover:text-primary-700">{{ assignment.account.account_number }}</a>
                                             {% else %}-{% endif %}
                                         {% else %}-{% endfor %}
                                     {% else %}-{% endif %}

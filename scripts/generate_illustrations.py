@@ -128,7 +128,14 @@ def generate_with_gemini(prompt: str, api_key: str, model: str = "gemini-2.0-fla
             ),
         )
 
-        for part in response.candidates[0].content.parts:
+        candidates = response.candidates or []
+        if not candidates:
+            logger.warning("No candidates in Gemini response for prompt: %s", prompt[:60])
+            return None
+
+        content = candidates[0].content
+        parts = content.parts if content is not None and content.parts is not None else []
+        for part in parts:
             if part.inline_data is not None:
                 return part.inline_data.data
 

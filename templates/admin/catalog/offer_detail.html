@@ -16,6 +16,10 @@
             {% if offer.code %}<p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Code: {{ offer.code }}</p>{% endif %}
         </div>
         <div class="flex flex-wrap items-center gap-2">
+            <a href="#plan-policy" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                Policies & Add-Ons
+            </a>
             <button type="button"
                     hx-get="/admin/catalog/offers/{{ offer.id }}/usage-graph"
                     hx-target="#graph-modal-container"
@@ -24,9 +28,13 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 Usage
             </button>
-            <a href="/admin/catalog/offers/{{ offer.id }}/fup" class="inline-flex items-center gap-2 rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-600 dark:bg-slate-800 dark:text-violet-300 dark:hover:bg-violet-900/20">
+            <a href="#plan-fup" class="inline-flex items-center gap-2 rounded-lg border border-violet-300 bg-white px-4 py-2 text-sm font-medium text-violet-700 hover:bg-violet-50 dark:border-violet-600 dark:bg-slate-800 dark:text-violet-300 dark:hover:bg-violet-900/20">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 FUP
+            </a>
+            <a href="/admin/catalog/settings" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                Catalog Components
             </a>
             <a href="/admin/catalog/offers/{{ offer.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
@@ -162,6 +170,92 @@
                     {% else %}
                     <p class="text-sm text-slate-500 dark:text-slate-400">No pricing configured yet.</p>
                     {% endif %}
+                </div>
+            </div>
+
+            <div id="plan-policy" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                            <h2 class="font-semibold text-slate-900 dark:text-white">Plan Policy</h2>
+                            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Plan-scoped commercial rules belong here; shared catalog building blocks live in Catalog Components.</p>
+                        </div>
+                        <div class="flex flex-wrap gap-2">
+                            <a href="/admin/catalog/offers/{{ offer.id }}/edit#service-policy" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                Edit Policies
+                            </a>
+                            <a href="/admin/catalog/offers/{{ offer.id }}/edit#linked-add-ons" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                Edit Add-Ons
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-6 space-y-6">
+                    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                        <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Usage Allowance</p>
+                            <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">{{ offer.usage_allowance.name if offer.usage_allowance else 'None' }}</p>
+                            <a href="/admin/catalog/settings/usage-allowances" class="mt-2 inline-flex text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Manage definitions</a>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">SLA Profile</p>
+                            <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">{{ offer.sla_profile.name if offer.sla_profile else 'None' }}</p>
+                            <a href="/admin/catalog/settings/sla-profiles" class="mt-2 inline-flex text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Manage definitions</a>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Policy Set</p>
+                            <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">{{ offer.policy_set.name if offer.policy_set else 'None' }}</p>
+                            <a href="/admin/catalog/settings/policy-sets" class="mt-2 inline-flex text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Manage definitions</a>
+                        </div>
+                        <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">FUP Rules</p>
+                            <p class="mt-2 text-sm font-medium text-slate-900 dark:text-white">{{ fup_rules_count }} configured</p>
+                            <a href="#plan-fup" class="mt-2 inline-flex text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Manage here</a>
+                        </div>
+                    </div>
+
+                    <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Linked Add-Ons</p>
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Optional or required commercial extras attached to this plan.</p>
+                            </div>
+                            <a href="/admin/catalog/settings/add-ons" class="inline-flex items-center gap-2 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                                Manage add-on definitions
+                            </a>
+                        </div>
+                        {% if offer.add_on_links %}
+                        <div class="mt-4 flex flex-wrap gap-2">
+                            {% for link in offer.add_on_links %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                                {{ link.add_on.name if link.add_on else 'Add-On' }}
+                                {% if link.is_required %}<span class="ml-1 text-[10px] uppercase tracking-wide text-rose-600 dark:text-rose-300">Required</span>{% endif %}
+                            </span>
+                            {% endfor %}
+                        </div>
+                        {% else %}
+                        <p class="mt-4 text-sm text-slate-500 dark:text-slate-400">No add-ons linked to this plan.</p>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <div id="plan-fup" class="rounded-xl border border-slate-200 bg-slate-50/70 p-1 shadow-sm dark:border-slate-700 dark:bg-slate-900/30">
+                <div class="rounded-[calc(0.75rem-1px)] bg-transparent">
+                    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                            <div>
+                                <h2 class="font-semibold text-slate-900 dark:text-white">FUP Management</h2>
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Usage enforcement is plan-scoped, so it is managed directly from the offer alongside other plan policy.</p>
+                            </div>
+                            <a href="/admin/catalog/offers/{{ offer.id }}/fup" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                                Open Dedicated FUP Page
+                            </a>
+                        </div>
+                    </div>
+                    <div class="p-6">
+                        {% include "admin/catalog/_fup_sections.html" %}
+                    </div>
                 </div>
             </div>
 

@@ -21,6 +21,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.billing import TaxRate
+from app.models.subscriber import Subscriber
 from app.services import customer_portal
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
@@ -74,6 +76,72 @@ def _htmx_error_response(
 
 def _get_subscriber(db: Session, subscriber_id: str):
     return subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+
+
+def _load_tax_rates(db: Session):
+    return (
+        db.query(TaxRate)
+        .filter(TaxRate.is_active.is_(True))
+        .order_by(TaxRate.name.asc())
+        .all()
+    )
+
+
+def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
+    defaults = {
+        "billing_enabled_override": "",
+        "billing_day": "",
+        "payment_due_days": "",
+        "grace_period_days": "",
+        "min_balance": "",
+        "tax_rate_id": "",
+        "payment_method": "",
+    }
+    if not customer:
+        return defaults
+    if customer_type == "person":
+        subscriber = customer
+    else:
+        subscriber = (
+            db.query(Subscriber)
+            .filter(Subscriber.organization_id == customer.id)
+            .order_by(Subscriber.created_at.asc())
+            .first()
+        )
+        if not subscriber:
+            return defaults
+        others = (
+            db.query(Subscriber)
+            .filter(Subscriber.organization_id == customer.id)
+            .all()
+        )
+        comparable_fields = (
+            "billing_enabled",
+            "billing_day",
+            "payment_due_days",
+            "grace_period_days",
+            "min_balance",
+            "tax_rate_id",
+            "payment_method",
+        )
+        for field in comparable_fields:
+            values = {str(getattr(item, field, None)) for item in others}
+            if len(values) > 1:
+                return defaults
+    defaults.update(
+        {
+            "billing_enabled_override": (
+                "true" if subscriber.billing_enabled else "false"
+            ) if subscriber.billing_enabled is not None else "",
+            "billing_day": str(subscriber.billing_day or ""),
+            "payment_due_days": str(subscriber.payment_due_days or ""),
+            "grace_period_days": str(subscriber.grace_period_days or ""),
+            "min_balance": str(subscriber.min_balance or ""),
+            "tax_rate_id": str(subscriber.tax_rate_id or ""),
+            "payment_method": str(subscriber.payment_method or ""),
+        }
+    )
+    return defaults
 
 
 def _toast_response(
@@ -163,7 +231,7 @@ def contacts_convert_to_subscriber(
             "Unsupported subscriber_type",
             extra={"subscriber_type": subscriber_type, "person_id": str(person.id)},
         )
-    redirect_url = f"/admin/subscribers/{person.id}"
+    redirect_url = f"/admin/customers/person/{person.id}"
     if missing_email:
         redirect_url = f"{redirect_url}?missing_email=1"
     return RedirectResponse(url=redirect_url, status_code=303)
@@ -173,7 +241,10 @@ def contacts_convert_to_subscriber(
 def customers_list(
     request: Request,
     search: str | None = None,
+    status: str | None = None,
     customer_type: str | None = None,  # 'person' or 'organization'
+    nas_id: str | None = None,
+    pop_site_id: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -182,7 +253,10 @@ def customers_list(
     page_data = web_customer_lists_service.build_customers_index_context(
         db=db,
         search=search,
+        status=status,
         customer_type=customer_type,
+        nas_id=nas_id,
+        pop_site_id=pop_site_id,
         page=page,
         per_page=per_page,
     )
@@ -275,9 +349,12 @@ def customer_new(
     db: Session = Depends(get_db),
 ):
     """New customer form."""
+    from app.models.network_monitoring import PopSite
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
+    pop_sites = db.query(PopSite).filter(PopSite.is_active.is_(True)).order_by(PopSite.name).all()
 
     return templates.TemplateResponse(
         "admin/customers/form.html",
@@ -286,6 +363,7 @@ def customer_new(
             "customer": None,
             "customer_type": type,
             "action": "create",
+            "pop_sites": pop_sites,
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -324,6 +402,7 @@ def customer_create(
     region: str | None = Form(None),
     postal_code: str | None = Form(None),
     country_code: str | None = Form(None),
+    pop_site_id: str | None = Form(None),
     status: str | None = Form(None),
     is_active: str | None = Form(None),
     marketing_opt_in: str | None = Form(None),
@@ -377,6 +456,7 @@ def customer_create(
             "region": region,
             "postal_code": postal_code,
             "country_code": country_code,
+            "pop_site_id": pop_site_id,
             "status": status,
             "is_active": is_active,
             "marketing_opt_in": marketing_opt_in,
@@ -917,6 +997,8 @@ def person_edit(
             "customer": customer,
             "customer_type": "person",
             "action": "edit",
+            "tax_rates": _load_tax_rates(db),
+            "billing_form": _billing_form_defaults(db, "person", customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -953,6 +1035,8 @@ def organization_edit(
             "customer": customer,
             "customer_type": "organization",
             "action": "edit",
+            "tax_rates": _load_tax_rates(db),
+            "billing_form": _billing_form_defaults(db, "organization", customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -987,6 +1071,13 @@ def person_update(
     marketing_opt_in: str | None = Form(None),
     notes: str | None = Form(None),
     account_start_date: str | None = Form(None),
+    billing_enabled_override: str | None = Form(None),
+    billing_day: str | None = Form(None),
+    payment_due_days: str | None = Form(None),
+    grace_period_days: str | None = Form(None),
+    min_balance: str | None = Form(None),
+    tax_rate_id: str | None = Form(None),
+    payment_method: str | None = Form(None),
     metadata: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -1018,6 +1109,13 @@ def person_update(
             marketing_opt_in=marketing_opt_in,
             notes=notes,
             account_start_date=account_start_date,
+            billing_enabled_override=billing_enabled_override,
+            billing_day=billing_day,
+            payment_due_days=payment_due_days,
+            grace_period_days=grace_period_days,
+            min_balance=min_balance,
+            tax_rate_id=tax_rate_id,
+            payment_method=payment_method,
             metadata_json=_parse_json(metadata, "metadata") if metadata is not None else None,
         )
         metadata_payload = build_changes_metadata(before, after)
@@ -1054,6 +1152,8 @@ def person_update(
                 "customer_type": "person",
                 "action": "edit",
                 "error": str(e),
+                "tax_rates": _load_tax_rates(db),
+                "billing_form": _billing_form_defaults(db, "person", customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1072,6 +1172,13 @@ def organization_update(
     website: str | None = Form(None),
     org_notes: str | None = Form(None),
     org_account_start_date: str | None = Form(None),
+    billing_enabled_override: str | None = Form(None),
+    billing_day: str | None = Form(None),
+    payment_due_days: str | None = Form(None),
+    grace_period_days: str | None = Form(None),
+    min_balance: str | None = Form(None),
+    tax_rate_id: str | None = Form(None),
+    payment_method: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
     """Update an organization."""
@@ -1086,6 +1193,13 @@ def organization_update(
             website=website,
             org_notes=org_notes,
             org_account_start_date=org_account_start_date,
+            billing_enabled_override=billing_enabled_override,
+            billing_day=billing_day,
+            payment_due_days=payment_due_days,
+            grace_period_days=grace_period_days,
+            min_balance=min_balance,
+            tax_rate_id=tax_rate_id,
+            payment_method=payment_method,
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
@@ -1119,6 +1233,8 @@ def organization_update(
                 "customer_type": "organization",
                 "action": "edit",
                 "error": str(e),
+                "tax_rates": _load_tax_rates(db),
+                "billing_form": _billing_form_defaults(db, "organization", customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },

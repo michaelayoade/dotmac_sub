@@ -28,7 +28,7 @@
 {% endif %}
 {% endmacro %}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {% call page_header(
         title="OLT Devices",
         subtitle="Fleet health, subscriber impact, and hardware management for optical line terminals",
@@ -48,133 +48,94 @@
         {{ stats_card("PON Ports", stats.total_pon_ports, icon=icon_server(), color="blue", color2="indigo") }}
     </div>
 
-    <div class="grid gap-6 xl:grid-cols-[1.7fr_1fr]">
-        <div class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
-            <form method="GET" action="/admin/network/olts" class="flex flex-wrap items-center gap-3">
-                <div class="relative min-w-[240px] flex-1">
-                    <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
-                        </svg>
-                    </div>
-                    <input type="text" name="search" value="{{ filters.search }}" placeholder="Search name, IP, vendor, model..."
-                           class="w-full rounded-lg border border-slate-200 bg-slate-50/60 py-2.5 pl-9 pr-4 text-sm text-slate-900 placeholder:text-slate-400 focus:border-violet-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
-                </div>
-                <select name="status"
-                        class="rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-2.5 text-sm text-slate-900 focus:border-violet-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white">
-                    <option value="" {% if not filters.status %}selected{% endif %}>All OLTs</option>
-                    <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Attention</option>
-                    <option value="healthy" {% if filters.status == 'healthy' %}selected{% endif %}>Healthy</option>
-                    <option value="unmonitored" {% if filters.status == 'unmonitored' %}selected{% endif %}>Unmonitored</option>
-                </select>
-                <button type="submit" class="inline-flex items-center rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-violet-700">Apply</button>
-                {% if filters.search or filters.status %}
-                <a href="/admin/network/olts" class="inline-flex items-center rounded-lg border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
-                {% endif %}
-            </form>
-            <div class="mt-4 flex flex-wrap gap-2">
-                <a href="/admin/network/olts?status=attention" class="inline-flex items-center rounded-full bg-rose-100 px-3 py-1 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Attention Queue</a>
-                <a href="/admin/network/olts?status=healthy" class="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Healthy Fleet</a>
-                <a href="/admin/network/onts?online_status=offline" class="inline-flex items-center rounded-full bg-amber-100 px-3 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Offline ONTs</a>
-                <a href="/admin/network/onts?signal_quality=critical&order_by=signal&order_dir=asc" class="inline-flex items-center rounded-full bg-violet-100 px-3 py-1 text-xs font-medium text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">Critical Signal ONTs</a>
-            </div>
+    {# ── Attention Banner ── #}
+    {% if stats.attention > 0 %}
+    <div class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-rose-950/30 dark:to-amber-950/10">
+        <div class="flex h-10 w-10 shrink-0 animate-pulse items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+            {{ icon_warning("h-5 w-5") }}
         </div>
-
-        <div class="rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-700/70 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div>
-                    <h2 class="text-base font-semibold text-slate-900 dark:text-white">Attention Queue</h2>
-                    <p class="text-sm text-slate-500 dark:text-slate-400">OLTs with failed telemetry checks.</p>
-                </div>
-                <span class="rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">{{ stats.attention }}</span>
-            </div>
-            <div class="mt-4 space-y-3">
-                {% for olt in attention_summary %}
-                <a href="{{ olt.detail_url }}" class="block rounded-xl border border-rose-200/70 bg-rose-50/50 p-3 transition hover:border-rose-300 hover:bg-rose-50 dark:border-rose-900/40 dark:bg-rose-900/10 dark:hover:bg-rose-900/20">
-                    <div class="flex items-start justify-between gap-3">
-                        <div>
-                            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ olt.name }}</p>
-                            <p class="mt-1 text-xs font-mono text-slate-500 dark:text-slate-400">{{ olt.mgmt_ip or 'No management IP' }}</p>
-                        </div>
-                        <span class="text-xs font-medium text-rose-700 dark:text-rose-300">{{ olt.pon_ports }} PON</span>
-                    </div>
-                    <div class="mt-2 flex gap-2 text-xs">
-                        <span class="rounded-full bg-white px-2 py-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300">Ping: {{ olt.runtime_ping_label }}</span>
-                        <span class="rounded-full bg-white px-2 py-1 text-slate-600 dark:bg-slate-800 dark:text-slate-300">SNMP: {{ olt.runtime_snmp_label }}</span>
-                    </div>
-                </a>
-                {% else %}
-                <div class="rounded-xl border border-emerald-200/70 bg-emerald-50/60 p-4 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/10 dark:text-emerald-300">
-                    No OLTs are currently failing ping or SNMP checks.
-                </div>
-                {% endfor %}
-            </div>
+        <div class="min-w-0 flex-1">
+            <p class="font-semibold text-rose-900 dark:text-rose-100">{{ stats.attention }} OLT{{ 's' if stats.attention != 1 }} need{{ '' if stats.attention != 1 else 's' }} attention</p>
+            <p class="mt-0.5 text-sm text-rose-800/80 dark:text-rose-200/70">Failed ping or SNMP telemetry checks</p>
         </div>
+        <a href="/admin/network/olts?status=attention" class="shrink-0 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700">View Queue</a>
     </div>
+    {% endif %}
 
-    {% call data_table(
-        title="OLT Fleet",
-        icon=icon_server(),
-        color="violet",
-        count=stats.total if stats else 0,
-        actions='<a href="/admin/network/olts?export=csv" class="text-[10px] font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400">Export OLTs →</a>' | safe
-    ) %}
-        {{ table_head([
-            {"label": "Name"},
-            {"label": "Management"},
-            {"label": "Hardware / Capacity"},
-            {"label": "Fleet Status"},
-            {"label": "Ping", "align": "center"},
-            {"label": "SNMP", "align": "center"},
-            {"label": "", "align": "center"}
-        ]) }}
-        <tbody>
+    {# ── Filter Bar ── #}
+    <form method="GET" action="/admin/network/olts" class="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="relative min-w-[240px] flex-1">
+            <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+            <input type="text" name="search" value="{{ filters.search }}" placeholder="Search name, IP, vendor, model..."
+                   class="w-full rounded-xl border border-slate-200 bg-white py-2 pl-9 pr-4 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+        <select name="status" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="" {% if not filters.status %}selected{% endif %}>All OLTs</option>
+            <option value="attention" {% if filters.status == 'attention' %}selected{% endif %}>Needs Attention</option>
+            <option value="healthy" {% if filters.status == 'healthy' %}selected{% endif %}>Healthy</option>
+            <option value="unmonitored" {% if filters.status == 'unmonitored' %}selected{% endif %}>Unmonitored</option>
+        </select>
+        <button type="submit" class="rounded-xl bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5">Apply</button>
+        {% if filters.search or filters.status %}
+        <a href="/admin/network/olts" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+        {% endif %}
+    </form>
+
+    {# ── OLT Fleet Table ── #}
+    <section>
+        <div class="flex items-center justify-between mb-4">
+            <h2 class="font-display text-lg font-bold text-slate-900 dark:text-white">OLT Fleet</h2>
+            <a href="/admin/network/olts?export=csv" class="text-xs font-semibold uppercase tracking-wider text-violet-600 hover:text-violet-700 dark:text-violet-400">Export →</a>
+        </div>
+        <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="w-full text-left text-sm">
+            <thead>
+                <tr class="border-b border-slate-100 dark:border-slate-700/60">
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Management</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Hardware / Capacity</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                    <th class="px-6 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Ping</th>
+                    <th class="px-6 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">SNMP</th>
+                    <th class="px-6 py-3 text-center text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400"></th>
+                </tr>
+            </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
             {% for olt in olts %}
-            {% call table_row(color="violet") %}
-                <td class="px-4 py-3">
-                    <a href="{{ olt.detail_url }}" class="text-sm font-semibold text-slate-900 hover:text-violet-600 dark:text-white dark:hover:text-violet-400">{{ olt.name }}</a>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ olt.hostname or 'No hostname' }}</p>
+            <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/30 cursor-pointer" onclick="window.location='{{ olt.detail_url }}'">
+                <td class="px-6 py-3">
+                    <a href="{{ olt.detail_url }}" class="font-semibold text-slate-900 hover:text-violet-600 dark:text-white dark:hover:text-violet-400">{{ olt.name }}</a>
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ olt.hostname or '' }}</p>
                 </td>
-                <td class="px-4 py-3 whitespace-nowrap">
-                    <span class="text-sm font-mono tabular-nums text-slate-700 dark:text-slate-300">{{ olt.mgmt_ip or '—' }}</span>
+                <td class="px-6 py-3 whitespace-nowrap font-mono tabular-nums text-slate-700 dark:text-slate-300">{{ olt.mgmt_ip or '—' }}</td>
+                <td class="px-6 py-3">
+                    <span class="text-slate-900 dark:text-white">{{ olt.vendor or 'Unknown' }}{% if olt.model %} {{ olt.model }}{% endif %}</span>
+                    <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ olt.pon_ports }} PON ports</p>
                 </td>
-                <td class="px-4 py-3">
-                    <p class="text-sm text-slate-900 dark:text-white">{{ olt.vendor or 'Unknown vendor' }}{% if olt.model %} {{ olt.model }}{% endif %}</p>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ olt.pon_ports }} PON ports</p>
-                </td>
-                <td class="px-4 py-3 whitespace-nowrap">
+                <td class="px-6 py-3 whitespace-nowrap">
                     {% if olt.runtime_ping_state == 'fail' or olt.runtime_snmp_state == 'fail' %}
-                    <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-1 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">Needs attention</span>
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Attention</span>
                     {% elif olt.runtime_ping_state == 'unknown' and olt.runtime_snmp_state == 'unknown' %}
-                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Unmonitored</span>
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Unmonitored</span>
                     {% else %}
-                    <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Healthy</span>
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Healthy</span>
                     {% endif %}
                 </td>
-                <td class="px-4 py-3 whitespace-nowrap text-center">
-                    {{ health_dot(olt.runtime_ping_state, "Ping") }}
+                <td class="px-6 py-3 whitespace-nowrap text-center">{{ health_dot(olt.runtime_ping_state, "Ping") }}</td>
+                <td class="px-6 py-3 whitespace-nowrap text-center">{{ health_dot(olt.runtime_snmp_state, "SNMP") }}</td>
+                <td class="px-6 py-3 whitespace-nowrap text-center">
+                    <a href="{{ olt.detail_url }}" class="text-violet-600 hover:text-violet-700 dark:text-violet-400" onclick="event.stopPropagation()">{{ icon_view() }}</a>
                 </td>
-                <td class="px-4 py-3 whitespace-nowrap text-center">
-                    {{ health_dot(olt.runtime_snmp_state, "SNMP") }}
-                </td>
-                {% call row_actions() %}
-                    {{ row_action(olt.detail_url, icon_view(), "View", "violet") }}
-                    {{ row_action(olt.edit_url, icon_edit(), "Edit", "slate") }}
-                {% endcall %}
-            {% endcall %}
+            </tr>
             {% else %}
-            {{ empty_state(
-                title="No OLT devices",
-                message="No OLTs match the current filters.",
-                icon=icon_server(),
-                color="violet",
-                color2="purple",
-                action_label="Add OLT",
-                action_href="/admin/network/olts/new",
-                colspan=7
-            ) }}
+            <tr><td colspan="7" class="px-6 py-12 text-center">
+                <p class="text-sm font-medium text-slate-600 dark:text-slate-300">No OLT devices match the current filters</p>
+                <a href="/admin/network/olts/new" class="mt-2 inline-flex text-sm font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400">Add OLT →</a>
+            </td></tr>
             {% endfor %}
         </tbody>
-    {% endcall %}
+        </table>
+        </div>
+    </section>
 </div>
 {% endblock %}

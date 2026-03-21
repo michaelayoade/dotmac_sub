@@ -64,7 +64,6 @@ from app.web.admin.notifications import router as notifications_router
 from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
-from app.web.admin.subscribers import router as subscribers_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.system import router as system_router
 from app.web.admin.usage import legacy_router as usage_legacy_router
@@ -111,9 +110,13 @@ def operations_service_orders_new_legacy(subscriber: str | None = None):
 
 
 @router.get("/settings")
-def admin_settings_hub():
+def admin_settings_hub(request: Request):
     """Canonical settings entry point."""
-    return RedirectResponse(url="/admin/system/settings-hub", status_code=307)
+    query = str(request.url.query).strip()
+    url = "/admin/system/settings-hub"
+    if query:
+        url = f"{url}?{query}"
+    return RedirectResponse(url=url, status_code=307)
 
 
 @router.get("/reports")
@@ -125,10 +128,6 @@ def admin_reports_hub():
 # Include all admin sub-routers
 router.include_router(dashboard_router)
 router.include_router(design_system_router)
-router.include_router(
-    subscribers_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("customer"))],
-)
 router.include_router(
     customers_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("customer"))],

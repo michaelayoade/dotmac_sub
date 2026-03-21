@@ -114,6 +114,9 @@ class SubscriberBase(BaseModel):
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
 
+    # Service location (POP site determines NAS/IP pool for provisioning)
+    pop_site_id: UUID | None = None
+
     # Account fields
     subscriber_number: str | None = Field(default=None, max_length=80)
     account_number: str | None = Field(default=None, max_length=80)
@@ -192,6 +195,9 @@ class SubscriberUpdate(BaseModel):
     region: str | None = Field(default=None, max_length=80)
     postal_code: str | None = Field(default=None, max_length=20)
     country_code: str | None = Field(default=None, max_length=2)
+
+    # Service location
+    pop_site_id: UUID | None = None
 
     # Account fields
     subscriber_number: str | None = Field(default=None, max_length=80)

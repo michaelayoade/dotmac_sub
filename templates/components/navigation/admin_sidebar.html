@@ -1,18 +1,19 @@
-<!-- Admin Sidebar Navigation — Macro-based, collapsed-aware, with badge support -->
+<!-- Admin Sidebar Navigation — Flat Stitch-style, collapsed-aware, with badge support -->
 
-{# ── Active page → section mapping for auto-expand ── #}
-{% set section_for_page = {
-    'dashboard': '',
-    'subscribers': 'operations', 'customers': 'operations', 'contacts': 'operations',
-    'provisioning': 'operations', 'provisioning-migrate': 'operations', 'workflows': 'operations', 'appointments': 'operations',
-    'support-tickets': 'operations',
+{# ── Active page → parent nav item mapping for highlighting ── #}
+{% set parent_for_page = {
+    'dashboard': 'dashboard',
+    'subscribers': 'customers', 'customers': 'customers', 'contacts': 'customers',
+    'provisioning': 'provisioning', 'provisioning-migrate': 'provisioning', 'workflows': 'provisioning', 'appointments': 'provisioning',
+    'support-tickets': 'support-tickets',
     'billing': 'billing', 'accounts': 'billing', 'invoices': 'billing', 'payments': 'billing',
     'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing', 'billing-cache': 'billing',
-    'payment_providers': 'billing', 'payment_arrangements': 'billing', 'payment_channels': 'billing',
-    'collection-accounts': 'billing', 'tax-rates': 'billing', 'ledger': 'billing',
+    'payment_arrangements': 'billing', 'payment_providers': 'billing', 'payment_channels': 'billing',
+    'payment_channel_accounts': 'billing', 'collection-accounts': 'billing', 'collection_accounts': 'billing',
+    'tax-rates': 'billing', 'ledger': 'billing',
     'catalog': 'catalog', 'catalog-offers': 'catalog', 'catalog-subscriptions': 'catalog',
     'catalog-add-ons': 'catalog', 'catalog-products': 'catalog', 'catalog-usage': 'catalog',
-    'catalog-calculator': 'catalog', 'resellers': 'catalog',
+    'catalog-calculator': 'catalog', 'catalog-settings': 'catalog', 'resellers': 'catalog',
     'network': 'network', 'network-hub': 'network', 'network-map': 'network',
     'network-devices': 'network', 'core-devices': 'network',
     'olts': 'network', 'onts': 'network', 'cpes': 'network', 'nas': 'network',
@@ -28,9 +29,12 @@
     'vpn': 'vpn', 'wireguard': 'vpn', 'wireguard-peers': 'vpn',
     'reports': 'reports', 'reports-revenue': 'reports', 'reports-subscribers': 'reports',
     'reports-network': 'reports', 'reports-billing': 'reports',
-    'gis': 'other', 'integrations': 'other', 'notifications': 'other',
-    'alert-policies': 'other', 'oncall-rotations': 'other',
+    'gis': 'gis', 'integrations': 'integrations',
+    'notifications': 'notifications', 'alert-policies': 'notifications', 'oncall-rotations': 'notifications',
     'settings-hub': 'system', 'configuration': 'system', 'system-modules': 'system',
+    'billing-setup': 'system',
+    'config-billing': 'system', 'config-payment-methods': 'system', 'config-tax': 'system',
+    'config-reminders': 'system', 'config-billing-notif': 'system',
     'company-info': 'system', 'system-about': 'system',
     'users': 'system', 'roles': 'system', 'permissions': 'system', 'api-keys': 'system',
     'audit-log': 'system', 'system-health': 'system', 'logs': 'system', 'scheduler': 'system',
@@ -38,89 +42,40 @@
     'system-restore-tool': 'system', 'system-db-inspector': 'system',
     'legal': 'system', 'design-system': 'system'
 } %}
-{% set section_for_menu = {
-    'operations': 'operations', 'catalog': 'catalog',
-    'billing': 'billing', 'network': 'network',
-    'core-network': 'network', 'gpon': 'network', 'fiber': 'network',
-    'vpn': 'vpn', 'reports': 'reports', 'system': 'system'
-} %}
-{% set initial_section = section_for_page.get(active_page, section_for_menu.get(active_menu, '')) %}
+{% set active_item = parent_for_page.get(active_page, active_page or '') %}
 
 {# ── Module visibility ── #}
 {% set module_states = sidebar_stats.module_states if sidebar_stats is defined and sidebar_stats and sidebar_stats.module_states is defined else {} %}
-{% set feature_states = sidebar_stats.feature_states if sidebar_stats is defined and sidebar_stats and sidebar_stats.feature_states is defined else {} %}
 
 {# ── Reusable class strings ── #}
-{% set cls_active = 'border border-primary-200 bg-primary-50 text-primary-900 shadow-sm dark:border-primary-500/30 dark:bg-slate-800 dark:text-primary-200 dark:ring-1 dark:ring-primary-500/20' %}
-{% set cls_inactive = 'border border-transparent text-slate-700 hover:border-slate-200 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-200 dark:hover:border-slate-700 dark:hover:bg-slate-800 dark:hover:text-white' %}
-{% set cls_link = 'flex items-center gap-3 rounded-xl px-3 py-2.5 text-[13px] font-medium leading-5 transition-colors' %}
-{% set cls_sub = 'flex items-center gap-2.5 rounded-xl border border-transparent py-2 pl-10 pr-3 text-[13px] font-medium leading-5 transition-colors' %}
+{% set cls_active = 'bg-indigo-500/10 text-indigo-600 border-l-2 border-indigo-500 dark:text-indigo-400 dark:bg-indigo-500/10' %}
+{% set cls_inactive = 'border-l-2 border-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-white' %}
+{% set cls_link = 'flex min-h-[40px] items-center gap-3 rounded-r-xl pl-3 pr-3 py-2 text-sm font-medium transition-colors' %}
 
 {# ── Macros ── #}
-{% macro nav_link(label, href, icon_svg, page_id, badge=None, tooltip=None) %}
-{% set is_active = active_page == page_id
-    or (page_id == 'reports' and active_page == 'reports-hub')
-    or (page_id == 'notifications' and active_page in ['notification-templates', 'notification-queue', 'notification-history']) %}
-<a href="{{ href }}" title="{{ tooltip or label }}"
-   aria-label="{{ tooltip or label }}"
+{% macro nav_link(label, href, icon_svg, page_id, badge=None) %}
+{% set is_active = active_item == page_id %}
+<a href="{{ href }}" title="{{ label }}"
    {% if is_active %}aria-current="page"{% endif %}
-   :data-tooltip="sidebarCollapsed ? '{{ tooltip or label }}' : ''"
-   :class="sidebarCollapsed ? 'justify-center px-2.5' : ''"
+   :data-tooltip="sidebarCollapsed ? '{{ label }}' : ''"
+   :class="sidebarCollapsed ? 'justify-center !pl-0 !pr-0 !border-l-0 rounded-xl' : ''"
    class="{{ cls_link }} {{ cls_active if is_active else cls_inactive }}">
     {{ icon_svg }}
     <span x-show="!sidebarCollapsed" class="flex-1 truncate">{{ label }}</span>
     {% if badge %}
-    <span x-show="!sidebarCollapsed" class="min-w-[20px] rounded-full bg-red-100 px-1.5 py-0.5 text-center text-[10px] font-bold leading-none text-red-700 dark:bg-red-900/30 dark:text-red-400">{{ badge }}</span>
+    <span x-show="!sidebarCollapsed" class="min-w-[20px] rounded-full bg-red-100 px-1.5 py-0.5 text-center text-[10px] font-bold leading-none tabular-nums text-red-700 dark:bg-red-900/30 dark:text-red-400">{{ badge }}</span>
     {% endif %}
 </a>
 {% endmacro %}
 
-{% macro section_header(label, section_id, icon_svg=None, primary_href=None, primary_page_id=None) %}
-{# Expanded state: clickable section header #}
-<button type="button"
-        x-on:click.prevent="openSection = openSection === '{{ section_id }}' ? '' : '{{ section_id }}'"
-        x-show="!sidebarCollapsed"
-        class="mt-4 flex w-full items-center justify-between px-3 pb-1.5 pt-2 group cursor-pointer">
-    <p class="text-[13px] font-semibold uppercase tracking-[0.12em] text-slate-600 dark:text-slate-300 group-hover:text-slate-800 dark:group-hover:text-white">{{ label }}</p>
-    <svg class="h-3 w-3 text-slate-500 transition-transform duration-200 group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-200" :class="{ 'rotate-180': openSection === '{{ section_id }}' }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
-    </svg>
-</button>
-{# Collapsed state: show icon linking to section's primary page #}
-{% if icon_svg and primary_href %}
-<a href="{{ primary_href }}" title="{{ label }}"
-   x-show="sidebarCollapsed" x-cloak
-   aria-label="{{ label }}"
-   {% if active_page == primary_page_id or initial_section == section_id %}aria-current="page"{% endif %}
-   data-tooltip="{{ label }}"
-   class="{{ cls_link }} justify-center px-2.5 {{ cls_active if active_page == primary_page_id or initial_section == section_id else cls_inactive }}">
-    {{ icon_svg }}
-</a>
-{% endif %}
+{% macro section_label(label) %}
+<p x-show="!sidebarCollapsed" class="mt-6 mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-400 dark:text-slate-500">{{ label }}</p>
+<div x-show="sidebarCollapsed" x-cloak class="mt-4 mb-1.5 mx-3 border-t border-slate-200 dark:border-slate-700/50"></div>
 {% endmacro %}
 
-{% macro sub_link(label, href, page_id) %}
-{% set is_active = active_page == page_id or (page_id == 'audit-log' and active_page == 'audit') %}
-<a href="{{ href }}"
-   aria-label="{{ label }}"
-   {% if is_active %}aria-current="page"{% endif %}
-   class="{{ cls_sub }} {{ cls_active if is_active else cls_inactive }}">
-    <span class="h-1.5 w-1.5 flex-shrink-0 rounded-full {% if is_active %}bg-primary-500{% else %}bg-slate-400 dark:bg-slate-500{% endif %}"></span>
-    <span class="truncate">{{ label }}</span>
-</a>
-{% endmacro %}
-
-{% macro divider() %}
-<div class="my-3 border-t border-slate-200 dark:border-slate-700/50" x-show="!sidebarCollapsed"></div>
-<div class="my-2" x-show="sidebarCollapsed" x-cloak></div>
-{% endmacro %}
-
-{# ── Icons (h-5 w-5, used in nav_link and collapsed section_header) ── #}
+{# ── Icons (h-5 w-5) ── #}
 {% set icon_dashboard %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6"/></svg>
-{% endset %}
-{% set icon_operations %}
-<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
 {% endset %}
 {% set icon_customers %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2"/></svg>
@@ -128,11 +83,11 @@
 {% set icon_provisioning %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
 {% endset %}
+{% set icon_support %}
+<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z"/></svg>
+{% endset %}
 {% set icon_billing %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-{% endset %}
-{% set icon_invoices %}
-<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
 {% endset %}
 {% set icon_catalog %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
@@ -158,103 +113,40 @@
 {% set icon_settings %}
 <svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
 {% endset %}
-{% set icon_resellers %}
-<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-{% endset %}
-{% set icon_support %}
-<svg class="h-5 w-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 5v2m0 4v2m0 4v2M5 5a2 2 0 00-2 2v3a2 2 0 110 4v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 110-4V7a2 2 0 00-2-2H5z"/></svg>
-{% endset %}
 
-{# ── Badge counts from sidebar_stats ── #}
+{# ── Badge counts ── #}
 {% set pending_orders_count = sidebar_stats.pending_orders if sidebar_stats is defined and sidebar_stats and sidebar_stats.pending_orders is defined and sidebar_stats.pending_orders > 0 else None %}
 {% set overdue_count = sidebar_stats.overdue_invoices if sidebar_stats is defined and sidebar_stats and sidebar_stats.overdue_invoices is defined and sidebar_stats.overdue_invoices > 0 else None %}
 
+{# ── Navigation ── #}
+<div class="space-y-0.5">
 
-<div class="space-y-1.5" x-data="{ openSection: '{{ initial_section }}' }">
-
-    {# ════════ DASHBOARD ════════ #}
     {{ nav_link("Dashboard", "/admin/dashboard", icon_dashboard, "dashboard") }}
 
-    {# ════════ OPERATIONS ════════ #}
+    {{ section_label("Core") }}
     {% if module_states.get('customer', True) %}
-    {{ section_header("Operations", "operations", icon_svg=icon_operations, primary_href="/admin/subscribers", primary_page_id="subscribers") }}
-    <div x-show="openSection === 'operations' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1 rounded-2xl border border-slate-200/60 bg-slate-50/60 p-2 dark:border-slate-700/60 dark:bg-slate-800/40">
-        {{ nav_link("Subscribers", "/admin/subscribers", icon_operations, "subscribers", tooltip="Subscriber lookup and support queue") }}
-        {{ nav_link("Customers", "/admin/customers", icon_customers, "customers") }}
-        {% if module_states.get('provisioning', True) %}
-        {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count) }}
-        {% endif %}
-        {{ nav_link("Support Tickets", "/admin/support/tickets", icon_support, "support-tickets") }}
-    </div>
+    {{ nav_link("Customers", "/admin/customers", icon_customers, "customers") }}
     {% endif %}
+    {% if module_states.get('provisioning', True) %}
+    {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count) }}
+    {% endif %}
+    {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
 
-    {# ════════ BILLING ════════ #}
+    {{ section_label("Operations") }}
     {% if module_states.get('billing', True) %}
-    {{ section_header("Billing", "billing", icon_svg=icon_billing, primary_href="/admin/billing", primary_page_id="billing") }}
-    <div x-show="openSection === 'billing' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1 rounded-2xl border border-slate-200/60 bg-slate-50/60 p-2 dark:border-slate-700/60 dark:bg-slate-800/40">
-        {{ nav_link("Overview", "/admin/billing", icon_billing, "billing") }}
-        {% if feature_states.get('invoices', True) %}
-        {{ nav_link("Invoices", "/admin/billing/invoices", icon_invoices, "invoices", badge=overdue_count) }}
-        {% endif %}
-        {% if feature_states.get('payments', True) %}
-        {{ sub_link("Payments", "/admin/billing/payments", "payments") }}
-        {% endif %}
-        {{ sub_link("Accounts", "/admin/billing/accounts", "accounts") }}
-        {% if feature_states.get('credit_notes', True) %}
-        {{ sub_link("Credit Notes", "/admin/billing/credits", "credits") }}
-        {% endif %}
-        {{ sub_link("Dunning", "/admin/billing/dunning", "dunning") }}
-        {{ sub_link("AR Aging", "/admin/billing/ar-aging", "ar-aging") }}
-        {{ sub_link("Arrangements", "/admin/billing/payment-arrangements", "payment_arrangements") }}
-        {{ sub_link("Providers", "/admin/billing/payment-providers", "payment_providers") }}
-    </div>
+    {{ nav_link("Billing", "/admin/billing", icon_billing, "billing", badge=overdue_count) }}
     {% endif %}
-
-    {# ════════ CATALOG ════════ #}
     {% if module_states.get('catalog', True) %}
-    {{ section_header("Catalog", "catalog", icon_svg=icon_catalog, primary_href="/admin/catalog/offers", primary_page_id="catalog") }}
-    <div x-show="openSection === 'catalog' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1 rounded-2xl border border-slate-200/60 bg-slate-50/60 p-2 dark:border-slate-700/60 dark:bg-slate-800/40">
-        {{ nav_link("Offers", "/admin/catalog/offers", icon_catalog, "catalog") }}
-        {{ sub_link("Subscriptions", "/admin/catalog/subscriptions", "catalog-subscriptions") }}
-        {{ sub_link("Add-ons", "/admin/catalog/settings/add-ons", "catalog-add-ons") }}
-        {{ sub_link("Usage & FUP", "/admin/catalog/usage", "catalog-usage") }}
-        {{ nav_link("Resellers", "/admin/resellers", icon_resellers, "resellers") }}
-    </div>
+    {{ nav_link("Catalog", "/admin/catalog/offers", icon_catalog, "catalog") }}
     {% endif %}
-
-    {# ════════ NETWORK ════════ #}
     {% if module_states.get('network', True) %}
-    {{ section_header("Network", "network", icon_svg=icon_network, primary_href="/admin/network", primary_page_id="network") }}
-    <div x-show="openSection === 'network' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1 rounded-2xl border border-slate-200/60 bg-slate-50/60 p-2 dark:border-slate-700/60 dark:bg-slate-800/40">
-        {{ nav_link("Network Hub", "/admin/network", icon_network, "network") }}
-        {{ sub_link("OLTs", "/admin/network/olts", "olts") }}
-        {{ sub_link("ONTs", "/admin/network/onts", "onts") }}
-        {{ sub_link("CPEs", "/admin/network/cpes", "cpes") }}
-        {{ sub_link("NAS Devices", "/admin/network/nas", "nas") }}
-        {{ sub_link("IP Management", "/admin/network/ip-management", "ip-management") }}
-        {{ sub_link("RADIUS", "/admin/network/radius", "radius") }}
-        {{ sub_link("Fiber Plant", "/admin/network/fiber-plant", "fiber-plant") }}
-        {{ sub_link("PoP Sites", "/admin/network/pop-sites", "pop-sites") }}
-        {{ sub_link("Zones", "/admin/network/zones", "zones") }}
-        {{ sub_link("Monitoring", "/admin/network/monitoring", "monitoring") }}
-        {{ sub_link("Speed Tests", "/admin/network/speedtests", "speedtests") }}
-        {{ sub_link("TR-069", "/admin/network/tr069", "tr069") }}
-        {{ sub_link("Weathermap", "/admin/network/weathermap", "weathermap") }}
-    </div>
+    {{ nav_link("Network", "/admin/network", icon_network, "network") }}
     {% endif %}
-
-    {# ════════ VPN ════════ #}
     {% if module_states.get('vpn', True) %}
-    {{ section_header("VPN", "vpn", icon_svg=icon_vpn, primary_href="/admin/network/vpn", primary_page_id="vpn") }}
-    <div x-show="openSection === 'vpn' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1 rounded-2xl border border-slate-200/60 bg-slate-50/60 p-2 dark:border-slate-700/60 dark:bg-slate-800/40">
-        {{ nav_link("WireGuard", "/admin/network/vpn", icon_vpn, "vpn") }}
-        {{ sub_link("Peers", "/admin/network/vpn/peers", "wireguard-peers") }}
-    </div>
+    {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn") }}
     {% endif %}
 
-    {{ divider() }}
-
-    {# ════════ STANDALONE LINKS ════════ #}
+    {{ section_label("Insights") }}
     {% if module_states.get('reports', True) %}
     {{ nav_link("Reports", "/admin/reports", icon_reports, "reports") }}
     {% endif %}
@@ -267,20 +159,5 @@
     {% if module_states.get('notifications', True) %}
     {{ nav_link("Notifications", "/admin/notifications/templates", icon_notifications, "notifications") }}
     {% endif %}
-
-    {{ divider() }}
-
-    {# ════════ SYSTEM ════════ #}
-    {{ section_header("System", "system", icon_svg=icon_settings, primary_href="/admin/settings", primary_page_id="settings-hub") }}
-    <div x-show="openSection === 'system' && !sidebarCollapsed" x-collapse x-cloak class="space-y-1 rounded-2xl border border-slate-200/60 bg-slate-50/60 p-2 dark:border-slate-700/60 dark:bg-slate-800/40">
-        {{ nav_link("Settings", "/admin/settings", icon_settings, "settings-hub") }}
-        {{ sub_link("Users", "/admin/system/users", "users") }}
-        {{ sub_link("Roles", "/admin/system/roles", "roles") }}
-        {{ sub_link("API Keys", "/admin/system/api-keys", "api-keys") }}
-        {{ sub_link("Audit Log", "/admin/system/audit", "audit-log") }}
-        {{ sub_link("System Health", "/admin/system/health", "system-health") }}
-        {{ sub_link("Scheduler", "/admin/system/scheduler", "scheduler") }}
-        {{ sub_link("Company Info", "/admin/system/company-info", "company-info") }}
-        {{ sub_link("Legal", "/admin/system/legal", "legal") }}
-    </div>
+    {{ nav_link("System", "/admin/settings", icon_settings, "system") }}
 </div>

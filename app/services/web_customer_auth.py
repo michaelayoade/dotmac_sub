@@ -290,7 +290,7 @@ def customer_stop_impersonation(request: Request, next_url: str | None):
     if session_token:
         customer_portal.invalidate_customer_session(session_token)
 
-    safe_url = _safe_next(next_url, fallback="/admin/subscribers")
+    safe_url = _safe_next(next_url, fallback="/admin/customers")
     response = RedirectResponse(url=safe_url, status_code=303)
     response.delete_cookie(customer_portal.SESSION_COOKIE_NAME)
     return response

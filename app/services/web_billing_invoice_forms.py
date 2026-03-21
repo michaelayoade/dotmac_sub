@@ -11,6 +11,7 @@ from app.models.domain_settings import SettingDomain
 from app.services import billing as billing_service
 from app.services import settings_spec
 from app.services import subscriber as subscriber_service
+from app.services.billing_settings import resolve_payment_due_days
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 
@@ -61,19 +62,7 @@ def new_form_state(db: Session, *, account_id: str | None) -> dict[str, object]:
     if selected_account:
         invoice_config["accountId"] = str(selected_account.id)
 
-    raw_invoice_due_days = settings_spec.resolve_value(
-        db, SettingDomain.billing, "invoice_due_days"
-    )
-    invoice_due_days = 14
-    if isinstance(raw_invoice_due_days, int):
-        invoice_due_days = raw_invoice_due_days
-    elif isinstance(raw_invoice_due_days, float):
-        invoice_due_days = int(raw_invoice_due_days)
-    elif isinstance(raw_invoice_due_days, str):
-        try:
-            invoice_due_days = int(raw_invoice_due_days)
-        except ValueError:
-            invoice_due_days = 14
+    payment_due_days = resolve_payment_due_days(db)
     default_currency = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
     if default_currency is None:
         default_currency = "NGN"
@@ -85,7 +74,7 @@ def new_form_state(db: Session, *, account_id: str | None) -> dict[str, object]:
         "tax_rates_json": tax_rates_json,
         "invoice_config": invoice_config,
         "default_issue_date": today.strftime("%Y-%m-%d"),
-        "default_due_date": (today + timedelta(days=invoice_due_days)).strftime("%Y-%m-%d"),
+        "default_due_date": (today + timedelta(days=payment_due_days)).strftime("%Y-%m-%d"),
         "default_currency": default_currency,
         "account_locked": bool(selected_account),
         "account_label": web_billing_customers_service.account_label(selected_account) if selected_account else None,

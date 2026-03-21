@@ -10,9 +10,9 @@
     <div>
         <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
             {% if subscription.subscriber_id and subscriber_label %}
-            <a href="/admin/subscribers/{{ subscription.subscriber_id }}" class="hover:text-primary-600">{{ subscriber_label }}</a>
+            <a href="/admin/customers" class="hover:text-primary-600">Customers</a>
             {% else %}
-            <a href="/admin/subscribers" class="hover:text-primary-600">Subscribers</a>
+            <a href="/admin/customers" class="hover:text-primary-600">Customers</a>
             {% endif %}
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             <span class="text-slate-900 dark:text-white">{{ 'Edit Subscription' if subscription.id else 'Add Subscription' }}</span>
@@ -191,6 +191,39 @@
                 <div x-show="billingMode === 'prepaid'" class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
                     {{ billing_mode_prepaid_notice }}
                 </div>
+
+                {% if commercial_policy.rows %}
+                <div class="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/40">
+                    <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                        <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Effective Commercial Terms</h3>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscription selections above plus customer and global billing defaults.</p>
+                    </div>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                            <thead class="bg-white/70 dark:bg-slate-900/20">
+                                <tr>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Setting</th>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effective</th>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Global Default</th>
+                                    <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Override</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                                {% for row in commercial_policy.rows %}
+                                <tr>
+                                    <td class="px-3 py-2 text-slate-700 dark:text-slate-200">{{ row.label }}</td>
+                                    <td class="px-3 py-2 text-slate-900 dark:text-white">{{ row.effective }}</td>
+                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.source }}</td>
+                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
+                                    <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
 
@@ -517,11 +550,11 @@
             </div>
             <div class="flex items-center gap-3">
                 {% if subscription.subscriber_id %}
-                <a href="/admin/subscribers/{{ subscription.subscriber_id }}" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <a href="/admin/customers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     Cancel
                 </a>
                 {% else %}
-                <a href="/admin/subscribers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <a href="/admin/customers" class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     Cancel
                 </a>
                 {% endif %}

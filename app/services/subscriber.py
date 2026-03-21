@@ -390,17 +390,23 @@ class Subscribers(ListResponseMixin):
         person_id: str | None = None,
         status: str | None = None,
         search: str | None = None,
+        include_deleted: bool = False,
     ):
         query = db.query(Subscriber).options(
             selectinload(Subscriber.addresses),
         )
         query = query.filter(Subscriber.user_type != UserType.system_user)
+        if not include_deleted:
+            query = query.filter(not_(splynx_deleted_import_clause()))
         # Status filter
         if status:
             normalized_status = status.strip().lower()
             if normalized_status == "inactive":
                 query = query.filter(Subscriber.is_active.is_(False))
-            elif normalized_status in ("active", "suspended", "canceled"):
+            elif normalized_status in (
+                "active", "blocked", "suspended", "disabled",
+                "canceled", "new", "delinquent",
+            ):
                 query = query.filter(Subscriber.status == normalized_status)
         # Full-text search across subscriber + related tables
         if search:
@@ -641,16 +647,22 @@ class Subscribers(ListResponseMixin):
         organization_id: str | None = None,
         status: str | None = None,
         search: str | None = None,
+        include_deleted: bool = False,
     ) -> int:
         """Return total count of subscribers matching filters."""
         query = db.query(func.count(Subscriber.id)).filter(
             Subscriber.user_type != UserType.system_user
         )
+        if not include_deleted:
+            query = query.filter(not_(splynx_deleted_import_clause()))
         if status:
             normalized_status = status.strip().lower()
             if normalized_status == "inactive":
                 query = query.filter(Subscriber.is_active.is_(False))
-            elif normalized_status in ("active", "suspended", "canceled"):
+            elif normalized_status in (
+                "active", "blocked", "suspended", "disabled",
+                "canceled", "new", "delinquent",
+            ):
                 query = query.filter(Subscriber.status == normalized_status)
         if search:
             term = search.strip()

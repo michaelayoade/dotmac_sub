@@ -3,7 +3,7 @@
 {% block title %}Monitoring - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("blue", "cyan") }}
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {% call page_header(title="Monitoring", subtitle="Equipment vendors, device types, and notification groups", icon=icon_cog(), color="blue", color2="cyan") %}{% endcall %}
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">

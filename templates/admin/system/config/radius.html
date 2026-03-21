@@ -3,7 +3,7 @@
 {% block title %}RADIUS Configuration - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("blue", "cyan") }}
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {% call page_header(title="RADIUS Configuration", subtitle="Reject IPs, MAC binding, debug logging, and session management", icon=icon_cog(), color="blue", color2="cyan") %}{% endcall %}
     {% if push_message %}
     <div class="rounded-lg border px-4 py-3 text-sm {% if push_status == 'success' %}border-emerald-300 bg-emerald-50 text-emerald-800 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-rose-300 bg-rose-50 text-rose-800 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300{% endif %}">

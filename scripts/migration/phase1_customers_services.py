@@ -39,7 +39,7 @@ logger = logging.getLogger(__name__)
 CUSTOMER_STATUS_MAP = {
     "new": "new",
     "active": "active",
-    "blocked": "suspended",
+    "blocked": "blocked",
     "disabled": "disabled",
 }
 
@@ -56,11 +56,11 @@ BILLING_TYPE_MAP = {
 
 SERVICE_STATUS_MAP = {
     "active": "active",
-    "blocked": "suspended",
+    "blocked": "blocked",
     "disabled": "disabled",
     "new": "pending",
     "stopped": "stopped",
-    "hidden": "archived",
+    "hidden": "hidden",
 }
 
 
@@ -124,6 +124,7 @@ def _map_customer_status(status_raw: str | None, *, is_deleted: bool):
     return {
         "new": SubscriberStatus.new,
         "active": SubscriberStatus.active,
+        "blocked": SubscriberStatus.blocked,
         "suspended": SubscriberStatus.suspended,
         "disabled": SubscriberStatus.disabled,
     }.get(status_str, SubscriberStatus.active)
@@ -137,10 +138,12 @@ def _map_service_status(status_raw: str | None, *, is_deleted: bool):
     status_str = SERVICE_STATUS_MAP.get((status_raw or "active").strip().lower(), "active")
     return {
         "active": SubscriptionStatus.active,
+        "blocked": SubscriptionStatus.blocked,
         "suspended": SubscriptionStatus.suspended,
         "disabled": SubscriptionStatus.disabled,
         "pending": SubscriptionStatus.pending,
         "stopped": SubscriptionStatus.stopped,
+        "hidden": SubscriptionStatus.hidden,
         "archived": SubscriptionStatus.archived,
     }.get(status_str, SubscriptionStatus.active)
 
@@ -153,9 +156,9 @@ def _map_billing_mode(billing_type_raw: str | None):
 
 
 def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
-    """Migrate Splynx customers → Subscriber."""
+    """Migrate Splynx customers → Subscriber (+ Organization for company customers)."""
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
-    from app.models.subscriber import Subscriber, SubscriberStatus, UserType
+    from app.models.subscriber import Organization, Subscriber, UserType
 
     # Load existing mappings (partner, tax)
     partner_mappings = {
@@ -216,7 +219,13 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
             status_enum = _map_customer_status(status_raw, is_deleted=is_deleted)
 
             # Reseller mapping
-            reseller_id = partner_mappings.get(row.get("partner_id"))
+            raw_partner_id = row.get("partner_id")
+            reseller_id = partner_mappings.get(raw_partner_id)
+            if raw_partner_id and raw_partner_id not in (0, "0") and not reseller_id:
+                logger.warning(
+                    "Customer %d has partner_id=%s with no reseller mapping",
+                    cid, raw_partner_id,
+                )
 
             # Category → metadata
             category = CATEGORY_MAP.get(row.get("category", "person"), "residential")
@@ -273,21 +282,40 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
                     "splynx_partner_percent": str(row.get("partner_percent") or ""),
                 },
             )
-            db.add(subscriber)
 
+            # Use savepoint so one bad row doesn't roll back the whole batch
+            savepoint = db.begin_nested()
             try:
+                db.add(subscriber)
                 db.flush()
+
+                # Create Organization for company customers
+                if category == "business":
+                    org = Organization(
+                        name=(row["name"] or "Unknown Org")[:160],
+                        address_line1=subscriber.address_line1,
+                        city=subscriber.city,
+                        postal_code=subscriber.postal_code,
+                        country_code=subscriber.country_code,
+                        is_active=not is_deleted,
+                        primary_login_subscriber_id=subscriber.id,
+                    )
+                    db.add(org)
+                    db.flush()
+                    subscriber.organization_id = org.id
+
+                db.add(SplynxIdMapping(
+                    entity_type=SplynxEntityType.customer,
+                    splynx_id=cid,
+                    dotmac_id=subscriber.id,
+                ))
+                savepoint.commit()
             except Exception as e:
-                db.rollback()
+                savepoint.rollback()
                 logger.warning("Failed to create subscriber for customer %d: %s", cid, e)
                 skipped += 1
                 continue
 
-            db.add(SplynxIdMapping(
-                entity_type=SplynxEntityType.customer,
-                splynx_id=cid,
-                dotmac_id=subscriber.id,
-            ))
             mapping[cid] = subscriber.id
             created += 1
 
@@ -361,7 +389,6 @@ def migrate_services(
     """Migrate Splynx services_internet → Subscription + AccessCredential."""
     from app.models.catalog import (
         AccessCredential,
-        BillingMode,
         ContractTerm,
         Subscription,
         SubscriptionStatus,
@@ -475,37 +502,40 @@ def migrate_services(
                 discount_description=(row.get("discount_text") or "")[:512] or None,
                 service_status_raw=status_raw,
             )
-            db.add(subscription)
-
+            # Use savepoint so one bad row doesn't roll back the whole batch
+            savepoint = db.begin_nested()
             try:
+                db.add(subscription)
                 db.flush()
+
+                # Create AccessCredential for RADIUS auth
+                login = (row.get("login") or "").strip()
+                password = row.get("password") or ""
+                if login and login not in existing_usernames:
+                    from app.services.credential_crypto import encrypt_credential
+
+                    cred = AccessCredential(
+                        subscriber_id=subscriber_id,
+                        username=login[:120],
+                        secret_hash=encrypt_credential(password[:255]) if password else None,
+                        is_active=not is_deleted and status_enum == SubscriptionStatus.active,
+                    )
+                    db.add(cred)
+                    existing_usernames.add(login)
+                    creds_created += 1
+
+                db.add(SplynxIdMapping(
+                    entity_type=SplynxEntityType.service,
+                    splynx_id=sid,
+                    dotmac_id=subscription.id,
+                ))
+                savepoint.commit()
             except Exception as e:
-                db.rollback()
+                savepoint.rollback()
                 logger.warning("Failed subscription for service %d: %s", sid, e)
                 skipped += 1
                 continue
 
-            # Create AccessCredential for RADIUS auth
-            login = (row.get("login") or "").strip()
-            password = row.get("password") or ""
-            if login and login not in existing_usernames:
-                from app.services.credential_crypto import encrypt_credential
-
-                cred = AccessCredential(
-                    subscriber_id=subscriber_id,
-                    username=login[:120],
-                    secret_hash=encrypt_credential(password[:255]) if password else None,
-                    is_active=not is_deleted and status_enum == SubscriptionStatus.active,
-                )
-                db.add(cred)
-                existing_usernames.add(login)
-                creds_created += 1
-
-            db.add(SplynxIdMapping(
-                entity_type=SplynxEntityType.service,
-                splynx_id=sid,
-                dotmac_id=subscription.id,
-            ))
             mapping[sid] = subscription.id
             created += 1
 
@@ -529,10 +559,8 @@ def migrate_custom_services(
 ) -> None:
     """Migrate Splynx services_custom → Subscription."""
     from app.models.catalog import (
-        BillingMode,
         ContractTerm,
         Subscription,
-        SubscriptionStatus,
     )
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
 
@@ -596,13 +624,23 @@ def migrate_custom_services(
             unit_price=Decimal(str(row.get("unit_price") or "0")),
             service_status_raw=status_raw,
         )
-        db.add(subscription)
-        db.flush()
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.service,
-            splynx_id=mapping_id,
-            dotmac_id=subscription.id,
-        ))
+
+        savepoint = db.begin_nested()
+        try:
+            db.add(subscription)
+            db.flush()
+            db.add(SplynxIdMapping(
+                entity_type=SplynxEntityType.service,
+                splynx_id=mapping_id,
+                dotmac_id=subscription.id,
+            ))
+            savepoint.commit()
+        except Exception as e:
+            savepoint.rollback()
+            logger.warning("Failed custom service %d: %s", sid, e)
+            skipped += 1
+            continue
+
         created += 1
 
     db.flush()

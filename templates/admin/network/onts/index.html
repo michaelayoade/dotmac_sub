@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
 
-<div class="relative space-y-6" x-data='{
+<div class="relative space-y-8" x-data='{
     view: "{{ filters.view or 'list' }}",
     filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %}
 }'>
@@ -50,23 +50,23 @@
         {{ stats_card("CPE Inventory", stats.total_cpes, icon=icon_users(), color="slate", color2="gray") }}
     </div>
 
-    <div class="grid gap-3 xl:grid-cols-3 animate-fade-in-up" style="animation-delay: 60ms;">
-        <a href="/admin/network/onts?view=list&online_status=offline" class="rounded-xl border border-rose-200 bg-rose-50/70 p-4 transition hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-900/10 dark:hover:bg-rose-900/20">
-            <p class="text-xs font-medium uppercase tracking-[0.22em] text-rose-700 dark:text-rose-300">Focus Queue</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Offline ONTs needing investigation</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Jump into failure triage instead of browsing the full inventory.</p>
+    {# ── Quick filters ── #}
+    {% if stats.offline_count > 0 or stats.low_signal_count > 0 %}
+    <div class="flex flex-wrap gap-2">
+        {% if stats.offline_count > 0 %}
+        <a href="/admin/network/onts?view=list&online_status=offline" class="inline-flex items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:-translate-y-0.5 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">
+            <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
+            {{ stats.offline_count }} Offline
         </a>
-        <a href="/admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc" class="rounded-xl border border-amber-200 bg-amber-50/70 p-4 transition hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-900/10 dark:hover:bg-amber-900/20">
-            <p class="text-xs font-medium uppercase tracking-[0.22em] text-amber-700 dark:text-amber-300">Optics Queue</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Worst optical signal first</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Use diagnostics mode for maintenance prioritization and dispatch planning.</p>
+        {% endif %}
+        {% if stats.low_signal_count > 0 %}
+        <a href="/admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc" class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:-translate-y-0.5 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
+            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+            {{ stats.low_signal_count }} Low Signal
         </a>
-        <div class="rounded-xl border border-slate-200 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-800/80">
-            <p class="text-xs font-medium uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">CPE Scope</p>
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">CPE inventory is secondary on this page</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">ONT list and diagnostics are the primary workspaces; CPE inventory lives in its own dedicated workspace.</p>
-        </div>
+        {% endif %}
     </div>
+    {% endif %}
 
     {# ═══════════════ Filter Bar ═══════════════ #}
     <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
@@ -527,25 +527,6 @@
             {% endif %}
         </div>
     </div>
-
-    {# CPE Workspace Link #}
-        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;">
-            <div class="flex items-start justify-between gap-4 px-6 py-5">
-                <div class="flex items-start gap-3">
-                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/40 dark:to-green-900/30">
-                        <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
-                    </div>
-                    <div>
-                        <h2 class="font-semibold text-slate-900 dark:text-white">CPE Workspace</h2>
-                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Customer-premises equipment has its own inventory and should not be mixed into the ONT operational queue.</p>
-                        <p class="mt-2 text-xs uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">{{ stats.total_cpes }} managed CPE devices</p>
-                    </div>
-                </div>
-                <a href="/admin/network/cpes" class="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
-                    Open CPE Inventory
-                </a>
-            </div>
-        </div>
 
 {{ animation_styles() }}
 {% endblock %}

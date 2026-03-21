@@ -19,18 +19,18 @@
            {"key": "actions", "label": "", "align": "right", "always_visible": true},
        ],
        color="amber",
-       htmx_url="/admin/subscribers",
-       create_url="/admin/subscribers/new",
-       create_label="Add Subscriber",
+       htmx_url="/admin/customers",
+       create_url="/admin/customers/new",
+       create_label="Add Customer",
        page=page, total_pages=total_pages, total=total, per_page=per_page,
        current_sort=sort, current_dir=dir
    ) %}
-       {{ cell_link("name", row.display_name, "/admin/subscribers/" ~ row.id, row.email) }}
+       {{ cell_link("name", row.display_name, "/admin/customers/" ~ ("organization/" ~ row.organization_id if row.organization_id else "person/" ~ row.id), row.email) }}
        {{ cell_status("status", row.status.value|title, "active") }}
        {{ cell_date("created_at", row.created_at) }}
        {{ cell_actions("actions", [
-           {"href": "/admin/subscribers/" ~ row.id, "icon": "view", "title": "View"},
-           {"href": "/admin/subscribers/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit"},
+           {"href": "/admin/customers/" ~ ("organization/" ~ row.organization_id if row.organization_id else "person/" ~ row.id), "icon": "view", "title": "View"},
+           {"href": "/admin/customers/" ~ ("organization/" ~ row.organization_id if row.organization_id else "person/" ~ row.id) ~ "/edit", "icon": "edit", "title": "Edit"},
        ]) }}
    {% endcall %}
 

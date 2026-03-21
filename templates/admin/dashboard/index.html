@@ -1,9 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
-    ambient_background, page_header, card, action_button, info_banner, status_badge,
+    ambient_background, page_header, action_button, status_badge,
     icon_users, icon_server, icon_bell, icon_chart_bar, icon_cog,
-    icon_warning, icon_credit_card, icon_clipboard, icon_building,
-    icon_archive, icon_puzzle, icon_plus, icon_cpu
+    icon_warning, icon_credit_card, icon_clipboard,
+    icon_archive, icon_puzzle, icon_plus, icon_cpu, icon_view
 %}
 
 {% block title %}Dashboard - DotMac Subs{% endblock %}
@@ -14,182 +14,108 @@
 {% set dev_online = monitoring_summary.devices_online if monitoring_summary else 0 %}
 {% set dev_total = monitoring_summary.devices_total if monitoring_summary else 0 %}
 {% set dev_offline = monitoring_summary.devices_offline if monitoring_summary else 0 %}
-{% set dev_degraded = monitoring_summary.devices_degraded if monitoring_summary else 0 %}
 {% set ont_on = onu_summary.online if onu_summary else 0 %}
 {% set ont_total = onu_summary.total if onu_summary else 0 %}
 {% set ont_low_signal = onu_summary.low_signal if onu_summary else 0 %}
 {% set total_alarms_count = stats.alarms_critical + stats.alarms_major + stats.alarms_minor + stats.alarms_warning %}
 {% set overdue_receivables = (stats.ar_30|default(0)) + (stats.ar_60|default(0)) + (stats.ar_90|default(0)) %}
 
-{% macro kpi_tile(label, value, href, color, helper, variant="default") %}
-<a href="{{ href }}" class="group rounded-2xl border border-slate-200/70 bg-white p-3.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-{{ color }}-300 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 dark:hover:border-{{ color }}-600/50">
-    <div class="flex items-start justify-between gap-3">
+{# ─── KPI Tile ─── #}
+{% macro kpi_tile(label, value, href, color, helper, progress=none) %}
+<a href="{{ href }}" class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-{{ color }}-300 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 dark:hover:border-{{ color }}-600/50">
+    <div class="absolute -right-6 -top-6 h-24 w-24 rounded-full bg-gradient-to-br from-{{ color }}-500/10 to-{{ color }}-500/5 blur-2xl transition-all group-hover:scale-150"></div>
+    <div class="relative">
         <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
-        {% if variant == "good" %}
-        {{ status_badge("Good", "success", size="sm", show_icon=False) }}
-        {% elif variant == "watch" %}
-        {{ status_badge("Watch", "warning", size="sm", show_icon=False) }}
-        {% elif variant == "alert" %}
-        {{ status_badge("Alert", "error", size="sm", show_icon=False) }}
+        <p class="mt-3 text-[clamp(1.5rem,2.5vw,2rem)] font-bold leading-none tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
+        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">{{ helper }}</p>
+        {% if progress is not none %}
+        <div class="mt-3 h-1 w-full overflow-hidden rounded-full bg-slate-200/70 dark:bg-slate-700/60">
+            <div class="h-full rounded-full bg-{{ color }}-500 transition-all" style="width: {{ [progress, 100] | min }}%"></div>
+        </div>
         {% endif %}
     </div>
-    <p class="mt-2.5 text-[clamp(1.25rem,2.2vw,1.8rem)] font-bold leading-none tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
-    <p class="mt-1.5 text-sm text-slate-600 dark:text-slate-300">{{ helper }}</p>
 </a>
 {% endmacro %}
 
-{% macro launchpad(title, subtitle, color, links) %}
-<div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
-    <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
-        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-{{ color }}-600 dark:text-{{ color }}-400">{{ title }}</p>
-        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
-    </div>
-    <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
-        {% for link in links %}
-        <a href="{{ link.href }}" class="group flex items-center justify-between px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-            <div class="flex items-center gap-3">
-                <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-{{ color }}-100 text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">
-                    {{ link.icon|safe }}
-                </div>
-                <div>
-                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ link.label }}</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ link.detail }}</p>
-                </div>
-            </div>
-            <svg class="h-4 w-4 text-slate-300 transition group-hover:text-{{ color }}-500 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-        </a>
-        {% endfor %}
-    </div>
-</div>
-{% endmacro %}
-
-{% macro priority_row(label, count, detail, href, variant="info") %}
-<a href="{{ href }}" class="group flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5 transition hover:-translate-y-0.5 hover:shadow-sm {% if variant == 'error' %}border-rose-200/80 bg-rose-50/85 hover:border-rose-300 dark:border-rose-900/40 dark:bg-rose-950/25 dark:hover:border-rose-700/50{% elif variant == 'warning' %}border-amber-200/80 bg-amber-50/85 hover:border-amber-300 dark:border-amber-900/40 dark:bg-amber-950/20 dark:hover:border-amber-700/50{% elif variant == 'success' %}border-emerald-200/80 bg-emerald-50/85 hover:border-emerald-300 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:border-emerald-700/50{% else %}border-blue-200/80 bg-blue-50/80 hover:border-blue-300 dark:border-blue-900/40 dark:bg-blue-950/20 dark:hover:border-blue-700/50{% endif %}">
-    <div class="min-w-0">
-        <div class="flex items-center gap-2">
-            {% if variant == "error" %}
-            {{ status_badge("Critical", "error", size="sm", show_icon=False) }}
-            {% elif variant == "warning" %}
-            {{ status_badge("Watch", "warning", size="sm", show_icon=False) }}
-            {% elif variant == "success" %}
-            {{ status_badge("Stable", "success", size="sm", show_icon=False) }}
-            {% else %}
-            {{ status_badge("Open", "info", size="sm", show_icon=False) }}
-            {% endif %}
-            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ label }}</p>
+<div class="space-y-8">
+    {# ═══════════ Section 1: Header ═══════════ #}
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <h1 class="font-display text-3xl font-bold tracking-tight text-slate-900 dark:text-white">Infrastructure Overview</h1>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Real-time monitoring and management dashboard.</p>
         </div>
-        <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ detail }}</p>
+        <div class="flex gap-3">
+            {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
+        </div>
     </div>
-    <div class="text-right">
-        <p class="text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ count }}</p>
-        <p class="mt-0.5 text-xs text-slate-500 transition group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-300">Review</p>
-    </div>
-</a>
-{% endmacro %}
 
-{% macro activity_icon(activity_type) %}
-{% if activity_type == 'activation' %}
-<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-</div>
-{% elif activity_type == 'payment' %}
-<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
-    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-</div>
-{% elif activity_type == 'signup' %}
-<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-</div>
-{% else %}
-<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300">
-    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-</div>
-{% endif %}
-{% endmacro %}
-
-<div class="space-y-6">
-    {% call page_header(
-        title="Operations Center",
-        subtitle="Real-time subscriber, network, and revenue signals for fast operational decisions.",
-        icon=icon_chart_bar(),
-        color="amber",
-        color2="orange"
-    ) %}
-        {{ action_button("Add Subscriber", "/admin/subscribers/new", icon_plus(), "primary", "amber", "orange") }}
-    {% endcall %}
-
+    {# ═══════════ Section 2: Attention Banner (only when issues exist) ═══════════ #}
     {% if attention_items %}
-    <section class="rounded-2xl border border-amber-200/70 bg-amber-50/90 px-5 py-4 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/20">
-        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div class="flex items-start gap-3">
-                <div class="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                    {{ icon_warning("h-4 w-4") }}
-                </div>
-                <div>
-                    <p class="text-sm font-semibold text-amber-900 dark:text-amber-100">Attention needed</p>
-                    <p class="mt-1 text-sm text-amber-800 dark:text-amber-200">Highest-priority issues across network, collections, and subscriber operations.</p>
-                </div>
-            </div>
-            <a href="{% if attention_items[0].href %}{{ attention_items[0].href }}{% else %}/admin/dashboard{% endif %}" class="text-sm font-medium text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100">Open first issue →</a>
+    <div class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-rose-950/30 dark:to-amber-950/10">
+        <div class="flex h-10 w-10 shrink-0 animate-pulse items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+            {{ icon_warning("h-5 w-5") }}
         </div>
-        <div class="mt-3 flex flex-wrap gap-2">
-            {% for item in attention_items[:4] %}
-            <a href="{{ item.href }}" class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium {% if item.severity == 'critical' %}border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/35 dark:text-rose-200{% elif item.severity in ['major', 'warning'] %}border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200{% else %}border-blue-200 bg-blue-100 text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-200{% endif %}">
-                <span>{{ item.label }}</span>
-            </a>
-            {% endfor %}
+        <div class="min-w-0 flex-1">
+            <p class="font-semibold text-rose-900 dark:text-rose-100">{{ attention_items[0].label }}</p>
+            <p class="mt-0.5 text-sm text-rose-800/80 dark:text-rose-200/70">{{ attention_items | length }} item{{ 's' if attention_items | length != 1 }} need attention</p>
         </div>
-    </section>
+        <a href="{{ attention_items[0].href }}" class="shrink-0 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700">
+            View {{ 'Alarms' if 'alarm' in attention_items[0].label else 'Issues' }}
+        </a>
+    </div>
     {% endif %}
 
-    <section class="grid grid-cols-2 gap-3 lg:grid-cols-3" hx-get="/admin/dashboard/stats" hx-trigger="every 60s" hx-swap="none">
+    {# ═══════════ Section 3: KPI Grid (single row, 4 cols on desktop) ═══════════ #}
+    {% set active_pct = ((stats.active_subscribers / stats.total_subscribers * 100) if stats.total_subscribers > 0 else 0) | round(1) %}
+    {% set dev_pct = ((dev_online / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
+    {% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
+
+    <section class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 60s" hx-swap="none">
         {{ kpi_tile(
             "Subscribers",
             stats.total_subscribers,
-            "/admin/subscribers",
+            "/admin/customers",
             "amber",
-            ("%d active, %+d this month" % (stats.active_subscribers, stats.subscribers_change|default(0))),
-            "good" if stats.active_subscribers > 0 else "default"
+            "%d active, %+d this month" % (stats.active_subscribers, stats.subscribers_change|default(0)),
+            progress=active_pct
         ) }}
         {{ kpi_tile(
-            "Online Now",
+            "Online Sessions",
             online_count,
             "/admin/network/sessions",
             "emerald",
-            "Authenticated access sessions",
-            "good" if online_count > 0 else "watch"
+            "Authenticated RADIUS sessions"
         ) }}
         {{ kpi_tile(
-            "Devices",
-            "%d/%d" | format(dev_online, dev_total),
+            "Network Devices",
+            "%d / %d" | format(dev_online, dev_total),
             "/admin/network/monitoring",
             "blue",
-            "%d offline devices need review" % dev_offline if dev_offline else "All monitored devices reachable",
-            "good" if dev_offline == 0 else "watch"
+            "%d offline" % dev_offline if dev_offline else "All reachable",
+            progress=dev_pct
         ) }}
         {{ kpi_tile(
             "ONTs",
-            "%d/%d" | format(ont_on, ont_total),
+            "%d / %d" | format(ont_on, ont_total),
             "/admin/network/onts",
             "violet",
-            "%d low signal endpoints" % ont_low_signal if ont_low_signal else "Signal quality looks stable",
-            "watch" if ont_low_signal > 0 else "good"
+            "%d low signal" % ont_low_signal if ont_low_signal else "Signal stable",
+            progress=ont_pct
         ) }}
         {% if show_financials %}
         {{ kpi_tile(
-            "Revenue",
+            "Revenue This Month",
             "₦%s" | format("{:,.0f}".format(stats.monthly_revenue)),
             "/admin/billing",
             "emerald",
-            "Current period revenue view"
+            "Paid invoices in current billing period"
         ) }}
-        {% else %}
         {{ kpi_tile(
-            "Active Accounts",
-            stats.active_subscribers,
-            "/admin/subscribers",
-            "slate",
-            "Subscribers currently in service"
+            "Overdue",
+            "₦%s" | format("{:,.0f}".format(overdue_receivables)),
+            "/admin/billing",
+            "rose",
+            "Outstanding receivables"
         ) }}
         {% endif %}
         {% if show_network and total_alarms_count > 0 %}
@@ -198,217 +124,175 @@
             total_alarms_count,
             "/admin/network/alarms",
             "rose",
-            "%d critical alarms open" % stats.alarms_critical,
-            "alert"
+            "%d critical" % stats.alarms_critical
         ) }}
-        {% else %}
+        {% endif %}
         {{ kpi_tile(
             "Orders",
             pending_orders,
             "/admin/provisioning",
             "amber",
-            "Provisioning queue waiting on action",
-            "watch" if pending_orders > 0 else "good"
+            "Provisioning queue"
         ) }}
-        {% endif %}
     </section>
 
-    <section class="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(340px,0.75fr)]">
-        {% call card(
-            title="Priority Queue",
-            icon=icon_warning(),
-            color="amber",
-            actions='<a href="/admin/network/monitoring" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Open NOC →</a>' | safe,
-            padding=False
-        ) %}
-        <div class="space-y-2.5 px-5 py-4">
-            {% if show_network and stats.alarms_critical > 0 %}
-            {{ priority_row("Critical alarms", stats.alarms_critical, "Immediate NOC action required.", "/admin/network/alarms", "error") }}
-            {% endif %}
-            {% if show_network and dev_offline > 0 %}
-            {{ priority_row("Devices offline", dev_offline, "Monitored devices have dropped out of service.", "/admin/network/monitoring", "warning") }}
-            {% endif %}
-            {% if show_network and dev_degraded > 0 %}
-            {{ priority_row("Degraded network", dev_degraded, "Performance issues or threshold breaches need review.", "/admin/network/monitoring", "warning") }}
-            {% endif %}
-            {% if show_network and ont_low_signal > 0 %}
-            {{ priority_row("Low-signal ONTs", ont_low_signal, "Optical signal is below expected operating range.", "/admin/network/onts", "warning") }}
-            {% endif %}
-            {% if pending_orders > 0 %}
-            {{ priority_row("Pending activations", pending_orders, "Provisioning and install work waiting on action.", "/admin/provisioning", "info") }}
-            {% endif %}
-            {% if stats.suspended_accounts > 0 %}
-            {{ priority_row("Suspended subscribers", stats.suspended_accounts, "Support and collections should review service impact.", "/admin/subscribers?status=suspended", "warning") }}
-            {% endif %}
-            {% if show_financials and overdue_receivables > 0 %}
-            {{ priority_row("Overdue receivables", "₦%s" | format("{:,.0f}".format(overdue_receivables)), "Collections risk requiring follow-up.", "/admin/billing", "warning") }}
-            {% endif %}
-            {% if stats.alarms_critical == 0 and dev_offline == 0 and dev_degraded == 0 and ont_low_signal == 0 and pending_orders == 0 and stats.suspended_accounts == 0 and (not show_financials or overdue_receivables == 0) %}
-            <div class="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 px-4 py-4 dark:border-emerald-700/40 dark:bg-emerald-900/20">
-                <div class="flex items-center gap-2">
-                    {{ status_badge("Stable", "success", size="sm", show_icon=False) }}
-                    <p class="text-sm font-semibold text-emerald-900 dark:text-emerald-100">No urgent exceptions</p>
-                </div>
-                <p class="mt-2 text-sm text-emerald-800 dark:text-emerald-200">The current view shows no critical alarms, degraded network groups, pending activation backlog, or suspended-account spikes.</p>
-            </div>
-            {% endif %}
-        </div>
-        <div class="grid gap-px border-t border-slate-200/70 bg-slate-200/70 dark:border-slate-700/70 dark:bg-slate-700/70 md:grid-cols-4">
-            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Critical</p>
-                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.alarms_critical }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Critical alarms</p>
-            </div>
-            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Offline</p>
-                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ dev_offline }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Devices down</p>
-            </div>
-            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
-                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ ont_low_signal }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">ONTs below threshold</p>
-            </div>
-            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Backlog</p>
-                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ pending_orders }}</p>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Provisioning queue</p>
-            </div>
-        </div>
-        {% endcall %}
-
-        <div class="space-y-4">
-            {% if show_subscribers %}
-            {% call card(title="New Subscribers", icon=icon_users(), color="amber",
-                actions=action_button("View All", href="/admin/subscribers", icon=icon_users("h-3 w-3"), variant="ghost", color="amber", size="sm"),
-                padding=False) %}
-            {% if recent_subscribers %}
-            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
-                {% for subscriber in recent_subscribers[:6] %}
-                <a href="/admin/subscribers/{{ subscriber.id }}" class="group flex items-center gap-3 px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                    <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-sm font-bold text-white shadow-sm">
-                        {{ (subscriber.first_name[0] if subscriber.first_name else subscriber.organization.name[0] if subscriber.organization else '?')|upper }}
-                    </div>
-                    <div class="min-w-0 flex-1">
-                        <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">
-                            {% if subscriber.first_name or subscriber.last_name %}
-                            {{ subscriber.first_name or '' }} {{ subscriber.last_name or '' }}
-                            {% elif subscriber.organization %}
-                            {{ subscriber.organization.name }}
-                            {% else %}
-                            Unknown
-                            {% endif %}
-                        </p>
-                        <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                            <span>{{ subscriber.category.value if subscriber.category else 'N/A' }}</span>
-                            <span class="font-mono text-slate-600 dark:text-slate-300">
-                                {{ subscriber.subscriber_code or subscriber.account_number or subscriber.phone or subscriber.phone_number or ('ID ' ~ ((subscriber.id|string)[:8])) }}
-                            </span>
-                        </div>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
-                            Created
-                            {% if subscriber.created_at %}
-                            {{ subscriber.created_at.strftime('%Y-%m-%d') }}
-                            {% else %}
-                            recently
-                            {% endif %}
-                        </p>
-                    </div>
-                    <svg class="h-4 w-4 text-slate-300 transition group-hover:text-amber-500 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                </a>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="flex flex-col items-center justify-center py-10">
-                <svg class="h-9 w-9 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-                <p class="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">No subscribers yet</p>
-            </div>
-            {% endif %}
-            {% endcall %}
-            {% endif %}
-
-            {% call card(
-                title="Action Links",
-                icon=icon_clipboard(),
-                color="slate",
-                padding=False
-            ) %}
-            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
-                <a href="/admin/subscribers" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
-                    <span>Subscriber support queue</span>
-                    <span class="font-medium text-slate-500 dark:text-slate-400">{{ stats.active_subscribers }} active</span>
-                </a>
-                <a href="/admin/provisioning" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
-                    <span>Provisioning and installs</span>
-                    <span class="font-medium text-slate-500 dark:text-slate-400">{{ pending_orders }} open</span>
-                </a>
-                <a href="/admin/network/monitoring" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
-                    <span>Network exceptions</span>
-                    <span class="font-medium text-slate-500 dark:text-slate-400">{{ total_alarms_count }} alarms</span>
-                </a>
-                {% if show_financials %}
-                <a href="/admin/billing" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
-                    <span>Collections and receivables</span>
-                    <span class="font-medium text-slate-500 dark:text-slate-400">₦{{ "{:,.0f}".format(overdue_receivables) }}</span>
-                </a>
-                {% endif %}
-            </div>
-            {% endcall %}
-        </div>
-    </section>
-
-    <section class="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
-        {% call card(title="Recent Activity", icon=icon_bell(), color="amber", actions='<a href="/admin/system/audit" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Open Audit →</a>' | safe, padding=False) %}
-        {% if recent_activities %}
-        <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
-            {% for activity in recent_activities[:6] %}
-            <div class="flex items-start gap-3 px-5 py-4">
-                {{ activity_icon(activity.type) }}
-                <div class="min-w-0 flex-1">
-                    <div class="flex items-start justify-between gap-3">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ activity.message }}</p>
-                        <span class="whitespace-nowrap text-xs tabular-nums text-slate-500 dark:text-slate-400">{{ activity.time }}</span>
-                    </div>
-                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ activity.detail }}</p>
-                </div>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="flex flex-col items-center justify-center py-10">
-            <svg class="h-9 w-9 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            <p class="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">No recent activity</p>
-        </div>
-        {% endif %}
-        {% endcall %}
-
-        <div id="server-health" hx-get="/admin/dashboard/server-health" hx-trigger="load, every 120s" hx-swap="innerHTML">
-            {% include "admin/dashboard/_server_health.html" %}
-        </div>
-    </section>
-
-    <section class="grid gap-4 xl:grid-cols-3">
+    {# ═══════════ Section 4: Quick Launch (4 compact cards) ═══════════ #}
+    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {# Subscribers #}
         {% if show_subscribers %}
-        {{ launchpad("Operations", "Subscriber servicing, customer records, and support response.", "amber", [
-            {"label": "Subscribers", "detail": "Accounts and lifecycle changes", "href": "/admin/subscribers", "icon": icon_users("h-4 w-4")},
-            {"label": "Customers", "detail": "Identity and account relationships", "href": "/admin/customers", "icon": icon_building("h-4 w-4")},
-            {"label": "Orders", "detail": "Provisioning queue", "href": "/admin/provisioning", "icon": icon_clipboard("h-4 w-4")}
-        ]) }}
+        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-600 dark:text-amber-400">Subscribers</p>
+            </div>
+            <div class="grid grid-cols-2 gap-1.5 p-3">
+                <a href="/admin/customers" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_users("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">List</span>
+                </a>
+                <a href="/admin/customers/new" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_plus("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Add New</span>
+                </a>
+                <a href="/admin/provisioning" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_clipboard("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Orders</span>
+                </a>
+                <a href="/admin/support/tickets" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-amber-50 dark:hover:bg-amber-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{{ icon_bell("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Support</span>
+                </a>
+            </div>
+        </div>
         {% endif %}
 
+        {# Network #}
         {% if show_network %}
-        {{ launchpad("Network", "Monitoring and access-layer workflows grouped for NOC use.", "blue", [
-            {"label": "Monitoring", "detail": "Health and alarm trends", "href": "/admin/network/monitoring", "icon": icon_chart_bar("h-4 w-4")},
-            {"label": "Devices", "detail": "Core devices", "href": "/admin/network/network-devices", "icon": icon_server("h-4 w-4")},
-            {"label": "OLTs", "detail": "Optical fleet", "href": "/admin/network/olts", "icon": icon_cpu("h-4 w-4")}
-        ]) }}
+        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-400">Network</p>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                <a href="/admin/network/monitoring" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">Monitoring</span>
+                    {% if total_alarms_count > 0 %}
+                    <span class="rounded bg-rose-100 px-1.5 py-0.5 text-[10px] font-bold text-rose-700 dark:bg-rose-900/30 dark:text-rose-400">{{ total_alarms_count }} alarms</span>
+                    {% else %}
+                    <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">Stable</span>
+                    {% endif %}
+                </a>
+                <a href="/admin/network/olts" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">OLTs</span>
+                    <span class="text-xs font-mono text-slate-500 dark:text-slate-400">{{ dev_total }}</span>
+                </a>
+                <a href="/admin/network/onts" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">ONTs</span>
+                    <span class="text-xs font-mono text-slate-500 dark:text-slate-400">{{ ont_total }}</span>
+                </a>
+                <a href="/admin/network/cpes" class="flex items-center justify-between px-5 py-2.5 transition hover:bg-blue-50/50 dark:hover:bg-blue-900/10">
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">CPEs</span>
+                </a>
+            </div>
+        </div>
         {% endif %}
 
-        {{ launchpad("Control", "Commercial tooling and platform governance surfaces.", "violet", [
-            {"label": "Billing", "detail": "Revenue and collection flow", "href": "/admin/billing", "icon": icon_credit_card("h-4 w-4")},
-            {"label": "Catalog", "detail": "Offers and packaging", "href": "/admin/catalog", "icon": icon_archive("h-4 w-4")},
-            {"label": "Settings", "detail": "Configuration and policy", "href": "/admin/settings", "icon": icon_cog("h-4 w-4")}
-        ]) }}
+        {# Billing #}
+        {% if show_financials %}
+        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-600 dark:text-emerald-400">Billing</p>
+            </div>
+            <div class="grid grid-cols-2 gap-1.5 p-3">
+                <a href="/admin/billing/invoices" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_credit_card("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Invoices</span>
+                </a>
+                <a href="/admin/billing/payments" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_chart_bar("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Payments</span>
+                </a>
+                <a href="/admin/catalog" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_archive("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Plans</span>
+                </a>
+                <a href="/admin/reports" class="group flex flex-col items-center gap-1.5 rounded-xl p-3 transition hover:bg-emerald-50 dark:hover:bg-emerald-900/10">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ icon_view("h-4 w-4") }}</div>
+                    <span class="text-xs font-semibold text-slate-900 dark:text-white">Reports</span>
+                </a>
+            </div>
+        </div>
+        {% endif %}
+
+        {# System #}
+        <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">System</p>
+            </div>
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                <a href="/admin/system/users" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_users("h-3.5 w-3.5") }}</div>
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">Users</span>
+                </a>
+                <a href="/admin/system/audit" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_bell("h-3.5 w-3.5") }}</div>
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">Audit Logs</span>
+                </a>
+                <a href="/admin/settings" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_cog("h-3.5 w-3.5") }}</div>
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">Settings</span>
+                </a>
+                <a href="/admin/system/health" class="flex items-center gap-3 px-5 py-2.5 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ icon_server("h-3.5 w-3.5") }}</div>
+                    <span class="text-sm font-medium text-slate-900 dark:text-white">Health</span>
+                </a>
+            </div>
+        </div>
     </section>
+
+    {# ═══════════ Section 5: Recent Events Table ═══════════ #}
+    {% if recent_activities %}
+    <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h3 class="font-display font-bold text-slate-900 dark:text-white">Recent Events</h3>
+            <a href="/admin/system/audit" class="text-xs font-semibold uppercase tracking-wider text-amber-600 hover:text-amber-700 dark:text-amber-400">Full History</a>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead>
+                    <tr class="border-b border-slate-100 dark:border-slate-700/60">
+                        <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Event</th>
+                        <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Details</th>
+                        <th class="px-6 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Time</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
+                    {% for activity in recent_activities[:5] %}
+                    <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <td class="px-6 py-3">
+                            <div class="flex items-center gap-3">
+                                {% if activity.type == 'activation' %}
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-emerald-100 dark:bg-emerald-900/30">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
+                                </span>
+                                {% elif activity.type == 'payment' %}
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-amber-100 dark:bg-amber-900/30">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
+                                </span>
+                                {% else %}
+                                <span class="inline-flex h-6 w-6 items-center justify-center rounded bg-blue-100 dark:bg-blue-900/30">
+                                    <span class="h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                                </span>
+                                {% endif %}
+                                <span class="font-medium text-slate-900 dark:text-white">{{ activity.message }}</span>
+                            </div>
+                        </td>
+                        <td class="px-6 py-3 text-slate-600 dark:text-slate-300">{{ activity.detail }}</td>
+                        <td class="px-6 py-3 text-right font-mono text-xs text-slate-500 dark:text-slate-400">{{ activity.time }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
+    {% endif %}
 </div>
 {% endblock %}

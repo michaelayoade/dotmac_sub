@@ -13,7 +13,7 @@ import secrets
 import string
 from typing import TYPE_CHECKING
 
-from app.models.catalog import AccessCredential
+from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import SettingDomain
 from app.services import numbering, settings_spec
 from app.services.credential_crypto import encrypt_credential
@@ -119,19 +119,53 @@ def auto_generate_pppoe_credential(
     plain_password = _generate_random_password(password_length)
     encrypted_password = encrypt_credential(plain_password)
 
-    credential = AccessCredential(
-        subscriber_id=subscriber_id,
-        username=username,
-        secret_hash=encrypted_password,
-        is_active=True,
-        radius_profile_id=radius_profile_id,
-    )
-    db.add(credential)
-    db.flush()
+    # Retry loop: handle username collisions from migrated data
+    max_retries = 5
+    for attempt in range(max_retries):
+        credential = AccessCredential(
+            subscriber_id=subscriber_id,
+            username=username,
+            secret_hash=encrypted_password,
+            is_active=True,
+            radius_profile_id=radius_profile_id,
+            connection_type=ConnectionType.pppoe,
+        )
+        db.add(credential)
+        try:
+            db.flush()
+            logger.info(
+                "Auto-generated PPPoE credential %s for subscriber %s",
+                username,
+                subscriber_id,
+            )
+            return credential
+        except Exception as exc:
+            db.rollback()
+            if "unique" not in str(exc).lower() and "duplicate" not in str(exc).lower():
+                raise
+            logger.warning(
+                "PPPoE username %s already exists (attempt %d/%d), generating next",
+                username,
+                attempt + 1,
+                max_retries,
+            )
+            # Generate a new username for the next attempt
+            username = numbering.generate_number(
+                db,
+                SettingDomain.radius,
+                SEQUENCE_KEY,
+                "pppoe_auto_generate_enabled",
+                "pppoe_username_prefix",
+                "pppoe_username_padding",
+                "pppoe_username_start",
+            )
+            if not username:
+                logger.error("PPPoE username generation exhausted for subscriber %s", subscriber_id)
+                return None
 
-    logger.info(
-        "Auto-generated PPPoE credential %s for subscriber %s",
-        username,
+    logger.error(
+        "Failed to generate unique PPPoE username after %d attempts for subscriber %s",
+        max_retries,
         subscriber_id,
     )
-    return credential
+    return None

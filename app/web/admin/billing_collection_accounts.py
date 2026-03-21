@@ -46,7 +46,7 @@ def collection_accounts_list(
     return templates.TemplateResponse(
         "admin/billing/collection_accounts.html",
         {
-            **_base_context(request, db, "collection_accounts"),
+            **_base_context(request, db, "collection-accounts"),
             **state,
         },
     )
@@ -85,7 +85,7 @@ def collection_accounts_create(
         return templates.TemplateResponse(
             "admin/billing/collection_accounts.html",
             {
-                **_base_context(request, db, "collection_accounts"),
+                **_base_context(request, db, "collection-accounts"),
                 **state,
                 "error": str(exc),
             },
@@ -109,7 +109,7 @@ def collection_accounts_edit(request: Request, account_id: UUID, db: Session = D
     return templates.TemplateResponse(
         "admin/billing/collection_account_form.html",
         {
-            **_base_context(request, db, "collection_accounts"),
+            **_base_context(request, db, "collection-accounts"),
             **state,
             "action_url": f"/admin/billing/collection-accounts/{account_id}/edit",
             "form_title": "Edit Collection Account",
@@ -151,9 +151,9 @@ def collection_accounts_update(
     except Exception as exc:
         state = web_billing_collection_accounts_service.edit_data(db, account_id=str(account_id))
         return templates.TemplateResponse(
-            "admin/billing/collection_account_form.html",
-            {
-                **_base_context(request, db, "collection_accounts"),
+        "admin/billing/collection_account_form.html",
+        {
+                **_base_context(request, db, "collection-accounts"),
                 **(state or {}),
                 "action_url": f"/admin/billing/collection-accounts/{account_id}/edit",
                 "form_title": "Edit Collection Account",

@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 <div class="space-y-6">
-    {% call page_header("Tax Rates", subtitle="Manage tax rates applied to invoices and billing", icon=icon_archive(), color="emerald", color2="teal", breadcrumbs=[{"href": "/admin/billing", "label": "Billing"}, {"href": "", "label": "Tax Rates"}]) %}
+    {% call page_header("Tax Rates", subtitle="Operational tax rate records used by billing and invoices", icon=icon_archive(), color="emerald", color2="teal", breadcrumbs=[{"href": "/admin/settings", "label": "Settings"}, {"href": "/admin/settings?category=billing", "label": "Billing Setup"}, {"href": "", "label": "Tax Rates"}]) %}
     {% endcall %}
 
     {% if error %}

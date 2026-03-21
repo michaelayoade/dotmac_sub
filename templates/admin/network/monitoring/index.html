@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
 
-<div class="relative space-y-6" id="monitoring-content">
+<div class="relative space-y-8" id="monitoring-content">
     {% set offline_devices = stats.devices_offline if stats and stats.devices_offline is defined else 0 %}
     {% set degraded_devices = stats.devices_degraded if stats and stats.devices_degraded is defined else 0 %}
     {% set active_alarm_count = alarms|length if alarms else 0 %}
@@ -34,67 +34,34 @@
     <p class="-mt-3 text-xs text-slate-500 dark:text-slate-400">Last updated: {{ last_refreshed_at.strftime('%Y-%m-%d %H:%M:%S UTC') }}</p>
     {% endif %}
 
-    {% if pon_outages or critical_alarm_count > 0 or offline_devices > 0 or degraded_devices > 0 %}
-    <section class="rounded-2xl border border-blue-200/70 bg-white/90 p-5 shadow-sm dark:border-blue-900/30 dark:bg-slate-800/90">
-        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-600 dark:text-blue-400">Operational Priority</p>
-                <h2 class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">Current network exceptions</h2>
-                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Blast radius and action queues for NOC review.</p>
-            </div>
-            <div class="flex flex-wrap gap-2">
-                <a href="/admin/network/alarms" class="inline-flex items-center rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">Open alarms</a>
-                <a href="/admin/network/monitoring?refresh=1{% if query %}&q={{ query | urlencode }}{% endif %}" class="inline-flex items-center rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Refresh state</a>
-            </div>
+    {# ── Attention Banner (compact, Stitch-style) ── #}
+    {% if critical_alarm_count > 0 or offline_devices > 0 %}
+    <div class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-rose-950/30 dark:to-amber-950/10">
+        <div class="flex h-10 w-10 shrink-0 animate-pulse items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
         </div>
-        <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {% if pon_outages %}
-            <div class="rounded-2xl border border-rose-200/80 bg-rose-50/80 px-4 py-3 dark:border-rose-900/40 dark:bg-rose-900/20">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">PON Outages</p>
-                <p class="mt-2 text-2xl font-bold tabular-nums text-rose-900 dark:text-rose-100">{{ pon_outages|length }}</p>
-                <p class="mt-1 text-xs text-rose-700 dark:text-rose-300">Ports with clustered offline ONTs</p>
-            </div>
-            {% endif %}
-            <div class="rounded-2xl border border-rose-200/80 bg-rose-50/80 px-4 py-3 dark:border-rose-900/40 dark:bg-rose-900/20">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">Critical Alarms</p>
-                <p class="mt-2 text-2xl font-bold tabular-nums text-rose-900 dark:text-rose-100">{{ critical_alarm_count }}</p>
-                <p class="mt-1 text-xs text-rose-700 dark:text-rose-300">Immediate escalation queue</p>
-            </div>
-            <div class="rounded-2xl border border-amber-200/80 bg-amber-50/80 px-4 py-3 dark:border-amber-900/40 dark:bg-amber-900/20">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">Devices Offline</p>
-                <p class="mt-2 text-2xl font-bold tabular-nums text-amber-900 dark:text-amber-100">{{ offline_devices }}</p>
-                <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">Hard-down infrastructure to inspect</p>
-            </div>
-            <div class="rounded-2xl border border-blue-200/80 bg-blue-50/80 px-4 py-3 dark:border-blue-900/40 dark:bg-blue-900/20">
-                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-700 dark:text-blue-300">Degraded Devices</p>
-                <p class="mt-2 text-2xl font-bold tabular-nums text-blue-900 dark:text-blue-100">{{ degraded_devices }}</p>
-                <p class="mt-1 text-xs text-blue-700 dark:text-blue-300">Threshold breaches and performance risk</p>
-            </div>
+        <div class="min-w-0 flex-1">
+            <p class="font-semibold text-rose-900 dark:text-rose-100">
+                {% if critical_alarm_count > 0 %}{{ critical_alarm_count }} critical alarm{{ 's' if critical_alarm_count != 1 }}{% endif %}
+                {% if critical_alarm_count > 0 and offline_devices > 0 %} · {% endif %}
+                {% if offline_devices > 0 %}{{ offline_devices }} device{{ 's' if offline_devices != 1 }} offline{% endif %}
+                {% if pon_outages %} · {{ pon_outages|length }} PON outage{{ 's' if pon_outages|length != 1 }}{% endif %}
+            </p>
+            <p class="mt-0.5 text-sm text-rose-800/80 dark:text-rose-200/70">{% if degraded_devices > 0 %}{{ degraded_devices }} degraded devices also need review{% else %}Immediate NOC action required{% endif %}</p>
         </div>
-        {% if pon_outages %}
-        <div class="mt-4 rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-4 dark:border-slate-700/60 dark:bg-slate-900/40">
-            <div class="flex items-center justify-between gap-3">
-                <div>
-                    <p class="text-sm font-semibold text-slate-900 dark:text-white">Possible outage blast radius</p>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Highest-impact ports by offline ONT count.</p>
-                </div>
-                <a href="#pon-outages" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">Jump to outage table</a>
-            </div>
-            <div class="mt-3 grid gap-2 lg:grid-cols-3">
-                {% for outage in pon_outages[:3] %}
-                <div class="rounded-xl border border-rose-200/70 bg-white px-3 py-3 dark:border-rose-900/30 dark:bg-slate-800/70">
-                    <div class="flex items-center justify-between gap-2">
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ outage.pon_port_name }}</p>
-                        <span class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">{{ outage.offline_count }} offline</span>
-                    </div>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ outage.olt_name }}</p>
-                    <p class="mt-2 text-xs text-slate-600 dark:text-slate-300">Total ONTs on port: {{ outage.total_count }}</p>
-                </div>
-                {% endfor %}
-            </div>
+        <a href="/admin/network/alarms" class="shrink-0 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700">View Alarms</a>
+    </div>
+    {% elif degraded_devices > 0 %}
+    <div class="flex items-center gap-4 rounded-2xl border border-amber-200/70 bg-amber-50/80 px-5 py-4 dark:border-amber-900/40 dark:bg-amber-950/20">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
         </div>
-        {% endif %}
-    </section>
+        <div class="min-w-0 flex-1">
+            <p class="font-semibold text-amber-900 dark:text-amber-100">{{ degraded_devices }} degraded device{{ 's' if degraded_devices != 1 }}</p>
+            <p class="mt-0.5 text-sm text-amber-800/80 dark:text-amber-200/70">Threshold breaches and performance risk</p>
+        </div>
+        <a href="/admin/network/monitoring?refresh=1" class="shrink-0 rounded-xl border border-amber-300 bg-white px-4 py-2 text-sm font-semibold text-amber-700 transition hover:bg-amber-50 dark:border-amber-700 dark:bg-slate-800 dark:text-amber-300">Refresh</a>
+    </div>
     {% endif %}
 
     {# Toast: refresh queued notification #}

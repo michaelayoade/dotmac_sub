@@ -131,21 +131,28 @@ class BillingMode(enum.Enum):
 class SubscriptionStatus(enum.Enum):
     """Service/subscription status — mirrors Splynx service status lifecycle.
 
-    Splynx mapping:
+    Splynx mapping (1:1):
       pending  → pending (awaiting activation / provisioning)
       active   → active (service running, can connect)
-      blocked  → suspended (temporarily blocked — non-payment)
+      blocked  → blocked (temporarily blocked — non-payment)
       stopped  → stopped (manually paused by admin, different from block)
       disabled → disabled (service terminated by admin)
-      hidden   → archived (historical, not visible to customer)
+      hidden   → hidden (historical, not visible to customer)
       deleted  → canceled (soft-deleted, record preserved)
+
+    DotMac-only statuses:
+      suspended — generic suspension (non-Splynx origin)
+      archived  — generic archive (non-Splynx origin)
+      expired   — contract/prepaid period ended
     """
     pending = "pending"       # Awaiting activation / provisioning
     active = "active"         # Service running, subscriber can connect
-    suspended = "suspended"   # Temporarily blocked (Splynx: blocked)
+    blocked = "blocked"       # Temporarily blocked (Splynx: blocked)
+    suspended = "suspended"   # Generic suspension (DotMac-native)
     stopped = "stopped"       # Manually paused by admin (Splynx: stopped)
     disabled = "disabled"     # Terminated by admin (Splynx: disabled)
-    archived = "archived"     # Historical, hidden from customer (Splynx: hidden)
+    hidden = "hidden"         # Not visible to customer (Splynx: hidden)
+    archived = "archived"     # Generic archive (DotMac-native)
     canceled = "canceled"     # Soft-deleted / fully terminated
     expired = "expired"       # Contract/prepaid period ended
 

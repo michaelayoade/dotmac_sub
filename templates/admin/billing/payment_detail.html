@@ -20,7 +20,7 @@
 } %}
 {% set status_html %}{{ status_badge(status_val | title, variant=payment_status_variants.get(status_val, 'pending')) }}{% endset %}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% call(content) detail_header(
         title="Payment Details",

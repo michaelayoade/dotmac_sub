@@ -193,18 +193,18 @@ def dashboard(request: Request, db: Session):
 
     # --- Billing summary ---
     b_stats = billing_stats.get("stats", {})
-    paid_revenue = b_stats.get("total_revenue", 0)
+    payments_this_month = b_stats.get("payments_amount", 0)
     pending_amount = b_stats.get("pending_amount", 0)
     overdue_amount = b_stats.get("overdue_amount", 0)
     active_subscribers = sub_stats["active_count"]
-    arpu = paid_revenue / active_subscribers if active_subscribers > 0 else 0
+    arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
     stats = {
         "total_subscribers": sub_stats["total_count"],
         "active_subscribers": active_subscribers,
         "subscribers_change": sub_stats.get("new_this_month", 0),
-        "monthly_revenue": paid_revenue,
-        "mrr": paid_revenue,
+        "monthly_revenue": payments_this_month,
+        "mrr": payments_this_month,
         "arpu": arpu,
         "revenue_change": 0,
         "system_uptime": net_stats["uptime_percentage"],
@@ -422,7 +422,7 @@ def dashboard(request: Request, db: Session):
     if sub_stats["suspended_count"] > 0:
         attention_items.append({
             "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
-            "href": "/admin/subscribers?status=suspended",
+            "href": "/admin/customers",
             "severity": "info",
         })
     if pending_orders > 0:

@@ -38,13 +38,13 @@
         {"key": "actions",    "label": "",             "align": "right", "always_visible": true},
     ],
     color="amber",
-    htmx_url="/admin/subscribers",
-    create_url="/admin/subscribers/new",
+    htmx_url="/admin/customers",
+    create_url="/admin/customers/new",
     create_label="Add Subscriber",
     empty_title="No subscribers found",
     empty_message="Get started by adding your first subscriber.",
     empty_action_label="Add Subscriber",
-    empty_action_href="/admin/subscribers/new",
+    empty_action_href="/admin/customers/new",
     page=page,
     total_pages=total_pages,
     total=total,
@@ -56,7 +56,7 @@
 ) %}
     {{ cell_link("name",
         row.display_name or (row.first_name ~ " " ~ row.last_name),
-        "/admin/subscribers/" ~ row.id,
+        "/admin/customers/person/" ~ row.id,
         row.email,
         color="amber") }}
     {{ cell("email", row.email) }}
@@ -67,8 +67,8 @@
         status_map.get(row.status.value, "default")) }}
     {{ cell_date("created_at", row.created_at) }}
     {{ cell_actions("actions", [
-        {"href": "/admin/subscribers/" ~ row.id, "icon": "view", "title": "View details", "color": "amber"},
-        {"href": "/admin/subscribers/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit"},
+        {"href": "/admin/customers/person/" ~ row.id, "icon": "view", "title": "View details", "color": "amber"},
+        {"href": "/admin/customers/person/" ~ row.id ~ "/edit", "icon": "edit", "title": "Edit"},
     ]) }}
 {% endcall %}
 
@@ -114,7 +114,7 @@
         color="emerald") }}
     {{ cell_link("subscriber",
         row.account.display_name if row.account else "—",
-        "/admin/subscribers/" ~ row.account_id if row.account else "#") }}
+        "/admin/customers/person/" ~ row.account_id if row.account else "#") }}
     {{ cell_currency("total", row.total) }}
     {{ cell_currency("balance", row.balance_due) }}
     {{ cell_status("status", row.status.value|replace("_", " ")|title,
@@ -245,7 +245,7 @@
 
    {% set status_filter %}
    <select name="status_filter"
-           hx-get="/admin/subscribers"
+           hx-get="/admin/customers"
            hx-target="#subscribers-grid-wrapper"
            hx-swap="outerHTML"
            class="rounded-xl border border-slate-200 bg-white py-2.5 px-3 text-sm ...">

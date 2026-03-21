@@ -28,6 +28,7 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import settings_spec
+from app.services.billing_settings import resolve_payment_due_days
 from app.services.billing import _recalculate_invoice_totals
 from app.services.common import round_money
 from app.services.events import emit_event
@@ -269,11 +270,7 @@ def run_invoice_cycle(
         auto_activate_pending: If True, auto-activate pending subscriptions when billed
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
-    due_days_raw = settings_spec.resolve_value(
-        db, SettingDomain.billing, "invoice_due_days"
-    )
-    due_days_parsed = _coerce_int_setting(due_days_raw)
-    due_days = max(due_days_parsed, 0) if due_days_parsed is not None else 14
+    due_days = resolve_payment_due_days(db)
 
     # Read auto-activate setting if not explicitly specified
     if auto_activate_pending is True:
@@ -596,11 +593,7 @@ def generate_prorated_invoice(
         return None
 
     # Get due days setting
-    due_days_raw = settings_spec.resolve_value(
-        db, SettingDomain.billing, "invoice_due_days"
-    )
-    due_days_parsed = _coerce_int_setting(due_days_raw)
-    due_days = max(due_days_parsed, 0) if due_days_parsed is not None else 14
+    due_days = resolve_payment_due_days(db)
 
     # Create prorated invoice
     invoice = Invoice(

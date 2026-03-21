@@ -87,7 +87,7 @@
     }
 
     renderDefaultCell(value) {
-      return `<td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</td>`;
+      return `<td class="px-3 py-3 overflow-hidden text-ellipsis text-sm text-slate-600 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</td>`;
     }
 
     renderKeyedCell(columnKey, value) {
@@ -96,10 +96,10 @@
         return this.renderSubscriberCell(key, value);
       }
       if (key === "status") {
-        return `<td class="whitespace-nowrap px-6 py-4">${this.renderStatusBadge(value)}</td>`;
+        return `<td class="px-3 py-3 overflow-hidden text-ellipsis">${this.renderStatusBadge(value)}</td>`;
       }
       if (key === "created_at" || key === "updated_at" || key.endsWith("_at")) {
-        return `<td class="whitespace-nowrap px-6 py-4"><span class="text-sm text-slate-500 dark:text-slate-400">${escapeHtml(this.formatDate(value))}</span></td>`;
+        return `<td class="px-3 py-3 overflow-hidden text-ellipsis"><span class="text-sm text-slate-500 dark:text-slate-400">${escapeHtml(this.formatDate(value))}</span></td>`;
       }
       if (key === "min_balance" || key === "balance") {
         const numeric = Number(value || 0);
@@ -109,20 +109,20 @@
             : numeric < 0
               ? "text-emerald-600 dark:text-emerald-400"
               : "text-slate-600 dark:text-slate-400";
-        return `<td class="whitespace-nowrap px-6 py-4"><span class="text-sm font-bold font-mono tabular-nums ${css}">${escapeHtml(this.formatValue(value))}</span></td>`;
+        return `<td class="px-3 py-3 overflow-hidden text-ellipsis"><span class="text-sm font-bold font-mono tabular-nums ${css}">${escapeHtml(this.formatValue(value))}</span></td>`;
       }
       if (key.endsWith("_id") || key === "id") {
-        return `<td class="whitespace-nowrap px-6 py-4"><span class="text-xs font-mono text-slate-500 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</span></td>`;
+        return `<td class="px-3 py-3 overflow-hidden text-ellipsis"><span class="text-xs font-mono text-slate-500 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</span></td>`;
       }
       if (key === "email") {
-        return `<td class="whitespace-nowrap px-6 py-4"><span class="text-sm text-slate-600 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</span></td>`;
+        return `<td class="px-3 py-3 overflow-hidden text-ellipsis"><span class="text-sm text-slate-600 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</span></td>`;
       }
       return this.renderDefaultCell(value);
     }
 
     renderSubscriberCell(key, value) {
       if (key === "subscriber_number") {
-        return `<td class="whitespace-nowrap px-6 py-4">
+        return `<td class="px-3 py-3 overflow-hidden text-ellipsis">
           <div class="space-y-1">
             <p class="text-sm font-semibold text-slate-900 dark:text-white">${escapeHtml(this.formatValue(value) || "No subscriber number")}</p>
             ${
@@ -326,6 +326,23 @@
         .filter((column) => column.is_visible)
         .sort((a, b) => a.display_order - b.display_order);
 
+      // Column width hints for table-fixed layout (percentage-based, inline styles
+      // because Tailwind JIT won't generate dynamic arbitrary-value classes)
+      const columnWidths = {
+        customer_name: "22%",
+        subscriber_name: "22%",
+        account_number: "10%",
+        subscriber_number: "10%",
+        pppoe_login: "11%",
+        ipv4_address: "12%",
+        nas_name: "14%",
+        pop_site_name: "12%",
+        status: "10%",
+        email: "16%",
+        reseller_name: "14%",
+        subscription_name: "14%",
+      };
+
       const head = visibleColumns
         .map((column) => {
           const sortIcon =
@@ -338,12 +355,13 @@
             ? `cursor-pointer select-none hover:text-indigo-600 dark:hover:text-indigo-400`
             : "";
           const sortAttr = column.sortable ? `data-sort="${column.column_key}"` : "";
-          return `<th ${sortAttr} class="px-6 py-4 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${interaction}">${escapeHtml(column.label)}${sortIcon}</th>`;
+          const widthStyle = columnWidths[column.column_key] ? ` style="width:${columnWidths[column.column_key]}"` : "";
+          return `<th ${sortAttr}${widthStyle} class="px-3 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${interaction}">${escapeHtml(column.label)}${sortIcon}</th>`;
         })
         .join("");
       const actionsHead =
         this.tableKey === "customers" || this.tableKey === "subscribers"
-          ? '<th class="px-6 py-4 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>'
+          ? '<th style="width:7%" class="px-3 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>'
           : "";
 
       const colspan =
@@ -361,7 +379,7 @@
                   if (this.tableKey === "subscribers") {
                     if (column.column_key === "subscriber_number") {
                       const accountNumber = this.formatValue(row.account_number);
-                      return `<td class="whitespace-nowrap px-6 py-4">
+                      return `<td class="px-3 py-3 overflow-hidden text-ellipsis">
                         <div class="space-y-1">
                           <p class="text-sm font-semibold text-slate-900 dark:text-white">${escapeHtml(value || "No subscriber number")}</p>
                           ${
@@ -428,10 +446,10 @@
                       this.tableKey === "customers"
                         ? escapeHtml(row.email || row.customer_type || "")
                         : escapeHtml(row.email || row.subscriber_number || "");
-                    return `<td class="whitespace-nowrap px-6 py-4">
-                      <a href="${escapeHtml(detailUrl)}" class="flex items-center gap-3">
-                        <span class="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 dark:from-indigo-900/40 dark:to-violet-900/40 dark:text-indigo-300">${icon}</span>
-                        <span class="min-w-0">
+                    return `<td class="px-3 py-3 overflow-hidden max-w-0">
+                      <a href="${escapeHtml(detailUrl)}" class="flex items-center gap-2 min-w-0">
+                        <span class="flex-shrink-0 flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-indigo-100 to-violet-100 text-indigo-700 dark:from-indigo-900/40 dark:to-violet-900/40 dark:text-indigo-300">${icon}</span>
+                        <span class="min-w-0 overflow-hidden">
                           <span class="block truncate text-sm font-semibold text-slate-900 hover:text-indigo-600 dark:text-white dark:hover:text-indigo-400">${escapeHtml(value || "View details")}</span>
                           ${
                             subtitle
@@ -446,7 +464,7 @@
                 })
                 .join("");
               const actionsCell = detailUrl
-                ? `<td class="whitespace-nowrap px-6 py-4 text-right">
+                ? `<td class="px-3 py-3 overflow-hidden text-ellipsis text-right">
                     <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
                       <a href="${escapeHtml(detailUrl)}" class="group/btn inline-flex items-center gap-1.5 rounded-xl border border-indigo-200 bg-indigo-50 px-3 py-2 text-xs font-semibold text-indigo-700 transition-all duration-200 hover:border-indigo-300 hover:bg-indigo-100 hover:shadow-sm dark:border-indigo-800 dark:bg-indigo-900/30 dark:text-indigo-300 dark:hover:bg-indigo-900/50" title="View Details">
                         <svg class="h-4 w-4 transition-transform duration-200 group-hover/btn:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -466,8 +484,10 @@
             .join("")
         : `<tr><td class="px-5 py-12 text-center text-sm text-slate-500" colspan="${colspan}">No records found</td></tr>`;
 
+      // Table content is built from server-provided data that has already been
+      // escaped via the escapeHtml() helper used in all cell renderers above.
       qs(this.root, '[data-role="table-wrap"]').innerHTML = `
-        <table class="min-w-full divide-y divide-slate-200/60 dark:divide-slate-700/60">
+        <table class="w-full table-fixed divide-y divide-slate-200/60 dark:divide-slate-700/60">
           <thead><tr class="bg-slate-50/80 dark:bg-slate-800/50">${head}${actionsHead}</tr></thead>
           <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">${body}</tbody>
         </table>

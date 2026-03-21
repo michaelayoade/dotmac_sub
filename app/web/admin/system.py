@@ -2924,7 +2924,22 @@ def _config_context(request: Request, db: Session, extra: dict) -> dict:
 @router.get("/settings-hub", response_class=HTMLResponse)
 def settings_hub(request: Request, db: Session = Depends(get_db)):
     data = web_system_settings_hub_service.build_settings_hub_context(db)
-    return templates.TemplateResponse("admin/system/settings_hub.html", _config_context(request, db, {"active_page": "settings-hub", **data}))
+    valid_category_ids = {str(cat.get("id")) for cat in data.get("categories", [])}
+    selected_category = str(request.query_params.get("category") or "").strip()
+    if selected_category not in valid_category_ids:
+        selected_category = ""
+    return templates.TemplateResponse(
+        "admin/system/settings_hub.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "billing-setup" if selected_category == "billing" else "settings-hub",
+                "selected_category": selected_category,
+                **data,
+            },
+        ),
+    )
 
 
 @router.get("/branding", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])

@@ -333,6 +333,55 @@ def invoice_create(
     return RedirectResponse(url=f"/admin/billing/invoices/{invoice.id}", status_code=303)
 
 
+@router.post(
+    "/invoices/generate-from-subscription",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:invoice:create"))],
+)
+def invoice_generate_from_subscription(
+    request: Request,
+    subscriber_id: str = Form(...),
+    subscription_id: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Generate an invoice with line items auto-populated from a subscription's offer."""
+    from app.services.billing.invoices import Invoices
+    from app.web.admin import get_current_user
+
+    try:
+        invoice = Invoices.create_for_subscription(db, subscriber_id, subscription_id)
+    except Exception as exc:
+        from app.web.admin import get_sidebar_stats
+
+        return templates.TemplateResponse(
+            "admin/billing/invoices.html",
+            {
+                "request": request,
+                "error": str(exc),
+                "active_page": "invoices",
+                "active_menu": "billing",
+                "current_user": get_current_user(request),
+                "sidebar_stats": get_sidebar_stats(db),
+            },
+            status_code=400,
+        )
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="generate_from_subscription",
+        entity_type="invoice",
+        entity_id=str(invoice.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={
+            "invoice_number": invoice.invoice_number,
+            "subscription_id": subscription_id,
+        },
+    )
+    return RedirectResponse(url=f"/admin/billing/invoices/{invoice.id}", status_code=303)
+
+
 @router.get("/invoices/{invoice_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:invoice:update"))])
 def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
     state = web_billing_invoice_forms_service.edit_form_state(

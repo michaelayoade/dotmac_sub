@@ -3,8 +3,8 @@
 {% block title %}Payment Methods - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
-<div class="relative space-y-6">
-    {% call page_header(title="Payment Methods", subtitle="Configure available payment methods for customer billing", icon=icon_credit_card(), color="emerald", color2="teal") %}{% endcall %}
+<div class="relative space-y-8">
+    {% call page_header(title="Payment Methods", subtitle="Configure customer-visible ways to pay. Gateway and settlement setup lives in Billing Setup.", icon=icon_credit_card(), color="emerald", color2="teal") %}{% endcall %}
     {% call card("Configured Payment Methods", color="emerald") %}
     {% if payment_methods %}
     <div class="overflow-x-auto">
@@ -15,14 +15,14 @@
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                     <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ m.name }}</td>
                     <td class="px-4 py-3">{% if m.is_active %}{{ status_badge("Active", "active", size="sm") }}{% else %}{{ status_badge("Inactive", "neutral", size="sm") }}{% endif %}</td>
-                    <td class="px-4 py-3 text-sm"><a href="/admin/billing/providers/{{ m.id }}" class="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400">Edit</a></td>
+                    <td class="px-4 py-3 text-sm"><a href="/admin/billing/payment-providers" class="text-emerald-600 hover:text-emerald-800 dark:text-emerald-400">Open billing setup</a></td>
                 </tr>
                 {% endfor %}
             </tbody>
         </table>
     </div>
     {% else %}
-    {{ empty_state("No payment methods configured", "Payment methods are managed via the Billing > Providers section.") }}
+    {{ empty_state("No payment methods configured", "Payment methods are managed from System > Billing Setup.") }}
     {% endif %}
     {% endcall %}
 </div>

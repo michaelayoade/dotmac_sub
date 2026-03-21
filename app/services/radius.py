@@ -555,6 +555,11 @@ def _container_safe_external_db_url(value: str | None) -> str | None:
     if hostname not in {"localhost", "127.0.0.1"}:
         return db_url
 
+    # If the URL already uses a non-default port (host-mapped), keep it as-is.
+    # Only rewrite to Docker hostname when port is the default 5432.
+    if parsed.port and parsed.port != 5432:
+        return db_url
+
     host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
     port = os.getenv("RADIUS_DB_PORT") or "5432"
     username = parsed.username or ""
@@ -1346,6 +1351,69 @@ def sync_account_credentials_to_radius(db: Session, account_id) -> int:
             count += 1
 
     return count
+
+
+def remove_external_radius_credentials(db: Session, account_id) -> int:
+    """Remove all RADIUS credentials for an account from external RADIUS databases.
+
+    Called on subscription suspension/cancellation to prevent the subscriber
+    from authenticating until reactivated.
+
+    Args:
+        db: Database session
+        account_id: The subscriber account ID
+
+    Returns:
+        Number of credentials removed from external RADIUS
+    """
+    account_uuid = coerce_uuid(account_id)
+    credentials = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == account_uuid)
+        .all()
+    )
+    if not credentials:
+        return 0
+
+    external_configs = _active_external_sync_configs(db)
+    if not external_configs:
+        return 0
+
+    removed = 0
+    for config in external_configs:
+        radcheck = config["radcheck_table"]
+        radreply = config["radreply_table"]
+        radusergroup = config.get("radusergroup_table", "radusergroup")
+        try:
+            engine = create_engine(config["db_url"])
+            with engine.begin() as conn:
+                for credential in credentials:
+                    conn.execute(
+                        text(f"DELETE FROM {radcheck} WHERE username = :u"),  # noqa: S608
+                        {"u": credential.username},
+                    )
+                    conn.execute(
+                        text(f"DELETE FROM {radreply} WHERE username = :u"),  # noqa: S608
+                        {"u": credential.username},
+                    )
+                    conn.execute(
+                        text(f"DELETE FROM {radusergroup} WHERE username = :u"),  # noqa: S608
+                        {"u": credential.username},
+                    )
+                    removed += 1
+            logger.info(
+                "Removed %d credentials from external RADIUS for account %s",
+                len(credentials),
+                account_id,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to remove credentials from external RADIUS for account %s",
+                account_id,
+                exc_info=True,
+            )
+
+    return removed
 
 
 radius_servers = RadiusServers()

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.services.billing_settings import resolve_payment_due_days
 
 logger = logging.getLogger(__name__)
 
@@ -271,7 +272,10 @@ BILLING_KEYS = [
 
 
 def get_billing_config_context(db: Session) -> dict:
-    return {"billing": _read_settings(db, SettingDomain.billing, BILLING_KEYS)}
+    billing = _read_settings(db, SettingDomain.billing, BILLING_KEYS)
+    if not billing.get("payment_due_days"):
+        billing["payment_due_days"] = str(resolve_payment_due_days(db))
+    return {"billing": billing}
 
 
 def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:

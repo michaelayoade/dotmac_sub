@@ -14,7 +14,7 @@
 {% set status = invoice.status|default('draft') %}
 {% set status_val = status.value if status is not string else status %}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {# ── Detail Header ── #}
     {% set status_html %}
         {% if status_val == 'paid' %}
@@ -86,9 +86,9 @@
                     {% call info_row("Billed To") %}
                         {% if invoice.account and invoice.account.subscriber %}
                             {% if invoice.account.subscriber.person %}
-                                <a href="/admin/subscribers/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.first_name }} {{ invoice.account.last_name }}</a>
+                                <a href="/admin/customers/person/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.first_name }} {{ invoice.account.last_name }}</a>
                             {% elif invoice.account.subscriber.organization %}
-                                <a href="/admin/subscribers/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.subscriber.organization.name }}</a>
+                                <a href="/admin/customers/organization/{{ invoice.account.subscriber.organization_id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.subscriber.organization.name }}</a>
                             {% else %}
                                 Account
                             {% endif %}

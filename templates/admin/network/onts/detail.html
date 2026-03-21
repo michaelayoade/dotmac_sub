@@ -58,7 +58,7 @@
                 </span>
                 {% endif %}
                 {% if subscriber_info.get('name') %}
-                <a href="/admin/subscribers/{{ subscriber_info.id }}" class="inline-flex items-center rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                <a href="/admin/customers/person/{{ subscriber_info.id }}" class="inline-flex items-center rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                     Subscriber: {{ subscriber_info.name }}
                 </a>
                 {% endif %}
@@ -300,7 +300,7 @@
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
                         <dd class="mt-1 text-sm">
-                            <a href="/admin/subscribers/{{ subscriber_info.id }}" class="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">{{ subscriber_info.name }}</a>
+                            <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-300">{{ subscriber_info.name }}</a>
                         </dd>
                     </div>
                     <div>
@@ -726,7 +726,7 @@
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
                     <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                         {% if subscriber_info and subscriber_info.id %}
-                        <a href="/admin/subscribers/{{ subscriber_info.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">{{ subscriber_info.name }}</a>
+                        <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">{{ subscriber_info.name }}</a>
                         {% else %}&mdash;{% endif %}
                     </dd>
                 </div>
@@ -840,7 +840,7 @@
                         </td>
                         <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
                             {% if pa.subscriber %}
-                            <a href="/admin/subscribers/{{ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
+                            <a href="/admin/customers/{{ 'organization/' ~ pa.subscriber.organization_id if pa.subscriber.organization_id else 'person/' ~ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
                                 {% if pa.subscriber.person %}{{ pa.subscriber.first_name }} {{ pa.subscriber.last_name }}{% elif pa.subscriber.organization %}{{ pa.subscriber.organization.name }}{% else %}{{ pa.subscriber.id | string | truncate(12) }}{% endif %}
                             </a>
                             {% else %}&mdash;{% endif %}

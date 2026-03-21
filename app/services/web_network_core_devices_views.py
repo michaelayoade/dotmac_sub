@@ -1537,6 +1537,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     if assignment and assignment.subscriber:
         sub = assignment.subscriber
         subscriber_info["id"] = str(sub.id)
+        subscriber_info["customer_url"] = (
+            f"/admin/customers/organization/{sub.organization_id}"
+            if getattr(sub, "organization_id", None)
+            else f"/admin/customers/person/{sub.id}"
+        )
         subscriber_info["name"] = _subscriber_display_name(sub)
         subscriber_info["status"] = sub.status.value if sub.status else "unknown"
         subscriber_info["status_class"] = SUBSCRIBER_STATUS_CLASSES.get(

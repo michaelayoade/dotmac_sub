@@ -320,6 +320,7 @@ def build_network_map_context(db: Session) -> dict:
             Address.latitude,
             Address.longitude,
             Subscriber.id.label("subscriber_id"),
+            Subscriber.organization_id.label("organization_id"),
             Subscriber.first_name,
             Subscriber.last_name,
             (active_sessions_subq.c.subscriber_id.isnot(None)).label("is_online"),
@@ -357,6 +358,7 @@ def build_network_map_context(db: Session) -> dict:
                     "address": addr.address_line1,
                     "city": addr.city or "",
                     "subscriber_id": str(addr.subscriber_id),
+                    "organization_id": str(addr.organization_id) if addr.organization_id else None,
                     "is_online": is_online,
                 },
             }

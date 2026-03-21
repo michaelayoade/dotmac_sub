@@ -6,6 +6,7 @@ import csv
 import io
 import logging
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from uuid import UUID, uuid4
 
@@ -49,6 +50,49 @@ def _normalize_optional(value: str | None) -> str | None:
         return None
     stripped = value.strip()
     return stripped or None
+
+
+def _optional_int(value: str | None) -> int | None:
+    normalized = _normalize_optional(value)
+    if normalized is None:
+        return None
+    return int(normalized)
+
+
+def _optional_decimal(value: str | None) -> Decimal | None:
+    normalized = _normalize_optional(value)
+    if normalized is None:
+        return None
+    try:
+        return Decimal(normalized)
+    except InvalidOperation as exc:
+        raise ValueError("min_balance must be a valid decimal value.") from exc
+
+
+def _billing_override_payload(
+    *,
+    billing_enabled_override: str | None,
+    billing_day: str | None,
+    payment_due_days: str | None,
+    grace_period_days: str | None,
+    min_balance: str | None,
+    tax_rate_id: str | None,
+    payment_method: str | None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "billing_day": _optional_int(billing_day),
+        "payment_due_days": _optional_int(payment_due_days),
+        "grace_period_days": _optional_int(grace_period_days),
+        "min_balance": _optional_decimal(min_balance),
+        "tax_rate_id": _normalize_optional(tax_rate_id),
+        "payment_method": _normalize_optional(payment_method),
+    }
+    normalized_enabled = _normalize_optional(billing_enabled_override)
+    if normalized_enabled == "true":
+        payload["billing_enabled"] = True
+    elif normalized_enabled == "false":
+        payload["billing_enabled"] = False
+    return payload
 
 
 def _suspend_customer_subscriptions(db: Session, customer_id: str) -> int:
@@ -472,7 +516,11 @@ def create_impersonation_session(
         account_id=selected_account.id,
         subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
-        return_to=f"/admin/subscribers/{selected_account.id}",
+        return_to=(
+            f"/admin/customers/organization/{selected_account.organization_id}"
+            if selected_account.organization_id
+            else f"/admin/customers/person/{selected_account.id}"
+        ),
     )
 
     actor_id_value = None
@@ -526,6 +574,13 @@ def update_person_customer(
     marketing_opt_in: str | None,
     notes: str | None,
     account_start_date: str | None,
+    billing_enabled_override: str | None,
+    billing_day: str | None,
+    payment_due_days: str | None,
+    grace_period_days: str | None,
+    min_balance: str | None,
+    tax_rate_id: str | None,
+    payment_method: str | None,
     metadata_json: dict | None,
 ):
     raw_status = str(status or "").strip().lower()
@@ -558,6 +613,17 @@ def update_person_customer(
         "notes": _normalize_optional(notes),
         "metadata_": metadata_json,
     }
+    data.update(
+        _billing_override_payload(
+            billing_enabled_override=billing_enabled_override,
+            billing_day=billing_day,
+            payment_due_days=payment_due_days,
+            grace_period_days=grace_period_days,
+            min_balance=min_balance,
+            tax_rate_id=tax_rate_id,
+            payment_method=payment_method,
+        )
+    )
     subscriber_service.subscribers.update(
         db=db,
         subscriber_id=customer_id,
@@ -600,6 +666,13 @@ def update_organization_customer(
     website: str | None,
     org_notes: str | None,
     org_account_start_date: str | None,
+    billing_enabled_override: str | None,
+    billing_day: str | None,
+    payment_due_days: str | None,
+    grace_period_days: str | None,
+    min_balance: str | None,
+    tax_rate_id: str | None,
+    payment_method: str | None,
 ):
     before = subscriber_service.organizations.get(db=db, organization_id=customer_id)
     payload = OrganizationUpdate(
@@ -616,6 +689,30 @@ def update_organization_customer(
         payload=payload,
     )
     after = subscriber_service.organizations.get(db=db, organization_id=customer_id)
+    subscriber_ids = [
+        str(subscriber.id)
+        for subscriber in db.query(Subscriber)
+        .filter(Subscriber.organization_id == coerce_uuid(customer_id))
+        .all()
+    ]
+    if subscriber_ids:
+        subscriber_payload = SubscriberUpdate.model_validate(
+            _billing_override_payload(
+                billing_enabled_override=billing_enabled_override,
+                billing_day=billing_day,
+                payment_due_days=payment_due_days,
+                grace_period_days=grace_period_days,
+                min_balance=min_balance,
+                tax_rate_id=tax_rate_id,
+                payment_method=payment_method,
+            )
+        )
+        for subscriber_id in subscriber_ids:
+            subscriber_service.subscribers.update(
+                db=db,
+                subscriber_id=subscriber_id,
+                payload=subscriber_payload,
+            )
     if org_account_start_date:
         subscriber = (
             db.query(Subscriber)

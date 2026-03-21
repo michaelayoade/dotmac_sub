@@ -124,7 +124,32 @@
                                 class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
                             <option value="">All Status</option>
                             <option value="active" {% if status == 'active' %}selected{% endif %}>Active</option>
+                            <option value="blocked" {% if status == 'blocked' %}selected{% endif %}>Blocked</option>
+                            <option value="suspended" {% if status == 'suspended' %}selected{% endif %}>Suspended</option>
+                            <option value="disabled" {% if status == 'disabled' %}selected{% endif %}>Disabled</option>
+                            <option value="new" {% if status == 'new' %}selected{% endif %}>New</option>
+                            <option value="canceled" {% if status == 'canceled' %}selected{% endif %}>Canceled</option>
                             <option value="inactive" {% if status == 'inactive' %}selected{% endif %}>Inactive</option>
+                        </select>
+                    </div>
+                    <div class="w-full sm:w-44">
+                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">NAS Device</label>
+                        <select name="nas_id"
+                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
+                            <option value="">All NAS</option>
+                            {% for nas in nas_options %}
+                            <option value="{{ nas.id }}" {% if nas_id == nas.id|string %}selected{% endif %}>{{ nas.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="w-full sm:w-40">
+                        <label class="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Location</label>
+                        <select name="pop_site_id"
+                                class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
+                            <option value="">All Locations</option>
+                            {% for pop in pop_site_options %}
+                            <option value="{{ pop.id }}" {% if pop_site_id == pop.id|string %}selected{% endif %}>{{ pop.name }}</option>
+                            {% endfor %}
                         </select>
                     </div>
                     <div class="w-full sm:w-32">

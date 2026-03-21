@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.services.billing_settings import resolve_payment_due_days
 from app.services.settings_cache import SettingsCache
 
 logger = logging.getLogger(__name__)
@@ -62,14 +63,7 @@ class SmartDefaultsService:
         """
         # Get settings from billing domain
         currency = self._get_setting(SettingDomain.billing, "default_currency", "NGN")
-        payment_terms_days = self._get_setting(SettingDomain.billing, "default_payment_terms_days", 30)
-
-        # Ensure payment_terms_days is an integer
-        if isinstance(payment_terms_days, str):
-            try:
-                payment_terms_days = int(payment_terms_days)
-            except ValueError:
-                payment_terms_days = 30
+        payment_terms_days = resolve_payment_due_days(self.db, default=30)
 
         today = date.today()
         due_date = today + timedelta(days=payment_terms_days)
@@ -154,13 +148,7 @@ class SmartDefaultsService:
             issued_at = date.today()
 
         if payment_terms_days is None:
-            payment_terms_days = self._get_setting(
-                SettingDomain.billing,
-                "default_payment_terms_days",
-                30
-            )
-            if isinstance(payment_terms_days, str):
-                payment_terms_days = int(payment_terms_days)
+            payment_terms_days = resolve_payment_due_days(self.db, default=30)
 
         return issued_at + timedelta(days=payment_terms_days)
 
@@ -177,13 +165,7 @@ class SmartDefaultsService:
             issued_at = date.today()
 
         if payment_terms_days is None:
-            payment_terms_days = self._get_setting(
-                SettingDomain.billing,
-                "default_payment_terms_days",
-                30,
-            )
-            if isinstance(payment_terms_days, str):
-                payment_terms_days = int(payment_terms_days)
+            payment_terms_days = resolve_payment_due_days(self.db, default=30)
 
         due_at = issued_at + timedelta(days=payment_terms_days)
         return {

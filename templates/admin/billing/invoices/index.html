@@ -18,7 +18,7 @@
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {# ── Page Header ── #}
     {% call(content) page_header(
         title="Invoices",
@@ -129,7 +129,7 @@
                             </a>
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
-                            <a href="/admin/subscribers/{{ invoice.subscriber.id }}" class="text-sm text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400">
+                            <a href="/admin/customers/{{ 'organization/' ~ invoice.subscriber.organization_id if invoice.subscriber.organization_id else 'person/' ~ invoice.subscriber.id }}" class="text-sm text-slate-900 hover:text-emerald-600 dark:text-white dark:hover:text-emerald-400">
                                 {{ invoice.subscriber.name }}
                             </a>
                         </td>

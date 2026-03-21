@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("sky", "indigo") }}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
     {% call page_header(
         title="Dual-Stack Management",
         subtitle="Unified IPv4 and IPv6 assignment visibility by subscriber or location",
@@ -93,7 +93,7 @@
                     </td>
                     <td class="px-4 py-3 text-right text-sm">
                         {% if row.subscriber_id %}
-                        <a href="/admin/subscribers/{{ row.subscriber_id }}" class="text-indigo-600 hover:text-indigo-700">Subscriber</a>
+                        <a href="/admin/customers" class="text-indigo-600 hover:text-indigo-700">Customer</a>
                         {% else %}
                         <span class="text-slate-400">-</span>
                         {% endif %}

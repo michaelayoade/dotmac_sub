@@ -923,11 +923,12 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
-        key="invoice_due_days",
-        env_var="BILLING_INVOICE_DUE_DAYS",
+        key="payment_due_days",
+        env_var="BILLING_PAYMENT_DUE_DAYS",
         value_type=SettingValueType.integer,
         default=14,
         min_value=0,
+        label="Payment Due Days",
     ),
     SettingSpec(
         domain=SettingDomain.billing,

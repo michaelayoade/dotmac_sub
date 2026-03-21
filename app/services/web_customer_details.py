@@ -3,29 +3,212 @@
 from __future__ import annotations
 
 import logging
+from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
 from uuid import UUID
 
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
-from app.models.catalog import SubscriptionStatus
+from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus, TaxRate
+from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
+from app.models.collections import DunningCase, DunningCaseStatus
+from app.models.communication_log import CommunicationLog
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network import CPEDevice, IPAssignment, OntAssignment
+from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import (
     ChannelType,
+    Reseller,
     Subscriber,
     SubscriberChannel,
 )
+from app.models.support import Ticket, TicketStatus
 from app.schemas.geocoding import GeocodePreviewRequest
 from app.services import audit as audit_service
 from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
+from app.services.billing_settings import resolve_payment_due_days
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
 
 logger = logging.getLogger(__name__)
+
+RESOLVED_TICKET_STATUSES = {
+    TicketStatus.resolved,
+    TicketStatus.closed,
+    TicketStatus.canceled,
+    TicketStatus.merged,
+}
+ACTIVE_SERVICE_ORDER_STATUSES = {
+    ServiceOrderStatus.submitted,
+    ServiceOrderStatus.scheduled,
+    ServiceOrderStatus.provisioning,
+}
+
+
+def _coerce_setting_int(value: object | None) -> int | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_setting_bool(value: object | None, default: bool | None = None) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off"}:
+            return False
+    return default
+
+
+def _coerce_setting_decimal(value: object | None) -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, int | float):
+        return Decimal(str(value))
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        try:
+            return Decimal(text)
+        except InvalidOperation:
+            return None
+    return None
+
+
+def _format_billing_value(key: str, value: object | None) -> str:
+    if value is None:
+        return "Not set"
+    if key == "billing_enabled":
+        return "Enabled" if bool(value) else "Disabled"
+    if key in {"billing_day", "payment_due_days", "grace_period_days"}:
+        if key == "billing_day":
+            return f"Day {value}"
+        if key == "payment_due_days":
+            return f"{value} day(s)"
+        return f"{value} day(s)"
+    if key == "min_balance":
+        try:
+            return f"NGN {Decimal(value):,.2f}"
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def _billing_global_defaults(db: Session) -> dict[str, object | None]:
+    keys = {"billing_enabled", "billing_day", "minimum_balance"}
+    rows = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.billing)
+        .filter(DomainSetting.key.in_(keys))
+        .all()
+    )
+    raw = {
+        row.key: row.value_json if row.value_json is not None else row.value_text
+        for row in rows
+    }
+    return {
+        "billing_enabled": _coerce_setting_bool(raw.get("billing_enabled"), True),
+        "billing_day": _coerce_setting_int(raw.get("billing_day")),
+        "payment_due_days": resolve_payment_due_days(db),
+        "min_balance": _coerce_setting_decimal(raw.get("minimum_balance")),
+    }
+
+
+def _resolve_tax_labels(db: Session, accounts: list[Subscriber]) -> dict[str, str]:
+    tax_ids = {account.tax_rate_id for account in accounts if getattr(account, "tax_rate_id", None)}
+    if not tax_ids:
+        return {}
+    rates = db.query(TaxRate).filter(TaxRate.id.in_(tax_ids)).all()
+    return {str(rate.id): rate.name for rate in rates}
+
+
+def _billing_policy_snapshot(db: Session, accounts: list[Subscriber]) -> dict[str, object]:
+    global_defaults = _billing_global_defaults(db)
+    tax_labels = _resolve_tax_labels(db, accounts)
+    fields = [
+        ("billing_enabled", "Billing", True),
+        ("billing_day", "Billing Day", True),
+        ("payment_due_days", "Payment Due", True),
+        ("grace_period_days", "Grace Period", False),
+        ("min_balance", "Minimum Balance", True),
+        ("tax_rate", "Tax Rate", False),
+    ]
+    rows: list[dict[str, str]] = []
+    has_overrides = False
+    has_mixed = False
+
+    for key, label, uses_global in fields:
+        raw_values: list[object | None] = []
+        effective_values: list[object | None] = []
+        for account in accounts:
+            if key == "tax_rate":
+                raw = tax_labels.get(str(account.tax_rate_id)) if getattr(account, "tax_rate_id", None) else None
+            else:
+                raw = getattr(account, key, None)
+            raw_values.append(raw)
+            effective_values.append(raw if raw is not None else (global_defaults.get(key) if uses_global else None))
+
+        unique_effective = {str(value) for value in effective_values if value is not None}
+        unique_raw = {str(value) for value in raw_values if value is not None}
+        if not accounts:
+            source = "Global default" if uses_global else "Not set"
+            effective = global_defaults.get(key) if uses_global else None
+            override = None
+        elif len(unique_effective) > 1 or (len(unique_raw) > 1):
+            source = "Mixed"
+            effective = "Mixed"
+            override = "Mixed"
+            has_mixed = True
+        else:
+            raw = next((value for value in raw_values if value is not None), None)
+            effective = effective_values[0] if effective_values else None
+            override = raw
+            if raw is None:
+                source = "Global default" if uses_global else "Not set"
+            else:
+                source = "Customer override"
+                has_overrides = True
+
+        rows.append(
+            {
+                "key": key,
+                "label": label,
+                "effective": effective if effective == "Mixed" else _format_billing_value(key, effective),
+                "source": source,
+                "global": _format_billing_value(key, global_defaults.get(key)) if uses_global else "Not set",
+                "override": override if override == "Mixed" else _format_billing_value(key, override),
+            }
+        )
+
+    return {
+        "rows": rows,
+        "has_overrides": has_overrides,
+        "has_mixed": has_mixed,
+        "account_count": len(accounts),
+    }
 
 
 def _dedupe_accounts(accounts):
@@ -70,7 +253,34 @@ def _format_contact_channel(subscriber: Subscriber, channel: SubscriberChannel) 
     }
 
 
-def _build_activity_items(db: Session, entity_type: str, entity_id: str):
+def _enum_label(value: object) -> str:
+    raw_value = getattr(value, "value", value)
+    if raw_value is None:
+        return ""
+    return str(raw_value).replace("_", " ").title()
+
+
+def _event_timestamp(*values: datetime | None) -> datetime | None:
+    for value in values:
+        if value is not None:
+            return value
+    return None
+
+
+def _timeline_sort_key(item: dict[str, object]) -> datetime:
+    timestamp = item.get("timestamp")
+    if isinstance(timestamp, datetime):
+        return timestamp
+    return datetime.min.replace(tzinfo=UTC)
+
+
+def _build_activity_items(
+    db: Session,
+    entity_type: str,
+    entity_id: str,
+    account_ids: list[UUID],
+    subscriptions: list[Subscription],
+) -> list[dict[str, object]]:
     audit_events = audit_service.audit_events.list(
         db=db,
         actor_id=None,
@@ -94,7 +304,170 @@ def _build_activity_items(db: Session, entity_type: str, entity_id: str):
             str(person.id): person
             for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
         }
-    activity_items = []
+    activity_items: list[dict[str, object]] = []
+
+    if account_ids:
+        invoices = (
+            db.query(Invoice)
+            .filter(Invoice.account_id.in_(account_ids))
+            .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
+            .limit(8)
+            .all()
+        )
+        payments = (
+            db.query(Payment)
+            .filter(Payment.account_id.in_(account_ids))
+            .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
+            .limit(8)
+            .all()
+        )
+        support_tickets = (
+            db.query(Ticket)
+            .filter(
+                or_(
+                    Ticket.subscriber_id.in_(account_ids),
+                    Ticket.customer_account_id.in_(account_ids),
+                    Ticket.customer_person_id.in_(account_ids),
+                )
+            )
+            .order_by(Ticket.updated_at.desc())
+            .limit(8)
+            .all()
+        )
+        communication_logs = (
+            db.query(CommunicationLog)
+            .filter(CommunicationLog.subscriber_id.in_(account_ids))
+            .order_by(func.coalesce(CommunicationLog.sent_at, CommunicationLog.created_at).desc())
+            .limit(8)
+            .all()
+        )
+        service_orders = (
+            db.query(ServiceOrder)
+            .filter(ServiceOrder.subscriber_id.in_(account_ids))
+            .order_by(ServiceOrder.updated_at.desc())
+            .limit(8)
+            .all()
+        )
+        dunning_cases = (
+            db.query(DunningCase)
+            .filter(DunningCase.account_id.in_(account_ids))
+            .order_by(func.coalesce(DunningCase.resolved_at, DunningCase.updated_at, DunningCase.started_at).desc())
+            .limit(8)
+            .all()
+        )
+    else:
+        invoices = []
+        payments = []
+        support_tickets = []
+        communication_logs = []
+        service_orders = []
+        dunning_cases = []
+
+    for invoice in invoices:
+        amount = invoice.total if invoice.total is not None else 0
+        activity_items.append(
+            {
+                "type": "invoice",
+                "title": f"Invoice {invoice.invoice_number or 'created'}",
+                "description": _enum_label(invoice.status),
+                "timestamp": _event_timestamp(invoice.issued_at, invoice.created_at),
+                "amount": float(amount),
+                "link": f"/admin/billing/invoices/{invoice.id}",
+            }
+        )
+
+    for payment in payments:
+        activity_items.append(
+            {
+                "type": "payment",
+                "title": "Payment received" if payment.status == PaymentStatus.succeeded else "Payment update",
+                "description": _enum_label(payment.status),
+                "timestamp": _event_timestamp(payment.paid_at, payment.created_at),
+                "amount": float(payment.amount or 0),
+            }
+        )
+
+    for subscription in subscriptions[:8]:
+        account_label = subscription.login or subscription.ipv4_address or subscription.ipv6_address
+        description = _enum_label(subscription.status)
+        if account_label:
+            description = f"{description} · {account_label}" if description else account_label
+        activity_items.append(
+            {
+                "type": "subscription",
+                "title": subscription.offer.name if subscription.offer else "Subscription updated",
+                "description": description,
+                "timestamp": _event_timestamp(
+                    subscription.updated_at,
+                    subscription.next_billing_at,
+                    subscription.start_at,
+                    subscription.created_at,
+                ),
+                "amount": float(subscription.unit_price or 0) if subscription.unit_price is not None else None,
+                "link": f"/admin/catalog/subscriptions/{subscription.id}",
+            }
+        )
+
+    for ticket in support_tickets:
+        description = " · ".join(
+            part for part in (_enum_label(ticket.status), _enum_label(ticket.priority)) if part
+        )
+        activity_items.append(
+            {
+                "type": "ticket",
+                "title": ticket.title or ticket.number or "Support ticket",
+                "description": description,
+                "timestamp": _event_timestamp(ticket.updated_at, ticket.created_at),
+                "link": f"/admin/support/tickets/{ticket.id}",
+            }
+        )
+
+    for log in communication_logs:
+        subject = log.subject or log.recipient or log.sender or _enum_label(log.channel) or "Communication"
+        description = " · ".join(
+            part
+            for part in (
+                _enum_label(log.channel),
+                _enum_label(log.direction),
+                _enum_label(log.status),
+            )
+            if part
+        )
+        activity_items.append(
+            {
+                "type": "communication",
+                "title": subject,
+                "description": description,
+                "timestamp": _event_timestamp(log.sent_at, log.created_at),
+            }
+        )
+
+    for order in service_orders:
+        title = f"{_enum_label(order.order_type) or 'Service'} order"
+        description = _enum_label(order.status)
+        activity_items.append(
+            {
+                "type": "service_order",
+                "title": title,
+                "description": description,
+                "timestamp": _event_timestamp(order.updated_at, order.created_at),
+                "link": f"/admin/provisioning/orders/{order.id}",
+            }
+        )
+
+    for case in dunning_cases:
+        description_parts = [_enum_label(case.status)]
+        if case.current_step is not None:
+            description_parts.append(f"Step {case.current_step}")
+        activity_items.append(
+            {
+                "type": "dunning",
+                "title": "Dunning case",
+                "description": " · ".join(part for part in description_parts if part),
+                "timestamp": _event_timestamp(case.resolved_at, case.updated_at, case.started_at, case.created_at),
+            }
+        )
+
     for event in audit_events:
         actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
         actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
@@ -112,7 +485,9 @@ def _build_activity_items(db: Session, entity_type: str, entity_id: str):
                 "timestamp": event.occurred_at,
             }
         )
-    return activity_items
+
+    activity_items.sort(key=_timeline_sort_key, reverse=True)
+    return activity_items[:20]
 
 
 def _build_common_financials(db: Session, account_ids):
@@ -191,6 +566,149 @@ def _build_common_financials(db: Session, account_ids):
             "last_payment": last_payment,
             "last_invoice": last_invoice,
         },
+    }
+
+
+def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, object]:
+    if not account_ids:
+        empty_summary = {
+            "open_tickets": 0,
+            "recent_communications": 0,
+            "active_service_orders": 0,
+            "open_dunning_cases": 0,
+            "active_credentials": 0,
+            "active_cpes": 0,
+            "active_onts": 0,
+            "active_ip_assignments": 0,
+            "linked_resellers": 0,
+        }
+        return {
+            "support_tickets": [],
+            "communication_logs": [],
+            "service_orders": [],
+            "dunning_cases": [],
+            "access_credentials": [],
+            "cpe_devices": [],
+            "ip_assignments": [],
+            "ont_assignments": [],
+            "linked_resellers": [],
+            "relationship_summary": empty_summary,
+        }
+
+    support_tickets = (
+        db.query(Ticket)
+        .filter(
+            or_(
+                Ticket.subscriber_id.in_(account_ids),
+                Ticket.customer_account_id.in_(account_ids),
+                Ticket.customer_person_id.in_(account_ids),
+            )
+        )
+        .order_by(Ticket.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    communication_logs = (
+        db.query(CommunicationLog)
+        .filter(CommunicationLog.subscriber_id.in_(account_ids))
+        .order_by(func.coalesce(CommunicationLog.sent_at, CommunicationLog.created_at).desc())
+        .limit(12)
+        .all()
+    )
+    service_orders = (
+        db.query(ServiceOrder)
+        .filter(ServiceOrder.subscriber_id.in_(account_ids))
+        .order_by(ServiceOrder.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    dunning_cases = (
+        db.query(DunningCase)
+        .filter(DunningCase.account_id.in_(account_ids))
+        .order_by(DunningCase.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    access_credentials = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id.in_(account_ids))
+        .order_by(AccessCredential.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    cpe_devices = (
+        db.query(CPEDevice)
+        .options(selectinload(CPEDevice.subscription))
+        .filter(CPEDevice.subscriber_id.in_(account_ids))
+        .order_by(CPEDevice.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    ip_assignments = (
+        db.query(IPAssignment)
+        .options(
+            selectinload(IPAssignment.ipv4_address),
+            selectinload(IPAssignment.ipv6_address),
+            selectinload(IPAssignment.subscription),
+        )
+        .filter(IPAssignment.subscriber_id.in_(account_ids))
+        .order_by(IPAssignment.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+    ont_assignments = (
+        db.query(OntAssignment)
+        .options(
+            selectinload(OntAssignment.ont_unit),
+            selectinload(OntAssignment.subscription),
+            selectinload(OntAssignment.pon_port),
+        )
+        .filter(OntAssignment.subscriber_id.in_(account_ids))
+        .order_by(OntAssignment.updated_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    reseller_ids = {
+        account.reseller_id
+        for account in db.query(Subscriber)
+        .options(selectinload(Subscriber.reseller))
+        .filter(Subscriber.id.in_(account_ids))
+        .all()
+        if getattr(account, "reseller_id", None)
+    }
+    linked_resellers = (
+        db.query(Reseller)
+        .filter(Reseller.id.in_(list(reseller_ids)))
+        .order_by(Reseller.name.asc())
+        .all()
+        if reseller_ids
+        else []
+    )
+
+    relationship_summary = {
+        "open_tickets": sum(1 for ticket in support_tickets if ticket.status not in RESOLVED_TICKET_STATUSES),
+        "recent_communications": len(communication_logs),
+        "active_service_orders": sum(1 for order in service_orders if order.status in ACTIVE_SERVICE_ORDER_STATUSES),
+        "open_dunning_cases": sum(1 for case in dunning_cases if case.status in {DunningCaseStatus.open, DunningCaseStatus.paused}),
+        "active_credentials": sum(1 for credential in access_credentials if credential.is_active),
+        "active_cpes": sum(1 for cpe in cpe_devices if str(getattr(cpe, "status", "")) == "DeviceStatus.active" or getattr(getattr(cpe, "status", None), "value", None) == "active"),
+        "active_onts": sum(1 for assignment in ont_assignments if assignment.active),
+        "active_ip_assignments": sum(1 for assignment in ip_assignments if assignment.is_active),
+        "linked_resellers": len(linked_resellers),
+    }
+
+    return {
+        "support_tickets": support_tickets,
+        "communication_logs": communication_logs,
+        "service_orders": service_orders,
+        "dunning_cases": dunning_cases,
+        "access_credentials": access_credentials,
+        "cpe_devices": cpe_devices,
+        "ip_assignments": ip_assignments,
+        "ont_assignments": ont_assignments,
+        "linked_resellers": linked_resellers,
+        "relationship_summary": relationship_summary,
     }
 
 
@@ -356,6 +874,7 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         if sub.status == SubscriptionStatus.active
     )
     financials["monthly_recurring"] = monthly_recurring
+    relationship_data = _build_relationship_data(db, account_ids)
 
     if not addresses:
         addresses = _build_person_fallback_address(db, customer)
@@ -406,7 +925,13 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     except Exception:
         notifications = []
 
-    activity_items = _build_activity_items(db, "subscriber", str(customer_id))
+    activity_items = _build_activity_items(
+        db,
+        "subscriber",
+        str(customer_id),
+        account_ids,
+        subscriptions,
+    )
     stats = {
         "total_subscribers": len(subscribers),
         "total_subscriptions": len(subscriptions),
@@ -414,6 +939,15 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "balance_due": balance_due,
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
+        "open_tickets": relationship_data["relationship_summary"]["open_tickets"],
+        "active_service_orders": relationship_data["relationship_summary"]["active_service_orders"],
+        "service_orders": relationship_data["relationship_summary"]["active_service_orders"],
+        "active_credentials": relationship_data["relationship_summary"]["active_credentials"],
+        "active_network_assets": (
+            relationship_data["relationship_summary"]["active_cpes"]
+            + relationship_data["relationship_summary"]["active_onts"]
+            + relationship_data["relationship_summary"]["active_ip_assignments"]
+        ),
     }
     try:
         customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
@@ -446,6 +980,8 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
+        "billing_policy": _billing_policy_snapshot(db, accounts),
+        **relationship_data,
     }
 
 
@@ -502,6 +1038,7 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         if sub.status == SubscriptionStatus.active
     )
     financials["monthly_recurring"] = monthly_recurring
+    relationship_data = _build_relationship_data(db, account_ids)
 
     primary_address = next(
         (a for a in addresses if getattr(a, "is_primary", False)),
@@ -545,7 +1082,13 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
     except Exception:
         notifications = []
 
-    activity_items = _build_activity_items(db, "organization", str(customer_id))
+    activity_items = _build_activity_items(
+        db,
+        "organization",
+        str(customer_id),
+        account_ids,
+        subscriptions,
+    )
     stats = {
         "total_subscribers": len(subscribers),
         "total_subscriptions": len(subscriptions),
@@ -553,6 +1096,15 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         "balance_due": balance_due,
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
+        "open_tickets": relationship_data["relationship_summary"]["open_tickets"],
+        "active_service_orders": relationship_data["relationship_summary"]["active_service_orders"],
+        "service_orders": relationship_data["relationship_summary"]["active_service_orders"],
+        "active_credentials": relationship_data["relationship_summary"]["active_credentials"],
+        "active_network_assets": (
+            relationship_data["relationship_summary"]["active_cpes"]
+            + relationship_data["relationship_summary"]["active_onts"]
+            + relationship_data["relationship_summary"]["active_ip_assignments"]
+        ),
     }
     try:
         customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
@@ -585,4 +1137,6 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
+        "billing_policy": _billing_policy_snapshot(db, accounts),
+        **relationship_data,
     }

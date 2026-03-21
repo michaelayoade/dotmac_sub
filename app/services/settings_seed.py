@@ -995,9 +995,12 @@ def seed_billing_settings(db: Session) -> None:
     )
     billing_settings.ensure_by_key(
         db,
-        key="invoice_due_days",
+        key="payment_due_days",
         value_type=SettingValueType.integer,
-        value_text=os.getenv("BILLING_INVOICE_DUE_DAYS", "14"),
+        value_text=os.getenv(
+            "BILLING_PAYMENT_DUE_DAYS",
+            os.getenv("BILLING_INVOICE_DUE_DAYS", "14"),
+        ),
     )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(

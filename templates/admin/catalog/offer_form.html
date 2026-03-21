@@ -14,6 +14,17 @@
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit Tariff' if offer and offer.id else 'Create Tariff' }}</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Define the tariff customers subscribe to, including provisioning parameters.</p>
         </div>
+        <div class="flex flex-wrap gap-2">
+            <a href="#service-policy" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Policies
+            </a>
+            <a href="#linked-add-ons" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Add-Ons
+            </a>
+            <a href="/admin/catalog/settings" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Catalog Components
+            </a>
+        </div>
     </div>
 
     <form method="POST" action="{{ action_url }}" class="space-y-6">
@@ -361,12 +372,17 @@
             </div>
         </div>
 
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div id="service-policy" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Service Policy</h2>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Core service rules that affect authorization, usage, and billing.</p>
             </div>
             <div class="p-6 space-y-6">
+                <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                    Shared policy definitions are maintained in
+                    <a href="/admin/catalog/settings" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Catalog Components</a>.
+                    This form links those definitions to the plan.
+                </div>
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div>
                         <label for="region_zone_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Region Zone</label>
@@ -453,12 +469,16 @@
         </div>
 
         {% if add_ons and add_ons|length > 0 %}
-        <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div id="linked-add-ons" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <h2 class="font-semibold text-slate-900 dark:text-white">Linked Add-Ons</h2>
                 <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Select add-ons that can be purchased with this tariff.</p>
             </div>
             <div class="p-6 space-y-4">
+                <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-900/40">
+                    <span class="text-slate-600 dark:text-slate-300">Add-on definitions and pricing are shared catalog components.</span>
+                    <a href="/admin/catalog/settings/add-ons" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">Manage definitions</a>
+                </div>
                 {% for addon in add_ons %}
                 {% set addon_id = addon.id|string %}
                 {% set is_linked = addon_id in addon_links_map %}

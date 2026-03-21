@@ -55,6 +55,10 @@ class EnforcementHandler:
             self._handle_account_throttle(db, event)
         elif event.event_type == EventType.usage_exhausted:
             self._handle_usage_exhausted(db, event)
+        elif event.event_type == EventType.payment_received:
+            self._handle_payment_received(db, event)
+        elif event.event_type == EventType.invoice_overdue:
+            self._handle_invoice_overdue(db, event)
 
     def _handle_subscription_block(self, db: Session, event: Event, reason: str) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
@@ -74,6 +78,11 @@ class EnforcementHandler:
             )
             if ip_result.get("ok"):
                 radius_service.reconcile_subscription_connectivity(db, str(subscription_id))
+            # Remove credentials from external RADIUS so subscriber cannot re-authenticate
+            if subscription:
+                radius_service.remove_external_radius_credentials(
+                    db, str(subscription.subscriber_id)
+                )
             disconnect_subscription_sessions(db, str(subscription_id), reason=reason)
             apply_subscription_address_list_block(db, str(subscription_id))
         except Exception as exc:
@@ -300,5 +309,87 @@ class EnforcementHandler:
             logger.warning(
                 "Failed to persist FUP state for subscription %s: %s",
                 subscription_id,
+                exc,
+            )
+
+    def _handle_payment_received(self, db: Session, event: Event) -> None:
+        """Auto-reactivate suspended accounts when a payment is received."""
+        account_id = event.account_id or event.payload.get("account_id")
+        if not account_id:
+            return
+        try:
+            from app.services import collections as collections_service
+
+            invoice_id = event.payload.get("invoice_id")
+            restored = collections_service.restore_account_services(
+                db, str(account_id), invoice_id=str(invoice_id) if invoice_id else None,
+            )
+            if restored:
+                logger.info(
+                    "Auto-restored %d subscription(s) for account %s after payment",
+                    restored,
+                    account_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to auto-restore account %s after payment: %s",
+                account_id,
+                exc,
+            )
+
+    def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
+        """Auto-suspend subscriber when an invoice becomes overdue."""
+        account_id = event.account_id or event.payload.get("account_id")
+        if not account_id:
+            return
+        try:
+            # Check if auto-suspension on overdue is enabled
+            enabled = settings_spec.resolve_value(
+                db, SettingDomain.billing, "auto_suspend_on_overdue"
+            )
+            if str(enabled).lower() in {"0", "false", "no", "off", ""}:
+                return
+
+            subscriber = db.get(Subscriber, account_id)
+            if not subscriber or subscriber.status != AccountStatus.active:
+                return
+
+            # Suspend all active subscriptions
+            subscriptions = (
+                db.query(Subscription)
+                .filter(
+                    Subscription.subscriber_id == subscriber.id,
+                    Subscription.status == SubscriptionStatus.active,
+                )
+                .all()
+            )
+            for sub in subscriptions:
+                sub.status = SubscriptionStatus.suspended
+                db.flush()
+                emit_event(
+                    db,
+                    EventType.subscription_suspended,
+                    {
+                        "subscription_id": str(sub.id),
+                        "from_status": "active",
+                        "to_status": "suspended",
+                        "reason": "invoice_overdue",
+                    },
+                    subscription_id=sub.id,
+                    account_id=sub.subscriber_id,
+                )
+
+            if subscriptions:
+                subscriber.status = AccountStatus.suspended
+                db.flush()
+                logger.info(
+                    "Auto-suspended %d subscription(s) for account %s due to overdue invoice",
+                    len(subscriptions),
+                    account_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to auto-suspend account %s for overdue invoice: %s",
+                account_id,
                 exc,
             )

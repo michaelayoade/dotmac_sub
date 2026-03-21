@@ -11,16 +11,17 @@
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 
-<div class="relative space-y-6">
+<div class="relative space-y-8">
 
     {# Page Header #}
     {% call(content) page_header(
         "Payment Providers",
-        subtitle="Configure payment gateway integrations",
+        subtitle="Gateway integration setup for billing operations",
         icon='<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
         color="emerald",
         breadcrumbs=[
-            {"label": "Billing", "href": "/admin/billing"},
+            {"label": "Settings", "href": "/admin/settings"},
+            {"label": "Billing Setup", "href": "/admin/settings?category=billing"},
             {"label": "Payment Providers"}
         ]
     ) %}
@@ -194,7 +195,7 @@
     <div class="grid gap-6 lg:grid-cols-2">
         <div class="rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
             <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Gateway Health and Failover</h3>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure automatic fallback between Paystack and Flutterwave.</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Configure automatic fallback between gateway providers as part of billing setup.</p>
             <form method="post" action="/admin/billing/payment-providers/failover-config" class="mt-4 space-y-4">
                 {% include "components/forms/csrf_input.html" %}
                 <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">

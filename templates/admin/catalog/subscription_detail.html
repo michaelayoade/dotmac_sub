@@ -20,7 +20,7 @@
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
                 <a href="/admin/catalog" class="hover:text-primary-600">Catalog</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <a href="/admin/catalog/subscriptions" class="hover:text-primary-600">Subscriptions</a>
+                <a href="/admin/catalog/subscriptions" class="hover:text-primary-600">Active Services</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 <span class="text-slate-900 dark:text-white">{{ offer_label }}</span>
             </nav>
@@ -28,9 +28,15 @@
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription details and activity.</p>
         </div>
         <div class="flex items-center gap-3">
+            {% if subscription.offer_id %}
+            <a href="/admin/catalog/offers/{{ subscription.offer_id }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                View Plan
+            </a>
+            {% endif %}
             <a href="/admin/catalog/subscriptions" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
-                Back to Subscriptions
+                Back to Active Services
             </a>
             <a href="/admin/catalog/subscriptions/{{ subscription.id }}/edit" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536M4 17l4.586-4.586a2 2 0 012.828 0L15 16l5-5a2 2 0 012.828 0L24 13.172V20a2 2 0 01-2 2H6a2 2 0 01-2-2v-3z"/></svg>
@@ -96,6 +102,43 @@
             </div>
 
             <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Commercial Terms</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subscription terms plus effective customer and billing defaults.</p>
+                    </div>
+                </div>
+                <div class="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+                    <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                        <thead class="bg-slate-50 dark:bg-slate-900/40">
+                            <tr>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Setting</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Effective</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Source</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Global Default</th>
+                                <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Override</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                            {% for row in commercial_policy.rows %}
+                            <tr>
+                                <td class="px-3 py-2 text-slate-700 dark:text-slate-200">{{ row.label }}</td>
+                                <td class="px-3 py-2 text-slate-900 dark:text-white">{{ row.effective }}</td>
+                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.source }}</td>
+                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.global }}</td>
+                                <td class="px-3 py-2 text-slate-500 dark:text-slate-400">{{ row.override }}</td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="5" class="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">Commercial policy is unavailable for this subscription.</td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
                 <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning</h3>
                 <div class="mt-4 grid gap-4 sm:grid-cols-2">
                     <div>
@@ -157,6 +200,125 @@
                     {{ subscription.service_description }}
                 </div>
                 {% endif %}
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning Evidence</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Operator-facing proof for activation, RADIUS sync, and access state.</p>
+                    </div>
+                    {% if direct_active_workflow %}
+                    <span class="inline-flex items-center rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Direct-Active Workflow</span>
+                    {% endif %}
+                </div>
+                <div class="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+                    <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Access Credential</p>
+                        <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ access_credential.username if access_credential else '—' }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {% if access_credential %}
+                                {{ 'Active' if access_credential.is_active else 'Inactive' }}{% if access_credential.connection_type %} · {{ access_credential.connection_type.value | upper }}{% endif %}
+                            {% else %}
+                                No subscriber credential linked
+                            {% endif %}
+                        </p>
+                    </div>
+                    <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Password Sync</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ password_sync.label }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ password_sync.detail }}</p>
+                    </div>
+                    <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">IP Assignment</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ ip_assignment_mode }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ ip_assignment_detail }}</p>
+                    </div>
+                    <div class="rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40">
+                        <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Live Session</p>
+                        {% if active_session %}
+                        <p class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ active_session.framed_ip_address or active_session.username }}</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Online since {{ active_session.session_start.strftime('%b %d, %Y %H:%M') if active_session.session_start else '—' }}
+                        </p>
+                        {% else %}
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">No active session</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscriber is not currently online in RADIUS accounting.</p>
+                        {% endif %}
+                    </div>
+                </div>
+
+                <div class="mt-6 grid gap-6 lg:grid-cols-2">
+                    <div>
+                        <div class="flex items-center justify-between">
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Resolved RADIUS Reply Attributes</h4>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ radius_reply_attributes|length }} attribute{{ '' if radius_reply_attributes|length == 1 else 's' }}</span>
+                        </div>
+                        <div class="mt-3 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+                            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
+                                <thead class="bg-slate-50 dark:bg-slate-900/40">
+                                    <tr>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Attribute</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Op</th>
+                                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Value</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                                    {% for attr in radius_reply_attributes %}
+                                    <tr>
+                                        <td class="px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-200">{{ attr.attribute }}</td>
+                                        <td class="px-3 py-2 font-mono text-xs text-slate-500 dark:text-slate-400">{{ attr.op }}</td>
+                                        <td class="px-3 py-2 font-mono text-xs text-slate-700 dark:text-slate-200">{{ attr.value }}</td>
+                                    </tr>
+                                    {% else %}
+                                    <tr>
+                                        <td colspan="3" class="px-3 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No reply attributes resolved for this subscription.</td>
+                                    </tr>
+                                    {% endfor %}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div class="space-y-6">
+                        <div>
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Lifecycle Timeline</h4>
+                            <div class="mt-3 space-y-3">
+                                {% for event in lifecycle_events %}
+                                <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.event_type.value | replace('_', ' ') | title }}</p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at.strftime('%b %d, %Y %H:%M') if event.created_at else '—' }}</p>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {{ event.from_status.value if event.from_status else '—' }} → {{ event.to_status.value if event.to_status else '—' }}
+                                        {% if event.reason %} · {{ event.reason }}{% endif %}
+                                    </p>
+                                </div>
+                                {% else %}
+                                <div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No lifecycle events recorded for this subscription yet.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+
+                        <div>
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Recent RADIUS Errors</h4>
+                            <div class="mt-3 space-y-3">
+                                {% for error in recent_auth_errors %}
+                                <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ error.error_type.value | replace('_', ' ') | title }}</p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ error.occurred_at.strftime('%b %d, %Y %H:%M') if error.occurred_at else '—' }}</p>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ error.reply_message or error.detail or 'No detail recorded.' }}</p>
+                                </div>
+                                {% else %}
+                                <div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No recent auth errors linked to this subscriber.</div>
+                                {% endfor %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
 
             {% if activities %}
@@ -229,7 +391,7 @@
                     <div>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Subscriber</p>
                         {% if subscription.account and subscription.account.subscriber %}
-                        <a href="/admin/subscribers/{{ subscription.account.subscriber.id }}" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <a href="/admin/customers/{{ 'organization/' ~ subscription.account.subscriber.organization_id if subscription.account.subscriber.organization_id else 'person/' ~ subscription.account.subscriber.id }}#subscriptions" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
                             {% if subscription.account.subscriber.person %}
                                 {{ subscription.account.first_name }} {{ subscription.account.last_name }}
                             {% elif subscription.account.subscriber.organization %}

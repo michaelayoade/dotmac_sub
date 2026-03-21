@@ -1,16 +1,28 @@
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
 from starlette.datastructures import FormData
 
+from app.models.billing import TaxRate
 from app.models.catalog import AccessCredential
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import IPAssignment
-from app.models.subscriber import ChannelType, SubscriberChannel
+from app.models.subscriber import Address, ChannelType, SubscriberChannel
 from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_network_ip as web_network_ip_service
+
+
+def _billing_setting(key: str, value: str) -> DomainSetting:
+    return DomainSetting(
+        domain=SettingDomain.billing,
+        key=key,
+        value_text=value,
+        is_active=True,
+    )
 
 
 def test_apply_generated_service_credentials_keeps_custom_password_on_edit(
@@ -131,6 +143,76 @@ def test_subscription_form_context_exposes_current_service_password(
 
     assert context["current_service_login"] == "10004167"
     assert context["current_service_password"] == "VisiblePass123"
+
+
+def test_subscription_detail_context_resolves_commercial_policy_from_customer_and_globals(
+    db_session,
+    subscription,
+    subscriber,
+):
+    db_session.add_all(
+        [
+            _billing_setting("billing_day", "1"),
+            _billing_setting("payment_due_days", "14"),
+            _billing_setting("minimum_balance", "50.00"),
+        ]
+    )
+    subscriber.payment_method = "bank_transfer"
+    subscriber.billing_day = 6
+    subscriber.grace_period_days = 3
+    subscriber.min_balance = Decimal("125.00")
+    db_session.commit()
+
+    context = web_catalog_subscriptions_service.subscription_detail_context(
+        db_session,
+        subscription,
+    )
+
+    rows = {row["key"]: row for row in context["commercial_policy"]["rows"]}
+    assert rows["billing_mode"]["source"] == "Subscription"
+    assert rows["contract_term"]["source"] == "Subscription"
+    assert rows["payment_method"]["effective"] == "bank_transfer"
+    assert rows["payment_method"]["source"] == "Customer override"
+    assert rows["billing_day"]["effective"] == "Day 6"
+    assert rows["billing_day"]["global"] == "Day 1"
+    assert rows["payment_due_days"]["effective"] == "14 day(s)"
+    assert rows["payment_due_days"]["source"] == "Global default"
+    assert rows["grace_period_days"]["effective"] == "3 day(s)"
+    assert rows["min_balance"]["effective"] == "NGN 125.00"
+    assert rows["tax_rate"]["effective"] == "Not set"
+
+
+def test_subscription_form_context_prefers_service_address_tax_for_commercial_policy(
+    db_session,
+    subscription,
+    subscriber,
+):
+    subscriber_tax = TaxRate(name="Customer VAT", rate=Decimal("0.075"))
+    address_tax = TaxRate(name="Service VAT", rate=Decimal("0.050"))
+    db_session.add_all([subscriber_tax, address_tax])
+    db_session.commit()
+
+    subscriber.tax_rate_id = subscriber_tax.id
+    address = Address(
+        subscriber_id=subscriber.id,
+        address_line1="123 Service Street",
+        tax_rate_id=address_tax.id,
+    )
+    db_session.add(address)
+    db_session.commit()
+
+    subscription.service_address_id = address.id
+    db_session.commit()
+
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session,
+        web_catalog_subscriptions_service.edit_form_data(db_session, subscription),
+    )
+
+    rows = {row["key"]: row for row in context["commercial_policy"]["rows"]}
+    assert rows["tax_rate"]["effective"] == "Service VAT (5.00%)"
+    assert rows["tax_rate"]["source"] == "Service address"
+    assert rows["tax_rate"]["override"] == "Customer VAT (7.50%)"
 
 
 def test_send_subscription_credentials_uses_email_and_sms_targets(

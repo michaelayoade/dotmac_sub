@@ -20,6 +20,7 @@ def build_accounts_list_data(
     page: int,
     per_page: int,
     customer_ref: str | None,
+    reseller_id: str | None = None,
 ) -> dict[str, object]:
     offset = (page - 1) * per_page
     accounts = []
@@ -34,13 +35,16 @@ def build_accounts_list_data(
         accounts = subscriber_service.accounts.list(
             db=db,
             subscriber_id=None,
-            reseller_id=None,
+            reseller_id=UUID(reseller_id) if reseller_id else None,
             order_by="created_at",
             order_dir="desc",
             limit=per_page,
             offset=offset,
         )
-        total = db.query(Subscriber).count()
+        total_query = db.query(Subscriber)
+        if reseller_id:
+            total_query = total_query.filter(Subscriber.reseller_id == UUID(reseller_id))
+        total = total_query.count()
     total_pages = (total + per_page - 1) // per_page
     return {
         "accounts": accounts,
@@ -49,6 +53,7 @@ def build_accounts_list_data(
         "total": total,
         "total_pages": total_pages,
         "customer_ref": customer_ref,
+        "reseller_id": reseller_id,
     }
 
 

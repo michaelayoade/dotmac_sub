@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge %}
 
-{% block title %}Subscriptions - Services - Admin{% endblock %}
+{% block title %}Active Services - Catalog - Admin{% endblock %}
 
 {% block content %}
 <div class="space-y-6" x-data="subscriptionBulkActions()" x-cloak.remove>
@@ -42,8 +42,8 @@
 
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Subscriptions</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Assign offers to subscriber accounts</p>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Active Services</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Live customer services created from catalog plans</p>
         </div>
         <a href="/admin/catalog/subscriptions/new" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>

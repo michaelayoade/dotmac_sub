@@ -287,6 +287,18 @@
                                     <option value="US" {% if current_country == 'US' %}selected{% endif %}>United States</option>
                                 </select>
                             </div>
+                            <div>
+                                <label for="pop_site_id" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Service Location (POP)</label>
+                                {% set current_pop = (customer.pop_site_id | string) if customer and customer.pop_site_id else '' %}
+                                <select name="pop_site_id" id="pop_site_id"
+                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                                    <option value="">Select POP site...</option>
+                                    {% for pop in pop_sites|default([]) %}
+                                    <option value="{{ pop.id }}" {% if current_pop == pop.id|string %}selected{% endif %}>{{ pop.name }}</option>
+                                    {% endfor %}
+                                </select>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Determines the NAS device and IP pool for this customer's subscriptions</p>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -314,9 +326,12 @@
                                 <label for="status" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Status</label>
                                 <select name="status" id="status"
                                         class="block w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:border-amber-500 focus:bg-slate-50 focus:text-slate-900 focus:ring-2 focus:ring-amber-500 transition dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100 dark:ring-slate-700 dark:focus:bg-slate-700 dark:focus:text-slate-100">
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="new" {% if current_status == 'new' %}selected{% endif %}>New</option>
                                     <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="active" {% if current_status == 'active' or not customer %}selected{% endif %}>Active</option>
-                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="blocked" {% if customer and current_status == 'suspended' %}selected{% endif %}>Blocked</option>
-                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="inactive" {% if customer and not customer.is_active and current_status != 'suspended' %}selected{% endif %}>Inactive</option>
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="blocked" {% if current_status == 'blocked' %}selected{% endif %}>Blocked</option>
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="suspended" {% if current_status == 'suspended' %}selected{% endif %}>Suspended</option>
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="disabled" {% if current_status == 'disabled' %}selected{% endif %}>Disabled</option>
+                                    <option class="bg-white text-slate-900 dark:bg-slate-800 dark:text-slate-100" value="canceled" {% if current_status == 'canceled' %}selected{% endif %}>Canceled</option>
                                 </select>
                             </div>
                             <div>
@@ -365,6 +380,74 @@
                             <label for="notes" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Notes</label>
                             <textarea name="notes" id="notes" rows="3" placeholder="Internal notes about this customer..."
                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition resize-none dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500">{{ customer.notes if customer and customer_type == 'person' else '' }}</textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="sections.billing = !sections.billing"
+                        class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-semibold text-slate-900 dark:text-white">Billing Policy Overrides</h2>
+                            <p class="text-sm text-slate-500 dark:text-slate-400">Leave blank to inherit global defaults.</p>
+                        </div>
+                    </div>
+                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.billing ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="sections.billing" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                    <div class="p-6 space-y-5">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                            <div>
+                                <label for="billing_enabled_override" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Enabled</label>
+                                <select name="billing_enabled_override" id="billing_enabled_override" :disabled="customerType !== 'person'"
+                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                                    <option value="" {% if not billing_form or not billing_form.billing_enabled_override %}selected{% endif %}>Inherit global default</option>
+                                    <option value="true" {% if billing_form and billing_form.billing_enabled_override == 'true' %}selected{% endif %}>Enabled</option>
+                                    <option value="false" {% if billing_form and billing_form.billing_enabled_override == 'false' %}selected{% endif %}>Disabled</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="payment_method" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Method</label>
+                                <input type="text" name="payment_method" id="payment_method" :disabled="customerType !== 'person'" value="{{ billing_form.payment_method if billing_form else '' }}" placeholder="transfer, cash, card"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                            <div>
+                                <label for="billing_day" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Day</label>
+                                <input type="number" min="1" max="28" name="billing_day" id="billing_day" :disabled="customerType !== 'person'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                            <div>
+                                <label for="payment_due_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Due Days</label>
+                                <input type="number" min="0" name="payment_due_days" id="payment_due_days" :disabled="customerType !== 'person'" value="{{ billing_form.payment_due_days if billing_form else '' }}" placeholder="Inherit"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                            <div>
+                                <label for="grace_period_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Grace Period Days</label>
+                                <input type="number" min="0" name="grace_period_days" id="grace_period_days" :disabled="customerType !== 'person'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Not set"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                            <div>
+                                <label for="min_balance" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Minimum Balance</label>
+                                <input type="number" step="0.01" name="min_balance" id="min_balance" :disabled="customerType !== 'person'" value="{{ billing_form.min_balance if billing_form else '' }}" placeholder="Inherit"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                        </div>
+                        <div>
+                            <label for="tax_rate_id" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Tax Rate</label>
+                            <select name="tax_rate_id" id="tax_rate_id" :disabled="customerType !== 'person'"
+                                    class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                                <option value="" {% if not billing_form or not billing_form.tax_rate_id %}selected{% endif %}>No customer override</option>
+                                {% for rate in tax_rates | default([]) %}
+                                <option value="{{ rate.id }}" {% if billing_form and billing_form.tax_rate_id == rate.id|string %}selected{% endif %}>{{ rate.name }} ({{ (rate.rate * 100) | round(2) }}%)</option>
+                                {% endfor %}
+                            </select>
                         </div>
                     </div>
                 </div>
@@ -442,6 +525,77 @@
                             <label for="org_notes" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Notes</label>
                             <textarea name="org_notes" id="org_notes" rows="3" placeholder="Internal notes about this organization..."
                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition resize-none dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500">{{ customer.notes if customer and customer_type == 'organization' else '' }}</textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
+                <button type="button" @click="sections.orgBilling = !sections.orgBilling"
+                        class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-100 text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-400">
+                            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        </div>
+                        <div>
+                            <h2 class="text-base font-semibold text-slate-900 dark:text-white">Billing Policy Overrides</h2>
+                            <p class="text-sm text-slate-500 dark:text-slate-400">Applies the same override set to all linked subscriber accounts.</p>
+                        </div>
+                    </div>
+                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.orgBilling ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                </button>
+                <div x-show="sections.orgBilling" x-collapse class="border-t border-slate-100 dark:border-slate-700">
+                    <div class="p-6 space-y-5">
+                        <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
+                            If linked accounts currently have mixed billing overrides, the fields below start blank. Saving will standardize them across the organization.
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                            <div>
+                                <label for="org_billing_enabled_override" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Enabled</label>
+                                <select name="billing_enabled_override" id="org_billing_enabled_override" :disabled="customerType !== 'organization'"
+                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                                    <option value="" {% if not billing_form or not billing_form.billing_enabled_override %}selected{% endif %}>Inherit global default</option>
+                                    <option value="true" {% if billing_form and billing_form.billing_enabled_override == 'true' %}selected{% endif %}>Enabled</option>
+                                    <option value="false" {% if billing_form and billing_form.billing_enabled_override == 'false' %}selected{% endif %}>Disabled</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="org_payment_method" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Method</label>
+                                <input type="text" name="payment_method" id="org_payment_method" :disabled="customerType !== 'organization'" value="{{ billing_form.payment_method if billing_form else '' }}" placeholder="transfer, cash, card"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                        </div>
+                        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+                            <div>
+                                <label for="org_billing_day" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Day</label>
+                                <input type="number" min="1" max="28" name="billing_day" id="org_billing_day" :disabled="customerType !== 'organization'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                            <div>
+                                <label for="org_payment_due_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Due Days</label>
+                                <input type="number" min="0" name="payment_due_days" id="org_payment_due_days" :disabled="customerType !== 'organization'" value="{{ billing_form.payment_due_days if billing_form else '' }}" placeholder="Inherit"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                            <div>
+                                <label for="org_grace_period_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Grace Period Days</label>
+                                <input type="number" min="0" name="grace_period_days" id="org_grace_period_days" :disabled="customerType !== 'organization'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Not set"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                            <div>
+                                <label for="org_min_balance" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Minimum Balance</label>
+                                <input type="number" step="0.01" name="min_balance" id="org_min_balance" :disabled="customerType !== 'organization'" value="{{ billing_form.min_balance if billing_form else '' }}" placeholder="Inherit"
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                            </div>
+                        </div>
+                        <div>
+                            <label for="org_tax_rate_id" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Tax Rate</label>
+                            <select name="tax_rate_id" id="org_tax_rate_id" :disabled="customerType !== 'organization'"
+                                    class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
+                                <option value="" {% if not billing_form or not billing_form.tax_rate_id %}selected{% endif %}>No customer override</option>
+                                {% for rate in tax_rates | default([]) %}
+                                <option value="{{ rate.id }}" {% if billing_form and billing_form.tax_rate_id == rate.id|string %}selected{% endif %}>{{ rate.name }} ({{ (rate.rate * 100) | round(2) }}%)</option>
+                                {% endfor %}
+                            </select>
                         </div>
                     </div>
                 </div>
@@ -613,7 +767,9 @@ function customerForm() {
             basic: true,
             address: {{ 'true' if customer else 'false' }},
             status: {{ 'true' if customer else 'false' }},
+            billing: {{ 'true' if customer else 'false' }},
             orgBasic: true,
+            orgBilling: {{ 'true' if customer else 'false' }},
             contacts: false,
             subscriber: true
         }
