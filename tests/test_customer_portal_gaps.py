@@ -3,6 +3,8 @@
 Covers: ticket creation, password change, event types, route registration.
 """
 
+from datetime import UTC, datetime
+from unittest.mock import MagicMock
 from app.services.events.types import EventType
 
 # ---------------------------------------------------------------------------
@@ -204,3 +206,100 @@ class TestCommentSchema:
         comment = TicketCommentCreate(body="This is my reply", is_internal=False)
         assert comment.body == "This is my reply"
         assert comment.is_internal is False
+
+
+class TestCaptiveRedirectPersistence:
+    def test_subscriber_update_schema_accepts_captive_redirect_flag(self) -> None:
+        from app.schemas.subscriber import SubscriberUpdate
+
+        payload = SubscriberUpdate(captive_redirect_enabled=True)
+        assert payload.captive_redirect_enabled is True
+
+    def test_billing_override_payload_sets_captive_redirect_flag(self) -> None:
+        from app.services.web_customer_actions import _billing_override_payload
+
+        payload = _billing_override_payload(
+            billing_enabled_override=None,
+            billing_day=None,
+            payment_due_days=None,
+            grace_period_days=None,
+            min_balance=None,
+            captive_redirect_enabled="true",
+            tax_rate_id=None,
+            payment_method=None,
+        )
+
+        assert payload["captive_redirect_enabled"] is True
+
+
+class TestRestrictedContextHelpers:
+    def test_get_restricted_since_uses_metadata_timestamp(self) -> None:
+        from app.models.subscriber import Subscriber
+        from app.services.customer_portal_context import get_restricted_since
+
+        subscriber = Subscriber(
+            first_name="Jane",
+            last_name="Doe",
+            email="jane@example.com",
+            metadata_={"restricted_since": "2026-03-10T12:00:00+00:00"},
+        )
+
+        result = get_restricted_since(subscriber)
+        assert result == datetime(2026, 3, 10, 12, 0, tzinfo=UTC)
+
+    def test_total_outstanding_balance_queries_positive_active_balances(self) -> None:
+        from app.services.customer_portal_context import get_total_outstanding_balance
+
+        scalar_query = MagicMock()
+        scalar_query.filter.return_value = scalar_query
+        scalar_query.scalar.return_value = 125.5
+        db = MagicMock()
+        db.query.return_value = scalar_query
+
+        total = get_total_outstanding_balance(db, "00000000-0000-0000-0000-000000000001")
+
+        assert total == 125.5
+
+
+class TestRestrictedStatusMetadata:
+    def test_restricted_status_transition_sets_restricted_since(self) -> None:
+        from app.models.subscriber import Subscriber, SubscriberStatus
+        from app.services.subscriber import _update_restricted_status_metadata
+
+        subscriber = Subscriber(
+            first_name="Jane",
+            last_name="Doe",
+            email="jane@example.com",
+            metadata_={},
+        )
+
+        _update_restricted_status_metadata(
+            subscriber,
+            previous_status=SubscriberStatus.active,
+            next_status=SubscriberStatus.blocked,
+        )
+
+        assert subscriber.metadata_ is not None
+        assert "restricted_since" in subscriber.metadata_
+        assert subscriber.metadata_["restricted_status"] == "blocked"
+
+    def test_leaving_restricted_status_records_exit(self) -> None:
+        from app.models.subscriber import Subscriber, SubscriberStatus
+        from app.services.subscriber import _update_restricted_status_metadata
+
+        subscriber = Subscriber(
+            first_name="Jane",
+            last_name="Doe",
+            email="jane@example.com",
+            metadata_={"restricted_since": "2026-03-10T12:00:00+00:00"},
+        )
+
+        _update_restricted_status_metadata(
+            subscriber,
+            previous_status=SubscriberStatus.suspended,
+            next_status=SubscriberStatus.active,
+        )
+
+        assert subscriber.metadata_ is not None
+        assert subscriber.metadata_["last_restricted_status"] == "suspended"
+        assert "last_restricted_ended_at" in subscriber.metadata_

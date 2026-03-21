@@ -20,52 +20,9 @@ def ensure_person_subscriber_account(
     last_name: str,
     email: str,
 ) -> dict[str, Any]:
-    headers = bearer_headers(token)
     person = ensure_person(api_context, token, first_name, last_name, email)
-
-    response = api_get(
-        api_context,
-        f"/api/v1/subscribers?subscriber_type=person&person_id={person['id']}",
-        headers=headers,
-    )
-    if not response.ok:
-        raise AuthError(f"Failed to list subscribers: {response.status}")
-    data = response.json()
-    subscribers = data.get("items", [])
-    if subscribers:
-        subscriber = subscribers[0]
-    else:
-        response = api_post_json(
-            api_context,
-            "/api/v1/subscribers",
-            {"person_id": person["id"]},
-            headers=headers,
-        )
-        if not response.ok:
-            raise AuthError(f"Failed to create subscriber: {response.status}")
-        subscriber = _response_json_dict(response)
-
-    response = api_get(
-        api_context,
-        f"/api/v1/subscriber-accounts?subscriber_id={subscriber['id']}",
-        headers=headers,
-    )
-    if not response.ok:
-        raise AuthError(f"Failed to list accounts: {response.status}")
-    data = response.json()
-    accounts = data.get("items", [])
-    if accounts:
-        account = accounts[0]
-    else:
-        response = api_post_json(
-            api_context,
-            "/api/v1/subscriber-accounts",
-            {"subscriber_id": subscriber["id"]},
-            headers=headers,
-        )
-        if not response.ok:
-            raise AuthError(f"Failed to create account: {response.status}")
-        account = _response_json_dict(response)
+    subscriber = person
+    account = person
 
     return {
         "person": person,

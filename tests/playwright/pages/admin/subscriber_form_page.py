@@ -57,7 +57,7 @@ class SubscriberFormPage(BasePage):
 
     def fill_notes(self, notes: str) -> None:
         """Fill the notes field."""
-        self.page.get_by_label("Notes").fill(notes)
+        self.page.locator("#notes, textarea[name='notes']").first.fill(notes)
 
     def set_active(self, active: bool) -> None:
         """Set the active checkbox."""
@@ -69,7 +69,7 @@ class SubscriberFormPage(BasePage):
 
     def submit(self) -> None:
         """Submit the form."""
-        self.page.get_by_role("button", name="Save").click()
+        self.page.locator("button[type='submit']").click()
 
     def cancel(self) -> None:
         """Cancel and go back."""

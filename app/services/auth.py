@@ -149,15 +149,14 @@ class UserCredentials(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        *,
         subscriber_id: str | None = None,
         person_id: str | None = None,
-        provider: str | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        provider: str | None = None,
+        is_active: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(UserCredential)
         resolved_subscriber_id = subscriber_id or person_id
@@ -243,17 +242,16 @@ class MFAMethods(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        *,
         subscriber_id: str | None = None,
         person_id: str | None = None,
-        method_type: str | None,
-        is_primary: bool | None,
-        enabled: bool | None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        method_type: str | None = None,
+        is_primary: bool | None = None,
+        enabled: bool | None = None,
+        is_active: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(MFAMethod)
         resolved_subscriber_id = subscriber_id or person_id
@@ -355,14 +353,13 @@ class Sessions(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        *,
         subscriber_id: str | None = None,
         person_id: str | None = None,
-        status: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        status: str | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(AuthSession)
         resolved_subscriber_id = subscriber_id or person_id
@@ -482,14 +479,13 @@ class ApiKeys(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        *,
         subscriber_id: str | None = None,
         person_id: str | None = None,
-        is_active: bool | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
+        is_active: bool | None = None,
+        order_by: str = "created_at",
+        order_dir: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
     ):
         query = db.query(ApiKey)
         resolved_subscriber_id = subscriber_id or person_id

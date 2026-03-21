@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, cast
 
 import pytest
+from playwright._impl._errors import Error as PlaywrightError
 
 from app.services.auth_flow import hash_password
 from tests.playwright.helpers.api import (
@@ -19,22 +21,31 @@ class AuthError(RuntimeError):
 
 
 def login_for_token(api_context, username: str, password: str) -> str:
-    response = api_post_json(
-        api_context,
-        "/api/v1/auth/login",
-        {"username": username, "password": password},
-    )
-    if response.status == 404:
-        return _login_for_token_via_web(api_context, username, password)
-    if not response.ok:
-        raise AuthError(f"Login failed for {username}: {response.status}")
-    payload = cast(dict[str, Any], response.json())
-    if payload.get("mfa_required"):
-        pytest.skip("MFA is enabled for this account; disable MFA for E2E users.")
-    token_obj = payload.get("access_token")
-    if not isinstance(token_obj, str) or not token_obj:
-        raise AuthError("Login response missing access_token")
-    return token_obj
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            response = api_post_json(
+                api_context,
+                "/api/v1/auth/login",
+                {"username": username, "password": password},
+            )
+            if response.status == 404:
+                return _login_for_token_via_web(api_context, username, password)
+            if not response.ok:
+                raise AuthError(f"Login failed for {username}: {response.status}")
+            payload = cast(dict[str, Any], response.json())
+            if payload.get("mfa_required"):
+                pytest.skip("MFA is enabled for this account; disable MFA for E2E users.")
+            token_obj = payload.get("access_token")
+            if not isinstance(token_obj, str) or not token_obj:
+                raise AuthError("Login response missing access_token")
+            return token_obj
+        except (PlaywrightError, AuthError) as exc:
+            last_error = exc
+            if attempt == 2:
+                break
+            time.sleep(2)
+    raise AuthError(f"Login failed for {username}: {last_error}")
 
 
 def _login_for_token_via_web(api_context, username: str, password: str) -> str:
@@ -65,24 +76,35 @@ def _session_token_from_headers(headers: dict[str, str]) -> str | None:
 
 def ensure_person(api_context, token: str, first_name: str, last_name: str, email: str) -> dict[str, Any]:
     headers = bearer_headers(token)
-    response = api_get(api_context, f"/api/v1/people?email={email}", headers=headers)
-    if not response.ok:
-        raise AuthError(f"Failed to list people: {response.status}")
-    data = cast(dict[str, Any], response.json())
-    items_obj = data.get("items", [])
-    if isinstance(items_obj, list) and items_obj:
-        item0 = items_obj[0]
-        if isinstance(item0, dict):
-            return cast(dict[str, Any], item0)
+    response = api_get(api_context, f"/api/v1/customers/search?q={email}", headers=headers)
+    if response.ok:
+        data = cast(dict[str, Any], response.json())
+        items_obj = data.get("items", [])
+        if isinstance(items_obj, list):
+            for item_obj in items_obj:
+                if not isinstance(item_obj, dict):
+                    continue
+                item = cast(dict[str, Any], item_obj)
+                subscriber_id = item.get("id")
+                if isinstance(subscriber_id, str) and subscriber_id:
+                    existing = api_get(
+                        api_context,
+                        f"/api/v1/subscribers/{subscriber_id}",
+                        headers=headers,
+                    )
+                    if existing.ok:
+                        subscriber = cast(dict[str, Any], existing.json())
+                        if subscriber.get("email") == email:
+                            return subscriber
 
     response = api_post_json(
         api_context,
-        "/api/v1/people",
+        "/api/v1/subscribers",
         {"first_name": first_name, "last_name": last_name, "email": email},
         headers=headers,
     )
     if not response.ok:
-        raise AuthError(f"Failed to create person: {response.status}")
+        raise AuthError(f"Failed to create subscriber: {response.status}")
     return cast(dict[str, Any], response.json())
 
 
@@ -94,28 +116,21 @@ def ensure_user_credential(
     password: str,
 ) -> dict[str, Any]:
     headers = bearer_headers(token)
-    response = api_get(
-        api_context,
-        f"/api/v1/user-credentials?person_id={person_id}",
-        headers=headers,
-    )
-    if not response.ok:
-        raise AuthError(f"Failed to list credentials: {response.status}")
-    data = cast(dict[str, Any], response.json())
-    items_obj = data.get("items", [])
-    if isinstance(items_obj, list):
-        for cred_obj in items_obj:
-            if not isinstance(cred_obj, dict):
-                continue
-            cred = cast(dict[str, Any], cred_obj)
-            if cred.get("username") == username and cred.get("is_active"):
-                return cred
+    try:
+        login_for_token(api_context, username, password)
+        return {
+            "subscriber_id": person_id,
+            "username": username,
+            "is_active": True,
+        }
+    except AuthError:
+        pass
 
     response = api_post_json(
         api_context,
         "/api/v1/user-credentials",
         {
-            "person_id": person_id,
+            "subscriber_id": person_id,
             "username": username,
             "password_hash": hash_password(password),
             "must_change_password": False,
@@ -151,7 +166,7 @@ def ensure_person_role(api_context, token: str, person_id: str, role_id: str) ->
     headers = bearer_headers(token)
     response = api_get(
         api_context,
-        f"/api/v1/rbac/person-roles?person_id={person_id}&role_id={role_id}",
+        f"/api/v1/rbac/person-roles?subscriber_id={person_id}&role_id={role_id}",
         headers=headers,
     )
     if not response.ok:
@@ -166,7 +181,7 @@ def ensure_person_role(api_context, token: str, person_id: str, role_id: str) ->
     response = api_post_json(
         api_context,
         "/api/v1/rbac/person-roles",
-        {"person_id": person_id, "role_id": role_id},
+        {"subscriber_id": person_id, "role_id": role_id},
         headers=headers,
     )
     if not response.ok:

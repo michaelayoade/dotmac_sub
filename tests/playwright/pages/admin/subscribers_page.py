@@ -32,7 +32,7 @@ class SubscribersPage(BasePage):
 
     def click_new_subscriber(self) -> None:
         """Click the new customer button."""
-        self.page.get_by_role("link", name="Add Customer").first.click()
+        self.page.get_by_role("link", name="Add Customer", exact=True).click()
 
     def click_subscriber_row(self, identifier: str) -> None:
         """Click on a subscriber row by name or number."""

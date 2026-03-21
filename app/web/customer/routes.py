@@ -94,7 +94,6 @@ def _render_dashboard(request: Request, db: Session, customer: dict, next_url: s
         {"request": request, "customer": customer, **dashboard_context, "active_page": "dashboard"},
     )
 
-
 @router.get("", response_class=HTMLResponse)
 def portal_home(request: Request, db: Session = Depends(get_db)) -> Response:
     """Customer portal dashboard."""
@@ -241,7 +240,6 @@ def customer_work_orders(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal/work-orders", status_code=303)
-
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_orders_list_context(request, db, customer, subscriber_ids)
     return templates.TemplateResponse("customer/work-orders/index.html", context)
@@ -257,7 +255,6 @@ def customer_work_order_detail(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal/work-orders", status_code=303)
-
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_order_detail_context(
         request, db, customer, subscriber_ids, work_order_id
@@ -420,7 +417,6 @@ def customer_usage(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/usage", status_code=303
         )
-
     usage_data = customer_portal.get_usage_page(
         db, customer, period=period, page=page, per_page=per_page
     )
@@ -447,7 +443,6 @@ def customer_bandwidth_series(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
     subscription = _resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse({"data": [], "total": 0, "source": "postgres"})
@@ -472,7 +467,6 @@ def customer_bandwidth_stats(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
     subscription = _resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse(
@@ -504,7 +498,6 @@ def customer_bandwidth_live(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-
     subscription = _resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse({"detail": "No active subscription found"}, status_code=404)
@@ -577,7 +570,6 @@ def customer_speedtest(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/speedtest", status_code=303
         )
-
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
@@ -621,7 +613,6 @@ def customer_speedtest_submit(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
@@ -713,7 +704,6 @@ def customer_services(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/services", status_code=303
         )
-
     services_data = customer_portal.get_services_page(
         db, customer, status=status, page=page, per_page=per_page
     )
@@ -739,7 +729,6 @@ def customer_service_detail(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     detail = customer_portal.get_service_detail(db, customer, str(subscription_id))
     if not detail:
         return templates.TemplateResponse(
@@ -773,7 +762,6 @@ def customer_installations(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/installations", status_code=303
         )
-
     appt_data = customer_portal.get_customer_appointments(
         db=db,
         customer=customer,
@@ -812,7 +800,6 @@ def customer_service_orders(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/service-orders", status_code=303
         )
-
     orders_data = customer_portal.get_service_orders_page(
         db, customer, status=status, page=page, per_page=per_page
     )
@@ -838,7 +825,6 @@ def customer_installation_detail(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     detail = customer_portal.get_installation_detail(db, customer, str(appointment_id))
     if not detail:
         return templates.TemplateResponse(
@@ -868,7 +854,6 @@ def customer_service_order_detail(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     detail = customer_portal.get_service_order_detail(
         db, customer, str(service_order_id)
     )
@@ -901,7 +886,6 @@ def customer_notifications(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login?next=/portal/notifications", status_code=303)
-
     return templates.TemplateResponse(
         "customer/notifications/index.html",
         {
@@ -929,7 +913,6 @@ def customer_profile(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/profile", status_code=303
         )
-
     return templates.TemplateResponse(
         "customer/profile/index.html",
         {
@@ -952,7 +935,6 @@ def customer_update_profile(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id:
         from app.services.web_customer_actions import update_customer_profile
@@ -1059,7 +1041,6 @@ def customer_change_plan(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     page_data = customer_portal.get_change_plan_page(db, customer, str(subscription_id))
     if not page_data:
         return templates.TemplateResponse(
@@ -1091,7 +1072,6 @@ def customer_submit_change_plan(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
-
     try:
         customer_portal.apply_instant_plan_change(
             db=db,
@@ -1140,7 +1120,6 @@ def customer_change_requests(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/change-requests", status_code=303
         )
-
     change_data = customer_portal.get_change_requests_page(
         db, customer, status=status, page=page, per_page=per_page
     )

@@ -1181,6 +1181,7 @@ def organization_update(
     payment_due_days: str | None = Form(None),
     grace_period_days: str | None = Form(None),
     min_balance: str | None = Form(None),
+    captive_redirect_enabled: str | None = Form(None),
     tax_rate_id: str | None = Form(None),
     payment_method: str | None = Form(None),
     db: Session = Depends(get_db),
@@ -1202,6 +1203,7 @@ def organization_update(
             payment_due_days=payment_due_days,
             grace_period_days=grace_period_days,
             min_balance=min_balance,
+            captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             payment_method=payment_method,
         )
