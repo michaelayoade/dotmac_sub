@@ -13,13 +13,13 @@ class CustomerServicesPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/customer/services") -> None:
+    def goto(self, path: str = "/portal/services") -> None:
         """Navigate to the services page."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the services page is loaded."""
-        expect(self.page.get_by_role("heading", name="Service", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="Services", exact=True)).to_be_visible()
 
     def expect_active_services_visible(self) -> None:
         """Assert active services section is visible."""
@@ -49,16 +49,14 @@ class CustomerServicesPage(BasePage):
         expect(self.page.get_by_text(service_name)).to_be_visible()
 
     def request_upgrade(self) -> None:
-        """Request a service upgrade."""
-        self.page.get_by_role("button", name="Upgrade").or_(
-            self.page.get_by_role("link", name="Upgrade")
+        """Open the plan change flow."""
+        self.page.get_by_role("button", name="Change Plan").or_(
+            self.page.get_by_role("link", name="Change Plan")
         ).first.click()
 
     def request_downgrade(self) -> None:
-        """Request a service downgrade."""
-        self.page.get_by_role("button", name="Downgrade").or_(
-            self.page.get_by_role("link", name="Downgrade")
-        ).first.click()
+        """Open the plan change flow."""
+        self.request_upgrade()
 
     def view_usage(self) -> None:
         """View usage for current service."""

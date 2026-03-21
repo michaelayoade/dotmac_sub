@@ -21,6 +21,10 @@ from app.services.customer_portal_flow_common import (
     _compute_total_pages,
     _resolve_next_billing_date,
 )
+from app.services.customer_portal_flow_changes import (
+    get_offer_price_summary,
+    get_plan_change_copy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -346,11 +350,14 @@ def get_service_detail(
         current_offer = db.get(CatalogOffer, subscription.offer_id)
 
     next_billing_date = _resolve_next_billing_date(db, subscription)
+    copy = get_plan_change_copy(subscription)
 
     return {
         "subscription": subscription,
         "current_offer": current_offer,
+        "current_offer_summary": get_offer_price_summary(current_offer),
         "next_billing_date": next_billing_date,
+        **copy,
     }
 
 

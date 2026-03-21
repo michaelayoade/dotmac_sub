@@ -3,11 +3,12 @@
 import logging
 from datetime import date, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import CatalogOffer, Subscription
+from app.models.catalog import CatalogOffer, PriceType, Subscription
 from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
@@ -23,6 +24,14 @@ from app.services.customer_portal_flow_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+_CYCLE_LABELS = {
+    "daily": "/day",
+    "weekly": "/week",
+    "monthly": "/month",
+    "quarterly": "/quarter",
+    "annual": "/year",
+}
 
 
 def get_change_plan_page(
@@ -47,12 +56,18 @@ def get_change_plan_page(
     if subscription.offer_id:
         current_offer = db.get(CatalogOffer, subscription.offer_id)
     next_billing_date = _resolve_next_billing_date(db, subscription)
+    copy = get_plan_change_copy(subscription)
 
     return {
         "subscription": subscription,
         "current_offer": current_offer,
+        "current_offer_summary": get_offer_price_summary(current_offer),
+        "available_offer_summaries": {
+            str(offer.id): get_offer_price_summary(offer) for offer in available_offers
+        },
         "available_offers": available_offers,
         "next_billing_date": next_billing_date,
+        **copy,
     }
 
 
@@ -100,12 +115,18 @@ def get_change_plan_error_context(
         else None
     )
     next_billing_date = _resolve_next_billing_date(db, subscription)
+    copy = get_plan_change_copy(subscription)
 
     return {
         "subscription": subscription,
         "current_offer": current_offer,
+        "current_offer_summary": get_offer_price_summary(current_offer),
+        "available_offer_summaries": {
+            str(offer.id): get_offer_price_summary(offer) for offer in available_offers
+        },
         "available_offers": available_offers,
         "next_billing_date": next_billing_date,
+        **copy,
     }
 
 
@@ -176,6 +197,58 @@ def _get_offer_recurring_price(offer: CatalogOffer) -> Decimal:
         if price.is_active and price.price_type == PriceType.recurring:
             return Decimal(str(price.amount))
     return Decimal("0")
+
+
+def get_offer_price_summary(offer: CatalogOffer | None) -> SimpleNamespace:
+    """Build recurring price display details for customer portal templates."""
+    amount = Decimal("0")
+    currency = "NGN"
+    cycle_value = "monthly"
+
+    if offer:
+        for price in offer.prices or []:
+            if price.is_active and price.price_type == PriceType.recurring:
+                amount = Decimal(str(price.amount or 0))
+                currency = str(price.currency or currency)
+                raw_cycle = price.billing_cycle
+                if raw_cycle:
+                    cycle_value = raw_cycle.value if hasattr(raw_cycle, "value") else str(raw_cycle)
+                break
+        else:
+            raw_cycle = getattr(offer, "billing_cycle", None)
+            if raw_cycle:
+                cycle_value = raw_cycle.value if hasattr(raw_cycle, "value") else str(raw_cycle)
+
+    return SimpleNamespace(
+        amount=float(amount),
+        amount_decimal=amount,
+        currency=currency,
+        billing_cycle=cycle_value,
+        period_label=_CYCLE_LABELS.get(cycle_value, "/cycle"),
+    )
+
+
+def get_plan_change_copy(subscription: Subscription) -> dict[str, str]:
+    """Return billing-mode-aware customer copy for plan changes."""
+    billing_mode = getattr(subscription, "billing_mode", None)
+    billing_mode_value = (
+        billing_mode.value if billing_mode and hasattr(billing_mode, "value") else str(billing_mode or "")
+    ).lower()
+    if billing_mode_value == "prepaid":
+        return {
+            "timing_message": "Select a new plan. Changes take effect immediately.",
+            "billing_message": (
+                "Because this subscription is prepaid, an immediate prorated invoice or credit note "
+                "may be generated today based on the remaining days in your billing cycle."
+            ),
+        }
+    return {
+        "timing_message": "Select a new plan. Changes take effect immediately.",
+        "billing_message": (
+            "Your next invoice will reflect the new rate. No mid-cycle proration is applied "
+            "for postpaid plans."
+        ),
+    }
 
 
 def apply_instant_plan_change(
@@ -268,5 +341,7 @@ __all__ = [
     "get_change_plan_error_context",
     "get_change_requests_page",
     "_get_offer_recurring_price",
+    "get_offer_price_summary",
+    "get_plan_change_copy",
     "apply_instant_plan_change",
 ]

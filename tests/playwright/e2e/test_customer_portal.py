@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from playwright.sync_api import Page
+from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.customer import (
     CustomerBillingPage,
@@ -93,6 +93,15 @@ class TestCustomerServices:
         page.goto()
         page.expect_loaded()
         page.expect_service_details_visible()
+
+    def test_services_change_plan_page_loads(self, customer_page: Page, settings):
+        """Customer can open the change plan page from services."""
+        page = CustomerServicesPage(customer_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+        page.request_upgrade()
+        customer_page.wait_for_url("**/portal/services/*/change")
+        expect(customer_page.get_by_role("heading", name="Change Your Plan")).to_be_visible()
 
 
 class TestCustomerSupport:

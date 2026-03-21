@@ -112,34 +112,31 @@
                     <thead>
                         <tr>
                             <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Rule Name</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Period</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Direction</th>
                             <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Threshold</th>
                             <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Action</th>
-                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Speed %</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Conditions</th>
+                            <th class="px-3 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Chain</th>
                             <th class="px-3 py-3 text-center text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Active</th>
-                            <th class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                            <th class="px-3 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                        {% set day_labels = {0: 'Mon', 1: 'Tue', 2: 'Wed', 3: 'Thu', 4: 'Fri', 5: 'Sat', 6: 'Sun'} %}
                         {% for rule in fup_policy.rules %}
                         <tr x-data="{ editing: false }" class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                             <template x-if="!editing">
-                                <td class="px-3 py-3 text-sm text-slate-900 dark:text-white font-medium">{{ rule.name }}</td>
+                                <td class="px-3 py-3">
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ rule.name }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ consumption_period_labels.get(rule.consumption_period.value, rule.consumption_period.value) }} · {{ direction_labels.get(rule.direction.value, rule.direction.value) }}</p>
+                                </td>
                             </template>
                             <template x-if="!editing">
-                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300">{{ consumption_period_labels.get(rule.consumption_period.value, rule.consumption_period.value) }}</td>
-                            </template>
-                            <template x-if="!editing">
-                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300">{{ direction_labels.get(rule.direction.value, rule.direction.value) }}</td>
-                            </template>
-                            <template x-if="!editing">
-                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300 font-mono">{{ rule.threshold_amount }} {{ data_unit_labels.get(rule.threshold_unit.value, rule.threshold_unit.value) }}</td>
+                                <td class="px-3 py-3 text-sm font-mono tabular-nums text-slate-700 dark:text-slate-300">{{ rule.threshold_amount }} {{ data_unit_labels.get(rule.threshold_unit.value, rule.threshold_unit.value) }}</td>
                             </template>
                             <template x-if="!editing">
                                 <td class="px-3 py-3 text-sm">
                                     {% if rule.action.value == 'reduce_speed' %}
-                                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">Reduce Speed</span>
+                                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">Throttle {{ rule.speed_reduction_percent or '' }}%</span>
                                     {% elif rule.action.value == 'block' %}
                                     <span class="inline-flex items-center rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900 dark:text-rose-200">Block</span>
                                     {% else %}
@@ -148,20 +145,48 @@
                                 </td>
                             </template>
                             <template x-if="!editing">
-                                <td class="px-3 py-3 text-sm text-slate-600 dark:text-slate-300 font-mono">{{ rule.speed_reduction_percent if rule.speed_reduction_percent is not none else '-' }}{% if rule.speed_reduction_percent is not none %}%{% endif %}</td>
+                                <td class="px-3 py-3 text-xs text-slate-500 dark:text-slate-400">
+                                    {% if rule.time_start and rule.time_end %}
+                                    <span class="inline-flex items-center gap-1 rounded bg-blue-50 px-1.5 py-0.5 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
+                                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        {{ rule.time_start.strftime('%H:%M') }}-{{ rule.time_end.strftime('%H:%M') }}
+                                    </span>
+                                    {% endif %}
+                                    {% if rule.days_of_week %}
+                                    <span class="inline-flex items-center gap-1 rounded bg-purple-50 px-1.5 py-0.5 text-purple-700 dark:bg-purple-900/20 dark:text-purple-300">
+                                        {{ rule.days_of_week | map('string') | map('replace', '0', 'Mon') | map('replace', '1', 'Tue') | map('replace', '2', 'Wed') | map('replace', '3', 'Thu') | map('replace', '4', 'Fri') | map('replace', '5', 'Sat') | map('replace', '6', 'Sun') | join(', ') }}
+                                    </span>
+                                    {% endif %}
+                                    {% if not rule.time_start and not rule.days_of_week %}
+                                    <span class="text-slate-400">Always</span>
+                                    {% endif %}
+                                </td>
+                            </template>
+                            <template x-if="!editing">
+                                <td class="px-3 py-3 text-xs">
+                                    {% if rule.enabled_by_rule_id %}
+                                    {% set parent_rule = fup_policy.rules | selectattr('id', 'equalto', rule.enabled_by_rule_id) | first %}
+                                    <span class="inline-flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-400">
+                                        <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
+                                        After: {{ parent_rule.name if parent_rule else 'Unknown' }}
+                                    </span>
+                                    {% else %}
+                                    <span class="text-slate-400">—</span>
+                                    {% endif %}
+                                </td>
                             </template>
                             <template x-if="!editing">
                                 <td class="px-3 py-3 text-center">
                                     {% if rule.is_active %}
-                                    <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Yes</span>
+                                    <span class="h-2 w-2 rounded-full bg-emerald-500 inline-block"></span>
                                     {% else %}
-                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">No</span>
+                                    <span class="h-2 w-2 rounded-full bg-slate-300 inline-block dark:bg-slate-600"></span>
                                     {% endif %}
                                 </td>
                             </template>
                             <template x-if="!editing">
                                 <td class="px-3 py-3 text-right">
-                                    <div class="flex items-center justify-end gap-2">
+                                    <div class="flex items-center justify-end gap-1">
                                         <button @click="editing = true" type="button" class="rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300" title="Edit">
                                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                                         </button>
@@ -177,7 +202,7 @@
                             </template>
 
                             <template x-if="editing">
-                                <td colspan="8" class="px-3 py-3">
+                                <td colspan="7" class="px-3 py-3">
                                     <form method="post" action="/admin/catalog/offers/{{ offer.id }}/fup/rules/{{ rule.id }}/update" class="space-y-4">
                                         {% include "components/forms/csrf_input.html" %}
                                         <input type="hidden" name="return_to" value="{{ fup_return_to or ('/admin/catalog/offers/' ~ offer.id ~ '/fup') }}">
@@ -191,14 +216,6 @@
                                                 <select name="consumption_period" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                                     {% for opt in consumption_periods %}
                                                     <option value="{{ opt.value }}" {% if rule.consumption_period.value == opt.value %}selected{% endif %}>{{ opt.label }}</option>
-                                                    {% endfor %}
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Direction</label>
-                                                <select name="direction" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                                    {% for opt in directions %}
-                                                    <option value="{{ opt.value }}" {% if rule.direction.value == opt.value %}selected{% endif %}>{{ opt.label }}</option>
                                                     {% endfor %}
                                                 </select>
                                             </div>
@@ -216,8 +233,6 @@
                                                     </select>
                                                 </div>
                                             </div>
-                                        </div>
-                                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
                                             <div>
                                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Action</label>
                                                 <select name="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
@@ -226,16 +241,51 @@
                                                     {% endfor %}
                                                 </select>
                                             </div>
+                                        </div>
+                                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
                                             <div>
                                                 <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Speed Reduction %</label>
                                                 <input type="number" name="speed_reduction_percent" value="{{ rule.speed_reduction_percent if rule.speed_reduction_percent is not none else '' }}" step="1" min="0" max="100" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                             </div>
-                                            <div class="flex items-end">
-                                                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 pb-2">
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Time Start</label>
+                                                <input type="time" name="time_start" value="{{ rule.time_start.strftime('%H:%M') if rule.time_start else '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Time End</label>
+                                                <input type="time" name="time_end" value="{{ rule.time_end.strftime('%H:%M') if rule.time_end else '' }}" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                            </div>
+                                            <div>
+                                                <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">Requires Rule</label>
+                                                <select name="enabled_by_rule_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                                    <option value="">None (always active)</option>
+                                                    {% for other_rule in fup_policy.rules %}
+                                                    {% if other_rule.id != rule.id %}
+                                                    <option value="{{ other_rule.id }}" {% if rule.enabled_by_rule_id and rule.enabled_by_rule_id == other_rule.id %}selected{% endif %}>{{ other_rule.name }}</option>
+                                                    {% endif %}
+                                                    {% endfor %}
+                                                </select>
+                                            </div>
+                                            <div class="flex items-end gap-3 pb-1">
+                                                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
                                                     <input type="checkbox" name="is_active" {% if rule.is_active %}checked{% endif %}
                                                         class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
                                                     Active
                                                 </label>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-2">Active Days</label>
+                                            <div class="flex flex-wrap gap-3">
+                                                {% for d_num, d_name in day_names %}
+                                                <label class="inline-flex items-center gap-1.5 text-xs text-slate-700 dark:text-slate-300">
+                                                    <input type="checkbox" name="days_of_week" value="{{ d_num }}"
+                                                        {% if rule.days_of_week and d_num in rule.days_of_week %}checked{% endif %}
+                                                        class="h-3.5 w-3.5 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                                                    {{ d_name }}
+                                                </label>
+                                                {% endfor %}
+                                                <span class="text-[10px] text-slate-400">(leave all unchecked = every day)</span>
                                             </div>
                                         </div>
                                         <div class="flex items-center gap-2">
@@ -309,9 +359,9 @@
                             {% endfor %}
                         </select>
                     </div>
-                    <div x-data="{ action: 'reduce_speed' }">
+                    <div>
                         <label for="new_rule_action" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Action</label>
-                        <select id="new_rule_action" name="action" x-model="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select id="new_rule_action" name="action" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% for opt in actions %}
                             <option value="{{ opt.value }}">{{ opt.label }}</option>
                             {% endfor %}
@@ -319,8 +369,45 @@
                     </div>
                     <div>
                         <label for="new_rule_speed_pct" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Speed Reduction %</label>
-                        <input type="number" id="new_rule_speed_pct" name="speed_reduction_percent" step="1" min="0" max="100" placeholder="50" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Only applies when action is "Reduce Speed"</p>
+                        <input type="number" id="new_rule_speed_pct" name="speed_reduction_percent" step="1" min="0" max="100" placeholder="90" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Time Start</label>
+                        <input type="time" name="time_start" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Leave empty for always">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Time End</label>
+                        <input type="time" name="time_end" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Requires Rule (Chain)</label>
+                        <select name="enabled_by_rule_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None (always active)</option>
+                            {% for existing_rule in fup_policy.rules %}
+                            <option value="{{ existing_rule.id }}">{{ existing_rule.name }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Sort Order</label>
+                        <input type="number" name="sort_order" value="{{ (fup_policy.rules | length) + 1 }}" min="0" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Active Days</label>
+                    <div class="flex flex-wrap gap-3">
+                        {% for day_num, day_name in day_names %}
+                        <label class="inline-flex items-center gap-1.5 text-sm text-slate-700 dark:text-slate-300">
+                            <input type="checkbox" name="days_of_week" value="{{ day_num }}"
+                                class="h-4 w-4 rounded border-slate-300 text-violet-600 focus:ring-violet-500 dark:border-slate-600 dark:bg-slate-700">
+                            {{ day_name }}
+                        </label>
+                        {% endfor %}
+                        <span class="text-xs text-slate-400 self-center">(leave all unchecked = every day)</span>
                     </div>
                 </div>
 

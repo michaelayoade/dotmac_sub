@@ -261,6 +261,91 @@ class TestRestrictedContextHelpers:
         assert total == 125.5
 
 
+class TestPlanChangeUiHelpers:
+    def test_offer_price_summary_uses_recurring_price_cycle(self) -> None:
+        from types import SimpleNamespace
+
+        from app.models.catalog import PriceType
+        from app.services.customer_portal_flow_changes import get_offer_price_summary
+
+        offer = SimpleNamespace(
+            prices=[
+                SimpleNamespace(
+                    is_active=True,
+                    price_type=PriceType.recurring,
+                    amount="4999.99",
+                    currency="NGN",
+                    billing_cycle=SimpleNamespace(value="weekly"),
+                )
+            ],
+            billing_cycle=None,
+        )
+
+        summary = get_offer_price_summary(offer)
+
+        assert summary.amount == 4999.99
+        assert summary.currency == "NGN"
+        assert summary.period_label == "/week"
+
+    def test_plan_change_copy_mentions_proration_for_prepaid(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services.customer_portal_flow_changes import get_plan_change_copy
+
+        copy = get_plan_change_copy(
+            SimpleNamespace(billing_mode=SimpleNamespace(value="prepaid"))
+        )
+
+        assert "prorated invoice or credit note" in copy["billing_message"]
+
+
+class TestPlanChangeSettingsValidation:
+    def test_save_plan_change_rejects_invalid_refund_policy(self) -> None:
+        import pytest
+
+        from app.services.web_system_config import save_plan_change
+
+        with pytest.raises(ValueError, match="Refund Policy"):
+            save_plan_change(
+                MagicMock(),
+                {
+                    "refund_policy": "bogus",
+                    "upgrade_fee": "0",
+                    "downgrade_fee": "0",
+                    "fee_tax_rate": "0",
+                    "invoice_timing": "immediate",
+                    "prepaid_rollover": "false",
+                    "discount_transfer": "false",
+                    "minimum_invoice_amount": "0",
+                },
+            )
+
+    def test_save_plan_change_normalizes_valid_values(self) -> None:
+        from unittest.mock import patch
+
+        from app.services.web_system_config import save_plan_change
+
+        with patch("app.services.web_system_config._save_settings") as save_mock:
+            save_plan_change(
+                MagicMock(),
+                {
+                    "refund_policy": "PRORATED",
+                    "upgrade_fee": "500.00",
+                    "downgrade_fee": "0",
+                    "fee_tax_rate": "7.50",
+                    "invoice_timing": "Immediate",
+                    "prepaid_rollover": "TRUE",
+                    "discount_transfer": "false",
+                    "minimum_invoice_amount": "100.00",
+                },
+            )
+
+        saved_payload = save_mock.call_args.args[2]
+        assert saved_payload["refund_policy"] == "prorated"
+        assert saved_payload["invoice_timing"] == "immediate"
+        assert saved_payload["prepaid_rollover"] == "true"
+
+
 class TestRestrictedStatusMetadata:
     def test_restricted_status_transition_sets_restricted_since(self) -> None:
         from app.models.subscriber import Subscriber, SubscriberStatus

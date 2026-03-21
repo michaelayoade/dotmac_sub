@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
@@ -399,7 +400,39 @@ def get_plan_change_context(db: Session) -> dict:
 
 
 def save_plan_change(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.billing, data, PLAN_CHANGE_KEYS)
+    normalized = dict(data)
+    refund_policy = str(normalized.get("refund_policy") or "").strip().lower()
+    invoice_timing = str(normalized.get("invoice_timing") or "").strip().lower()
+    prepaid_rollover = str(normalized.get("prepaid_rollover") or "").strip().lower()
+    discount_transfer = str(normalized.get("discount_transfer") or "").strip().lower()
+
+    allowed_refund_policies = {"none", "prorated", "full_within_days"}
+    allowed_invoice_timing = {"immediate", "next_invoice"}
+    allowed_booleanish = {"true", "false"}
+
+    if refund_policy not in allowed_refund_policies:
+        raise ValueError("Refund Policy must be one of: none, prorated, full_within_days.")
+    if invoice_timing not in allowed_invoice_timing:
+        raise ValueError("Invoice Timing must be either immediate or next_invoice.")
+    if prepaid_rollover not in allowed_booleanish:
+        raise ValueError("Prepaid Rollover must be true or false.")
+    if discount_transfer not in allowed_booleanish:
+        raise ValueError("Discount Transfer must be true or false.")
+
+    for key in ("upgrade_fee", "downgrade_fee", "fee_tax_rate", "minimum_invoice_amount"):
+        value = str(normalized.get(key) or "").strip()
+        if not value:
+            continue
+        try:
+            Decimal(value)
+        except InvalidOperation as exc:
+            raise ValueError(f"{key.replace('_', ' ').title()} must be a valid decimal value.") from exc
+
+    normalized["refund_policy"] = refund_policy
+    normalized["invoice_timing"] = invoice_timing
+    normalized["prepaid_rollover"] = prepaid_rollover
+    normalized["discount_transfer"] = discount_transfer
+    _save_settings(db, SettingDomain.billing, normalized, PLAN_CHANGE_KEYS)
 
 
 # ---------------------------------------------------------------------------

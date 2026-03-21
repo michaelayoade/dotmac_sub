@@ -15,7 +15,7 @@ class OffersPage(BasePage):
 
     def goto(self, path: str = "/admin/catalog") -> None:
         """Navigate to the services list."""
-        super().goto(path)
+        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded")
 
     def expect_loaded(self) -> None:
         """Assert the services page is loaded."""

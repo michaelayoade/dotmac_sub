@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, time
 from typing import Any
 
 from fastapi import HTTPException
@@ -126,6 +126,11 @@ class FupPolicies:
         threshold_unit: str,
         action: str,
         speed_reduction_percent: float | None = None,
+        sort_order: int | None = None,
+        time_start: time | None = None,
+        time_end: time | None = None,
+        enabled_by_rule_id: str | None = None,
+        days_of_week: list[int] | None = None,
     ) -> FupRule:
         """Add a rule to an FUP policy.
 
@@ -159,7 +164,7 @@ class FupPolicies:
         rule = FupRule(
             policy_id=policy.id,
             name=name.strip(),
-            sort_order=next_order,
+            sort_order=sort_order if sort_order is not None else next_order,
             consumption_period=validate_enum(
                 consumption_period, FupConsumptionPeriod, "consumption_period"
             ),
@@ -168,6 +173,10 @@ class FupPolicies:
             threshold_unit=validate_enum(threshold_unit, FupDataUnit, "threshold_unit"),
             action=validate_enum(action, FupAction, "action"),
             speed_reduction_percent=speed_reduction_percent,
+            time_start=time_start,
+            time_end=time_end,
+            enabled_by_rule_id=coerce_uuid(enabled_by_rule_id) if enabled_by_rule_id else None,
+            days_of_week=days_of_week,
         )
         db.add(rule)
         db.commit()

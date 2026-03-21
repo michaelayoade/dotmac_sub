@@ -3210,7 +3210,22 @@ def config_plan_change_page(request: Request, db: Session = Depends(get_db)):
 @router.post("/config/plan-change", response_class=HTMLResponse)
 def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_plan_change(db, form)
+    try:
+        web_system_config_service.save_plan_change(db, form)
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "admin/system/config/plan_change.html",
+            _config_context(
+                request,
+                db,
+                {
+                    "active_page": "config-plan-change",
+                    "plan_change": form,
+                    "error": str(exc),
+                },
+            ),
+            status_code=400,
+        )
     return RedirectResponse(url="/admin/system/config/plan-change", status_code=303)
 
 

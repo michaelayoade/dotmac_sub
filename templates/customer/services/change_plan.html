@@ -12,7 +12,8 @@
                 <span class="text-slate-900 dark:text-white">Change Plan</span>
             </nav>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Change Your Plan</h1>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Select a new plan — changes take effect immediately</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ timing_message }}</p>
+            <p class="mt-2 max-w-2xl text-sm text-slate-600 dark:text-slate-300">{{ billing_message }}</p>
         </div>
         <a href="/portal/change-requests" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
             View change history
@@ -37,8 +38,8 @@
                 {% endif %}
             </div>
             <div class="text-right">
-                <p class="text-2xl font-bold text-primary-600 dark:text-primary-400">{{ current_offer.currency or 'NGN' }} {{ '{:,.2f}'.format(current_offer.price or 0) }}</p>
-                <p class="text-sm text-slate-500 dark:text-slate-400">/month</p>
+                <p class="text-2xl font-bold text-primary-600 dark:text-primary-400">{{ current_offer_summary.currency }} {{ '{:,.2f}'.format(current_offer_summary.amount) }}</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">{{ current_offer_summary.period_label }}</p>
             </div>
         </div>
     </div>
@@ -54,9 +55,10 @@
                 {% for offer in available_offers %}
                 {% if not current_offer or (offer.id | string) != (current_offer.id | string) %}
                 {% set selectable_offers.count = selectable_offers.count + 1 %}
+                {% set offer_summary = available_offer_summaries[offer.id | string] %}
                 <label class="relative cursor-pointer">
                     <input type="radio" name="offer_id" value="{{ offer.id }}" class="peer sr-only" required
-                           @change="selectOffer('{{ offer.name }}', {{ offer.price or 0 }})">
+                           @change="selectOffer('{{ offer.name }}', {{ offer_summary.amount }}, '{{ offer_summary.currency }}', '{{ offer_summary.period_label }}')">
                     <div class="rounded-xl border-2 border-slate-200 bg-white p-6 transition-all hover:border-primary-300 peer-checked:border-primary-500 peer-checked:ring-2 peer-checked:ring-primary-500/20 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-primary-600 dark:peer-checked:border-primary-400">
                         <div class="flex items-start justify-between">
                             <div>
@@ -75,15 +77,15 @@
                         </div>
                         <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
                             <p class="text-2xl font-bold text-slate-900 dark:text-white">
-                                {{ offer.currency or 'NGN' }} {{ '{:,.2f}'.format(offer.price or 0) }}
-                                <span class="text-sm font-normal text-slate-500 dark:text-slate-400">/month</span>
+                                {{ offer_summary.currency }} {{ '{:,.2f}'.format(offer_summary.amount) }}
+                                <span class="text-sm font-normal text-slate-500 dark:text-slate-400">{{ offer_summary.period_label }}</span>
                             </p>
                             {% if current_offer %}
-                            {% set diff = (offer.price or 0) - (current_offer.price or 0) %}
+                            {% set diff = offer_summary.amount - current_offer_summary.amount %}
                             {% if diff > 0 %}
-                            <p class="mt-1 text-sm font-medium text-amber-600 dark:text-amber-400">+{{ offer.currency or 'NGN' }} {{ '{:,.2f}'.format(diff) }}/month</p>
+                            <p class="mt-1 text-sm font-medium text-amber-600 dark:text-amber-400">+{{ offer_summary.currency }} {{ '{:,.2f}'.format(diff) }}{{ offer_summary.period_label }}</p>
                             {% elif diff < 0 %}
-                            <p class="mt-1 text-sm font-medium text-green-600 dark:text-green-400">-{{ offer.currency or 'NGN' }} {{ '{:,.2f}'.format(diff | abs) }}/month</p>
+                            <p class="mt-1 text-sm font-medium text-green-600 dark:text-green-400">-{{ offer_summary.currency }} {{ '{:,.2f}'.format(diff | abs) }}{{ offer_summary.period_label }}</p>
                             {% endif %}
                             {% endif %}
                         </div>
@@ -130,17 +132,19 @@
                 <h3 class="mt-4 text-lg font-semibold text-slate-900 dark:text-white">Confirm Plan Change</h3>
                 <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">
                     You're switching to <span class="font-semibold text-slate-900 dark:text-white" x-text="selectedOfferName"></span>.
-                    Your next bill will reflect the new price of
-                    <span class="font-semibold" x-text="'NGN ' + selectedOfferPrice.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>/month.
+                    The recurring rate will be
+                    <span class="font-semibold" x-text="selectedOfferCurrency + ' ' + selectedOfferPrice.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>
+                    <span x-text="selectedOfferPeriodLabel"></span>.
                 </p>
+                <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">{{ billing_message }}</p>
                 <template x-if="priceDifference > 0">
                     <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">
-                        This is an increase of NGN <span x-text="priceDifference.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>/month.
+                        This is an increase of <span x-text="selectedOfferCurrency"></span> <span x-text="priceDifference.toLocaleString('en-NG', {minimumFractionDigits: 2})"></span><span x-text="selectedOfferPeriodLabel"></span>.
                     </p>
                 </template>
                 <template x-if="priceDifference < 0">
                     <p class="mt-2 text-sm font-medium text-green-600 dark:text-green-400">
-                        This saves you NGN <span x-text="Math.abs(priceDifference).toLocaleString('en-NG', {minimumFractionDigits: 2})"></span>/month.
+                        This saves you <span x-text="selectedOfferCurrency"></span> <span x-text="Math.abs(priceDifference).toLocaleString('en-NG', {minimumFractionDigits: 2})"></span><span x-text="selectedOfferPeriodLabel"></span>.
                     </p>
                 </template>
             </div>
@@ -162,12 +166,16 @@ function changePlanPage() {
         showConfirm: false,
         selectedOfferName: '',
         selectedOfferPrice: 0,
+        selectedOfferCurrency: 'NGN',
+        selectedOfferPeriodLabel: '/month',
         priceDifference: 0,
-        currentPrice: {{ current_offer.price or 0 if current_offer else 0 }},
+        currentPrice: {{ current_offer_summary.amount if current_offer_summary else 0 }},
         pendingForm: null,
-        selectOffer(name, price) {
+        selectOffer(name, price, currency, periodLabel) {
             this.selectedOfferName = name;
             this.selectedOfferPrice = price;
+            this.selectedOfferCurrency = currency;
+            this.selectedOfferPeriodLabel = periodLabel;
             this.priceDifference = price - this.currentPrice;
         },
         confirmAndSubmit(event) {

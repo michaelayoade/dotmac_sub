@@ -408,13 +408,13 @@ class Subscribers(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
+        person_id: str | None,
         organization_id: str | None,
         subscriber_type: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
-        person_id: str | None = None,
         status: str | None = None,
         search: str | None = None,
         include_deleted: bool = False,

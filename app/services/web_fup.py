@@ -224,6 +224,19 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
         except ValueError:
             speed_reduction_percent = None
 
+    # Parse new chaining/time fields
+    time_start = _parse_time(str(form.get("time_start", "")))
+    time_end = _parse_time(str(form.get("time_end", "")))
+    enabled_by_raw = str(form.get("enabled_by_rule_id", "")).strip()
+    enabled_by_rule_id = enabled_by_raw if enabled_by_raw else None
+    sort_order_raw = str(form.get("sort_order", "0"))
+    try:
+        sort_order = int(sort_order_raw)
+    except ValueError:
+        sort_order = 0
+    days_of_week_raw = form.getlist("days_of_week")
+    days_of_week = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
+
     fup_policies.add_rule(
         db,
         str(policy.id),
@@ -234,6 +247,11 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
         threshold_unit=threshold_unit,
         action=action,
         speed_reduction_percent=speed_reduction_percent,
+        sort_order=sort_order,
+        time_start=time_start,
+        time_end=time_end,
+        enabled_by_rule_id=enabled_by_rule_id,
+        days_of_week=days_of_week,
     )
     logger.info("Added FUP rule for offer %s", offer_id)
 
@@ -286,6 +304,18 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
 
     is_active = form.get("is_active")
     kwargs["is_active"] = is_active == "on" or is_active == "true"
+
+    # Parse chaining/time fields
+    time_start_raw = str(form.get("time_start", "")).strip()
+    time_end_raw = str(form.get("time_end", "")).strip()
+    kwargs["time_start"] = _parse_time(time_start_raw) if time_start_raw else None
+    kwargs["time_end"] = _parse_time(time_end_raw) if time_end_raw else None
+
+    enabled_by_raw = str(form.get("enabled_by_rule_id", "")).strip()
+    kwargs["enabled_by_rule_id"] = enabled_by_raw if enabled_by_raw else None
+
+    days_of_week_raw = form.getlist("days_of_week")
+    kwargs["days_of_week"] = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
 
     fup_policies.update_rule(db, rule_id, **kwargs)
     logger.info("Updated FUP rule %s", rule_id)

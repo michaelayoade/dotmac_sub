@@ -14,6 +14,7 @@
             <p class="text-sm font-medium text-emerald-700 dark:text-emerald-300">
                 Your plan has been changed to {{ current_offer.name if current_offer else 'the new plan' }}. The change is effective immediately.
             </p>
+            <p class="text-sm text-emerald-700/80 dark:text-emerald-300/80">{{ billing_message }}</p>
         </div>
     </div>
     {% endif %}
@@ -93,8 +94,8 @@
                     <p class="text-base font-semibold text-stone-900 dark:text-white">{{ current_offer.name }}</p>
                 </div>
                 <p class="text-lg font-semibold text-[var(--color-brand-600)] dark:text-[var(--color-brand-400)]">
-                    {{ current_offer.currency or 'NGN' }} {{ '{:,.2f}'.format(current_offer.price or 0) }}
-                    <span class="text-sm font-normal text-stone-500 dark:text-stone-400">/month</span>
+                    {{ current_offer_summary.currency }} {{ '{:,.2f}'.format(current_offer_summary.amount) }}
+                    <span class="text-sm font-normal text-stone-500 dark:text-stone-400">{{ current_offer_summary.period_label }}</span>
                 </p>
             </div>
             {% endif %}

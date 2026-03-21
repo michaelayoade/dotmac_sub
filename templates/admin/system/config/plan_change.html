@@ -5,18 +5,64 @@
 {{ ambient_background("emerald", "teal") }}
 <div class="relative space-y-8">
     {% call page_header(title="Plan Change Rules", subtitle="Refund policy, upgrade/downgrade fees, and discount transfer on plan changes", icon=icon_cog(), color="emerald", color2="teal") %}{% endcall %}
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         {% call card("Plan Change Rules", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Refund Policy</label><input type="text" name="refund_policy" value="{{ plan_change.refund_policy or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upgrade Fee</label><input type="text" name="upgrade_fee" value="{{ plan_change.upgrade_fee or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Downgrade Fee</label><input type="text" name="downgrade_fee" value="{{ plan_change.downgrade_fee or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Fee Tax Rate</label><input type="text" name="fee_tax_rate" value="{{ plan_change.fee_tax_rate or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Timing</label><input type="text" name="invoice_timing" value="{{ plan_change.invoice_timing or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Prepaid Rollover</label><input type="text" name="prepaid_rollover" value="{{ plan_change.prepaid_rollover or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Discount Transfer</label><input type="text" name="discount_transfer" value="{{ plan_change.discount_transfer or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Min Invoice Amount</label><input type="text" name="minimum_invoice_amount" value="{{ plan_change.minimum_invoice_amount or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Refund Policy</label>
+                <select name="refund_policy" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    {% set refund_policy = plan_change.refund_policy or 'none' %}
+                    <option value="none" {% if refund_policy == 'none' %}selected{% endif %}>None</option>
+                    <option value="prorated" {% if refund_policy == 'prorated' %}selected{% endif %}>Prorated</option>
+                    <option value="full_within_days" {% if refund_policy == 'full_within_days' %}selected{% endif %}>Full Within Days</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upgrade Fee</label>
+                <input type="number" step="0.01" min="0" name="upgrade_fee" value="{{ plan_change.upgrade_fee or '0.00' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Downgrade Fee</label>
+                <input type="number" step="0.01" min="0" name="downgrade_fee" value="{{ plan_change.downgrade_fee or '0.00' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Fee Tax Rate</label>
+                <input type="number" step="0.01" min="0" name="fee_tax_rate" value="{{ plan_change.fee_tax_rate or '0.00' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Timing</label>
+                {% set invoice_timing = plan_change.invoice_timing or 'immediate' %}
+                <select name="invoice_timing" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="immediate" {% if invoice_timing == 'immediate' %}selected{% endif %}>Immediate</option>
+                    <option value="next_invoice" {% if invoice_timing == 'next_invoice' %}selected{% endif %}>Next Invoice</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Prepaid Rollover</label>
+                {% set prepaid_rollover = plan_change.prepaid_rollover or 'false' %}
+                <select name="prepaid_rollover" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if prepaid_rollover == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if prepaid_rollover != 'true' %}selected{% endif %}>Disabled</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Discount Transfer</label>
+                {% set discount_transfer = plan_change.discount_transfer or 'false' %}
+                <select name="discount_transfer" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="true" {% if discount_transfer == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if discount_transfer != 'true' %}selected{% endif %}>Disabled</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Min Invoice Amount</label>
+                <input type="number" step="0.01" min="0" name="minimum_invoice_amount" value="{{ plan_change.minimum_invoice_amount or '0.00' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
         </div>
         {% endcall %}
         <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Configuration</button></div>
