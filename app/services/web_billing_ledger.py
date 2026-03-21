@@ -9,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import UUID
 
+from sqlalchemy.orm import joinedload
+
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.models.subscriber import Reseller, Subscriber
 from app.services import web_billing_customers as web_billing_customers_service
@@ -70,7 +72,11 @@ def build_ledger_entries_data(
         .all()
     ]
     if account_ids or not customer_ref:
-        query = db.query(LedgerEntry).filter(LedgerEntry.is_active.is_(True))
+        query = (
+            db.query(LedgerEntry)
+            .options(joinedload(LedgerEntry.account).joinedload(Subscriber.organization))
+            .filter(LedgerEntry.is_active.is_(True))
+        )
         if account_ids:
             query = query.filter(LedgerEntry.account_id.in_(account_ids))
         if entry_type:

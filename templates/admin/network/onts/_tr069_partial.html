@@ -2,7 +2,10 @@
 {% from "components/ui/macros.html" import card, empty_state, data_table, table_head %}
 
 {% if tr069 and tr069.available %}
-<div class="space-y-6" x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, diagOpen: false, showSsidModal: false, showPasswordModal: false, showPppoeModal: false, showPingModal: false, ssid: '{{ tr069.wireless.SSID or '' }}', wifiPassword: '', pppoeUser: '{{ tr069.wan.get('PPPoE Username', '') or '' }}', pppoePass: '', pingHost: '8.8.8.8', pingCount: 4 }">
+<div class="space-y-6"
+     data-initial-ssid="{{ (tr069.wireless.SSID or '')|tojson|forceescape }}"
+     data-initial-pppoe-user="{{ (tr069.wan.get('PPPoE Username', '') or '')|tojson|forceescape }}"
+     x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, diagOpen: false, showSsidModal: false, showPasswordModal: false, showPppoeModal: false, showPingModal: false, ssid: JSON.parse($el.dataset.initialSsid || '&quot;&quot;'), wifiPassword: '', pppoeUser: JSON.parse($el.dataset.initialPppoeUser || '&quot;&quot;'), pppoePass: '', pingHost: '8.8.8.8', pingCount: 4, actionPending: false, actionMessage: '', actionType: 'info', getCsrfToken: function() { const meta = document.querySelector('meta[name=\\'csrf-token\\']'); if (meta && meta.content) return meta.content; const cookie = document.cookie.match(new RegExp('csrf_token=([^;]+)')); return cookie ? cookie[1] : ''; }, submitAction: async function(url, options, pendingMessage) { this.actionPending = true; this.actionMessage = pendingMessage || 'Applying change...'; this.actionType = 'info'; try { const token = this.getCsrfToken(); const requestOptions = Object.assign({}, options || {}); requestOptions.headers = Object.assign({}, (options && options.headers) || {}, token ? {'X-CSRF-Token': token} : {}); if (requestOptions.body instanceof FormData && token && !requestOptions.body.has('_csrf_token')) { requestOptions.body.append('_csrf_token', token); } const response = await fetch(url, requestOptions); const raw = await response.text(); let data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { message: raw, success: response.ok }; } } const ok = response.ok && data.success !== false; const message = data.message || (ok ? 'Action completed.' : 'Request failed (' + response.status + ')'); const type = ok ? 'success' : 'error'; this.actionMessage = message; this.actionType = type; htmx.trigger(document.body, 'showToast', {message: message, type: type}); return ok; } catch (error) { const message = (error && error.message) ? error.message : 'Request failed.'; this.actionMessage = message; this.actionType = 'error'; htmx.trigger(document.body, 'showToast', {message: message, type: 'error'}); return false; } finally { this.actionPending = false; } } }">
     <div class="flex flex-wrap items-center justify-end gap-2">
         <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/refresh"
                 hx-swap="none"
@@ -14,6 +17,15 @@
                 class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
             Reboot
         </button>
+    </div>
+
+    <div x-show="actionMessage" x-transition x-cloak
+         :class="actionType === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800/60 dark:bg-emerald-900/20 dark:text-emerald-300' : actionType === 'error' ? 'border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-800/60 dark:bg-rose-900/20 dark:text-rose-300' : 'border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-800/60 dark:bg-blue-900/20 dark:text-blue-300'"
+         class="rounded-lg border px-4 py-3 text-sm">
+        <div class="flex items-center justify-between gap-3">
+            <span x-text="actionMessage"></span>
+            <button type="button" @click="actionMessage = ''" class="text-xs font-medium opacity-80 hover:opacity-100">Dismiss</button>
+        </div>
     </div>
 
     {# System Section #}
@@ -104,7 +116,19 @@
                 {% for key, value in tr069.wireless.items() %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
                     <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
+                    {% if key == 'Password' and value %}
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white"
+                        x-data="{ revealed: false }">
+                        <span x-show="!revealed">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;
+                            <button type="button" @click="revealed = true" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">show</button>
+                        </span>
+                        <span x-show="revealed" x-cloak>{{ value }}
+                            <button type="button" @click="revealed = false" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">hide</button>
+                        </span>
+                    </dd>
+                    {% else %}
                     <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                    {% endif %}
                 </div>
                 {% endfor %}
             </dl>
@@ -225,30 +249,30 @@
     {% endif %}
 
     {# Diagnostics Section #}
-    <div class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
-        <button @click="diagOpen = !diagOpen" class="flex w-full items-center justify-between px-5 py-3">
+    <details class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <summary class="flex cursor-pointer items-center justify-between px-5 py-3">
             <div class="flex items-center gap-2">
                 <svg class="h-4 w-4 text-rose-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
                 <span class="text-sm font-semibold text-slate-900 dark:text-white">Diagnostics</span>
             </div>
-            <svg :class="diagOpen ? 'rotate-180' : ''" class="h-4 w-4 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-        </button>
-        <div x-show="diagOpen" x-transition x-cloak class="border-t border-slate-200 dark:border-slate-700 px-5 py-4">
-            <p class="text-xs text-slate-500 dark:text-slate-400 mb-3">Run network diagnostics from the ONT device itself via TR-069.</p>
+            <svg class="h-4 w-4 text-slate-400 transition-transform details-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+            <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Run network diagnostics from the ONT device itself via TR-069.</p>
             <div class="flex flex-wrap gap-2">
-                <button @click="showPingModal = true"
+                <button type="button" @click="showPingModal = true"
                     class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                     Ping Test
                 </button>
-                <button @click="fetch('/admin/network/onts/{{ tr069.ont_id }}/traceroute-diagnostic', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded','X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}, body:'host=8.8.8.8'}).then(r=>r.json()).then(d=>{htmx.trigger(document.body,'showToast',{message:d.message,type:d.success?'success':'error'})})"
+                <button type="button" @click="submitAction('/admin/network/onts/{{ tr069.ont_id }}/traceroute-diagnostic', {method:'POST', headers:{'Content-Type':'application/x-www-form-urlencoded'}, body:'host=8.8.8.8'}, 'Running traceroute...')"
                     class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                     <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
                     Traceroute (8.8.8.8)
                 </button>
             </div>
         </div>
-    </div>
+    </details>
 
     {# PPPoE Credentials Modal #}
     <div x-show="showPppoeModal" x-transition.opacity x-cloak
@@ -277,7 +301,7 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="const fd = new FormData(); fd.append('username', pppoeUser); fd.append('password', pppoePass); fetch('/admin/network/onts/{{ tr069.ont_id }}/pppoe-credentials', {method:'POST', headers:{'X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}, body: fd}).then(r=>r.json()).then(d=>{showPppoeModal=false; pppoePass=''; htmx.trigger(document.body, 'showToast', {message: d.message, type: d.success ? 'success' : 'error'})})"
+                <button @click="const fd = new FormData(); fd.append('username', pppoeUser); fd.append('password', pppoePass); submitAction('/admin/network/onts/{{ tr069.ont_id }}/pppoe-credentials', {method:'POST', body: fd}, 'Applying PPPoE credentials...').then(ok => { if (ok) { showPppoeModal = false; pppoePass = ''; } })"
                         class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
                     Push Credentials
                 </button>
@@ -311,7 +335,7 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="const fd = new FormData(); fd.append('host', pingHost); fd.append('count', pingCount); fetch('/admin/network/onts/{{ tr069.ont_id }}/ping-diagnostic', {method:'POST', headers:{'X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}, body: fd}).then(r=>r.json()).then(d=>{showPingModal=false; htmx.trigger(document.body, 'showToast', {message: d.message, type: d.success ? 'success' : 'error'})})"
+                <button type="button" @click="const fd = new FormData(); fd.append('host', pingHost); fd.append('count', pingCount); submitAction('/admin/network/onts/{{ tr069.ont_id }}/ping-diagnostic', {method:'POST', body: fd}, 'Running ping diagnostic...').then(ok => { if (ok) { showPingModal = false; } })"
                         class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700">
                     Run Ping
                 </button>
@@ -339,7 +363,7 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="fetch('/admin/network/onts/{{ ont.id }}/wifi-ssid?ssid=' + encodeURIComponent(ssid), {method:'POST', headers:{'X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}}).then(r=>r.json()).then(d=>{showSsidModal=false; htmx.trigger(document.body, 'showToast', {message: d.message, type: d.success ? 'success' : 'error'})})"
+                <button @click="submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-ssid?ssid=' + encodeURIComponent(ssid), {method:'POST'}, 'Applying WiFi SSID...').then(ok => { if (ok) { showSsidModal = false; } })"
                         class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
                     Apply
                 </button>
@@ -367,7 +391,7 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="const fd = new FormData(); fd.append('password', wifiPassword); fetch('/admin/network/onts/{{ ont.id }}/wifi-password', {method:'POST', headers:{'X-CSRFToken': document.querySelector('[name=csrf_token]')?.value || ''}, body: fd}).then(r=>r.json()).then(d=>{showPasswordModal=false; wifiPassword=''; htmx.trigger(document.body, 'showToast', {message: d.message, type: d.success ? 'success' : 'error'})})"
+                <button @click="const fd = new FormData(); fd.append('password', wifiPassword); submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-password', {method:'POST', body: fd}, 'Applying WiFi password...').then(ok => { if (ok) { showPasswordModal = false; wifiPassword = ''; } })"
                         class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
                     Apply
                 </button>

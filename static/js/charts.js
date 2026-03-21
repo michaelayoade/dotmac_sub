@@ -219,6 +219,11 @@ function createHorizontalBarChart(ctx, data, options = {}) {
 // Create a doughnut/pie chart
 function createDoughnutChart(ctx, data, options = {}) {
     const theme = getThemeColors();
+    const customPlugins = options.plugins || {};
+    const customLegend = customPlugins.legend || {};
+    const customLegendLabels = customLegend.labels || {};
+    const customTooltip = customPlugins.tooltip || {};
+    const customLayout = options.layout || {};
     const defaultData = {
         labels: data.labels || [],
         datasets: [{
@@ -242,11 +247,16 @@ function createDoughnutChart(ctx, data, options = {}) {
         options: {
             responsive: true,
             maintainAspectRatio: false,
-            cutout: options.pie ? 0 : '70%',
+            cutout: options.cutout ?? (options.pie ? 0 : '70%'),
+            layout: {
+                padding: 12,
+                ...customLayout,
+            },
             plugins: {
                 legend: {
                     display: true,
                     position: options.legendPosition || 'right',
+                    ...customLegend,
                     labels: {
                         color: theme.text,
                         font: {
@@ -256,6 +266,7 @@ function createDoughnutChart(ctx, data, options = {}) {
                         usePointStyle: true,
                         pointStyle: 'circle',
                         padding: 16,
+                        ...customLegendLabels,
                     }
                 },
                 tooltip: {
@@ -266,6 +277,7 @@ function createDoughnutChart(ctx, data, options = {}) {
                     borderWidth: 1,
                     cornerRadius: 8,
                     padding: 12,
+                    ...customTooltip,
                 }
             },
             ...options,

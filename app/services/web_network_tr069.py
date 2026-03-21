@@ -19,8 +19,10 @@ from app.schemas.tr069 import (
 from app.services import tr069 as tr069_service
 from app.services.common import coerce_uuid
 from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.network._common import decode_huawei_hex_serial
 
 logger = logging.getLogger(__name__)
+
 
 @dataclass
 class JobAction:
@@ -163,6 +165,13 @@ def link_tr069_device_to_cpe(
     )
 
 
+def _display_serial_number(value: str | None) -> str | None:
+    serial = str(value or "").strip()
+    if not serial:
+        return None
+    return decode_huawei_hex_serial(serial) or serial
+
+
 def tr069_dashboard_data(
     db: Session,
     *,
@@ -245,6 +254,7 @@ def tr069_dashboard_data(
 
     for device in devices:
         device.linked_cpe = cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
+        device.display_serial_number = _display_serial_number(device.serial_number)
 
     unconfigured_devices = [item for item in devices if not item.cpe_device_id]
     configured_devices = [item for item in devices if item.cpe_device_id]

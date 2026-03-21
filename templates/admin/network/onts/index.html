@@ -1,13 +1,13 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, filter_select, icon_plus, icon_view, icon_edit, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, filter_select, icon_plus, icon_view, icon_edit, icon_cpu, icon_check_circle, icon_warning, icon_server, icon_users, animation_styles %}
 
-{% block title %}ONT / CPE Devices - Admin{% endblock %}
+{% block title %}ONT Fleet - Admin{% endblock %}
 
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
 
 <div class="relative space-y-6" x-data='{
-    view: "list",
+    view: "{{ filters.view or 'list' }}",
     filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %}
 }'>
     {# Page Header #}
@@ -19,19 +19,13 @@
             Back to Network
         </a>
     </div>
-    {% set ont_icon %}
-    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
-    </svg>
-    {% endset %}
-
     {% call page_header(
-        title="ONT / CPE Devices",
-        subtitle="Manage subscriber endpoint devices",
-        icon=ont_icon,
+        title="ONT Fleet",
+        subtitle="Inventory, diagnostics, and provisioning triage for optical network terminals",
+        icon=icon_cpu(),
         color="blue",
         color2="indigo",
-        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "ONT / CPE Devices"}]
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "ONT Fleet"}]
     ) %}
         <div class="flex items-center gap-2">
             {# View toggle: List vs Diagnostics #}
@@ -43,23 +37,41 @@
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 </button>
             </div>
-            {{ action_button("Add Device", "/admin/network/onts/new", icon_plus(), "primary", "blue", "indigo") }}
+            {{ action_button("Add ONT", "/admin/network/onts/new", icon_plus(), "primary", "blue", "indigo") }}
         </div>
     {% endcall %}
 
     {# Stats Overview #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-6 animate-fade-in-up" style="animation-delay: 50ms;">
-        {{ stats_card("Total ONTs", stats.total_onts, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>', color="blue", color2="indigo") }}
-        {{ stats_card("Online", stats.online_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}
-        {{ stats_card("Offline", stats.offline_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3"/></svg>', color="rose", color2="pink") }}
-        {{ stats_card("Low Signal", stats.low_signal_count, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
-        {{ stats_card("Total CPEs", stats.total_cpes, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>', color="emerald", color2="green") }}
-        {{ stats_card("Total Devices", stats.total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="violet", color2="purple") }}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Total ONTs", stats.total_onts, icon=icon_cpu(), color="blue", color2="indigo") }}
+        {{ stats_card("Online", stats.online_count, icon=icon_check_circle(), color="emerald", color2="teal") }}
+        {{ stats_card("Offline", stats.offline_count, icon=icon_server(), color="rose", color2="pink") }}
+        {{ stats_card("Low Signal", stats.low_signal_count, icon=icon_warning(), color="amber", color2="orange") }}
+        {{ stats_card("CPE Inventory", stats.total_cpes, icon=icon_users(), color="slate", color2="gray") }}
+    </div>
+
+    <div class="grid gap-3 xl:grid-cols-3 animate-fade-in-up" style="animation-delay: 60ms;">
+        <a href="/admin/network/onts?view=list&online_status=offline" class="rounded-xl border border-rose-200 bg-rose-50/70 p-4 transition hover:bg-rose-100 dark:border-rose-900/40 dark:bg-rose-900/10 dark:hover:bg-rose-900/20">
+            <p class="text-xs font-medium uppercase tracking-[0.22em] text-rose-700 dark:text-rose-300">Focus Queue</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Offline ONTs needing investigation</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Jump into failure triage instead of browsing the full inventory.</p>
+        </a>
+        <a href="/admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc" class="rounded-xl border border-amber-200 bg-amber-50/70 p-4 transition hover:bg-amber-100 dark:border-amber-900/40 dark:bg-amber-900/10 dark:hover:bg-amber-900/20">
+            <p class="text-xs font-medium uppercase tracking-[0.22em] text-amber-700 dark:text-amber-300">Optics Queue</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Worst optical signal first</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Use diagnostics mode for maintenance prioritization and dispatch planning.</p>
+        </a>
+        <div class="rounded-xl border border-slate-200 bg-white/80 p-4 dark:border-slate-700 dark:bg-slate-800/80">
+            <p class="text-xs font-medium uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">CPE Scope</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">CPE inventory is secondary on this page</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">ONT list and diagnostics are the primary workspaces; CPE inventory lives in its own dedicated workspace.</p>
+        </div>
     </div>
 
     {# ═══════════════ Filter Bar ═══════════════ #}
     <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
         <form method="GET" action="/admin/network/onts" id="ont-filter-form">
+            <input type="hidden" name="view" :value="view">
             <input type="hidden" name="pon_port_id" value="{{ filters.pon_port_id }}">
             <input type="hidden" name="pon_hint" value="{{ filters.pon_hint }}">
             {# Primary filter row: search + quick filters + toggle #}
@@ -69,8 +81,8 @@
                     <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                         <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                     </div>
-                    <input type="text" name="search" value="{{ filters.search }}" placeholder="Search serial number..."
-                           class="w-full rounded-lg border border-slate-200 bg-slate-50/50 py-2 pl-9 pr-4 text-sm text-slate-900 transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder:text-slate-500"
+                    <input type="text" name="search" value="{{ filters.search }}" placeholder="Search serial, MAC, OLT, PON, firmware..."
+                           class="w-full rounded-lg border border-slate-200 bg-slate-50/50 py-2 pl-9 pr-4 text-sm text-slate-900 transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-700 dark:focus:text-white"
                            hx-get="/admin/network/onts" hx-trigger="keyup changed delay:400ms" hx-target="body" hx-push-url="true" hx-include="#ont-filter-form">
                 </div>
 
@@ -109,7 +121,7 @@
 
                 {# Clear filters #}
                 {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.search or filters.vendor %}
-                <a href="/admin/network/onts" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
+                    <a href="/admin/network/onts?view={{ filters.view or 'list' }}" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     Clear
                 </a>
@@ -172,9 +184,9 @@
                         <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                     </div>
                     <div>
-                        <h2 class="font-semibold text-slate-900 dark:text-white">ONT Units</h2>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">ONT Inventory</h2>
                         <p class="text-xs text-slate-500 dark:text-slate-400">
-                            Showing {{ onts|length }} of {{ pagination.total }} ONT{{ 's' if pagination.total != 1 else '' }}
+                            Showing {{ onts|length }} of {{ pagination.total }} ONT{{ 's' if pagination.total != 1 else '' }} in the current operational queue
                         </p>
                     </div>
                 </div>
@@ -339,14 +351,14 @@
                 </p>
                 <div class="flex items-center gap-2">
                     {% if pagination.has_prev %}
-                    <a href="/admin/network/onts?page={{ pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="/admin/network/onts?view=list&page={{ pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="/admin/network/onts?page={{ pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="/admin/network/onts?view=list&page={{ pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
@@ -369,19 +381,19 @@
                     </div>
                     <div>
                         <h2 class="font-semibold text-slate-900 dark:text-white">Signal Diagnostics</h2>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">ONTs sorted by worst signal first for maintenance planning</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Dedicated triage queue sorted by worst optical signal first</p>
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
-                    <a href="/admin/network/onts?signal_quality=critical&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc"
                        class="inline-flex items-center rounded-lg bg-rose-100 px-3 py-1.5 text-xs font-medium text-rose-700 transition-colors hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
                         Critical Only
                     </a>
-                    <a href="/admin/network/onts?signal_quality=warning&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc"
                        class="inline-flex items-center rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50">
                         Warning+
                     </a>
-                    <a href="/admin/network/onts?order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc"
                        class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         All
                     </a>
@@ -402,12 +414,13 @@
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
-                        {% for ont in onts %}
+                        {% for ont in diagnostics_onts %}
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
                         <tr class="group transition-all hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5">
                             <td class="px-6 py-3">
-                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ ont.serial_number }}</a>
+                                {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else ont.serial_number %}
+                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ serial_display or ont.serial_number or '-' }}</a>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ ont.vendor or '' }} {{ ont.model or '' }}</p>
                             </td>
                             <td class="px-6 py-3 whitespace-nowrap">
@@ -489,21 +502,21 @@
             </div>
 
             {# Pagination (same as list view) #}
-            {% if pagination.total_pages > 1 %}
+            {% if diagnostics_pagination.total_pages > 1 %}
             <div class="flex items-center justify-between border-t border-amber-200/60 px-6 py-4 dark:border-amber-700/40">
                 <p class="text-sm text-slate-600 dark:text-slate-400">
-                    Page {{ pagination.page }} of {{ pagination.total_pages }}
+                    Page {{ diagnostics_pagination.page }} of {{ diagnostics_pagination.total_pages }}
                 </p>
                 <div class="flex items-center gap-2">
-                    {% if pagination.has_prev %}
-                    <a href="/admin/network/onts?page={{ pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    {% if diagnostics_pagination.has_prev %}
+                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
-                    {% if pagination.has_next %}
-                    <a href="/admin/network/onts?page={{ pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    {% if diagnostics_pagination.has_next %}
+                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
@@ -515,68 +528,24 @@
         </div>
     </div>
 
-    {# CPEs Table #}
-    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;">
-        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
-            <div class="flex items-center gap-3">
-                <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/40 dark:to-green-900/30">
-                    <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
+    {# CPE Workspace Link #}
+        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 150ms;">
+            <div class="flex items-start justify-between gap-4 px-6 py-5">
+                <div class="flex items-start gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-100 to-green-100 dark:from-emerald-900/40 dark:to-green-900/30">
+                        <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
+                    </div>
+                    <div>
+                        <h2 class="font-semibold text-slate-900 dark:text-white">CPE Workspace</h2>
+                        <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Customer-premises equipment has its own inventory and should not be mixed into the ONT operational queue.</p>
+                        <p class="mt-2 text-xs uppercase tracking-[0.22em] text-slate-500 dark:text-slate-400">{{ stats.total_cpes }} managed CPE devices</p>
+                    </div>
                 </div>
-                <h2 class="font-semibold text-slate-900 dark:text-white">CPE Devices</h2>
+                <a href="/admin/network/cpes" class="inline-flex items-center rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30">
+                    Open CPE Inventory
+                </a>
             </div>
         </div>
-        <div class="overflow-x-auto">
-            <table class="min-w-full">
-                <thead>
-                    <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Device</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Account</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">MAC Address</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
-                    {% for cpe in cpes %}
-                    <tr class="group transition-all hover:bg-gradient-to-r hover:from-emerald-50/50 hover:to-green-50/30 dark:hover:from-emerald-900/10 dark:hover:to-green-900/5">
-                        <td class="px-6 py-4">
-                            <div class="flex items-center gap-3">
-                                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 shadow-md shadow-emerald-500/25">
-                                    <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
-                                </div>
-                                <span class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ cpe.id|string|truncate(8, true, "") }}...</span>
-                            </div>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            {% if cpe.account %}
-                            <a href="/admin/billing/accounts/{{ cpe.account_id }}" class="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">{{ cpe.account.name }}</a>
-                            {% else %}
-                            <span class="text-sm text-slate-400">-</span>
-                            {% endif %}
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
-                            <span class="inline-flex items-center rounded-lg bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ cpe.mac_address or '-' }}</span>
-                        </td>
-                        <td class="px-6 py-4 whitespace-nowrap text-right">
-                            <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                                {{ row_action("/admin/network/cpes/" ~ cpe.id, icon_view(), "View details", "emerald") }}
-                            </div>
-                        </td>
-                    </tr>
-                    {% else %}
-                    {{ empty_state(
-                        title="No CPE devices found",
-                        message="CPE devices will appear when subscribers are provisioned.",
-                        icon='<svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>',
-                        color="emerald",
-                        color2="green",
-                        colspan=4
-                    ) }}
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
 
 {{ animation_styles() }}
 {% endblock %}

@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, icon_plus, icon_view, icon_edit, icon_server, icon_check_circle, icon_warning, icon_users, icon_cpu, icon_network, animation_styles %}
 
 {% block title %}Network Devices - Admin{% endblock %}
 
@@ -16,16 +16,10 @@
             Back to Network
         </a>
     </div>
-    {% set device_icon %}
-    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-    </svg>
-    {% endset %}
-
     {% call page_header(
         title="Network Devices",
         subtitle="Manage all network infrastructure devices",
-        icon=device_icon,
+        icon=icon_server(),
         color="slate",
         color2="blue",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Network Devices"}]
@@ -256,8 +250,8 @@
     <div x-show="activeTab === 'olts'" x-cloak class="space-y-6">
         {# Stats #}
         <div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up">
-            {{ stats_card("Total OLTs", stats.olt_total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>', color="violet", color2="purple") }}
-            {{ stats_card("Active", stats.olt_active, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="indigo", color2="blue") }}
+            {{ stats_card("Total OLTs", stats.olt_total, icon=icon_server(), color="violet", color2="purple") }}
+            {{ stats_card("Active", stats.olt_active, icon=icon_check_circle(), color="indigo", color2="blue") }}
         </div>
 
         {# Actions #}
@@ -358,10 +352,10 @@
     <div x-show="activeTab === 'onts'" x-cloak class="space-y-6">
         {# Stats #}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up">
-            {{ stats_card("Total ONTs", stats.ont_total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>', color="blue", color2="indigo") }}
-            {{ stats_card("Inactive ONTs", stats.ont_inactive, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
-            {{ stats_card("Total CPEs", stats.cpe_total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>', color="emerald", color2="green") }}
-            {{ stats_card("Total Devices", stats.ont_total + stats.cpe_total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="violet", color2="purple") }}
+            {{ stats_card("Total ONTs", stats.ont_total, icon=icon_cpu(), color="blue", color2="indigo") }}
+            {{ stats_card("Inactive ONTs", stats.ont_inactive, icon=icon_warning(), color="amber", color2="orange") }}
+            {{ stats_card("Total CPEs", stats.cpe_total, icon=icon_network(), color="emerald", color2="green") }}
+            {{ stats_card("Total Devices", stats.ont_total + stats.cpe_total, icon=icon_users(), color="violet", color2="purple") }}
         </div>
 
         {# Actions #}

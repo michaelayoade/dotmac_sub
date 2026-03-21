@@ -1143,6 +1143,16 @@ ONLINE_STATUS_CLASSES: dict[str, str] = {
     "unknown": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
 }
 
+SUBSCRIBER_STATUS_CLASSES: dict[str, str] = {
+    "active": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    "new": "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+    "suspended": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "delinquent": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "disabled": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+    "canceled": "bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200",
+    "unknown": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+}
+
 OFFLINE_REASON_DISPLAY: dict[str, str] = {
     "power_fail": "Power Fail",
     "los": "Loss of Signal",
@@ -1161,6 +1171,7 @@ def _is_synthetic_ont_serial(value: object | None) -> bool:
 def onts_list_page_data(
     db: Session,
     *,
+    view: str = "list",
     status: str | None = None,
     olt_id: str | None = None,
     pon_port_id: str | None = None,
@@ -1178,6 +1189,8 @@ def onts_list_page_data(
     """Return ONT/CPE list payload with advanced filtering and signal classification."""
     from app.models.network import OLTDevice, OntUnit
     from app.services.network.olt_polling import get_signal_thresholds
+
+    normalized_view = "diagnostics" if view == "diagnostics" else "list"
 
     # Determine is_active from status filter
     status_filter = (status or "all").strip().lower()
@@ -1209,10 +1222,30 @@ def onts_list_page_data(
         offset=offset,
     )
 
+    diagnostics_onts: Sequence[OntUnit] = ()
+    diagnostics_total = 0
+    if normalized_view == "diagnostics":
+        diagnostics_onts, diagnostics_total = network_service.ont_units.list_advanced(
+            db,
+            olt_id=olt_id,
+            pon_port_id=pon_port_id,
+            pon_hint=pon_hint,
+            zone_id=zone_id,
+            signal_quality=signal_quality,
+            online_status=online_status,
+            vendor=vendor,
+            search=search,
+            is_active=is_active,
+            order_by="signal",
+            order_dir="asc",
+            limit=per_page,
+            offset=offset,
+        )
+
     # Signal threshold classification for displayed ONTs
     warn, crit = get_signal_thresholds(db)
     signal_data: dict[str, dict[str, str]] = {}
-    for ont in onts:
+    for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
         quality = _classify_ont_signal(ont, warn, crit)
         ont_status_enum = getattr(ont, "online_status", None)
         status_val = ont_status_enum.value if ont_status_enum else "unknown"
@@ -1280,16 +1313,6 @@ def onts_list_page_data(
     )
     low_signal_count = int(warning_count) + int(critical_count)
 
-    # CPE rows for diagnostics view; count is computed separately for accuracy.
-    cpes = network_service.cpe_devices.list(
-        db=db,
-        subscriber_id=None,
-        subscription_id=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=100,
-        offset=0,
-    )
     total_cpes_count = db.scalar(select(func.count()).select_from(CPEDevice)) or 0
 
     stats = {
@@ -1324,19 +1347,17 @@ def onts_list_page_data(
     # Build active assignment lookup for OLT/PON display
     from app.models.network import OntAssignment, PonPort
 
-    ont_ids = [ont.id for ont in onts]
+    ont_ids = list({ont.id for ont in list(onts) + list(diagnostics_onts)})
     assignment_info: dict[str, dict[str, str]] = {}
     serial_display_by_ont_id: dict[str, str] = {}
-    for ont in onts:
+    for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
         serial_value = str(getattr(ont, "serial_number", "") or "").strip()
-        if serial_value and not _is_synthetic_ont_serial(serial_value):
+        if serial_value:
             serial_display_by_ont_id[str(ont.id)] = serial_value
             continue
         mac_value = str(getattr(ont, "mac_address", "") or "").strip()
         if mac_value:
             serial_display_by_ont_id[str(ont.id)] = mac_value
-        elif serial_value:
-            serial_display_by_ont_id[str(ont.id)] = "N/A"
         else:
             serial_display_by_ont_id[str(ont.id)] = "-"
     if ont_ids:
@@ -1375,6 +1396,7 @@ def onts_list_page_data(
 
     # Pagination metadata
     total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+    diagnostics_total_pages = max(1, (diagnostics_total + per_page - 1) // per_page)
 
     # Distinct vendors for filter dropdown
     vendor_rows = db.scalars(
@@ -1387,7 +1409,7 @@ def onts_list_page_data(
 
     return {
         "onts": onts,
-        "cpes": cpes,
+        "diagnostics_onts": diagnostics_onts,
         "stats": stats,
         "status_filter": status_filter,
         "signal_data": signal_data,
@@ -1407,6 +1429,7 @@ def onts_list_page_data(
             "signal_quality": signal_quality or "",
             "search": search or "",
             "vendor": vendor or "",
+            "view": normalized_view,
             "order_by": order_by,
             "order_dir": order_dir,
         },
@@ -1418,6 +1441,14 @@ def onts_list_page_data(
             "total_pages": total_pages,
             "has_prev": page > 1,
             "has_next": page < total_pages,
+        },
+        "diagnostics_pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": diagnostics_total,
+            "total_pages": diagnostics_total_pages,
+            "has_prev": page > 1,
+            "has_next": page < diagnostics_total_pages,
         },
     }
 
@@ -1508,9 +1539,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         subscriber_info["id"] = str(sub.id)
         subscriber_info["name"] = _subscriber_display_name(sub)
         subscriber_info["status"] = sub.status.value if sub.status else "unknown"
-        subscriber_info["status_class"] = ONLINE_STATUS_CLASSES.get(
-            "online" if subscriber_info["status"] == "active" else "offline",
-            ONLINE_STATUS_CLASSES["unknown"],
+        subscriber_info["status_class"] = SUBSCRIBER_STATUS_CLASSES.get(
+            str(subscriber_info["status"]),
+            SUBSCRIBER_STATUS_CLASSES["unknown"],
         )
     if assignment and assignment.subscription:
         subscription = assignment.subscription
@@ -1585,6 +1616,20 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
 def _subscriber_display_name(subscriber: object) -> str:
     """Build display name from subscriber person or organization."""
+    display_name = str(getattr(subscriber, "display_name", "") or "").strip()
+    if display_name:
+        return display_name
+
+    full_name = str(getattr(subscriber, "full_name", "") or "").strip()
+    if full_name:
+        return full_name
+
+    first = str(getattr(subscriber, "first_name", "") or "").strip()
+    last = str(getattr(subscriber, "last_name", "") or "").strip()
+    direct_name = f"{first} {last}".strip()
+    if direct_name:
+        return direct_name
+
     person = getattr(subscriber, "person", None)
     if person:
         first = getattr(person, "first_name", "") or ""
@@ -1597,7 +1642,13 @@ def _subscriber_display_name(subscriber: object) -> str:
         org_name = getattr(org, "name", None)
         if org_name:
             return str(org_name)
-    return str(getattr(subscriber, "id", ""))[:8]
+    email = str(getattr(subscriber, "email", "") or "").strip()
+    if email:
+        return email
+    subscriber_number = str(getattr(subscriber, "subscriber_number", "") or "").strip()
+    if subscriber_number:
+        return subscriber_number
+    return str(getattr(subscriber, "id", "") or "").strip()[:8]
 
 
 def get_change_request_asset(

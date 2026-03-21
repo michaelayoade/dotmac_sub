@@ -38,15 +38,18 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
         "MAC Address": [
             f"{_DEV}.Ethernet.Interface.1.MACAddress",
             f"{_IGD}.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress",
         ],
     },
     "wan": {
         "Connection Type": [
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType",
             f"{_DEV}.PPP.Interface.1.ConnectionStatus",
         ],
         "WAN IP": [
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress",
             f"{_DEV}.IP.Interface.1.IPv4Address.1.IPAddress",
             f"{_DEV}.DHCPv4.Client.1.IPAddress",
         ],
@@ -56,17 +59,21 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
         ],
         "Status": [
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus",
             f"{_DEV}.IP.Interface.1.Status",
         ],
         "Uptime": [
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Uptime",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.Uptime",
         ],
         "DNS Servers": [
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DNSServers",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DNSServers",
             f"{_DEV}.DNS.Client.Server.1.DNSServer",
         ],
         "Gateway": [
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DefaultGateway",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DefaultGateway",
             f"{_DEV}.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
         ],
     },
@@ -120,6 +127,11 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
         "Connected Clients": [
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.TotalAssociations",
             f"{_DEV}.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries",
+        ],
+        "Password": [
+            f"{_IGD}.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey",
+            f"{_IGD}.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+            f"{_DEV}.WiFi.AccessPoint.1.Security.KeyPassphrase",
         ],
     },
 }

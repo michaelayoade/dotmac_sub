@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.models.network import (
     OltCard,
@@ -21,6 +21,7 @@ from app.models.network import (
     OntUnit,
     PonPort,
 )
+from app.models.subscriber import Subscriber
 from app.schemas.network import (
     OltCardCreate,
     OltCardPortCreate,
@@ -336,9 +337,42 @@ class OntUnits(CRUDManager[OntUnit]):
         if vendor:
             stmt = stmt.where(OntUnit.vendor.ilike(f"%{vendor}%"))
 
-        # Text search on serial number
+        # Broader text search for ONT operations workflows.
         if search:
-            stmt = stmt.where(OntUnit.serial_number.ilike(f"%{search}%"))
+            term = f"%{search.strip()}%"
+            search_assignment = aliased(OntAssignment)
+            search_pon_port = aliased(PonPort)
+            search_olt = aliased(OLTDevice)
+            search_subscriber = aliased(Subscriber)
+            stmt = (
+                stmt.outerjoin(
+                    search_assignment,
+                    (search_assignment.ont_unit_id == OntUnit.id)
+                    & (search_assignment.active.is_(True)),
+                )
+                .outerjoin(search_pon_port, search_pon_port.id == search_assignment.pon_port_id)
+                .outerjoin(search_olt, search_olt.id == search_pon_port.olt_id)
+                .outerjoin(search_subscriber, search_subscriber.id == search_assignment.subscriber_id)
+                .where(
+                    or_(
+                        OntUnit.serial_number.ilike(term),
+                        OntUnit.mac_address.ilike(term),
+                        OntUnit.vendor.ilike(term),
+                        OntUnit.model.ilike(term),
+                        OntUnit.firmware_version.ilike(term),
+                        OntUnit.notes.ilike(term),
+                        OntUnit.board.ilike(term),
+                        OntUnit.port.ilike(term),
+                        search_olt.name.ilike(term),
+                        search_olt.hostname.ilike(term),
+                        search_pon_port.name.ilike(term),
+                        search_pon_port.notes.ilike(term),
+                        search_subscriber.display_name.ilike(term),
+                        search_subscriber.subscriber_number.ilike(term),
+                        search_subscriber.email.ilike(term),
+                    )
+                )
+            )
 
         # Filter by signal quality using thresholds
         if signal_quality and signal_quality in ("good", "warning", "critical"):
@@ -359,15 +393,27 @@ class OntUnits(CRUDManager[OntUnit]):
         count_stmt = select(func.count()).select_from(stmt.order_by(None).subquery())
         total = db.scalar(count_stmt) or 0
 
-        # Ordering — include signal-based sorting
-        allowed = {
-            "serial_number": OntUnit.serial_number,
-            "created_at": OntUnit.created_at,
-            "signal": OntUnit.olt_rx_signal_dbm,
-            "last_seen": OntUnit.last_seen_at,
-            "vendor": OntUnit.vendor,
-        }
-        stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
+        # Ordering — include signal-based sorting with nulls last so diagnostics
+        # does not prioritize devices missing telemetry over real low-signal rows.
+        if order_by == "signal":
+            if order_dir == "desc":
+                stmt = stmt.order_by(
+                    OntUnit.olt_rx_signal_dbm.is_(None),
+                    OntUnit.olt_rx_signal_dbm.desc(),
+                )
+            else:
+                stmt = stmt.order_by(
+                    OntUnit.olt_rx_signal_dbm.is_(None),
+                    OntUnit.olt_rx_signal_dbm.asc(),
+                )
+        else:
+            allowed = {
+                "serial_number": OntUnit.serial_number,
+                "created_at": OntUnit.created_at,
+                "last_seen": OntUnit.last_seen_at,
+                "vendor": OntUnit.vendor,
+            }
+            stmt = _apply_ordering(stmt, order_by, order_dir, allowed)
         results = list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
         return results, total
 

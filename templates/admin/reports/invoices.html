@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card, status_badge, empty_state, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, stats_card, status_badge, empty_state, animation_styles, icon_chart_bar %}
 {% block title %}Invoice Report - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("teal", "emerald") }}
 <div class="relative space-y-6">
-    {% call page_header(title="Invoice Report", subtitle="Detailed invoice listing with tax breakdown and payment status", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>', color="teal", color2="emerald") %}{% endcall %}
+    {% call page_header(title="Invoice Report", subtitle="Detailed invoice listing with tax breakdown and payment status", icon=icon_chart_bar(), color="teal", color2="emerald") %}{% endcall %}
 
     {# Filters #}
     <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 50ms;">

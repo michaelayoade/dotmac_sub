@@ -61,7 +61,7 @@ _TICKET_COLUMNS = [
 ]
 
 
-def _ctx(request: Request, db: Session, active_page: str = "tickets") -> dict:
+def _ctx(request: Request, db: Session, active_page: str = "support-tickets") -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -249,6 +249,7 @@ def tickets_list(
         visible_columns = list(_DEFAULT_VISIBLE_COLUMNS)
 
     context = _ctx(request, db)
+    people_lookup = {item["id"]: item["label"] for item in support_service.list_people(db)}
     context.update(
         {
             "tickets": tickets,
@@ -271,6 +272,7 @@ def tickets_list(
             "all_priorities": [item.value for item in TicketPriority],
             "ticket_type_options": support_service.ticket_types(db),
             "people_options": support_service.list_people(db),
+            "people_lookup": people_lookup,
         }
     )
 

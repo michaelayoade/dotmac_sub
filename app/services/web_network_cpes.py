@@ -5,16 +5,83 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy.orm import Session
+
 from app.models.catalog import Subscription
-from app.models.network import DeviceStatus, DeviceType
+from app.models.network import CPEDevice, DeviceStatus
 from app.models.subscriber import Address, Subscriber
+from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import CPEDeviceCreate, CPEDeviceUpdate
 from app.services import network as network_service
 from app.services.common import coerce_uuid, validate_enum
+from app.services.network._common import decode_huawei_hex_serial
 
 logger = logging.getLogger(__name__)
 
 _CPE_META_KEYS = ("winbox_host", "api_host", "api_port", "api_user")
+_CPE_DEVICE_TYPE_OPTIONS = [
+    "router",
+    "modem",
+]
+_CPE_DEFAULT_DEVICE_TYPE = "router"
+
+
+def _vendor_from_serial(value: str | None) -> str | None:
+    serial = str(value or "").strip().upper()
+    decoded = decode_huawei_hex_serial(serial)
+    probe = decoded or serial
+    if probe.startswith(("HWT", "HW")):
+        return "Huawei"
+    if probe.startswith("ZT"):
+        return "ZTE"
+    if probe.startswith("NK"):
+        return "Nokia"
+    return None
+
+
+def build_cpe_identity_context(db: Session, cpe: CPEDevice) -> dict[str, object]:
+    linked_tr069 = (
+        db.query(Tr069CpeDevice)
+        .filter(Tr069CpeDevice.cpe_device_id == cpe.id)
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
+        .first()
+    )
+    raw_serial = str(cpe.serial_number or (linked_tr069.serial_number if linked_tr069 else "") or "").strip()
+    decoded_serial = decode_huawei_hex_serial(raw_serial)
+    display_serial = decoded_serial or raw_serial or None
+    vendor = (
+        str(cpe.vendor or "").strip()
+        or str(_vendor_from_serial(raw_serial) or "")
+        or ""
+    ).strip() or None
+    model = (
+        str(cpe.model or "").strip()
+        or str(getattr(linked_tr069, "product_class", "") or "").strip()
+        or None
+    )
+    mac_address = str(cpe.mac_address or "").strip() or None
+    return {
+        "linked_tr069": linked_tr069,
+        "display_serial": display_serial,
+        "raw_serial": raw_serial or None,
+        "vendor": vendor,
+        "model": model,
+        "mac_address": mac_address,
+        "oui": str(getattr(linked_tr069, "oui", "") or "").strip() or None,
+        "product_class": str(getattr(linked_tr069, "product_class", "") or "").strip() or None,
+        "connection_request_url": str(getattr(linked_tr069, "connection_request_url", "") or "").strip() or None,
+        "last_inform_at": getattr(linked_tr069, "last_inform_at", None),
+    }
+
+
+def _normalize_cpe_device_type(value: str | None) -> str:
+    device_type = str(value or "").strip()
+    if device_type in _CPE_DEVICE_TYPE_OPTIONS:
+        return device_type
+    if device_type in {"cpe", "ont", "access_point", "bridge", "other"}:
+        return _CPE_DEFAULT_DEVICE_TYPE
+    return _CPE_DEFAULT_DEVICE_TYPE
 
 
 def parse_cpe_notes_metadata(notes: str | None) -> tuple[dict[str, str | None], str | None]:
@@ -76,7 +143,7 @@ def parse_cpe_form(form) -> dict[str, object]:
         "subscriber_id": str(form.get("subscriber_id") or "").strip(),
         "subscription_id": str(form.get("subscription_id") or "").strip() or None,
         "service_address_id": str(form.get("service_address_id") or "").strip() or None,
-        "device_type": str(form.get("device_type") or "").strip() or DeviceType.ont.value,
+        "device_type": _normalize_cpe_device_type(form.get("device_type")),
         "status": str(form.get("status") or "").strip() or DeviceStatus.active.value,
         "serial_number": str(form.get("serial_number") or "").strip() or None,
         "model": str(form.get("model") or "").strip() or None,
@@ -93,6 +160,7 @@ def parse_cpe_form(form) -> dict[str, object]:
 
 def cpe_form_snapshot(values: dict[str, object], *, cpe_id: str | None = None) -> dict[str, object]:
     data = dict(values)
+    data["device_type"] = _normalize_cpe_device_type(data.get("device_type"))
     if cpe_id:
         data["id"] = cpe_id
     return data
@@ -105,7 +173,7 @@ def cpe_form_snapshot_from_model(cpe) -> dict[str, object]:
         "subscriber_id": str(cpe.subscriber_id),
         "subscription_id": str(cpe.subscription_id) if cpe.subscription_id else "",
         "service_address_id": str(cpe.service_address_id) if cpe.service_address_id else "",
-        "device_type": cpe.device_type.value,
+        "device_type": _normalize_cpe_device_type(cpe.device_type.value),
         "status": cpe.status.value,
         "serial_number": cpe.serial_number or "",
         "model": cpe.model or "",
@@ -120,6 +188,37 @@ def cpe_form_snapshot_from_model(cpe) -> dict[str, object]:
     }
 
 
+def _resolve_subscriber_label(db: Session, subscriber_id: str | None) -> str:
+    """Return a typeahead-friendly subscriber label for the CPE form."""
+    selected_subscriber_id = str(subscriber_id or "").strip()
+    if not selected_subscriber_id:
+        return ""
+    try:
+        subscriber = db.query(Subscriber).filter(Subscriber.id == coerce_uuid(selected_subscriber_id)).first()
+    except Exception:
+        logger.warning(
+            "Failed to resolve CPE subscriber label for %s",
+            selected_subscriber_id,
+            exc_info=True,
+        )
+        return ""
+    if not subscriber:
+        return ""
+    if subscriber.organization and subscriber.organization.name:
+        label = str(subscriber.organization.name)
+    else:
+        label = (
+            f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
+            or str(getattr(subscriber, "display_name", "") or "").strip()
+            or "Subscriber"
+        )
+    if subscriber.account_number:
+        label = f"{label} ({subscriber.account_number})"
+    elif subscriber.subscriber_number:
+        label = f"{label} ({subscriber.subscriber_number})"
+    return label
+
+
 def validate_cpe_values(values: dict[str, object]) -> str | None:
     if not values.get("subscriber_id"):
         return "Subscriber is required."
@@ -128,14 +227,13 @@ def validate_cpe_values(values: dict[str, object]) -> str | None:
 
 def create_cpe(db, values: dict[str, object]):
     normalized = dict(values)
-    normalized["subscriber_id"] = coerce_uuid(str(values.get("subscriber_id") or ""))
+    normalized["account_id"] = coerce_uuid(str(values.get("subscriber_id") or ""))
+    normalized.pop("subscriber_id", None)
     if values.get("subscription_id"):
         normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
         normalized["service_address_id"] = coerce_uuid(str(values.get("service_address_id")))
-    normalized["device_type"] = validate_enum(
-        str(values.get("device_type") or DeviceType.ont.value), DeviceType, "device_type"
-    )
+    normalized["device_type"] = _normalize_cpe_device_type(values.get("device_type"))
     normalized["status"] = validate_enum(
         str(values.get("status") or DeviceStatus.active.value), DeviceStatus, "status"
     )
@@ -157,14 +255,13 @@ def create_cpe(db, values: dict[str, object]):
 def update_cpe(db, *, cpe_id: str, values: dict[str, object]):
     normalized = dict(values)
     if values.get("subscriber_id"):
-        normalized["subscriber_id"] = coerce_uuid(str(values.get("subscriber_id")))
+        normalized["account_id"] = coerce_uuid(str(values.get("subscriber_id")))
+    normalized.pop("subscriber_id", None)
     if values.get("subscription_id"):
         normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
         normalized["service_address_id"] = coerce_uuid(str(values.get("service_address_id")))
-    normalized["device_type"] = validate_enum(
-        str(values.get("device_type") or DeviceType.ont.value), DeviceType, "device_type"
-    )
+    normalized["device_type"] = _normalize_cpe_device_type(values.get("device_type"))
     normalized["status"] = validate_enum(
         str(values.get("status") or DeviceStatus.active.value), DeviceStatus, "status"
     )
@@ -188,7 +285,6 @@ def get_cpe(db, *, cpe_id: str):
 
 
 def cpe_form_reference_data(db, *, subscriber_id: str | None = None) -> dict[str, object]:
-    subscribers = db.query(Subscriber).order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc()).limit(500).all()
     selected_subscriber_id = str(subscriber_id or "").strip()
     subscriptions: list[Subscription] = []
     addresses: list[Address] = []
@@ -208,10 +304,10 @@ def cpe_form_reference_data(db, *, subscriber_id: str | None = None) -> dict[str
             .all()
         )
     return {
-        "subscribers": subscribers,
+        "selected_subscriber_label": _resolve_subscriber_label(db, selected_subscriber_id),
         "subscriptions": subscriptions,
         "addresses": addresses,
-        "device_types": [item.value for item in DeviceType],
+        "device_types": _CPE_DEVICE_TYPE_OPTIONS,
         "statuses": [item.value for item in DeviceStatus],
     }
 

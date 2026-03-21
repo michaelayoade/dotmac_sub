@@ -1962,6 +1962,12 @@ def audit_log(
     )
 
 
+@router.get("/audit-log", dependencies=[Depends(require_permission("audit:read"))])
+def audit_log_legacy():
+    """Legacy route redirect for audit log."""
+    return RedirectResponse(url="/admin/system/audit", status_code=307)
+
+
 @router.get("/scheduler", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
 def scheduler_overview(
     request: Request,

@@ -27,7 +27,7 @@
 
         <!-- Logo -->
         <div class="flex h-16 items-center justify-between px-4 border-b border-slate-200 dark:border-slate-800">
-            <a href="/admin/dashboard" class="flex items-center gap-3">
+            <a href="/admin/dashboard" class="flex items-center gap-2.5">
                 {% set sidebar_logo_main = sidebar_stats.sidebar_logo_url if sidebar_stats is defined and sidebar_stats and sidebar_stats.sidebar_logo_url else '' %}
                 {% set sidebar_logo_dark = sidebar_stats.sidebar_logo_dark_url if sidebar_stats is defined and sidebar_stats and sidebar_stats.sidebar_logo_dark_url else '' %}
                 <div class="flex h-10 w-10 items-center justify-center rounded-lg {% if sidebar_logo_main or sidebar_logo_dark %}bg-transparent{% else %}bg-gradient-to-br from-primary-500 to-primary-600{% endif %}">
@@ -56,7 +56,7 @@
                     </svg>
                     {% endif %}
                 </div>
-                <span x-show="!sidebarCollapsed" class="text-lg font-semibold text-slate-900 dark:text-white">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</span>
+                <span x-show="!sidebarCollapsed" class="text-[15px] font-semibold leading-5 tracking-tight text-slate-900 dark:text-white">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</span>
             </a>
             <button x-on:click="sidebarCollapsed = !sidebarCollapsed"
                     aria-label="Toggle sidebar collapse"
@@ -76,15 +76,27 @@
             {% include "components/navigation/admin_sidebar.html" %}
         </nav>
 
-        <!-- User Profile (bottom) -->
+        <!-- Operator Context (bottom) -->
         <div class="border-t border-slate-200 p-4 dark:border-slate-800">
-            <div class="flex items-center gap-3">
-                <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-white">
-                    {{ current_user.initials if current_user is defined and current_user else 'AD' }}
+            <div class="rounded-2xl border border-slate-200/70 bg-slate-50/85 p-2.5 dark:border-slate-700/70 dark:bg-slate-800/60">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-9 w-9 items-center justify-center rounded-full bg-slate-200 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-white">
+                        {{ current_user.initials if current_user is defined and current_user else 'AD' }}
+                    </div>
+                    <div x-show="!sidebarCollapsed" class="min-w-0 flex-1">
+                        <p class="text-sm font-medium text-slate-900 truncate dark:text-white">{{ current_user.name if current_user is defined and current_user else 'Admin User' }}</p>
+                        <p class="text-xs text-slate-600 truncate dark:text-slate-300">{{ current_user.email if current_user is defined and current_user else 'admin@example.com' }}</p>
+                    </div>
                 </div>
-                <div x-show="!sidebarCollapsed" class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-slate-900 truncate dark:text-white">{{ current_user.name if current_user is defined and current_user else 'Admin User' }}</p>
-                    <p class="text-xs text-slate-500 truncate dark:text-slate-400">{{ current_user.email if current_user is defined and current_user else 'admin@example.com' }}</p>
+                <div x-show="!sidebarCollapsed" class="mt-2.5 grid grid-cols-2 gap-2 text-xs">
+                    <div class="rounded-xl border border-slate-200/70 bg-white/90 px-2.5 py-1.5 dark:border-slate-700/70 dark:bg-slate-900/65">
+                        <p class="font-semibold uppercase tracking-[0.12em] text-slate-600 dark:text-slate-300">Tenant</p>
+                        <p class="mt-1 truncate text-slate-800 dark:text-slate-100">{{ sidebar_stats.app_name if sidebar_stats is defined and sidebar_stats and sidebar_stats.app_name else 'DotMac Subs' }}</p>
+                    </div>
+                    <div class="rounded-xl border border-slate-200/70 bg-white/90 px-2.5 py-1.5 dark:border-slate-700/70 dark:bg-slate-900/65">
+                        <p class="font-semibold uppercase tracking-[0.12em] text-slate-600 dark:text-slate-300">Unread</p>
+                        <p class="mt-1 tabular-nums text-slate-800 dark:text-slate-100">{{ unread_notifications }}</p>
+                    </div>
                 </div>
             </div>
         </div>
@@ -118,8 +130,79 @@
 
             <!-- Breadcrumbs -->
             <div class="hidden md:flex items-center gap-2 text-sm">
+                {% set breadcrumb_labels = {
+                    'dashboard': 'Dashboard',
+                    'subscribers': 'Subscribers',
+                    'customers': 'Customers',
+                    'contacts': 'Contacts',
+                    'provisioning': 'Provisioning',
+                    'support-tickets': 'Support Tickets',
+                    'billing': 'Revenue & Billing',
+                    'accounts': 'Billing Accounts',
+                    'invoices': 'Invoices',
+                    'payments': 'Payments',
+                    'credits': 'Credit Notes',
+                    'dunning': 'Dunning',
+                    'ar-aging': 'AR Aging',
+                    'payment_arrangements': 'Payment Arrangements',
+                    'payment_providers': 'Payment Providers',
+                    'catalog': 'Catalog',
+                    'catalog-offers': 'Offers',
+                    'catalog-subscriptions': 'Subscriptions',
+                    'catalog-add-ons': 'Add-ons',
+                    'catalog-usage': 'Usage & FUP',
+                    'resellers': 'Resellers',
+                    'network': 'Network Hub',
+                    'olts': 'OLTs',
+                    'onts': 'ONTs',
+                    'cpes': 'CPEs',
+                    'nas': 'NAS Devices',
+                    'radius': 'RADIUS',
+                    'fiber-plant': 'Fiber Plant',
+                    'monitoring': 'Monitoring',
+                    'speedtests': 'Speed Tests',
+                    'tr069': 'TR-069',
+                    'weathermap': 'Weathermap',
+                    'vpn': 'WireGuard',
+                    'wireguard-peers': 'WireGuard Peers',
+                    'reports': 'Reports',
+                    'gis': 'GIS / Map',
+                    'integrations': 'Integrations',
+                    'notifications': 'Notifications',
+                    'settings-hub': 'Settings',
+                    'configuration': 'Configuration',
+                    'users': 'Users',
+                    'roles': 'Roles',
+                    'permissions': 'Permissions',
+                    'api-keys': 'API Keys',
+                    'audit-log': 'Audit Log',
+                    'system-health': 'System Health',
+                    'scheduler': 'Scheduler',
+                    'system-about': 'About',
+                    'design-system': 'Design System'
+                } %}
+                {% set request_path = request.url.path if request is defined and request and request.url and request.url.path else '/admin/dashboard' %}
+                {% set path_parts = request_path.strip('/').split('/') %}
+                {% set inferred_active_page = active_page|default('dashboard') %}
+                {% if request_path.startswith('/admin') and request_path not in ['/admin', '/admin/', '/admin/dashboard'] and inferred_active_page == 'dashboard' %}
+                    {% if path_parts|length > 2 %}
+                        {% set inferred_active_page = path_parts[2] %}
+                    {% elif path_parts|length > 1 %}
+                        {% set inferred_active_page = path_parts[1] %}
+                    {% endif %}
+                {% endif %}
+                {% set current_breadcrumb = page_title if page_title is defined and page_title else breadcrumb_labels.get(inferred_active_page, inferred_active_page|replace('-', ' ')|replace('_', ' ')|title) %}
+                {% set parent_breadcrumb = breadcrumb_labels.get(active_menu, active_menu|replace('-', ' ')|replace('_', ' ')|title) if active_menu is defined and active_menu and active_menu not in ['dashboard', inferred_active_page] else None %}
                 {% block breadcrumbs %}
                 <a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Dashboard</a>
+                {% if parent_breadcrumb %}
+                <span class="text-slate-300 dark:text-slate-600">/</span>
+                <span class="text-slate-500 dark:text-slate-400">{{ parent_breadcrumb }}</span>
+                {% endif %}
+                {% if inferred_active_page and inferred_active_page != 'dashboard' %}
+                <span class="text-slate-300 dark:text-slate-600">/</span>
+                <span class="text-slate-900 dark:text-white">{{ current_breadcrumb }}</span>
+                {% endif %}
                 {% endblock %}
             </div>
 
@@ -147,9 +230,9 @@
                                x-on:keydown.down.prevent="navigateDown()"
                                x-on:keydown.up.prevent="navigateUp()"
                                x-on:keydown.enter.prevent="selectCurrent()"
-                               placeholder="Search customers, invoices..."
+                               placeholder="Operational lookup: name, phone, account, PPPoE, ONT, IP, MAC..."
                                autocomplete="off"
-                               class="w-full sm:w-72 rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-14 text-sm placeholder-slate-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-500" />
+                               class="w-full sm:w-96 rounded-lg border border-slate-300 bg-slate-50 py-2 pl-10 pr-14 text-sm text-slate-700 placeholder-slate-500 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-400" />
                         <svg class="absolute left-3 top-2.5 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                         </svg>
@@ -180,6 +263,7 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                                 </svg>
                                 <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No results for "<span x-text="query"></span>"</p>
+                                <p class="mt-1 text-xs text-slate-400 dark:text-slate-500">Try name, phone, account number, invoice, PPPoE, ONT serial, IP, or MAC.</p>
                             </div>
                         </template>
 

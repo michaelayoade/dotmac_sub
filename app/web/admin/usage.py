@@ -19,6 +19,7 @@ from app.web.request_parsing import parse_form_data
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog/usage", tags=["web-admin-usage"])
+legacy_router = APIRouter(prefix="/usage", tags=["web-admin-usage-legacy"])
 
 
 def _base_context(request: Request, db: Session, active_page: str, usage_tab: str = ""):
@@ -32,6 +33,16 @@ def _base_context(request: Request, db: Session, active_page: str, usage_tab: st
         "sidebar_stats": get_sidebar_stats(db),
         "csrf_token": get_csrf_token(request),
     }
+
+
+@legacy_router.get("", response_class=HTMLResponse)
+def usage_legacy_index() -> RedirectResponse:
+    return RedirectResponse("/admin/catalog/usage", status_code=307)
+
+
+@legacy_router.get("/{path:path}", response_class=HTMLResponse)
+def usage_legacy_redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(f"/admin/catalog/usage/{path}", status_code=307)
 
 
 # =============================================================================

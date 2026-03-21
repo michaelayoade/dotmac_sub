@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, action_button, status_badge, row_action, empty_state, card, icon_plus, icon_view, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, action_button, status_badge, row_action, empty_state, card, icon_plus, icon_view, icon_shield, animation_styles %}
 
 {% block title %}VPN - Admin{% endblock %}
 
@@ -26,16 +26,10 @@
             Back to Network
         </a>
     </div>
-    {% set wg_icon %}
-    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/>
-    </svg>
-    {% endset %}
-
     {% call page_header(
         title="VPN",
         subtitle="Unified WireGuard and OpenVPN tunnel management",
-        icon=wg_icon,
+        icon=icon_shield(),
         color="violet",
         color2="purple",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "VPN"}]

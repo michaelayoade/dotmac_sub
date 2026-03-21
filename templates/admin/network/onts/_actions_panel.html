@@ -44,7 +44,7 @@
 
 {# ── PPPoE Credentials ─────────────────────────────────────────────── #}
 {% call card("PPPoE Credentials", color="blue") %}
-<div x-data="{ expanded: false }" class="space-y-3">
+<div x-data="{ expanded: false, pppoeMessage: '', pppoeType: 'info' }" class="space-y-3">
     <button @click="expanded = !expanded"
             class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/50 px-3.5 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30 transition-colors">
         <span class="inline-flex items-center gap-2">
@@ -56,8 +56,19 @@
     <div x-show="expanded" x-transition.duration.200ms x-cloak>
         <form hx-post="/admin/network/onts/{{ ont.id }}/pppoe-credentials"
               hx-swap="none"
+              hx-on::before-request="pppoeMessage = 'Pushing PPPoE credentials to device...'; pppoeType = 'info'"
+              hx-on::after-request="try { const data = JSON.parse(event.detail.xhr.responseText || '{}'); pppoeMessage = data.message || (event.detail.successful ? 'PPPoE credentials pushed.' : 'PPPoE push failed.'); pppoeType = data.success ? 'success' : 'error'; } catch (e) { pppoeMessage = event.detail.successful ? 'PPPoE credentials pushed.' : 'PPPoE push failed.'; pppoeType = event.detail.successful ? 'success' : 'error'; }"
               class="space-y-2 pt-1">
             {% include "components/forms/csrf_input.html" %}
+            <div x-show="pppoeMessage" x-cloak
+                 class="rounded-lg border px-3 py-2 text-xs"
+                 :class="{
+                    'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300': pppoeType === 'info',
+                    'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300': pppoeType === 'success',
+                    'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800/50 dark:bg-rose-900/20 dark:text-rose-300': pppoeType === 'error'
+                 }">
+                <span x-text="pppoeMessage"></span>
+            </div>
             <div>
                 <label for="pppoe-user" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Username</label>
                 <input type="text" id="pppoe-user" name="username" maxlength="64" required placeholder="PPPoE username" value="{{ ont.pppoe_username or '' }}"

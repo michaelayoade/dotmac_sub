@@ -17,15 +17,15 @@
             {% endif %}
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                 <div>
-                    <label for="subscriber_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber <span class="text-red-500">*</span></label>
-                    <select name="subscriber_id" id="subscriber_id" required class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">Select subscriber</option>
-                        {% for subscriber in subscribers %}
-                        <option value="{{ subscriber.id }}" {% if cpe.subscriber_id|string == subscriber.id|string %}selected{% endif %}>
-                            {{ subscriber.full_name }}{% if subscriber.account_number %} ({{ subscriber.account_number }}){% endif %}
-                        </option>
-                        {% endfor %}
-                    </select>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber <span class="text-red-500">*</span></label>
+                    <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscribers" data-typeahead-min="2" data-typeahead-limit="8">
+                        <input type="text" name="subscriber_search" data-typeahead-input
+                               value="{{ selected_subscriber_label or '' }}"
+                               placeholder="Search subscriber..."
+                               class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <input type="hidden" name="subscriber_id" id="subscriber_id" data-typeahead-hidden value="{{ cpe.subscriber_id or '' }}" required>
+                        <div data-typeahead-results></div>
+                    </div>
                 </div>
                 <div>
                     <label for="device_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Device Type</label>
@@ -35,27 +35,8 @@
                         {% endfor %}
                     </select>
                 </div>
-                <div>
-                    <label for="subscription_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription</label>
-                    <select name="subscription_id" id="subscription_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">None</option>
-                        {% for sub in subscriptions %}
-                        <option value="{{ sub.id }}" {% if cpe.subscription_id|string == sub.id|string %}selected{% endif %}>
-                            {{ sub.id }}{% if sub.status %} - {{ sub.status.value | title }}{% endif %}
-                        </option>
-                        {% endfor %}
-                    </select>
-                </div>
-                <div>
-                    <label for="service_address_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Service Address</label>
-                    <select name="service_address_id" id="service_address_id" class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <option value="">None</option>
-                        {% for addr in addresses %}
-                        <option value="{{ addr.id }}" {% if cpe.service_address_id|string == addr.id|string %}selected{% endif %}>
-                            {{ addr.address_line1 }}{% if addr.city %}, {{ addr.city }}{% endif %}
-                        </option>
-                        {% endfor %}
-                    </select>
+                <div id="subscriber-linked-fields" class="contents">
+                    {% include "admin/network/cpes/_subscriber_fields.html" %}
                 </div>
                 <div>
                     <label for="status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Status</label>
@@ -114,4 +95,29 @@
         </div>
     </form>
 </div>
+<script>
+(() => {
+    const subscriberInput = document.getElementById('subscriber_id');
+    if (!subscriberInput || typeof htmx === 'undefined') return;
+
+    let lastValue = subscriberInput.value || '';
+    subscriberInput.addEventListener('change', () => {
+        const subscriberId = subscriberInput.value || '';
+        if (subscriberId === lastValue) return;
+        lastValue = subscriberId;
+
+        const subscriptionInput = document.getElementById('subscription_id');
+        const addressInput = document.getElementById('service_address_id');
+        const params = new URLSearchParams({
+            subscriber_id: subscriberId,
+            subscription_id: subscriptionInput ? subscriptionInput.value || '' : '',
+            service_address_id: addressInput ? addressInput.value || '' : '',
+        });
+        htmx.ajax('GET', `/admin/network/cpes/subscriber-fields?${params.toString()}`, {
+            target: '#subscriber-linked-fields',
+            swap: 'outerHTML',
+        });
+    });
+})();
+</script>
 {% endblock %}

@@ -157,14 +157,15 @@
                                     {% endif %}
                                 </div>
                                 <div>
-                                    <p class="font-mono text-sm font-semibold text-slate-900 dark:text-white">{{ entry.id | string | truncate(12, True, '') }}</p>
+                                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ entry.memo or (source | title | replace('_', ' ')) }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ entry.id | string | truncate(12, True, '') }}</p>
                                 </div>
                             </div>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if entry.account_id %}
-                            <a href="/admin/billing/accounts/{{ entry.account_id }}" class="text-sm text-slate-600 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 transition-colors font-mono">
-                                {{ entry.account_id | string | truncate(8, True, '') }}
+                            <a href="/admin/billing/accounts/{{ entry.account_id }}" class="text-sm text-slate-600 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 transition-colors">
+                                {{ entry.account.organization.name if entry.account and entry.account.organization else entry.account.full_name if entry.account and entry.account.full_name else entry.account.display_name if entry.account and entry.account.display_name else entry.account.account_number if entry.account and entry.account.account_number else 'Account' }}
                             </a>
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">&mdash;</span>

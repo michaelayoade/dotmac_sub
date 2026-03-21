@@ -120,7 +120,12 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for device in unconfigured_devices %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
-                            <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ device.serial_number or '-' }}</td>
+                            <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">
+                                <div>{{ device.display_serial_number or device.serial_number or '-' }}</div>
+                                {% if device.display_serial_number and device.serial_number and device.display_serial_number != device.serial_number %}
+                                <div class="text-xs text-slate-500 dark:text-slate-400">Raw: {{ device.serial_number }}</div>
+                                {% endif %}
+                            </td>
                             <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
                                 <div>OUI: {{ device.oui or '-' }}</div>
                                 <div class="text-slate-500">{{ device.product_class or '-' }}</div>
@@ -180,7 +185,12 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for device in configured_devices %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
-                            <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">{{ device.serial_number or '-' }}</td>
+                            <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">
+                                <div>{{ device.display_serial_number or device.serial_number or '-' }}</div>
+                                {% if device.display_serial_number and device.serial_number and device.display_serial_number != device.serial_number %}
+                                <div class="text-xs text-slate-500 dark:text-slate-400">Raw: {{ device.serial_number }}</div>
+                                {% endif %}
+                            </td>
                             <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
                                 <div>OUI: {{ device.oui or '-' }}</div>
                                 <div class="text-slate-500">{{ device.product_class or '-' }}</div>

@@ -207,6 +207,8 @@ def customers_list(
         {
             "request": request,
             **page_data,
+            "active_page": "customers",
+            "active_menu": "operations",
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },

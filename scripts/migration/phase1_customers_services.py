@@ -37,10 +37,10 @@ logger = logging.getLogger(__name__)
 
 # --- Status mappings ---
 CUSTOMER_STATUS_MAP = {
-    "new": "active",        # new customers are activatable
+    "new": "new",
     "active": "active",
     "blocked": "suspended",
-    "disabled": "canceled",
+    "disabled": "disabled",
 }
 
 CATEGORY_MAP = {
@@ -57,8 +57,10 @@ BILLING_TYPE_MAP = {
 SERVICE_STATUS_MAP = {
     "active": "active",
     "blocked": "suspended",
-    "disabled": "canceled",
+    "disabled": "disabled",
     "new": "pending",
+    "stopped": "stopped",
+    "hidden": "archived",
 }
 
 
@@ -111,6 +113,43 @@ def _parse_date(val) -> datetime | None:
     except (ValueError, TypeError):
         pass
     return None
+
+
+def _map_customer_status(status_raw: str | None, *, is_deleted: bool):
+    from app.models.subscriber import SubscriberStatus
+
+    if is_deleted:
+        return SubscriberStatus.canceled
+    status_str = CUSTOMER_STATUS_MAP.get((status_raw or "new").strip().lower(), "active")
+    return {
+        "new": SubscriberStatus.new,
+        "active": SubscriberStatus.active,
+        "suspended": SubscriberStatus.suspended,
+        "disabled": SubscriberStatus.disabled,
+    }.get(status_str, SubscriberStatus.active)
+
+
+def _map_service_status(status_raw: str | None, *, is_deleted: bool):
+    from app.models.catalog import SubscriptionStatus
+
+    if is_deleted:
+        return SubscriptionStatus.canceled
+    status_str = SERVICE_STATUS_MAP.get((status_raw or "active").strip().lower(), "active")
+    return {
+        "active": SubscriptionStatus.active,
+        "suspended": SubscriptionStatus.suspended,
+        "disabled": SubscriptionStatus.disabled,
+        "pending": SubscriptionStatus.pending,
+        "stopped": SubscriptionStatus.stopped,
+        "archived": SubscriptionStatus.archived,
+    }.get(status_str, SubscriptionStatus.active)
+
+
+def _map_billing_mode(billing_type_raw: str | None):
+    from app.models.catalog import BillingMode
+
+    mapped = BILLING_TYPE_MAP.get((billing_type_raw or "").strip().lower(), "prepaid")
+    return BillingMode.postpaid if mapped == "postpaid" else BillingMode.prepaid
 
 
 def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
@@ -174,14 +213,7 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
             first_name, last_name = _split_name(row["name"])
             email = _dedup_email(row.get("email", ""), cid, seen_emails)
             status_raw = row.get("status", "new")
-            status_str = CUSTOMER_STATUS_MAP.get(status_raw, "active")
-
-            # Map status
-            status_enum = {
-                "active": SubscriberStatus.active,
-                "suspended": SubscriberStatus.suspended,
-                "canceled": SubscriberStatus.canceled,
-            }.get(status_str, SubscriberStatus.active)
+            status_enum = _map_customer_status(status_raw, is_deleted=is_deleted)
 
             # Reseller mapping
             reseller_id = partner_mappings.get(row.get("partner_id"))
@@ -223,7 +255,18 @@ def migrate_customers(conn, db) -> dict[int, uuid.UUID]:
                 splynx_customer_id=cid,
                 metadata_={
                     "subscriber_category": category,
+                    "splynx_deleted": is_deleted,
                     "splynx_status": status_raw,
+                    "splynx_date_add": (
+                        _parse_date(row.get("date_add")).isoformat()
+                        if _parse_date(row.get("date_add")) is not None
+                        else None
+                    ),
+                    "splynx_last_update": (
+                        _parse_date(row.get("last_update")).isoformat()
+                        if _parse_date(row.get("last_update")) is not None
+                        else None
+                    ),
                     "splynx_category": row.get("category"),
                     "splynx_billing_type": row.get("billing_type"),
                     "splynx_login": row.get("login"),
@@ -260,6 +303,11 @@ def migrate_custom_fields(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
     """Migrate customer custom field values → SubscriberCustomField."""
     from app.models.subscriber import SubscriberCustomField
 
+    existing_pairs = {
+        (str(cf.subscriber_id), cf.key)
+        for cf in db.scalars(select(SubscriberCustomField)).all()
+    }
+
     # Get field definitions
     fields = fetch_all(conn, "SELECT * FROM customers_fields WHERE deleted='0'")
     field_defs = {f["name"]: f for f in fields}
@@ -287,12 +335,18 @@ def migrate_custom_fields(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
                 skipped += 1
                 continue
 
+            key = (str(subscriber_id), field_name[:80])
+            if key in existing_pairs:
+                skipped += 1
+                continue
+
             cf = SubscriberCustomField(
                 subscriber_id=subscriber_id,
                 key=field_name[:80],
                 value_text=str(value)[:2000] if value else None,
             )
             db.add(cf)
+            existing_pairs.add(key)
             created += 1
 
         db.flush()
@@ -373,13 +427,7 @@ def migrate_services(
 
             is_deleted = row.get("deleted") == "1"
             status_raw = row.get("status", "active")
-            status_str = SERVICE_STATUS_MAP.get(status_raw, "active")
-            status_enum = {
-                "active": SubscriptionStatus.active,
-                "suspended": SubscriptionStatus.suspended,
-                "canceled": SubscriptionStatus.canceled,
-                "pending": SubscriptionStatus.pending,
-            }.get(status_str, SubscriptionStatus.active)
+            status_enum = _map_service_status(status_raw, is_deleted=is_deleted)
 
             nas_device_id = router_mappings.get(row.get("router_id"))
 
@@ -398,8 +446,7 @@ def migrate_services(
             disc_type_map = {"percent": "percentage", "fixed": "fixed"}
             mapped_disc_type = disc_type_map.get(raw_disc_type, raw_disc_type) if raw_disc_type else None
 
-            # Billing mode from customer's billing_type (stored in metadata)
-            billing_mode = BillingMode.prepaid  # default
+            billing_mode = _map_billing_mode(row.get("billing_type"))
 
             subscription = Subscription(
                 subscriber_id=subscriber_id,
@@ -426,6 +473,7 @@ def migrate_services(
                 discount_start_at=_parse_date(discount_start) if discount_start and str(discount_start) != "0000-00-00" else None,
                 discount_end_at=_parse_date(discount_end) if discount_end and str(discount_end) != "0000-00-00" else None,
                 discount_description=(row.get("discount_text") or "")[:512] or None,
+                service_status_raw=status_raw,
             )
             db.add(subscription)
 
@@ -441,11 +489,13 @@ def migrate_services(
             login = (row.get("login") or "").strip()
             password = row.get("password") or ""
             if login and login not in existing_usernames:
+                from app.services.credential_crypto import encrypt_credential
+
                 cred = AccessCredential(
                     subscriber_id=subscriber_id,
                     username=login[:120],
-                    secret_hash=password[:255] if password else None,
-                    is_active=not is_deleted and status_str == "active",
+                    secret_hash=encrypt_credential(password[:255]) if password else None,
+                    is_active=not is_deleted and status_enum == SubscriptionStatus.active,
                 )
                 db.add(cred)
                 existing_usernames.add(login)
@@ -499,11 +549,23 @@ def migrate_custom_services(
 
     query = "SELECT * FROM services_custom ORDER BY id"
     rows = fetch_all(conn, query)
+    existing_maps = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.service,
+                SplynxIdMapping.splynx_id >= 200000,
+            )
+        ).all()
+    }
     created = 0
     skipped = 0
 
     for row in rows:
         sid = row["id"]
+        mapping_id = 200000 + sid
+        if mapping_id in existing_maps:
+            continue
         subscriber_id = customer_mapping.get(row.get("customer_id"))
         if not subscriber_id:
             skipped += 1
@@ -516,13 +578,7 @@ def migrate_custom_services(
 
         is_deleted = row.get("deleted") == "1"
         status_raw = row.get("status", "active")
-        status_str = SERVICE_STATUS_MAP.get(status_raw, "active")
-        status_enum = {
-            "active": SubscriptionStatus.active,
-            "suspended": SubscriptionStatus.suspended,
-            "canceled": SubscriptionStatus.canceled,
-            "pending": SubscriptionStatus.pending,
-        }.get(status_str, SubscriptionStatus.active)
+        status_enum = _map_service_status(status_raw, is_deleted=is_deleted)
 
         start_date = row.get("start_date")
         start_at = _parse_date(start_date) if start_date and str(start_date) != "0000-00-00" else None
@@ -531,15 +587,22 @@ def migrate_custom_services(
             subscriber_id=subscriber_id,
             offer_id=offer_id,
             status=status_enum,
-            billing_mode=BillingMode.prepaid,
+            billing_mode=_map_billing_mode(row.get("billing_type")),
             contract_term=ContractTerm.month_to_month,
             start_at=start_at,
-            splynx_service_id=200000 + sid,  # Offset to avoid collision with internet services
+            splynx_service_id=mapping_id,
             service_description=(row.get("description") or "")[:500] or None,
             quantity=row.get("quantity") or 1,
             unit_price=Decimal(str(row.get("unit_price") or "0")),
+            service_status_raw=status_raw,
         )
         db.add(subscription)
+        db.flush()
+        db.add(SplynxIdMapping(
+            entity_type=SplynxEntityType.service,
+            splynx_id=mapping_id,
+            dotmac_id=subscription.id,
+        ))
         created += 1
 
     db.flush()
@@ -575,17 +638,10 @@ def run_phase1(dry_run: bool = True) -> None:
             db.commit()
             logger.info("--- Customers committed ---")
 
-            # Step 2: Custom fields (skip if already populated)
-            from app.models.subscriber import SubscriberCustomField
-            existing_cf = db.scalar(
-                select(func.count(SubscriberCustomField.id))
-            )
-            if existing_cf and existing_cf > 0:
-                logger.info("Custom fields already populated (%d), skipping", existing_cf)
-            else:
-                migrate_custom_fields(conn, db, customer_mapping)
-                db.commit()
-                logger.info("--- Custom fields committed ---")
+            # Step 2: Custom fields
+            migrate_custom_fields(conn, db, customer_mapping)
+            db.commit()
+            logger.info("--- Custom fields committed ---")
 
             # Step 3: Internet services → Subscriptions + AccessCredentials
             service_mapping = migrate_services(conn, db, customer_mapping)

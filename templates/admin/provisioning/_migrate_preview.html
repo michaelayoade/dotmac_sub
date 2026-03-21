@@ -24,7 +24,7 @@
                 {% for row in preview.rows %}
                     {% for change in row.changes %}
                     <tr>
-                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.full_name }}<br><span class="font-mono text-slate-500">{{ row.subscriber_id }}</span></td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.subscriber_label or row.full_name }}<br><span class="text-slate-500">{{ row.account_number or row.subscriber_number or row.portal_login or 'No account label' }}</span></td>
                         <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ change.field }}</td>
                         <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ change.from }}</td>
                         <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ change.to }}</td>

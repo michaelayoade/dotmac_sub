@@ -1,0 +1,789 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background,
+    page_header,
+    detail_header,
+    action_button,
+    stats_card,
+    status_badge,
+    type_badge,
+    data_table,
+    table_head,
+    table_row,
+    row_actions,
+    row_action,
+    empty_state,
+    card,
+    search_input,
+    filter_select,
+    filter_bar,
+    pagination,
+    tabs,
+    info_row,
+    icon_badge,
+    info_banner,
+    status_filter_card,
+    step_indicator,
+    progress_bar,
+    timeline_item,
+    metric_row,
+    info_grid,
+    section_divider,
+    setting_row,
+    setting_toggle,
+    submit_button,
+    danger_button,
+    warning_button,
+    connection_status,
+    alert_count_badge,
+    vendor_badge,
+    icon_plus,
+    icon_view,
+    icon_edit,
+    icon_delete,
+    icon_users,
+    icon_user,
+    icon_server,
+    icon_network,
+    icon_location,
+    icon_ticket,
+    icon_invoice,
+    icon_check_circle,
+    icon_lightning,
+    icon_bell,
+    icon_clipboard,
+    icon_archive,
+    icon_credit_card,
+    icon_trending_up,
+    icon_chart_bar,
+    icon_shield,
+    icon_cog,
+    icon_puzzle,
+    icon_heart,
+    icon_cpu,
+    icon_mail,
+    icon_refresh,
+    icon_filter,
+    icon_search,
+    icon_download,
+    icon_upload,
+    icon_warning,
+    icon_building,
+    icon_database,
+    icon_calendar,
+    icon_clock,
+    icon_check,
+    icon_x,
+    icon_link
+%}
+
+{% block breadcrumbs %}
+<a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Dashboard</a>
+<span class="mx-2 text-slate-400">/</span>
+<span class="text-slate-900 dark:text-white">Design System</span>
+{% endblock %}
+
+{% block page_header %}
+{{ page_header(
+    title="Design System",
+    subtitle="Living component reference — every macro rendered with real data",
+    icon=icon_puzzle(),
+    color="indigo",
+    color2="violet"
+) }}
+{% endblock %}
+
+{% block content %}
+{{ ambient_background(color1="indigo", color2="violet") }}
+
+{# ── Navigation ── #}
+<nav class="mb-8 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Jump to Section</h3>
+    <div class="flex flex-wrap gap-2">
+        {% for section in ["colors", "stats-cards", "status-badges", "type-badges", "buttons", "icons", "tables", "cards", "forms", "navigation", "info-display", "progress", "timeline", "settings", "banners", "misc"] %}
+        <a href="#{{ section }}" class="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-indigo-100 hover:text-indigo-700 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-indigo-900/30 dark:hover:text-indigo-300">{{ section | replace("-", " ") | title }}</a>
+        {% endfor %}
+    </div>
+</nav>
+
+{# ═══════════════════════════════════════════════
+   SECTION: Module Accent Colors
+   ═══════════════════════════════════════════════ #}
+<section id="colors" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Module Accent Colors</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400">Each module has a primary + secondary color for gradients. Pass both <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-700">color</code> and <code class="rounded bg-slate-100 px-1.5 py-0.5 text-xs dark:bg-slate-700">color2</code> to macros.</p>
+
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {% set modules = [
+            ("Subscribers / Customers", "amber", "orange", icon_users()),
+            ("Billing / Invoices", "emerald", "teal", icon_invoice()),
+            ("Catalog / Offers", "violet", "purple", icon_archive()),
+            ("Network / Infrastructure", "blue", "indigo", icon_server()),
+            ("Speed Tests", "cyan", "sky", icon_lightning()),
+            ("Provisioning", "amber", "orange", icon_clipboard()),
+            ("System / Admin", "slate", "gray", icon_cog()),
+            ("VPN / WireGuard", "cyan", "teal", icon_shield()),
+            ("Reports / Analytics", "teal", "emerald", icon_chart_bar()),
+            ("GIS / Mapping", "green", "emerald", icon_location()),
+            ("Notifications", "rose", "pink", icon_bell()),
+            ("Integrations", "indigo", "blue", icon_puzzle())
+        ] %}
+        {% for label, c1, c2, ic in modules %}
+        <div class="flex items-center gap-4 rounded-xl border border-slate-200/60 bg-white p-4 dark:border-slate-700/60 dark:bg-slate-800">
+            {{ icon_badge(ic, color=c1, color2=c2, size="md") }}
+            <div>
+                <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ label }}</p>
+                <p class="text-xs text-slate-500 dark:text-slate-400"><code>color="{{ c1 }}"</code> <code>color2="{{ c2 }}"</code></p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Stats Cards
+   ═══════════════════════════════════════════════ #}
+<section id="stats-cards" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Stats Cards</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>stats_card(label, value, icon, color, color2, href, change, change_type)</code></p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Per-Module Examples</h3>
+    <div class="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card(label="Active Subscribers", value="1,247", icon=icon_users(), color="amber", color2="orange", href="#", change=5.2, change_type="positive") }}
+        {{ stats_card(label="Monthly Revenue", value="₦ 4.2M", icon=icon_trending_up(), color="emerald", color2="teal", change=12.5) }}
+        {{ stats_card(label="Active Plans", value="18", icon=icon_archive(), color="violet", color2="purple") }}
+        {{ stats_card(label="Devices Online", value="342", icon=icon_server(), color="blue", color2="indigo", change=-2.1) }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">More Variants</h3>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card(label="Overdue Invoices", value="23", icon=icon_warning(), color="rose", color2="pink", change=-8, change_type="negative") }}
+        {{ stats_card(label="VPN Tunnels", value="7", icon=icon_shield(), color="cyan", color2="teal") }}
+        {{ stats_card(label="Open Tickets", value="5", icon=icon_ticket(), color="amber", color2="orange") }}
+        {{ stats_card(label="System Uptime", value="99.7%", icon=icon_cpu(), color="slate", color2="gray") }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Status Badges
+   ═══════════════════════════════════════════════ #}
+<section id="status-badges" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Status Badges</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>status_badge(status, variant, pulse, size, show_icon)</code> — Accessible indicators with icon + color.</p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">All Variants</h3>
+    <div class="mb-6 flex flex-wrap gap-3">
+        {% for v in ["active", "inactive", "online", "offline", "warning", "pending", "success", "error", "info", "maintenance", "decommissioned", "draft", "paid", "overdue", "default"] %}
+            {{ status_badge(status=v | title, variant=v, pulse=(v in ["active", "online"])) }}
+        {% endfor %}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Sizes</h3>
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+        {{ status_badge(status="Small", variant="active", size="sm") }}
+        {{ status_badge(status="Medium", variant="active", size="md") }}
+        {{ status_badge(status="Large", variant="active", size="lg") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">ISP Context Examples</h3>
+    <div class="flex flex-wrap gap-3">
+        {{ status_badge(status="Active", variant="active", pulse=True) }}
+        {{ status_badge(status="Suspended", variant="warning") }}
+        {{ status_badge(status="Canceled", variant="error") }}
+        {{ status_badge(status="Paid", variant="paid") }}
+        {{ status_badge(status="Overdue", variant="overdue") }}
+        {{ status_badge(status="Draft Invoice", variant="draft") }}
+        {{ status_badge(status="Pending Activation", variant="pending") }}
+        {{ status_badge(status="Online", variant="online", pulse=True) }}
+        {{ status_badge(status="Offline", variant="offline") }}
+        {{ status_badge(status="Under Maintenance", variant="maintenance") }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Type Badges
+   ═══════════════════════════════════════════════ #}
+<section id="type-badges" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Type Badges</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>type_badge(type, size)</code> — Entity type indicators.</p>
+
+    <div class="flex flex-wrap items-center gap-3">
+        {{ type_badge(type="person", size="sm") }}
+        {{ type_badge(type="person", size="md") }}
+        {{ type_badge(type="person", size="lg") }}
+        <span class="mx-2 text-slate-300 dark:text-slate-600">|</span>
+        {{ type_badge(type="organization", size="sm") }}
+        {{ type_badge(type="organization", size="md") }}
+        {{ type_badge(type="organization", size="lg") }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Buttons
+   ═══════════════════════════════════════════════ #}
+<section id="buttons" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Buttons</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>action_button(label, href, icon, variant, color, color2, size, hx_attrs)</code></p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Variants</h3>
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+        {{ action_button("Primary", href="#", icon=icon_plus(), variant="primary", color="amber", color2="orange") }}
+        {{ action_button("Secondary", href="#", icon=icon_edit(), variant="secondary", color="amber") }}
+        {{ action_button("Ghost", href="#", icon=icon_view(), variant="ghost", color="amber") }}
+        {{ action_button("Danger", href="#", icon=icon_delete(), variant="danger") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Sizes</h3>
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+        {{ action_button("Small", href="#", icon=icon_plus(), size="sm", color="blue", color2="indigo") }}
+        {{ action_button("Medium", href="#", icon=icon_plus(), size="md", color="blue", color2="indigo") }}
+        {{ action_button("Large", href="#", icon=icon_plus(), size="lg", color="blue", color2="indigo") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Per-Module Colors</h3>
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+        {{ action_button("Add Subscriber", href="#", icon=icon_plus(), color="amber", color2="orange") }}
+        {{ action_button("New Invoice", href="#", icon=icon_plus(), color="emerald", color2="teal") }}
+        {{ action_button("Create Offer", href="#", icon=icon_plus(), color="violet", color2="purple") }}
+        {{ action_button("Add Device", href="#", icon=icon_plus(), color="blue", color2="indigo") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Confirmation Buttons</h3>
+    <div class="flex flex-wrap items-center gap-3">
+        {{ submit_button(label="Save Changes", loading_label="Saving...", icon=icon_check(), color="primary") }}
+        {{ danger_button(label="Delete Subscriber", confirm_title="Delete Subscriber?", confirm_message="This will permanently remove the subscriber and all associated data.", action_url="#") }}
+        {{ warning_button(label="Suspend Account", confirm_title="Suspend Account?", confirm_message="The subscriber will lose network access immediately.", action_url="#") }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Icons
+   ═══════════════════════════════════════════════ #}
+<section id="icons" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Icons</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400">SVG icon macros. Pass <code>class</code> param for custom sizing.</p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Icon Badges (with gradient background)</h3>
+    <div class="mb-6 flex flex-wrap items-center gap-3">
+        {{ icon_badge(icon_users(), color="amber", color2="orange", size="sm") }}
+        {{ icon_badge(icon_invoice(), color="emerald", color2="teal", size="md") }}
+        {{ icon_badge(icon_server(), color="blue", color2="indigo", size="lg") }}
+        {{ icon_badge(icon_shield(), color="cyan", color2="teal", size="md") }}
+        {{ icon_badge(icon_chart_bar(), color="teal", color2="emerald", size="md") }}
+        {{ icon_badge(icon_bell(), color="rose", color2="pink", size="md") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">All Available Icons</h3>
+    <div class="grid grid-cols-4 gap-3 sm:grid-cols-6 lg:grid-cols-8">
+        {% set all_icons = [
+            ("plus", icon_plus()),
+            ("view", icon_view()),
+            ("edit", icon_edit()),
+            ("delete", icon_delete()),
+            ("users", icon_users("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("user", icon_user("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("server", icon_server("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("network", icon_network("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("location", icon_location("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("ticket", icon_ticket("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("invoice", icon_invoice("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("check_circle", icon_check_circle("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("lightning", icon_lightning("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("bell", icon_bell("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("clipboard", icon_clipboard("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("archive", icon_archive("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("credit_card", icon_credit_card("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("trending_up", icon_trending_up("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("chart_bar", icon_chart_bar("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("shield", icon_shield("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("cog", icon_cog("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("puzzle", icon_puzzle("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("heart", icon_heart("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("cpu", icon_cpu("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("mail", icon_mail()),
+            ("refresh", icon_refresh()),
+            ("filter", icon_filter()),
+            ("search", icon_search()),
+            ("download", icon_download()),
+            ("upload", icon_upload()),
+            ("warning", icon_warning("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("building", icon_building("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("database", icon_database("h-5 w-5 text-slate-600 dark:text-slate-300")),
+            ("calendar", icon_calendar()),
+            ("clock", icon_clock()),
+            ("check", icon_check()),
+            ("x", icon_x()),
+            ("link", icon_link())
+        ] %}
+        {% for name, ic in all_icons %}
+        <div class="flex flex-col items-center gap-1.5 rounded-lg border border-slate-200/60 bg-white p-3 dark:border-slate-700/60 dark:bg-slate-800">
+            {{ ic }}
+            <span class="text-[10px] text-slate-500 dark:text-slate-400">{{ name }}</span>
+        </div>
+        {% endfor %}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Tables
+   ═══════════════════════════════════════════════ #}
+<section id="tables" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Data Tables</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>data_table</code> + <code>table_head</code> + <code>table_row</code> + <code>row_actions</code> + <code>row_action</code></p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber Table (amber)</h3>
+    {% call data_table(title="Subscribers", icon=icon_users(), color="amber", count=5, actions='<a href="#" class="rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300">Export CSV</a>' | safe) %}
+        {{ table_head([
+            {"label": "Name"},
+            {"label": "Email"},
+            {"label": "Status", "align": "center"},
+            {"label": "MRR", "align": "right"},
+            {"label": "Created"},
+            {"label": "", "align": "right"}
+        ]) }}
+        <tbody>
+            {% set sample_subs = [
+                ("Adebayo Johnson", "adebayo@fiberlink.ng", "active", "₦ 15,000", "2024-01-15"),
+                ("Chioma Okafor", "chioma@techcorp.ng", "active", "₦ 25,000", "2024-02-20"),
+                ("Emeka Uche", "emeka@gmail.com", "suspended", "₦ 10,000", "2024-03-01"),
+                ("Fatima Ibrahim", "fatima@enterprise.ng", "pending", "₦ 50,000", "2024-03-10"),
+                ("Grace Nwosu", "grace@smallbiz.ng", "canceled", "₦ 8,500", "2023-11-05")
+            ] %}
+            {% for name, email, status, mrr, created in sample_subs %}
+            {% call table_row(color="amber") %}
+                <td class="px-6 py-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-full bg-amber-100 text-xs font-bold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">{{ name[0] }}</div>
+                        <span class="font-medium text-slate-900 dark:text-white">{{ name }}</span>
+                    </div>
+                </td>
+                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ email }}</td>
+                <td class="px-6 py-4 text-center">
+                    {% set variant_map = {"active": "active", "suspended": "warning", "pending": "pending", "canceled": "error"} %}
+                    {{ status_badge(status=status | title, variant=variant_map[status]) }}
+                </td>
+                <td class="px-6 py-4 text-right font-mono text-sm tabular-nums text-slate-900 dark:text-white">{{ mrr }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ created }}</td>
+                {% call row_actions() %}
+                    {{ row_action(href="#", icon=icon_view(), title="View", color="amber") }}
+                    {{ row_action(href="#", icon=icon_edit(), title="Edit", color="amber") }}
+                    {{ row_action(href="#", icon=icon_delete(), title="Delete", color="rose") }}
+                {% endcall %}
+            {% endcall %}
+            {% endfor %}
+        </tbody>
+    {% endcall %}
+
+    <div class="mt-6"></div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice Table (emerald)</h3>
+    {% call data_table(title="Invoices", icon=icon_invoice(), color="emerald", count=3) %}
+        {{ table_head([
+            {"label": "#"},
+            {"label": "Account"},
+            {"label": "Status", "align": "center"},
+            {"label": "Total", "align": "right"},
+            {"label": "Balance Due", "align": "right"},
+            {"label": "Due Date"},
+            {"label": "", "align": "right"}
+        ]) }}
+        <tbody>
+            {% set sample_invoices = [
+                ("INV-2024-0042", "Adebayo Johnson", "paid", "₦ 15,000.00", "₦ 0.00", "2024-03-15"),
+                ("INV-2024-0043", "Chioma Okafor", "issued", "₦ 25,000.00", "₦ 25,000.00", "2024-03-20"),
+                ("INV-2024-0044", "Fatima Ibrahim", "overdue", "₦ 50,000.00", "₦ 50,000.00", "2024-02-28")
+            ] %}
+            {% for num, account, status, total, balance, due in sample_invoices %}
+            {% call table_row(color="emerald") %}
+                <td class="px-6 py-4 font-mono text-sm text-slate-900 dark:text-white">{{ num }}</td>
+                <td class="px-6 py-4 text-sm text-slate-700 dark:text-slate-300">{{ account }}</td>
+                <td class="px-6 py-4 text-center">{{ status_badge(status=status | title, variant=status) }}</td>
+                <td class="px-6 py-4 text-right font-mono text-sm tabular-nums text-slate-900 dark:text-white">{{ total }}</td>
+                <td class="px-6 py-4 text-right font-mono text-sm tabular-nums text-slate-900 dark:text-white">{{ balance }}</td>
+                <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">{{ due }}</td>
+                {% call row_actions() %}
+                    {{ row_action(href="#", icon=icon_view(), title="View", color="emerald") }}
+                {% endcall %}
+            {% endcall %}
+            {% endfor %}
+        </tbody>
+    {% endcall %}
+
+    <div class="mt-6"></div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Empty State</h3>
+    {% call data_table(title="Speed Tests", icon=icon_lightning(), color="cyan", count=0) %}
+        {{ table_head([{"label": "Subscriber"}, {"label": "Download"}, {"label": "Upload"}, {"label": "Date"}]) }}
+        <tbody>
+            {{ empty_state(
+                title="No speed tests recorded",
+                message="Speed test results will appear here once subscribers run tests.",
+                icon=icon_lightning(),
+                color="cyan",
+                color2="sky",
+                action_label="Run Speed Test",
+                action_href="#",
+                colspan=4
+            ) }}
+        </tbody>
+    {% endcall %}
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Cards
+   ═══════════════════════════════════════════════ #}
+<section id="cards" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Cards</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>card(title, icon, color, color2, actions, padding)</code></p>
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
+        {% call card(title="Subscriber Details", icon=icon_user(), color="amber", color2="orange") %}
+            {{ info_row(label="Name", value="Adebayo Johnson") }}
+            {{ info_row(label="Email", value="adebayo@fiberlink.ng", icon=icon_mail()) }}
+            {{ info_row(label="Phone", value="+234 801 234 5678") }}
+            {{ info_row(label="Status", value=status_badge(status="Active", variant="active", pulse=True)) }}
+            {{ info_row(label="Account Number", value="ACC-001247") }}
+        {% endcall %}
+
+        {% call card(title="Network Status", icon=icon_server(), color="blue", color2="indigo") %}
+            {% call info_grid() %}
+                {{ metric_row(label="Devices Online", value="342", color="emerald") }}
+                {{ metric_row(label="Devices Offline", value="8", color="rose") }}
+                {{ metric_row(label="Bandwidth Usage", value="68.5%", color="amber") }}
+                {{ metric_row(label="IP Pool Usage", value="72.3%", color="blue", mono=True) }}
+            {% endcall %}
+        {% endcall %}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Forms & Inputs
+   ═══════════════════════════════════════════════ #}
+<section id="forms" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Form Components</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400">Search, filters, and form inputs.</p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Filter Bar</h3>
+    {% call filter_bar() %}
+        <div class="flex flex-wrap items-end gap-4">
+            {{ search_input(name="search", value="", placeholder="Search subscribers...", color="amber") }}
+            {{ filter_select(
+                name="status",
+                options=[
+                    {"value": "", "label": "All Statuses"},
+                    {"value": "active", "label": "Active"},
+                    {"value": "suspended", "label": "Suspended"},
+                    {"value": "canceled", "label": "Canceled"}
+                ],
+                value="",
+                label="Status",
+                color="amber"
+            ) }}
+            {{ filter_select(
+                name="plan",
+                options=[
+                    {"value": "", "label": "All Plans"},
+                    {"value": "fiber-100", "label": "Fiber 100 Mbps"},
+                    {"value": "fiber-200", "label": "Fiber 200 Mbps"},
+                    {"value": "fiber-500", "label": "Fiber 500 Mbps"}
+                ],
+                value="",
+                label="Plan",
+                color="amber"
+            ) }}
+        </div>
+    {% endcall %}
+
+    <div class="mt-6"></div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status Filter Cards</h3>
+    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+        {{ status_filter_card(label="All", value="1,247", icon=icon_users(), href="#", color="slate", is_active=True) }}
+        {{ status_filter_card(label="Active", value="1,089", icon=icon_check_circle(), href="#", color="emerald", color2="teal") }}
+        {{ status_filter_card(label="Suspended", value="82", icon=icon_warning(), href="#", color="amber", color2="orange") }}
+        {{ status_filter_card(label="Pending", value="43", icon=icon_clock(), href="#", color="blue") }}
+        {{ status_filter_card(label="Canceled", value="28", icon=icon_x(), href="#", color="rose", color2="pink") }}
+        {{ status_filter_card(label="Delinquent", value="5", icon=icon_credit_card(), href="#", color="red") }}
+    </div>
+
+    <div class="mt-6"></div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Pagination</h3>
+    {{ pagination(page=3, total_pages=12, total=287, per_page=25, base_url="/admin/design-system", color="amber") }}
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Navigation
+   ═══════════════════════════════════════════════ #}
+<section id="navigation" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Navigation</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>tabs(items, active, color)</code> and <code>step_indicator(steps, current, color)</code></p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Tabs</h3>
+    <div class="mb-6">
+        {{ tabs(
+            items=[
+                {"href": "#", "label": "Overview", "value": "overview", "icon": icon_user()},
+                {"href": "#", "label": "Subscriptions", "value": "subscriptions", "count": 3},
+                {"href": "#", "label": "Invoices", "value": "invoices", "count": 12},
+                {"href": "#", "label": "Payments", "value": "payments", "count": 8},
+                {"href": "#", "label": "Equipment", "value": "equipment"},
+                {"href": "#", "label": "Timeline", "value": "timeline"}
+            ],
+            active="overview",
+            color="amber"
+        ) }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Step Indicator (Provisioning Workflow)</h3>
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-6 dark:border-slate-700/60 dark:bg-slate-800">
+        {{ step_indicator(
+            steps=["Order Created", "Site Survey", "Installation", "Testing", "Activation"],
+            current=3,
+            color="indigo"
+        ) }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Info Display
+   ═══════════════════════════════════════════════ #}
+<section id="info-display" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Info Display</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400">Detail page components for showing record data.</p>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Detail Header</h3>
+    <div class="mb-6">
+        {% call detail_header(
+            title="Adebayo Johnson",
+            subtitle="ACC-001247 · Residential",
+            icon=icon_user(),
+            color="amber",
+            color2="orange",
+            back_href="#",
+            status=status_badge(status="Active", variant="active", pulse=True)
+        ) %}
+            {{ action_button("Edit", href="#", icon=icon_edit(), variant="secondary", color="amber") }}
+            {{ action_button("New Invoice", href="#", icon=icon_plus(), color="emerald", color2="teal") }}
+        {% endcall %}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Connection Status</h3>
+    <div class="mb-6 flex flex-wrap gap-6">
+        {{ connection_status(status="online", label="PPPoE Session", last_seen="2 minutes ago") }}
+        {{ connection_status(status="offline", label="ONT Signal", last_seen="3 hours ago") }}
+        {{ connection_status(status="degraded", label="WireGuard Tunnel", last_seen="5 minutes ago") }}
+        {{ connection_status(status="unknown", label="TR-069 Agent") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Alert Count Badges</h3>
+    <div class="mb-6 flex flex-wrap items-center gap-4">
+        <span class="text-sm text-slate-600 dark:text-slate-300">Critical</span>{{ alert_count_badge(count=3, color="rose") }}
+        <span class="text-sm text-slate-600 dark:text-slate-300">Warning</span>{{ alert_count_badge(count=12, color="amber") }}
+        <span class="text-sm text-slate-600 dark:text-slate-300">Info</span>{{ alert_count_badge(count=0, color="blue") }}
+        <span class="text-sm text-slate-600 dark:text-slate-300">Overflow</span>{{ alert_count_badge(count=150, color="rose") }}
+    </div>
+
+    <h3 class="mb-3 text-sm font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Vendor Badges</h3>
+    <div class="flex flex-wrap items-center gap-3">
+        {{ vendor_badge(vendor="Huawei", size="sm") }}
+        {{ vendor_badge(vendor="ZTE", size="md") }}
+        {{ vendor_badge(vendor="Nokia", size="lg") }}
+        {{ vendor_badge(vendor="Cisco") }}
+        {{ vendor_badge(vendor="MikroTik") }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Progress
+   ═══════════════════════════════════════════════ #}
+<section id="progress" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Progress Bars</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>progress_bar(value, max, label, show_text, size, color)</code> — Auto-colors: green &lt;70%, yellow &lt;85%, red &ge;85%.</p>
+
+    <div class="space-y-4 rounded-2xl border border-slate-200/60 bg-white p-6 dark:border-slate-700/60 dark:bg-slate-800">
+        {{ progress_bar(value=45, label="IP Pool A — 192.168.1.0/24", size="md") }}
+        {{ progress_bar(value=72, label="IP Pool B — 10.0.0.0/22", size="md") }}
+        {{ progress_bar(value=89, label="IP Pool C — 172.16.0.0/24", size="md") }}
+        {{ progress_bar(value=97, label="IP Pool D — 10.10.0.0/28 (Critical)", size="md") }}
+
+        <div class="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+            <p class="mb-2 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Size variants</p>
+            {{ progress_bar(value=60, label="Small", size="sm") }}
+            {{ progress_bar(value=60, label="Medium", size="md") }}
+            {{ progress_bar(value=60, label="Large", size="lg") }}
+        </div>
+
+        <div class="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
+            <p class="mb-2 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Fixed colors</p>
+            {{ progress_bar(value=60, label="Emerald", size="md", color="emerald") }}
+            {{ progress_bar(value=60, label="Blue", size="md", color="blue") }}
+            {{ progress_bar(value=60, label="Violet", size="md", color="violet") }}
+        </div>
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Timeline
+   ═══════════════════════════════════════════════ #}
+<section id="timeline" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Timeline</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>timeline_item(title, description, time, color, is_last)</code></p>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-6 dark:border-slate-700/60 dark:bg-slate-800">
+        {{ timeline_item(title="Subscription Activated", description="Fiber 100 Mbps plan activated, PPPoE credentials sent to adebayo@fiberlink.ng", time="Today, 14:32", color="emerald") }}
+        {{ timeline_item(title="Invoice Paid", description="INV-2024-0042 — ₦ 15,000.00 via bank transfer", time="Today, 10:15", color="blue") }}
+        {{ timeline_item(title="ONT Provisioned", description="Huawei HG8145V5 (SN: 48575443A1B2C3D4) bound to port 0/1/3", time="Yesterday, 16:45", color="indigo") }}
+        {{ timeline_item(title="Service Order Created", description="New install order #SO-2024-0089 submitted", time="Yesterday, 09:00", color="amber") }}
+        {{ timeline_item(title="Customer Created", description="Account ACC-001247 registered by admin@dotmac.ng", time="Mar 14, 2024", color="slate", is_last=True) }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Settings
+   ═══════════════════════════════════════════════ #}
+<section id="settings" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Settings Components</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>setting_row</code> + <code>setting_toggle</code></p>
+
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-6 dark:border-slate-700/60 dark:bg-slate-800">
+        {% call setting_row(label="Auto-create invoices", description="Automatically generate invoices on billing day", source="organization") %}
+            {{ setting_toggle(name="auto_invoice", value=True) }}
+        {% endcall %}
+        {% call setting_row(label="Grace period (days)", description="Days after due date before suspension", source="default") %}
+            <input type="number" value="7" class="w-72 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        {% endcall %}
+        {% call setting_row(label="Send billing notifications", description="Email subscribers when invoices are generated", source="organization") %}
+            {{ setting_toggle(name="billing_notifications", value=True) }}
+        {% endcall %}
+        {% call setting_row(label="PPPoE auto-generation", description="Automatically generate PPPoE credentials for new subscriptions", source="default") %}
+            {{ setting_toggle(name="pppoe_auto", value=False) }}
+        {% endcall %}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: Banners
+   ═══════════════════════════════════════════════ #}
+<section id="banners" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">Info Banners</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400"><code>info_banner(message, icon, color, actions)</code></p>
+
+    <div class="space-y-4">
+        {{ info_banner(
+            message="This subscriber was migrated from Splynx on 2024-01-15. Some historical data may be incomplete.",
+            icon=icon_warning(),
+            color="amber"
+        ) }}
+        {{ info_banner(
+            message="Invoice is locked because it has been sent to the customer. Void it to make changes.",
+            icon=icon_invoice(),
+            color="blue",
+            actions='<a href="#" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-blue-700">Void Invoice</a>' | safe
+        ) }}
+        {{ info_banner(
+            message="3 ONTs have low signal strength (below -28 dBm). Check fiber connections.",
+            icon=icon_warning(),
+            color="rose"
+        ) }}
+    </div>
+</section>
+
+{{ section_divider() }}
+
+{# ═══════════════════════════════════════════════
+   SECTION: ISP Data Formatting
+   ═══════════════════════════════════════════════ #}
+<section id="misc" class="mb-12">
+    <h2 class="mb-1 font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">ISP Data Formatting</h2>
+    <p class="mb-6 text-sm text-slate-500 dark:text-slate-400">Conventions for displaying ISP-specific data types.</p>
+
+    {% call card(title="Data Type Examples", icon=icon_database(), color="slate") %}
+        <div class="grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-2">
+            {{ info_row(label="Currency (NGN)", value="₦ 15,000.00") }}
+            {{ info_row(label="Currency (USD)", value="$ 49.99") }}
+            {{ info_row(label="Bandwidth (Download)", value="100 Mbps") }}
+            {{ info_row(label="Bandwidth (Uplink)", value="1 Gbps") }}
+        </div>
+        <div class="mt-2 grid grid-cols-1 gap-x-8 gap-y-1 sm:grid-cols-2">
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">IPv4 Address</span>
+                <span class="font-mono text-sm text-slate-900 dark:text-white">192.168.1.100</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">IPv6 Address</span>
+                <span class="font-mono text-sm text-slate-900 dark:text-white">2001:db8::1</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">MAC Address</span>
+                <span class="font-mono text-sm text-slate-900 dark:text-white">48:57:54:43:A1:B2</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial Number</span>
+                <span class="font-mono text-sm text-slate-900 dark:text-white">48575443A1B2C3D4</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Signal Strength</span>
+                <span class="font-mono text-sm text-emerald-600 dark:text-emerald-400">-22.5 dBm</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Signal (Warning)</span>
+                <span class="font-mono text-sm text-amber-600 dark:text-amber-400">-27.1 dBm</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Signal (Critical)</span>
+                <span class="font-mono text-sm text-rose-600 dark:text-rose-400">-31.8 dBm</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Uptime</span>
+                <span class="text-sm text-slate-900 dark:text-white">14d 6h 32m</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Date (Recent)</span>
+                <span class="text-sm text-slate-900 dark:text-white">2 hours ago</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Date (Older)</span>
+                <span class="text-sm text-slate-900 dark:text-white">2024-01-15</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Percentage</span>
+                <span class="tabular-nums text-sm text-slate-900 dark:text-white">95.5%</span>
+            </div>
+            <div class="flex items-center justify-between border-b border-slate-100 py-2.5 dark:border-slate-700/50">
+                <span class="text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Phone (E.164)</span>
+                <span class="text-sm text-slate-900 dark:text-white">+234 801 234 5678</span>
+            </div>
+        </div>
+    {% endcall %}
+</section>
+
+{% endblock %}

@@ -397,13 +397,26 @@ def migrate_credit_notes(
 ) -> None:
     """Migrate Splynx credit_notes → CreditNote + CreditNoteLine."""
     from app.models.billing import CreditNote, CreditNoteStatus
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
 
+    existing_maps = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.credit_note
+            )
+        ).all()
+    }
     query = "SELECT * FROM credit_notes ORDER BY id"
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
 
     for row in rows:
+        splynx_credit_note_id = row["id"]
+        if splynx_credit_note_id in existing_maps:
+            continue
+
         subscriber_id = customer_mapping.get(row.get("customer_id"))
         if not subscriber_id:
             skipped += 1
@@ -425,14 +438,22 @@ def migrate_credit_notes(
 
         cn = CreditNote(
             account_id=subscriber_id,
+            invoice_id=invoice_mapping.get(row.get("invoice_id")),
             credit_number=(row.get("number") or "")[:80] or None,
             status=status,
             currency="NGN",
             total=total,
             applied_total=total - Decimal(str(row.get("remind_amount") or "0")),
+            memo=(row.get("description") or row.get("comment") or "")[:1000] or None,
             is_active=not is_deleted,
         )
         db.add(cn)
+        db.flush()
+        db.add(SplynxIdMapping(
+            entity_type=SplynxEntityType.credit_note,
+            splynx_id=splynx_credit_note_id,
+            dotmac_id=cn.id,
+        ))
         created += 1
 
     db.flush()

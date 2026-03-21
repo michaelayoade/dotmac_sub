@@ -30,13 +30,13 @@
                 <td data-column="ticket_type" class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ ticket.ticket_type or '-' }}</td>
                 <td data-column="priority" class="px-4 py-3">{{ ticket_priority_badge(ticket.priority) }}</td>
                 <td data-column="status" class="px-4 py-3">{{ ticket_status_badge(ticket.status) }}</td>
-                <td data-column="customer" class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ ticket.customer_person_id or '-' }}</td>
-                <td data-column="customer_id" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.customer_account_id or '-' }}</td>
-                <td data-column="subscriber" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.subscriber_id or '-' }}</td>
+                <td data-column="customer" class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ people_lookup.get(ticket.customer_person_id|string, ticket.customer_person_id or '-') if people_lookup is defined else (ticket.customer_person_id or '-') }}</td>
+                <td data-column="customer_id" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ people_lookup.get(ticket.customer_account_id|string, ticket.customer_account_id or '-') if people_lookup is defined else (ticket.customer_account_id or '-') }}</td>
+                <td data-column="subscriber" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ people_lookup.get(ticket.subscriber_id|string, ticket.subscriber_id or '-') if people_lookup is defined else (ticket.subscriber_id or '-') }}</td>
                 <td data-column="region" class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ ticket.region or '-' }}</td>
-                <td data-column="technician" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.technician_person_id or '-' }}</td>
-                <td data-column="project_manager" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.ticket_manager_person_id or '-' }}</td>
-                <td data-column="site_coordinator" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.site_coordinator_person_id or '-' }}</td>
+                <td data-column="technician" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ people_lookup.get(ticket.technician_person_id|string, ticket.technician_person_id or '-') if people_lookup is defined else (ticket.technician_person_id or '-') }}</td>
+                <td data-column="project_manager" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ people_lookup.get(ticket.ticket_manager_person_id|string, ticket.ticket_manager_person_id or '-') if people_lookup is defined else (ticket.ticket_manager_person_id or '-') }}</td>
+                <td data-column="site_coordinator" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ people_lookup.get(ticket.site_coordinator_person_id|string, ticket.site_coordinator_person_id or '-') if people_lookup is defined else (ticket.site_coordinator_person_id or '-') }}</td>
                 <td data-column="channel" class="px-4 py-3 text-slate-700 dark:text-slate-300">{{ ticket.channel.value if ticket.channel else '-' }}</td>
                 <td data-column="due_at" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.due_at.strftime('%Y-%m-%d %H:%M') if ticket.due_at else '-' }}</td>
                 <td data-column="created_at" class="px-4 py-3 text-xs text-slate-500 dark:text-slate-400">{{ ticket.created_at.strftime('%Y-%m-%d %H:%M') if ticket.created_at else '-' }}</td>

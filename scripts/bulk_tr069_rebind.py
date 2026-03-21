@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
 """Bulk TR-069 profile rebind for SmartOLT → GenieACS migration.
 
-Rebinds ONTs from their current TR-069 server profile to a new profile ID
-on the OLT, triggering a reset so ONTs register with the new ACS.
+Rebinds ONTs from their current TR-069 server profile to the DotMac ACS
+profile on each OLT, triggering a reset so ONTs register with GenieACS.
+
+Auto-detects the DotMac ACS profile per OLT by name/URL match.  If the
+profile doesn't exist yet, it is auto-created (matching the web UI's
+"Init TR-069" behaviour).
 
 Uses a single SSH session per OLT for efficiency (vs one connection per ONT).
 Writes a checkpoint file per OLT so interrupted runs can be safely resumed.
 
 Usage:
-    # Dry run (default) — shows what would happen
-    python scripts/bulk_tr069_rebind.py --profile-id 2
+    # Dry run (default) — auto-detects profile per OLT, shows what would happen
+    python scripts/bulk_tr069_rebind.py
 
     # Dry run on a specific OLT
-    python scripts/bulk_tr069_rebind.py --profile-id 2 --olt "Garki Huawei OLT"
+    python scripts/bulk_tr069_rebind.py --olt "Garki Huawei OLT"
 
     # Execute (rebinds + resets ONTs)
-    python scripts/bulk_tr069_rebind.py --profile-id 2 --execute
+    python scripts/bulk_tr069_rebind.py --execute
 
     # Execute on one OLT only
-    python scripts/bulk_tr069_rebind.py --profile-id 2 --olt "Garki Huawei OLT" --execute
+    python scripts/bulk_tr069_rebind.py --olt "Garki Huawei OLT" --execute
 
     # Limit batch size (e.g., first 10 per OLT for testing)
-    python scripts/bulk_tr069_rebind.py --profile-id 2 --olt "Garki Huawei OLT" --limit 10 --execute
+    python scripts/bulk_tr069_rebind.py --olt "Garki Huawei OLT" --limit 10 --execute
 
     # Resume after interrupted run (auto-skips already-rebound ONTs)
-    python scripts/bulk_tr069_rebind.py --profile-id 2 --execute --resume
+    python scripts/bulk_tr069_rebind.py --execute --resume
+
+    # Override auto-detection with explicit profile ID
+    python scripts/bulk_tr069_rebind.py --profile-id 2 --execute
 
     # Verify post-rebind: check GenieACS for new informs
     python scripts/bulk_tr069_rebind.py --verify
@@ -60,6 +67,13 @@ logger = logging.getLogger("bulk_rebind")
 
 # Checkpoint directory for resume capability
 CHECKPOINT_DIR = Path("scripts/migration/.rebind_checkpoints")
+
+# Default ACS config (matches web_network_olts.py Init TR-069 behaviour)
+DEFAULT_ACS_PROFILE_NAME = "DotMac-ACS"
+DEFAULT_ACS_URL = "http://10.10.41.1:7547"
+DEFAULT_ACS_USERNAME = "acs"
+DEFAULT_ACS_PASSWORD = "acs"  # noqa: S105
+DEFAULT_ACS_INFORM_INTERVAL = 300
 
 
 class OntBatchItem(TypedDict):
@@ -216,6 +230,64 @@ def _preflight_check_olt(
         return False, f"Pre-flight command failed: {exc}"
     finally:
         transport.close()
+
+
+# ── Profile resolution ────────────────────────────────────────────────
+
+
+def _resolve_dotmac_profile(
+    olt: OLTDevice,
+    *,
+    auto_create: bool = False,
+) -> tuple[int | None, str]:
+    """Find the DotMac ACS TR-069 profile ID on this OLT.
+
+    Matches by name (contains "dotmac") or ACS URL (contains the default
+    ACS host).  If no match is found and ``auto_create`` is True, creates
+    the profile using the default ACS config.
+
+    Returns:
+        (profile_id, message) — profile_id is None if not found/created.
+    """
+    from app.services.network.olt_ssh_profiles import get_tr069_server_profiles
+
+    acs_host = DEFAULT_ACS_URL.split("//", 1)[-1].split(":")[0]  # "10.10.41.1"
+
+    ok, msg, profiles = get_tr069_server_profiles(olt)
+    if not ok:
+        return None, f"Cannot list profiles: {msg}"
+
+    # Search existing profiles
+    for p in profiles:
+        if "dotmac" in p.name.lower() or acs_host in (p.acs_url or ""):
+            return p.profile_id, f"Found profile '{p.name}' (ID {p.profile_id})"
+
+    if not auto_create:
+        names = ", ".join(f"{p.name}(ID {p.profile_id})" for p in profiles) or "(none)"
+        return None, f"No DotMac ACS profile found. Existing: {names}"
+
+    # Auto-create
+    from app.services.network.olt_ssh import create_tr069_server_profile
+
+    ok, create_msg = create_tr069_server_profile(
+        olt,
+        profile_name=DEFAULT_ACS_PROFILE_NAME,
+        acs_url=DEFAULT_ACS_URL,
+        username=DEFAULT_ACS_USERNAME,
+        password=DEFAULT_ACS_PASSWORD,
+        inform_interval=DEFAULT_ACS_INFORM_INTERVAL,
+    )
+    if not ok:
+        return None, f"Auto-create failed: {create_msg}"
+
+    # Re-query to get the assigned profile ID
+    ok, _msg2, profiles2 = get_tr069_server_profiles(olt)
+    if ok:
+        for p in profiles2:
+            if "dotmac" in p.name.lower() or acs_host in (p.acs_url or ""):
+                return p.profile_id, f"Auto-created profile '{p.name}' (ID {p.profile_id})"
+
+    return None, "Profile created but could not verify ID"
 
 
 # ── Batch rebind ───────────────────────────────────────────────────────────
@@ -382,31 +454,39 @@ def _rebind_batch_on_olt(
 def run(
     db: Session,
     *,
-    profile_id: int,
+    profile_id: int | None = None,
     olt_name: str | None = None,
     dry_run: bool = True,
     limit: int | None = None,
     resume: bool = False,
     skip_preflight: bool = False,
+    auto_create_profile: bool = True,
 ) -> RunTotals:
     """Run the bulk rebind across OLTs.
 
     Args:
         db: Database session.
-        profile_id: Target TR-069 OLT profile ID.
+        profile_id: Target TR-069 OLT profile ID.  If None, auto-detects
+            the DotMac ACS profile per OLT by name/URL match.
         olt_name: If set, only rebind ONTs on this OLT.
         dry_run: If True, log commands but don't execute.
         limit: Max ONTs per OLT (for staged rollout).
         resume: If True, load checkpoint and skip already-rebound ONTs.
         skip_preflight: If True, skip SSH/profile verification.
+        auto_create_profile: If True and the DotMac ACS profile doesn't
+            exist on an OLT, create it automatically.
 
     Returns:
         Aggregate stats dict.
     """
     from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 
-    # Build OLT filter
-    olt_stmt = select(OLTDevice).where(OLTDevice.mgmt_ip.isnot(None))
+    # Build OLT filter — require SSH credentials for rebind
+    olt_stmt = select(OLTDevice).where(
+        OLTDevice.mgmt_ip.isnot(None),
+        OLTDevice.ssh_username.isnot(None),
+        OLTDevice.ssh_password.isnot(None),
+    )
     if olt_name:
         olt_stmt = olt_stmt.where(OLTDevice.name == olt_name)
     olts = db.scalars(olt_stmt).all()
@@ -418,12 +498,28 @@ def run(
     totals: RunTotals = {"bound": 0, "skipped": 0, "errors": 0, "preflight_failed": 0}
 
     for olt in olts:
-        logger.info("━━━ %s ━━━", olt.name)
+        logger.info("━━━ %s (%s) ━━━", olt.name, olt.mgmt_ip)
+
+        # Resolve the TR-069 profile for this OLT
+        if profile_id is not None:
+            olt_profile_id = profile_id
+            logger.info("  Using explicit profile ID %d", olt_profile_id)
+        else:
+            logger.info("  Auto-detecting DotMac ACS profile...")
+            resolved_id, resolve_msg = _resolve_dotmac_profile(
+                olt, auto_create=auto_create_profile and not dry_run,
+            )
+            if resolved_id is None:
+                logger.error("  SKIPPING %s — %s", olt.name, resolve_msg)
+                totals["preflight_failed"] += 1
+                continue
+            olt_profile_id = resolved_id
+            logger.info("  %s", resolve_msg)
 
         # Pre-flight check (skip in dry-run mode)
         if not dry_run and not skip_preflight:
             logger.info("  Running pre-flight check...")
-            ok, msg = _preflight_check_olt(olt, profile_id)
+            ok, msg = _preflight_check_olt(olt, olt_profile_id)
             if not ok:
                 logger.error("  PRE-FLIGHT FAILED for %s: %s", olt.name, msg)
                 totals["preflight_failed"] += 1
@@ -504,10 +600,10 @@ def run(
         # Load checkpoint for resume
         already_done: set[str] = set()
         if resume and not dry_run:
-            already_done = _load_checkpoint(olt.name, profile_id)
+            already_done = _load_checkpoint(olt.name, olt_profile_id)
 
         stats = _rebind_batch_on_olt(
-            olt, batch, profile_id,
+            olt, batch, olt_profile_id,
             dry_run=dry_run,
             already_done=already_done,
         )
@@ -622,7 +718,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--profile-id", type=int, default=None,
-        help="Target TR-069 OLT profile ID (e.g., 2 for GenieACS)",
+        help="Override auto-detection with explicit OLT profile ID",
     )
     parser.add_argument(
         "--olt", type=str, default=None,
@@ -645,6 +741,10 @@ def main() -> None:
         help="Skip SSH/profile pre-flight check",
     )
     parser.add_argument(
+        "--no-auto-create", action="store_true",
+        help="Don't auto-create the DotMac ACS profile on OLTs that lack it",
+    )
+    parser.add_argument(
         "--verify", action="store_true",
         help="Verify GenieACS has received informs from rebound ONTs",
     )
@@ -659,15 +759,17 @@ def main() -> None:
             verify_genieacs_informs(db)
             return
 
-        if not args.profile_id:
-            parser.error("--profile-id is required (unless using --verify)")
-
         dry_run = not args.execute
         mode = "DRY RUN" if dry_run else "EXECUTE"
         logger.info("╔══════════════════════════════════════════╗")
         logger.info("║  Bulk TR-069 Rebind [%s]           ║", mode.ljust(7))
         logger.info("╚══════════════════════════════════════════╝")
-        logger.info("Target profile ID: %d", args.profile_id)
+        if args.profile_id:
+            logger.info("Profile ID: %d (explicit override)", args.profile_id)
+        else:
+            logger.info("Profile: auto-detect per OLT (DotMac ACS by name/URL)")
+            if not args.no_auto_create:
+                logger.info("Auto-create: ON (will create profile on OLTs that lack it)")
         if args.olt:
             logger.info("OLT filter: %s", args.olt)
         if args.limit:
@@ -684,6 +786,7 @@ def main() -> None:
             limit=args.limit,
             resume=args.resume,
             skip_preflight=args.skip_preflight,
+            auto_create_profile=not args.no_auto_create,
         )
         logger.info("")
         logger.info("╔══════════════════════════════════════════╗")

@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import String, case, cast, func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import (
     CreditNote,
@@ -63,12 +63,58 @@ def _last_6_months(now: datetime) -> list[tuple[str, int, int, datetime, datetim
     return months
 
 
+PERIOD_CHOICES = ("this_month", "last_month", "this_quarter", "this_year", "all")
+
+
+def _period_bounds(period: str, now: datetime) -> tuple[datetime | None, datetime | None]:
+    """Return (start, end) datetimes for a named period.
+
+    Returns (None, None) for ``"all"`` (no date filter).
+    """
+    if period == "this_month":
+        start = _month_start(now)
+        return start, _next_month_start(start)
+    if period == "last_month":
+        start = _month_start(_month_start(now) - timedelta(days=1))
+        return start, _month_start(now)
+    if period == "this_quarter":
+        q_month = ((now.month - 1) // 3) * 3 + 1
+        start = datetime(now.year, q_month, 1, tzinfo=UTC)
+        end_month = q_month + 3
+        end_year = now.year
+        if end_month > 12:
+            end_month -= 12
+            end_year += 1
+        return start, datetime(end_year, end_month, 1, tzinfo=UTC)
+    if period == "this_year":
+        return datetime(now.year, 1, 1, tzinfo=UTC), datetime(now.year + 1, 1, 1, tzinfo=UTC)
+    # "all" — no bounds
+    return None, None
+
+
+def _subscriber_location_expr():
+    return func.lower(
+        func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")
+    )
+
+
 class BillingReporting:
     """Service for billing reports and statistics."""
 
     @staticmethod
-    def get_overview_stats(db: Session) -> dict[str, Any]:
+    def get_overview_stats(
+        db: Session,
+        *,
+        period_start: datetime | None = None,
+        period_end: datetime | None = None,
+        partner_id: str | None = None,
+        location: str | None = None,
+    ) -> dict[str, Any]:
         """Calculate billing overview statistics using SQL aggregation.
+
+        When *period_start*/*period_end* are provided, invoices are filtered
+        by ``created_at`` within the window.  Payments and credit notes are
+        filtered similarly by their respective date columns.
 
         Returns:
             Dictionary with keys:
@@ -100,6 +146,16 @@ class BillingReporting:
             func.count(case((Invoice.status == InvoiceStatus.overdue, 1))).label("overdue_count"),
             func.count(case((Invoice.status == InvoiceStatus.draft, 1))).label("draft_count"),
         )
+        if partner_id or location:
+            stmt = stmt.join(Subscriber, Invoice.account_id == Subscriber.id)
+            if partner_id:
+                stmt = stmt.where(cast(Subscriber.reseller_id, String) == partner_id)
+            if location:
+                stmt = stmt.where(_subscriber_location_expr() == location.lower())
+        if period_start is not None:
+            stmt = stmt.where(Invoice.created_at >= period_start)
+        if period_end is not None:
+            stmt = stmt.where(Invoice.created_at < period_end)
         row = db.execute(stmt).one()
 
         return {
@@ -114,7 +170,12 @@ class BillingReporting:
         }
 
     @staticmethod
-    def get_account_stats(db: Session) -> dict[str, Any]:
+    def get_account_stats(
+        db: Session,
+        *,
+        partner_id: str | None = None,
+        location: str | None = None,
+    ) -> dict[str, Any]:
         """Calculate account-level statistics using SQL aggregation.
 
         Returns:
@@ -128,6 +189,10 @@ class BillingReporting:
             func.count(case((Subscriber.status == SubscriberStatus.active, 1))).label("active_count"),
             func.count(case((Subscriber.status == SubscriberStatus.suspended, 1))).label("suspended_count"),
         )
+        if partner_id:
+            stmt = stmt.where(cast(Subscriber.reseller_id, String) == partner_id)
+        if location:
+            stmt = stmt.where(_subscriber_location_expr() == location.lower())
         row = db.execute(stmt).one()
 
         return {
@@ -199,20 +264,39 @@ class BillingReporting:
         *,
         partner_id: str | None = None,
         location: str | None = None,
+        period: str = "this_month",
     ) -> dict[str, Any]:
         """Build complete billing dashboard statistics.
 
         All heavy aggregations are performed at the SQL level.
+        The *period* parameter controls the date window for the top-level
+        KPI cards (payments, revenue, unpaid, credit notes).  Charts that
+        have their own time axis (6-month trends, MRR) are unaffected.
 
         Returns:
             Dictionary with keys: stats, invoices, revenue_trend,
-            chart_data, total_balance, active_count, suspended_count.
+            chart_data, total_balance, active_count, suspended_count,
+            selected_period.
         """
         selected_partner_id = (partner_id or "").strip() or None
         selected_location = (location or "").strip() or None
+        selected_period = period if period in PERIOD_CHOICES else "this_month"
 
-        overview = BillingReporting.get_overview_stats(db)
-        account_stats = BillingReporting.get_account_stats(db)
+        now = datetime.now(UTC)
+        period_start, period_end = _period_bounds(selected_period, now)
+
+        overview = BillingReporting.get_overview_stats(
+            db,
+            period_start=period_start,
+            period_end=period_end,
+            partner_id=selected_partner_id,
+            location=selected_location,
+        )
+        account_stats = BillingReporting.get_account_stats(
+            db,
+            partner_id=selected_partner_id,
+            location=selected_location,
+        )
 
         # Collection rate
         total_billed = (
@@ -234,10 +318,7 @@ class BillingReporting:
                 if selected_partner_id:
                     stmt = stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
                 if selected_location:
-                    loc = selected_location.lower()
-                    stmt = stmt.where(
-                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
-                    )
+                    stmt = stmt.where(_subscriber_location_expr() == selected_location.lower())
             return stmt
 
         def _scope_payment_stmt(stmt: Any) -> Any:
@@ -247,10 +328,7 @@ class BillingReporting:
                 if selected_partner_id:
                     stmt = stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
                 if selected_location:
-                    loc = selected_location.lower()
-                    stmt = stmt.where(
-                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
-                    )
+                    stmt = stmt.where(_subscriber_location_expr() == selected_location.lower())
             return stmt
 
         def _scope_credit_note_stmt(stmt: Any) -> Any:
@@ -260,21 +338,26 @@ class BillingReporting:
                 if selected_partner_id:
                     stmt = stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
                 if selected_location:
-                    loc = selected_location.lower()
-                    stmt = stmt.where(
-                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
-                    )
+                    stmt = stmt.where(_subscriber_location_expr() == selected_location.lower())
             return stmt
 
-        # --- Payments aggregate ---
+        # --- Payments aggregate (period-scoped) ---
         payments_stmt = select(
             func.count().label("count"),
             func.coalesce(func.sum(Payment.amount), Decimal("0")).label("total"),
         ).where(Payment.status == PaymentStatus.succeeded)
+        if period_start is not None:
+            payments_stmt = payments_stmt.where(
+                func.coalesce(Payment.paid_at, Payment.created_at) >= period_start
+            )
+        if period_end is not None:
+            payments_stmt = payments_stmt.where(
+                func.coalesce(Payment.paid_at, Payment.created_at) < period_end
+            )
         payments_stmt = _scope_payment_stmt(payments_stmt)
         payments_row = db.execute(payments_stmt).one()
 
-        # --- Unpaid invoices aggregate ---
+        # --- Unpaid invoices aggregate (period-scoped) ---
         unpaid_statuses = [
             InvoiceStatus.issued,
             InvoiceStatus.overdue,
@@ -284,10 +367,14 @@ class BillingReporting:
             func.count().label("count"),
             func.coalesce(func.sum(Invoice.balance_due), Decimal("0")).label("total"),
         ).where(Invoice.status.in_(unpaid_statuses))
+        if period_start is not None:
+            unpaid_stmt = unpaid_stmt.where(Invoice.created_at >= period_start)
+        if period_end is not None:
+            unpaid_stmt = unpaid_stmt.where(Invoice.created_at < period_end)
         unpaid_stmt = _scope_invoice_stmt(unpaid_stmt)
         unpaid_row = db.execute(unpaid_stmt).one()
 
-        # --- Credit notes aggregate ---
+        # --- Credit notes aggregate (period-scoped) ---
         cn_stmt = select(
             func.count().label("count"),
             func.coalesce(func.sum(CreditNote.total), Decimal("0")).label("total"),
@@ -295,6 +382,10 @@ class BillingReporting:
             CreditNote.is_active.is_(True),
             CreditNote.status != CreditNoteStatus.void,
         )
+        if period_start is not None:
+            cn_stmt = cn_stmt.where(CreditNote.created_at >= period_start)
+        if period_end is not None:
+            cn_stmt = cn_stmt.where(CreditNote.created_at < period_end)
         cn_stmt = _scope_credit_note_stmt(cn_stmt)
         cn_row = db.execute(cn_stmt).one()
 
@@ -348,15 +439,15 @@ class BillingReporting:
         ]
 
         period_comparison: list[dict[str, Any]] = []
-        for period_label, period_start, period_end in comparison_periods:
+        for cmp_label, cmp_start, cmp_end in comparison_periods:
             # Payments in period
             pp_stmt = select(
                 func.count().label("count"),
                 func.coalesce(func.sum(Payment.amount), Decimal("0")).label("total"),
             ).where(
                 Payment.status == PaymentStatus.succeeded,
-                func.coalesce(Payment.paid_at, Payment.created_at) >= period_start,
-                func.coalesce(Payment.paid_at, Payment.created_at) < period_end,
+                func.coalesce(Payment.paid_at, Payment.created_at) >= cmp_start,
+                func.coalesce(Payment.paid_at, Payment.created_at) < cmp_end,
             )
             pp_stmt = _scope_payment_stmt(pp_stmt)
             pp_row = db.execute(pp_stmt).one()
@@ -364,8 +455,8 @@ class BillingReporting:
             # Paid invoices in period
             pi_stmt = select(func.count()).where(
                 Invoice.status == InvoiceStatus.paid,
-                func.coalesce(Invoice.paid_at, Invoice.created_at) >= period_start,
-                func.coalesce(Invoice.paid_at, Invoice.created_at) < period_end,
+                func.coalesce(Invoice.paid_at, Invoice.created_at) >= cmp_start,
+                func.coalesce(Invoice.paid_at, Invoice.created_at) < cmp_end,
             )
             pi_stmt = _scope_invoice_stmt(pi_stmt)
             paid_inv_count = db.execute(pi_stmt).scalar() or 0
@@ -373,8 +464,8 @@ class BillingReporting:
             # Unpaid invoices created in period
             ui_stmt = select(func.count()).where(
                 Invoice.status.in_(unpaid_statuses),
-                Invoice.created_at >= period_start,
-                Invoice.created_at < period_end,
+                Invoice.created_at >= cmp_start,
+                Invoice.created_at < cmp_end,
             )
             ui_stmt = _scope_invoice_stmt(ui_stmt)
             unpaid_inv_count = db.execute(ui_stmt).scalar() or 0
@@ -386,14 +477,14 @@ class BillingReporting:
             ).where(
                 CreditNote.is_active.is_(True),
                 CreditNote.status != CreditNoteStatus.void,
-                CreditNote.created_at >= period_start,
-                CreditNote.created_at < period_end,
+                CreditNote.created_at >= cmp_start,
+                CreditNote.created_at < cmp_end,
             )
             pcn_stmt = _scope_credit_note_stmt(pcn_stmt)
             pcn_row = db.execute(pcn_stmt).one()
 
             period_comparison.append({
-                "label": period_label,
+                "label": cmp_label,
                 "payments_amount": float(pp_row.total),
                 "payments_count": pp_row.count,
                 "paid_invoices_count": paid_inv_count,
@@ -403,7 +494,7 @@ class BillingReporting:
                 "total_income": float(pp_row.total),
             })
 
-        # --- Payment method breakdown (SQL JOIN + GROUP BY) ---
+        # --- Payment method breakdown (period-scoped, SQL JOIN + GROUP BY) ---
         METHOD_LABELS = {
             "cash": "Cash",
             "card": "Card",
@@ -429,15 +520,20 @@ class BillingReporting:
             .where(Payment.status == PaymentStatus.succeeded)
             .group_by("method_key")
         )
+        if period_start is not None:
+            pm_stmt = pm_stmt.where(
+                func.coalesce(Payment.paid_at, Payment.created_at) >= period_start
+            )
+        if period_end is not None:
+            pm_stmt = pm_stmt.where(
+                func.coalesce(Payment.paid_at, Payment.created_at) < period_end
+            )
         if selected_partner_id or selected_location:
             pm_stmt = pm_stmt.join(Subscriber, Payment.account_id == Subscriber.id)
             if selected_partner_id:
                 pm_stmt = pm_stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
             if selected_location:
-                loc = selected_location.lower()
-                pm_stmt = pm_stmt.where(
-                    func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
-                )
+                pm_stmt = pm_stmt.where(_subscriber_location_expr() == selected_location.lower())
 
         method_rows = db.execute(pm_stmt).all()
         method_totals: dict[str, float] = {}
@@ -555,10 +651,7 @@ class BillingReporting:
                 if selected_partner_id:
                     mrr_stmt = mrr_stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
                 if selected_location:
-                    loc = selected_location.lower()
-                    mrr_stmt = mrr_stmt.where(
-                        func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
-                    )
+                    mrr_stmt = mrr_stmt.where(_subscriber_location_expr() == selected_location.lower())
 
             mrr_row = db.execute(mrr_stmt).one()
             month_mrr = float(mrr_row.mrr)
@@ -586,10 +679,7 @@ class BillingReporting:
             if selected_partner_id:
                 planned_stmt = planned_stmt.where(cast(Subscriber.reseller_id, String) == selected_partner_id)
             if selected_location:
-                loc = selected_location.lower()
-                planned_stmt = planned_stmt.where(
-                    func.lower(func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")) == loc
-                )
+                planned_stmt = planned_stmt.where(_subscriber_location_expr() == selected_location.lower())
         planned_income = float(db.execute(planned_stmt).scalar() or 0)
 
         # --- Net revenue retention (payment-based, SQL aggregation) ---
@@ -607,6 +697,7 @@ class BillingReporting:
             func.coalesce(Payment.paid_at, Payment.created_at) >= prev_start,
             func.coalesce(Payment.paid_at, Payment.created_at) < prev_end,
         ).group_by(Payment.account_id)
+        prev_stmt = _scope_payment_stmt(prev_stmt)
         prev_by_account = {str(r.account_id): float(r.total) for r in db.execute(prev_stmt).all()}
 
         # Current month totals by account (only for cohort accounts)
@@ -623,6 +714,7 @@ class BillingReporting:
                 func.coalesce(Payment.paid_at, Payment.created_at) < current_end,
                 cast(Payment.account_id, String).in_(cohort_ids),
             ).group_by(Payment.account_id)
+            cur_stmt = _scope_payment_stmt(cur_stmt)
             current_by_account = {str(r.account_id): float(r.total) for r in db.execute(cur_stmt).all()}
             current_total = sum(current_by_account.get(acc_id, 0.0) for acc_id in cohort_ids)
             net_revenue_retention = round((current_total / prev_total) * 100, 2)
@@ -645,10 +737,9 @@ class BillingReporting:
                 func.coalesce(Payment.paid_at, Payment.created_at) >= current_start,
                 func.coalesce(Payment.paid_at, Payment.created_at) < current_end,
             )
-            .group_by(Payment.account_id)
-            .order_by(func.sum(Payment.amount).desc())
-            .limit(10)
         )
+        tp_stmt = _scope_payment_stmt(tp_stmt)
+        tp_stmt = tp_stmt.group_by(Payment.account_id).order_by(func.sum(Payment.amount).desc()).limit(10)
         tp_rows = db.execute(tp_stmt).all()
         top_payer_labels: list[str] = []
         top_payer_values: list[float] = []
@@ -678,9 +769,12 @@ class BillingReporting:
         # --- Recent invoices (last 10) ---
         recent_stmt = (
             select(Invoice)
-            .order_by(Invoice.created_at.desc())
-            .limit(10)
+            .options(
+                joinedload(Invoice.account).joinedload(Subscriber.organization),
+            )
         )
+        recent_stmt = _scope_invoice_stmt(recent_stmt)
+        recent_stmt = recent_stmt.order_by(Invoice.created_at.desc()).limit(10)
         recent_invoices = db.scalars(recent_stmt).all()
 
         return {
@@ -701,6 +795,7 @@ class BillingReporting:
             "total_balance": account_stats["total_balance"],
             "active_count": account_stats["active_count"],
             "suspended_count": account_stats["suspended_count"],
+            "selected_period": selected_period,
         }
 
 

@@ -68,6 +68,31 @@ def cpe_new(
     return templates.TemplateResponse("admin/network/cpes/form.html", context)
 
 
+@router.get("/cpes/subscriber-fields", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def cpe_subscriber_fields(
+    request: Request,
+    subscriber_id: str | None = None,
+    subscription_id: str | None = None,
+    service_address_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    cpe = web_network_cpes_service.cpe_form_snapshot(
+        {
+            "subscriber_id": subscriber_id or "",
+            "subscription_id": subscription_id or "",
+            "service_address_id": service_address_id or "",
+        }
+    )
+    context = _base_context(request, db, active_page="cpes")
+    context.update(
+        {
+            "cpe": cpe,
+            **web_network_cpes_service.cpe_form_reference_data(db, subscriber_id=subscriber_id),
+        }
+    )
+    return templates.TemplateResponse("admin/network/cpes/_subscriber_fields.html", context)
+
+
 @router.post("/cpes", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
 def cpe_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
@@ -89,6 +114,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
     try:
         cpe = web_network_cpes_service.create_cpe(db, values)
     except Exception as exc:
+        db.rollback()
         context = _base_context(request, db, active_page="cpes")
         context.update(
             {
@@ -170,6 +196,7 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     try:
         cpe = web_network_cpes_service.update_cpe(db, cpe_id=cpe_id, values=values)
     except Exception as exc:
+        db.rollback()
         context = _base_context(request, db, active_page="cpes")
         context.update(
             {
@@ -247,12 +274,18 @@ def cpe_detail(
             {"request": request, "message": "CPE not found"},
             status_code=404,
         )
+    from app.services.network.cpe_tr069 import CpeTR069
+
     meta, cleaned_notes = web_network_cpes_service.parse_cpe_notes_metadata(cpe.notes)
+    identity = web_network_cpes_service.build_cpe_identity_context(db, cpe)
+    tr069_summary = CpeTR069.get_device_summary(db, cpe_id)
     activities = build_audit_activities(db, "cpe", str(cpe_id), limit=20)
     context = _base_context(request, db, active_page="cpes")
     context.update(
         {
             "cpe": cpe,
+            "cpe_identity": identity,
+            "cpe_tr069_summary": tr069_summary,
             "cpe_meta": meta,
             "cpe_notes": cleaned_notes,
             "is_mikrotik": "mikrotik" in str(cpe.vendor or "").lower(),

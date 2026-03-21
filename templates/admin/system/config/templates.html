@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles, icon_mail %}
 {% block title %}Notification Templates - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("rose", "pink") }}
 <div class="relative space-y-6">
-    {% call page_header(title="Notification Templates", subtitle="Email and SMS template library with variable support", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>', color="rose", color2="pink") %}{% endcall %}
+    {% call page_header(title="Notification Templates", subtitle="Email and SMS template library with variable support", icon=icon_mail(), color="rose", color2="pink") %}{% endcall %}
     {% call card("Template Library", color="rose") %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">

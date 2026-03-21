@@ -225,7 +225,11 @@ def build_network_map_context(db: Session) -> dict:
     ont_offline = 0
     ont_warning = 0
     for ont in ont_units:
-        status = ont.online_status or "unknown"
+        status = (
+            ont.online_status.value
+            if getattr(ont.online_status, "value", None) is not None
+            else str(ont.online_status or "unknown")
+        )
         if status == "online":
             ont_online += 1
         else:

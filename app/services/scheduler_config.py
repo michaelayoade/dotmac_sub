@@ -787,6 +787,23 @@ def build_beat_schedule() -> dict:
                     "args": [str(sync_job.id)],
                 }
 
+        # Splynx incremental sync (dual-run period only)
+        splynx_sync_enabled = _effective_bool(
+            session, SettingDomain.subscriber, "splynx_sync_enabled",
+            "SPLYNX_SYNC_ENABLED", False,
+        )
+        splynx_sync_interval = _effective_int(
+            session, SettingDomain.subscriber, "splynx_sync_interval_minutes",
+            "SPLYNX_SYNC_INTERVAL_MINUTES", 30,
+        )
+        splynx_sync_interval = max(splynx_sync_interval, 5)  # Min: 5 minutes
+        if splynx_sync_enabled:
+            schedule["splynx_incremental_sync"] = {
+                "task": "app.tasks.splynx_sync.run_incremental_sync",
+                "schedule": timedelta(minutes=splynx_sync_interval),
+                "kwargs": {"hours_back": 2},
+            }
+
         tasks = (
             session.query(ScheduledTask)
             .filter(ScheduledTask.enabled.is_(True))

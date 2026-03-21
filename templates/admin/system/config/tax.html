@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+{% from "components/ui/macros.html" import icon_cog, ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
 {% block title %}Tax Configuration - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 <div class="relative space-y-6">
-    {% call page_header(title="Tax Configuration", subtitle="Manage tax rates and tax groups applied to invoices", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 14l6-6m-5.5.5h.01m4.99 5h.01M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16l3.5-2 3.5 2 3.5-2 3.5 2z"/></svg>', color="emerald", color2="teal") %}{% endcall %}
+    {% call page_header(title="Tax Configuration", subtitle="Manage tax rates and tax groups applied to invoices", icon=icon_cog(), color="emerald", color2="teal") %}{% endcall %}
     {% call card("Tax Rates", color="emerald") %}
     {% if tax_rates %}
     <div class="overflow-x-auto">

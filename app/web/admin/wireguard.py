@@ -17,6 +17,7 @@ from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/vpn", tags=["web-admin-vpn"])
+legacy_router = APIRouter(prefix="/wireguard", tags=["web-admin-vpn-legacy"])
 
 
 def _base_context(
@@ -32,6 +33,16 @@ def _base_context(
         "sidebar_stats": get_sidebar_stats(db),
         "csrf_token": get_csrf_token(request),
     }
+
+
+@legacy_router.get("", response_class=HTMLResponse)
+def wireguard_legacy_index() -> RedirectResponse:
+    return RedirectResponse("/admin/network/vpn", status_code=307)
+
+
+@legacy_router.get("/{path:path}", response_class=HTMLResponse)
+def wireguard_legacy_redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(f"/admin/network/vpn/{path}", status_code=307)
 
 
 def _get_actor_id(request: Request) -> str | None:

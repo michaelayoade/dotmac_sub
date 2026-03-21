@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, filter_bar, search_input, filter_select, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
+{% from "components/ui/macros.html" import icon_server, ambient_background, page_header, stats_card, action_button, status_badge, filter_bar, search_input, filter_select, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
 
 {% block title %}Network Devices - Admin{% endblock %}
 
@@ -16,16 +16,12 @@
             Back to Network
         </a>
     </div>
-    {% set device_icon %}
-    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/>
-    </svg>
-    {% endset %}
+    
 
     {% call page_header(
         title="Network Devices",
         subtitle="Manage OLT, ONT, and CPE devices across the network",
-        icon=device_icon,
+        icon=icon_server(),
         color="cyan",
         color2="blue",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Network Devices"}]
@@ -69,7 +65,7 @@
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 100ms;">
         {{ stats_card("Online", stats.online, icon='<span class="relative flex h-3 w-3"><span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-white opacity-75"></span><span class="relative inline-flex h-3 w-3 rounded-full bg-white"></span></span>', color="emerald", color2="green") }}
         {{ stats_card("Offline", stats.offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>', color="red", color2="rose") }}
-        {{ stats_card("Warning", stats.warning, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card("Warning", stats.warning, icon=icon_warning(), color="amber", color2="orange") }}
         {{ stats_card("Unprovisioned", stats.unprovisioned, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>', color="slate", color2="slate") }}
     </div>
 

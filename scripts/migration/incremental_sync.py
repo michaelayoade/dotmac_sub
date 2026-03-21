@@ -45,6 +45,73 @@ def _parse_date(val) -> datetime | None:
     return None
 
 
+def _fetch_invoice_items(conn, inv_id: int) -> list[dict]:
+    """Fetch non-deleted line items for a Splynx invoice."""
+    return fetch_all(
+        conn,
+        f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'",  # noqa: S608
+    )
+
+
+def _compute_invoice_aggregates(
+    items: list[dict],
+    row: dict,
+) -> tuple[Decimal, Decimal, datetime | None, datetime | None]:
+    """Compute subtotal, tax_total, billing_period_start/end from line items.
+
+    Falls back to invoice-level fields when line items are missing or
+    have no period data.
+    """
+    subtotal = Decimal("0")
+    tax_total = Decimal("0")
+    period_starts: list[datetime | None] = []
+    period_ends: list[datetime | None] = []
+
+    for item in items:
+        price = Decimal(str(item.get("price") or "0"))
+        qty = Decimal(str(item.get("quantity") or "1"))
+        tax_pct = Decimal(str(item.get("tax") or "0"))
+        line_amount = price * qty
+        subtotal += line_amount
+        tax_total += line_amount * tax_pct / Decimal("100")
+
+        period_starts.append(_parse_date(item.get("period_from")))
+        period_ends.append(_parse_date(item.get("period_to")))
+
+    # Fall back to invoice total if no line items
+    if not items:
+        subtotal = Decimal(str(row.get("total") or "0"))
+        tax_total = Decimal("0")
+
+    # Billing period: min(period_from), max(period_to) from items
+    valid_starts = [d for d in period_starts if d]
+    valid_ends = [d for d in period_ends if d]
+    billing_start = min(valid_starts) if valid_starts else _parse_date(row.get("date_created"))
+    billing_end = max(valid_ends) if valid_ends else _parse_date(row.get("date_till"))
+
+    return subtotal, tax_total, billing_start, billing_end
+
+
+def _resolve_subscription_id(
+    conn,
+    service_map: dict[int, str],
+    transaction_id: int | None,
+) -> str | None:
+    """Map a line item's transaction_id → Splynx service_id → DotMac subscription_id."""
+    if not transaction_id:
+        return None
+    rows = fetch_all(
+        conn,
+        f"SELECT service_id FROM billing_transactions WHERE id = {transaction_id}",  # noqa: S608
+    )
+    if not rows:
+        return None
+    service_id = rows[0].get("service_id")
+    if not service_id:
+        return None
+    return service_map.get(int(service_id))
+
+
 def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
     """Sync invoices created since the given timestamp."""
     from app.models.billing import Invoice, InvoiceLine, InvoiceStatus, TaxApplication
@@ -55,6 +122,14 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
         for m in db.scalars(
             select(SplynxIdMapping).where(
                 SplynxIdMapping.entity_type == SplynxEntityType.customer
+            )
+        ).all()
+    }
+    service_map: dict[int, str] = {
+        m.splynx_id: str(m.dotmac_id)
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.service
             )
         ).all()
     }
@@ -102,15 +177,25 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
         total = Decimal(str(row.get("total") or "0"))
         due = Decimal(str(row.get("due") or "0"))
 
+        # Fetch line items first to compute aggregates
+        items = _fetch_invoice_items(conn, inv_id)
+        subtotal, tax_total, billing_start, billing_end = _compute_invoice_aggregates(
+            items, row
+        )
+
         invoice = Invoice(
             account_id=subscriber_id,
             invoice_number=(row.get("number") or "")[:80] or None,
             status=status,
             currency="NGN",
+            subtotal=subtotal,
+            tax_total=tax_total,
             total=total,
             balance_due=due,
+            billing_period_start=billing_start,
+            billing_period_end=billing_end,
             issued_at=_parse_date(row.get("date_created")),
-            due_at=_parse_date(row.get("date_payment")),
+            due_at=_parse_date(row.get("date_till")),
             paid_at=_parse_date(row.get("date_updated")) if status == InvoiceStatus.paid else None,
             is_sent=row.get("is_sent") in ("1", 1, True),
             splynx_invoice_id=inv_id,
@@ -125,16 +210,16 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
             dotmac_id=invoice.id,
         ))
 
-        # Fetch and create invoice items
-        items = fetch_all(
-            conn,
-            f"SELECT * FROM invoices_items WHERE invoice_id = {inv_id} AND deleted = '0'", # noqa: S608
-        )
+        # Create invoice line items
         for item in items:
             price = Decimal(str(item.get("price") or "0"))
             qty = Decimal(str(item.get("quantity") or "1"))
+            subscription_id = _resolve_subscription_id(
+                conn, service_map, item.get("transaction_id")
+            )
             line = InvoiceLine(
                 invoice_id=invoice.id,
+                subscription_id=subscription_id,
                 description=(item.get("description") or "Line item")[:255],
                 quantity=qty,
                 unit_price=price,

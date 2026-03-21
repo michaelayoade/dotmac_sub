@@ -14,6 +14,7 @@ Connects to:
 from __future__ import annotations
 
 import logging
+import os
 import sys
 import time
 
@@ -23,31 +24,72 @@ import urllib3
 
 from scripts.migration.db_connections import dotmac_session
 
-# Suppress SSL warnings for self-signed cert
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+# Suppress SSL warnings only when TLS verification is explicitly disabled.
+if not os.environ.get("SPLYNX_VERIFY_TLS", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}:
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
 # --- Splynx API config ---
-SPLYNX_API_BASE = "https://138.68.165.175"
-SPLYNX_API_KEY = "231cea3f36e218736b7339489477641f"
-SPLYNX_API_SECRET = "6ecb2ec96216809c065a64c864870a27"
-SPLYNX_HOST_HEADER = "selfcare.dotmac.ng"
+SPLYNX_API_BASE = os.environ.get("SPLYNX_API_BASE", "")
+SPLYNX_API_KEY = os.environ.get("SPLYNX_API_KEY", "")
+SPLYNX_API_SECRET = os.environ.get("SPLYNX_API_SECRET", "")
+SPLYNX_HOST_HEADER = os.environ.get("SPLYNX_HOST_HEADER", "")
+SPLYNX_VERIFY_TLS = os.environ.get("SPLYNX_VERIFY_TLS", "true").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # --- RADIUS DB config ---
-RADIUS_DB_DSN = "postgresql://radius:l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-@localhost:5437/radius"
+RADIUS_DB_DSN = os.environ.get("RADIUS_DB_DSN", "")
+
+
+def _require_api_config() -> None:
+    missing = [
+        name
+        for name, value in (
+            ("SPLYNX_API_BASE", SPLYNX_API_BASE),
+            ("SPLYNX_API_KEY", SPLYNX_API_KEY),
+            ("SPLYNX_API_SECRET", SPLYNX_API_SECRET),
+        )
+        if not value
+    ]
+    if missing:
+        raise RuntimeError(
+            "Missing required environment variables for RADIUS sync: "
+            + ", ".join(missing)
+        )
+
+
+def _require_radius_db_config() -> None:
+    if not RADIUS_DB_DSN:
+        raise RuntimeError(
+            "Missing required environment variable for RADIUS sync: RADIUS_DB_DSN"
+        )
 
 
 def _splynx_get(endpoint: str, params: dict | None = None) -> list | dict | None:
     """Make authenticated GET request to Splynx API."""
+    if not SPLYNX_API_BASE or not SPLYNX_API_KEY or not SPLYNX_API_SECRET:
+        raise RuntimeError(
+            "Splynx API credentials are not configured. "
+            "Set SPLYNX_API_BASE, SPLYNX_API_KEY, and SPLYNX_API_SECRET."
+        )
     url = f"{SPLYNX_API_BASE}/api/2.0/admin/{endpoint}"
     resp = requests.get(
         url,
         params=params,
         auth=(SPLYNX_API_KEY, SPLYNX_API_SECRET),
         headers={"Host": SPLYNX_HOST_HEADER, "Content-Type": "application/json"},
-        verify=False, # noqa: S501
+        verify=SPLYNX_VERIFY_TLS,
         timeout=30,
     )
     if resp.status_code == 200:
@@ -60,6 +102,8 @@ def _splynx_get(endpoint: str, params: dict | None = None) -> list | dict | None
 
 def sync_nas_clients() -> int:
     """Sync NAS devices to RADIUS nas table."""
+    _require_api_config()
+    _require_radius_db_config()
     conn = psycopg.connect(RADIUS_DB_DSN)
     cur = conn.cursor()
 
@@ -101,6 +145,8 @@ def sync_nas_clients() -> int:
 
 def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
     """Pull cleartext service passwords from Splynx API and write to radcheck + radreply."""
+    _require_api_config()
+    _require_radius_db_config()
     conn = psycopg.connect(RADIUS_DB_DSN)
     cur = conn.cursor()
 
@@ -231,6 +277,7 @@ def sync_service_passwords(batch_size: int = 50) -> dict[str, int]:
 
 def update_access_credentials(batch_size: int = 50) -> int:
     """Update DotMac Sub access_credentials with cleartext passwords from Splynx API."""
+    _require_api_config()
     updated = 0
 
     with dotmac_session() as db:

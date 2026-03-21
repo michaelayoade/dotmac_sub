@@ -8,6 +8,17 @@
 {% set is_mikrotik_device = is_mikrotik if is_mikrotik is defined else ('mikrotik' in vendor_name) %}
 {% set cleaned_notes = cpe_notes if cpe_notes is defined else cpe.notes %}
 {% set meta = cpe_meta if cpe_meta is defined and cpe_meta else {} %}
+{% set identity = cpe_identity if cpe_identity is defined and cpe_identity else {} %}
+{% set tr069 = cpe_tr069_summary if cpe_tr069_summary is defined and cpe_tr069_summary and cpe_tr069_summary.available else none %}
+{% set display_serial = identity.get('display_serial') or cpe.serial_number or 'CPE Device' %}
+{% set display_vendor = (tr069.system.get('Manufacturer') if tr069 else none) or identity.get('vendor') or cpe.vendor or '-' %}
+{% set display_model = (tr069.system.get('Model') if tr069 else none) or identity.get('model') or cpe.model %}
+{% set display_mac = (tr069.system.get('MAC Address') if tr069 else none) or identity.get('mac_address') or cpe.mac_address %}
+{% set display_wan_ip = tr069.wan.get('WAN IP') if tr069 else none %}
+{% set display_firmware = tr069.system.get('Firmware') if tr069 else none %}
+{% set display_hardware = tr069.system.get('Hardware') if tr069 else none %}
+{% set display_ssid = tr069.wireless.get('SSID') if tr069 else none %}
+{% set display_wifi_password = tr069.wireless.get('Password') if tr069 else none %}
 
 <div class="space-y-6"
      x-data="{ activeTab: 'overview' }"
@@ -17,10 +28,10 @@
             <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
                 <a href="/admin/network/cpes" class="hover:text-emerald-600">CPEs</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">{{ cpe.serial_number or 'CPE Device' }}</span>
+                <span class="text-slate-900 dark:text-white">{{ display_serial }}</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ cpe.serial_number or 'CPE Device' }}</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ cpe.vendor or '-' }}{% if cpe.model %} / {{ cpe.model }}{% endif %}</p>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ display_serial }}</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ display_vendor }}{% if display_model %} / {{ display_model }}{% endif %}</p>
         </div>
         <div class="flex items-center gap-2">
             <a href="/admin/network/cpes/{{ cpe.id }}/edit" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Edit</a>
@@ -75,12 +86,66 @@
                             </div>
                             <div>
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">MAC Address</dt>
-                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ cpe.mac_address or '-' }}</dd>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ display_mac or '-' }}</dd>
                             </div>
                             <div>
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Installed</dt>
                                 <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ cpe.installed_at.strftime('%b %d, %Y %H:%M') if cpe.installed_at else '-' }}</dd>
                             </div>
+                            {% if display_wan_ip %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">WAN IP</dt>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ display_wan_ip }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if display_firmware %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Firmware</dt>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ display_firmware }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if display_hardware %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Hardware</dt>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ display_hardware }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if display_ssid %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">WiFi SSID</dt>
+                                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ display_ssid }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if display_wifi_password %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">WiFi Password</dt>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ display_wifi_password }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if identity.get('raw_serial') and identity.get('display_serial') and identity.get('raw_serial') != identity.get('display_serial') %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Raw Serial</dt>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ identity.get('raw_serial') }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if identity.get('last_inform_at') %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Last Inform</dt>
+                                <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ identity.get('last_inform_at').strftime('%b %d, %Y %H:%M') }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if identity.get('oui') %}
+                            <div>
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">TR-069 OUI</dt>
+                                <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white">{{ identity.get('oui') }}</dd>
+                            </div>
+                            {% endif %}
+                            {% if identity.get('connection_request_url') %}
+                            <div class="sm:col-span-2">
+                                <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Connection Request URL</dt>
+                                <dd class="mt-1 break-all font-mono text-sm text-slate-900 dark:text-white">{{ identity.get('connection_request_url') }}</dd>
+                            </div>
+                            {% endif %}
                             {% if cleaned_notes %}
                             <div class="sm:col-span-2">
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Notes</dt>

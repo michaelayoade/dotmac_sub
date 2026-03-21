@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles, icon_credit_card %}
 {% block title %}Payment Methods - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 <div class="relative space-y-6">
-    {% call page_header(title="Payment Methods", subtitle="Configure available payment methods for customer billing", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>', color="emerald", color2="teal") %}{% endcall %}
+    {% call page_header(title="Payment Methods", subtitle="Configure available payment methods for customer billing", icon=icon_credit_card(), color="emerald", color2="teal") %}{% endcall %}
     {% call card("Configured Payment Methods", color="emerald") %}
     {% if payment_methods %}
     <div class="overflow-x-auto">

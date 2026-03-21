@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% from "components/ui/macros.html" import icon_cog, ambient_background, page_header, card, animation_styles %}
 {% block title %}Data Retention - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("slate", "gray") }}
 <div class="relative space-y-6">
-    {% call page_header(title="Data Retention Policy", subtitle="Configure how long logs and statistics are kept before automatic cleanup", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>', color="slate", color2="gray") %}{% endcall %}
+    {% call page_header(title="Data Retention Policy", subtitle="Configure how long logs and statistics are kept before automatic cleanup", icon=icon_cog(), color="slate", color2="gray") %}{% endcall %}
     <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20 animate-fade-in-up" style="animation-delay: 30ms;"><p class="text-sm text-amber-700 dark:text-amber-300"><strong>Note:</strong> Retention policies should comply with local regulatory requirements (e.g., GDPR, telecom regulations). Consult your compliance officer before reducing retention periods.</p></div>
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">

@@ -25,6 +25,48 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
     return expr
 
 
+def _serial_search_candidates(serial_number: str | None) -> list[str]:
+    """Build likely serial variants for GenieACS/TR-069 lookup.
+
+    Supports raw inventory serials like ``HWTC7D4701C3`` and Huawei hex-style
+    serials like ``485754437D4701C3`` that GenieACS may report instead.
+    """
+    serial = str(serial_number or "").strip()
+    if not serial:
+        return []
+
+    candidates: list[str] = []
+
+    def add(value: str | None) -> None:
+        value = str(value or "").strip()
+        if value and value not in candidates:
+            candidates.append(value)
+
+    add(serial)
+    normalized = normalize_tr069_serial(serial)
+    add(normalized)
+
+    # Huawei display serials often appear as HWTC-XXXXXXXX on OLTs but as
+    # 48575443XXXXXXXX in GenieACS (ASCII vendor prefix hex-encoded).
+    if len(normalized) == 12 and normalized[:4].isalpha():
+        add(f"{normalized[:4]}-{normalized[4:]}")
+        vendor_hex = normalized[:4].encode("ascii").hex().upper()
+        add(vendor_hex + normalized[4:])
+
+    # If the provided serial is already in Huawei hex form, also try the
+    # human-readable vendor-prefix representation for local matching.
+    if len(normalized) == 16 and re.fullmatch(r"[0-9A-F]{16}", normalized):
+        try:
+            vendor_ascii = bytes.fromhex(normalized[:8]).decode("ascii")
+        except (ValueError, UnicodeDecodeError):
+            vendor_ascii = ""
+        if vendor_ascii.isalpha():
+            add(vendor_ascii + normalized[8:])
+            add(f"{vendor_ascii}-{normalized[8:]}")
+
+    return candidates
+
+
 def _resolve_olt_via_assignment(db: Session, ont: OntUnit) -> OLTDevice | None:
     """Fall back to active assignment → PON port → OLT resolution."""
     from app.models.network import PonPort
@@ -44,19 +86,14 @@ def _resolve_device_id_from_server(
     client: GenieACSClient,
     serial_number: str,
 ) -> str | None:
-    serial = str(serial_number or "").strip()
-    devices = client.list_devices(query={"_id": {"$regex": f".*-{re.escape(serial)}$"}})
-    if not devices:
-        normalized_target = normalize_tr069_serial(serial)
-        if not normalized_target:
-            return None
-        devices = client.list_devices(
-            query={"_id": {"$regex": f".*-{re.escape(normalized_target)}$"}}
-        )
+    for candidate in _serial_search_candidates(serial_number):
+        devices = client.list_devices(query={"_id": {"$regex": f".*-{re.escape(candidate)}$"}})
         if not devices:
-            return None
-    device_id = str(devices[0].get("_id") or "").strip()
-    return device_id or None
+            continue
+        device_id = str(devices[0].get("_id") or "").strip()
+        if device_id:
+            return device_id
+    return None
 
 
 def _resolve_server_by_id(
@@ -123,12 +160,12 @@ def resolve_genieacs_with_reason(
             logger.warning("Failed ONT ACS lookup for ONT %s", ont.serial_number)
 
     # 3) Linked TR-069 device by serial number
+    serial_candidates = _serial_search_candidates(ont.serial_number)
+    normalized_candidates = [normalize_tr069_serial(value) for value in serial_candidates]
+    normalized_candidates = [value for value in normalized_candidates if value]
     stmt = (
         select(Tr069CpeDevice)
-        .where(
-            _normalized_serial_expr(Tr069CpeDevice.serial_number)
-            == normalize_tr069_serial(ont.serial_number)
-        )
+        .where(_normalized_serial_expr(Tr069CpeDevice.serial_number).in_(normalized_candidates))
         .where(Tr069CpeDevice.is_active.is_(True))
         .limit(1)
     )
@@ -227,13 +264,13 @@ def resolve_genieacs_for_cpe_with_reason(
                 return (client, device_id), "resolved_via_cpe_device_fk"
 
     # 2) Linked Tr069CpeDevice by normalized serial number match
-    normalized_serial = normalize_tr069_serial(serial)
-    if normalized_serial:
+    normalized_candidates = [normalize_tr069_serial(value) for value in _serial_search_candidates(serial)]
+    normalized_candidates = [value for value in normalized_candidates if value]
+    if normalized_candidates:
         stmt = (
             select(Tr069CpeDevice)
             .where(
-                _normalized_serial_expr(Tr069CpeDevice.serial_number)
-                == normalized_serial
+                _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(normalized_candidates)
             )
             .where(Tr069CpeDevice.is_active.is_(True))
             .limit(1)

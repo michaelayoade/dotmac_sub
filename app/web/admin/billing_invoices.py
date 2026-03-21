@@ -44,6 +44,7 @@ def billing_overview(
     request: Request,
     partner_id: str | None = Query(None),
     location: str | None = Query(None),
+    period: str = Query("this_month"),
     db: Session = Depends(get_db),
 ):
     """Billing overview page."""
@@ -51,6 +52,7 @@ def billing_overview(
         db,
         partner_id=partner_id,
         location=location,
+        period=period,
     )
 
     # Get sidebar stats and current user
@@ -180,6 +182,8 @@ def invoices_list(
         {
             "request": request,
             **state,
+            "active_page": "invoices",
+            "active_menu": "billing",
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },

@@ -380,7 +380,10 @@ def get_peer_detail_context(
     now = datetime.now(UTC)
     is_connected = False
     if peer.last_handshake_at:
-        is_connected = (now - peer.last_handshake_at).total_seconds() < 180
+        last_handshake_at = peer.last_handshake_at
+        if last_handshake_at.tzinfo is None:
+            last_handshake_at = last_handshake_at.replace(tzinfo=UTC)
+        is_connected = (now - last_handshake_at).total_seconds() < 180
 
     mikrotik_script = None
     peer_config = None

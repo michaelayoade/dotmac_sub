@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, icon_plus, icon_view, icon_edit, animation_styles %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, icon_plus, icon_view, icon_edit, icon_lightning, icon_check_circle, icon_clock, animation_styles %}
 
 {% block title %}Fiber Plant - Admin{% endblock %}
 
@@ -16,16 +16,10 @@
             Back to Network
         </a>
     </div>
-    {% set fiber_icon %}
-    <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
-    </svg>
-    {% endset %}
-
     {% call page_header(
         title="Fiber Plant",
         subtitle="Manage outside plant fiber infrastructure",
-        icon=fiber_icon,
+        icon=icon_lightning(),
         color="orange",
         color2="amber",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Fiber Plant"}]
@@ -222,9 +216,9 @@
     {# ==================== FIBER STRANDS TAB ==================== #}
     <div x-show="activeTab === 'strands'" x-cloak class="space-y-6">
         <div class="grid gap-4 sm:grid-cols-3 animate-fade-in-up">
-            {{ stats_card("Total Strands", stats.strands, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>', color="blue", color2="indigo") }}
-            {{ stats_card("Available", stats.strands_available, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="green") }}
-            {{ stats_card("In Use", stats.strands_in_use, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="amber", color2="orange") }}
+            {{ stats_card("Total Strands", stats.strands, icon=icon_lightning(), color="blue", color2="indigo") }}
+            {{ stats_card("Available", stats.strands_available, icon=icon_check_circle(), color="emerald", color2="green") }}
+            {{ stats_card("In Use", stats.strands_in_use, icon=icon_clock(), color="amber", color2="orange") }}
         </div>
 
         <div class="flex justify-end">

@@ -154,7 +154,12 @@
                         <td class="px-2 py-1.5">
                             <span class="rounded-full px-2 py-0.5 {% if row.status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300{% elif row.status in ['suspended', 'delinquent'] %}bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300{% else %}bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300{% endif %}">{{ row.status }}</span>
                         </td>
-                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200 font-mono">{{ row.subscriber_id }}</td>
+                        <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">
+                            <div class="font-medium">{{ row.subscriber_label or row.full_name or 'Subscriber' }}</div>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">
+                                {{ row.account_number or row.subscriber_number or row.portal_login or 'No account label' }}
+                            </div>
+                        </td>
                         <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.portal_login or '-' }}</td>
                         <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.full_name }}</td>
                         <td class="px-2 py-1.5 text-slate-700 dark:text-slate-200">{{ row.phone or '-' }}</td>

@@ -1,4 +1,6 @@
 -- One-time migration from splynx_staging into dotmac_sub core tables.
+-- Legacy snapshot migration path. Keep for reference/reconciliation only.
+-- Authoritative cutover path is the phased Python migration under scripts/migration/.
 -- Requires splynx_staging tables to be populated (see scripts/splynx_staging.sql).
 --
 -- Target model: Unified Subscriber (no more people/subscriber_accounts split).

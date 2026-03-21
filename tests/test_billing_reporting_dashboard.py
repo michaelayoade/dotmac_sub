@@ -166,7 +166,7 @@ def test_dashboard_stats_include_new_kpis_and_comparison(db_session, subscriber)
         created_at=now,
     )
 
-    result = billing_reporting.get_dashboard_stats(db_session)
+    result = billing_reporting.get_dashboard_stats(db_session, period="all")
     stats = result["stats"]
 
     assert stats["payments_count"] == 1
@@ -207,7 +207,7 @@ def test_dashboard_stats_include_payment_method_and_daily_payments(db_session, s
         payment_method_id=cash_method.id,
     )
 
-    result = billing_reporting.get_dashboard_stats(db_session)
+    result = billing_reporting.get_dashboard_stats(db_session, period="all")
     breakdown = result["payment_method_breakdown"]
     daily = result["daily_payments"]
 

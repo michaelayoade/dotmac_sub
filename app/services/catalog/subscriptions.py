@@ -42,6 +42,15 @@ from app.validators import catalog as catalog_validators
 
 logger = logging.getLogger(__name__)
 
+
+def _ensure_utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value
+
+
 def _add_months(value: datetime, months: int) -> datetime:
     total = value.month - 1 + months
     year = value.year + total // 12
@@ -607,10 +616,10 @@ class Subscriptions(ListResponseMixin):
         )
         catalog_validators.validate_offer_active(db, offer_id)
         status = data.get("status", subscription.status)
-        start_at = data.get("start_at", subscription.start_at)
-        end_at = data.get("end_at", subscription.end_at)
-        next_billing_at = data.get("next_billing_at", subscription.next_billing_at)
-        canceled_at = data.get("canceled_at", subscription.canceled_at)
+        start_at = _ensure_utc(data.get("start_at", subscription.start_at))
+        end_at = _ensure_utc(data.get("end_at", subscription.end_at))
+        next_billing_at = _ensure_utc(data.get("next_billing_at", subscription.next_billing_at))
+        canceled_at = _ensure_utc(data.get("canceled_at", subscription.canceled_at))
         reference_at = start_at or datetime.now(UTC)
         if offer_version_id:
             catalog_validators.validate_offer_version_active(
@@ -641,7 +650,7 @@ class Subscriptions(ListResponseMixin):
             cycle = _resolve_billing_cycle(
                 db, offer_id, str(offer_version_id) if offer_version_id else None
             )
-            existing_next = data.get("next_billing_at") or next_billing_at
+            existing_next = _ensure_utc(data.get("next_billing_at") or next_billing_at)
             now = datetime.now(UTC)
             # Recompute next_billing_at when:
             # 1. Not provided in form data, OR

@@ -6,7 +6,11 @@ from unittest.mock import MagicMock, patch
 import httpx
 import pytest
 
-from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.genieacs import (
+    GenieACSClient,
+    GenieACSError,
+    GenieACSMethodNotAllowedError,
+)
 
 
 @pytest.fixture
@@ -160,6 +164,20 @@ class TestDeviceOperations:
             result = client.get_device("ABC-Model-123")
 
             assert result == device
+
+    def test_get_device_falls_back_to_query_on_405(self, client, mock_response):
+        """Test get_device falls back to query lookup when direct GET is not allowed."""
+        device = {"_id": "ABC-Model-123"}
+
+        with patch.object(client, "_request") as mock_request, patch.object(
+            client, "list_devices", return_value=[device]
+        ) as mock_list_devices:
+            mock_request.side_effect = GenieACSMethodNotAllowedError("API error: 405")
+
+            result = client.get_device("ABC-Model-123")
+
+            assert result == device
+            mock_list_devices.assert_called_once_with(query={"_id": "ABC-Model-123"})
 
     def test_delete_device(self, client, mock_response):
         """Test delete_device succeeds."""

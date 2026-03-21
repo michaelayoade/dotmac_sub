@@ -72,6 +72,8 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         str(subscription.id),
         {"login": "10004167"},
         "",
+        [],
+        [],
         None,
         None,
     )
@@ -261,6 +263,219 @@ def test_create_subscription_with_audit_uses_requested_free_ipv4(
     )
     assert assignment.ipv4_address is not None
     assert assignment.ipv4_address.address == "10.80.0.5"
+
+
+def test_update_subscription_with_audit_persists_added_ipv4_assignment(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Edit Subscription IPv4 Pool",
+            "ip_version": "ipv4",
+            "cidr": "10.82.0.0/29",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+
+    block, block_error = web_network_ip_service.create_ip_block(
+        db_session,
+        {
+            "pool_id": str(pool.id),
+            "cidr": "10.82.0.0/29",
+            "is_active": True,
+        },
+    )
+    assert block_error is None
+    assert block is not None
+
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    updated = web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [str(block.id)],
+        ["10.82.0.5"],
+        None,
+        None,
+    )
+
+    db_session.refresh(updated)
+    assert updated.ipv4_address == "10.82.0.5"
+
+    assignment = (
+        db_session.query(IPAssignment)
+        .filter(IPAssignment.subscription_id == updated.id)
+        .filter(IPAssignment.is_active.is_(True))
+        .one()
+    )
+    assert assignment.ipv4_address is not None
+    assert assignment.ipv4_address.address == "10.82.0.5"
+
+
+def test_edit_form_data_includes_active_ipv4_assignments(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Existing Assignments Pool",
+            "ip_version": "ipv4",
+            "cidr": "10.83.0.0/29",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+
+    first_block, first_error = web_network_ip_service.create_ip_block(
+        db_session,
+        {
+            "pool_id": str(pool.id),
+            "cidr": "10.83.0.0/30",
+            "is_active": True,
+        },
+    )
+    second_block, second_error = web_network_ip_service.create_ip_block(
+        db_session,
+        {
+            "pool_id": str(pool.id),
+            "cidr": "10.83.0.4/30",
+            "is_active": True,
+        },
+    )
+    assert first_error is None
+    assert second_error is None
+    assert first_block is not None
+    assert second_block is not None
+
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    web_catalog_subscriptions_service._allocate_ipv4_assignments_for_subscription(
+        db_session,
+        subscription_obj=subscription,
+        block_ids=[str(first_block.id), str(second_block.id)],
+        selected_ips=["10.83.0.1", "10.83.0.5"],
+    )
+    subscription.ipv4_address = "10.83.0.1"
+    db_session.commit()
+    db_session.refresh(subscription)
+
+    form_data = web_catalog_subscriptions_service.edit_form_data(db_session, subscription)
+
+    assert form_data["ipv4_addresses"] == ["10.83.0.1", "10.83.0.5"]
+    assert form_data["ipv4_block_ids"] == [str(first_block.id), str(second_block.id)]
+
+
+def test_update_subscription_with_audit_deallocates_removed_ipv4_assignments(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    pool, pool_error = web_network_ip_service.create_ip_pool(
+        db_session,
+        {
+            "name": "Deallocation Pool",
+            "ip_version": "ipv4",
+            "cidr": "10.84.0.0/29",
+            "is_active": True,
+        },
+    )
+    assert pool_error is None
+    assert pool is not None
+
+    first_block, first_error = web_network_ip_service.create_ip_block(
+        db_session,
+        {
+            "pool_id": str(pool.id),
+            "cidr": "10.84.0.0/30",
+            "is_active": True,
+        },
+    )
+    second_block, second_error = web_network_ip_service.create_ip_block(
+        db_session,
+        {
+            "pool_id": str(pool.id),
+            "cidr": "10.84.0.4/30",
+            "is_active": True,
+        },
+    )
+    assert first_error is None
+    assert second_error is None
+    assert first_block is not None
+    assert second_block is not None
+
+    subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+
+    web_catalog_subscriptions_service._allocate_ipv4_assignments_for_subscription(
+        db_session,
+        subscription_obj=subscription,
+        block_ids=[str(first_block.id), str(second_block.id)],
+        selected_ips=["10.84.0.1", "10.84.0.5"],
+    )
+    subscription.ipv4_address = "10.84.0.1"
+    db_session.commit()
+    db_session.refresh(subscription)
+
+    updated = web_catalog_subscriptions_service.update_subscription_with_audit(
+        db_session,
+        str(subscription.id),
+        {"login": "10004167"},
+        "",
+        [str(first_block.id)],
+        ["10.84.0.1"],
+        None,
+        None,
+    )
+
+    db_session.refresh(updated)
+    assert updated.ipv4_address == "10.84.0.1"
+
+    active_assignments = (
+        db_session.query(IPAssignment)
+        .filter(IPAssignment.subscription_id == updated.id)
+        .filter(IPAssignment.is_active.is_(True))
+        .all()
+    )
+    assert len(active_assignments) == 1
+    assert active_assignments[0].ipv4_address is not None
+    assert active_assignments[0].ipv4_address.address == "10.84.0.1"
+
+    inactive_assignments = (
+        db_session.query(IPAssignment)
+        .filter(IPAssignment.subscription_id == updated.id)
+        .filter(IPAssignment.is_active.is_(False))
+        .all()
+    )
+    assert len(inactive_assignments) == 1
+    assert inactive_assignments[0].ipv4_address is not None
+    assert inactive_assignments[0].ipv4_address.address == "10.84.0.5"
 
 
 @patch("app.services.radius.reconcile_subscription_connectivity")

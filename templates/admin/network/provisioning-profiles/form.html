@@ -35,7 +35,7 @@
                     <div class="sm:col-span-2">
                         <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Profile Name <span class="text-red-500">*</span></label>
                         <input type="text" name="name" id="name" required maxlength="120"
-                            value="{{ (form_values.name if form_values is defined and form_values) else (item.name if item else '') }}"
+                            value="{{ form_values.name if form_values is defined and form_values else (item.name if item else '') }}"
                             placeholder="e.g. Residential 100M PPPoE Bridge"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     </div>

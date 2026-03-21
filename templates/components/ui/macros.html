@@ -95,7 +95,7 @@
         {% endif %}
         <div>
             {% if breadcrumbs %}
-            <nav class="mb-1 flex items-center gap-1.5 text-xs text-slate-500 dark:text-slate-400">
+            <nav class="mb-1 flex items-center gap-1.5 text-xs text-slate-600 dark:text-slate-300">
                 {% for crumb in breadcrumbs %}
                 {% if not loop.last %}
                 <a href="{{ crumb.href }}" class="hover:text-{{ color }}-600 dark:hover:text-{{ color }}-400">{{ crumb.label }}</a>
@@ -108,7 +108,7 @@
             {% endif %}
             <h1 class="text-2xl font-bold font-display tracking-tight text-slate-900 dark:text-white">{{ title }}</h1>
             {% if subtitle %}
-            <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{{ subtitle }}</p>
+            <p class="mt-1 text-sm leading-6 text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
             {% endif %}
         </div>
     </div>
@@ -189,7 +189,7 @@
     <div class="absolute -right-4 -top-4 h-24 w-24 rounded-full bg-gradient-to-br from-{{ color }}-500/10 to-{{ c2 }}-500/10 blur-2xl transition-all group-hover:scale-150"></div>
     <div class="relative flex items-center justify-between">
         <div>
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ label }}</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">{{ label }}</p>
             <p class="mt-1 text-[clamp(1.25rem,2vw,1.875rem)] font-bold leading-tight text-slate-900 dark:text-white">{{ value }}</p>
             {% if change is not none %}
             {% set change_num = change %}
@@ -314,7 +314,7 @@
                 {{ icon|safe }}
             </div>
             {% endif %}
-            <h2 class="font-semibold text-slate-900 dark:text-white">{{ title }}</h2>
+            <h2 class="text-base font-semibold tracking-tight text-slate-900 dark:text-white">{{ title }}</h2>
         </div>
         <div class="flex items-center gap-3">
             {% if count is not none %}
@@ -343,7 +343,7 @@
         {% for col in columns %}
         {% set align = col.align if col is mapping and col.align is defined else 'left' %}
         {% set label = col.label if col is mapping and col.label is defined else col %}
-        <th scope="col" class="px-6 py-3 text-{{ align }} text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">
+        <th scope="col" class="px-6 py-3 text-{{ align }} text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">
             {{ label }}
         </th>
         {% endfor %}
@@ -443,7 +443,7 @@
                 {{ icon|safe }}
             </div>
             {% endif %}
-            <h2 class="font-semibold text-slate-900 dark:text-white">{{ title }}</h2>
+            <h2 class="text-base font-semibold tracking-tight text-slate-900 dark:text-white">{{ title }}</h2>
         </div>
         {% if actions %}{{ actions|safe }}{% endif %}
     </div>
@@ -470,7 +470,7 @@
            name="{{ name }}"
            value="{{ value }}"
            placeholder="{{ placeholder }}"
-           class="block w-full rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-400 transition-all focus:border-{{ color }}-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder-slate-500 dark:focus:border-{{ color }}-500"
+           class="block w-full rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-400 selection:bg-{{ color }}-200 selection:text-slate-900 transition-all focus:border-{{ color }}-500 focus:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder-slate-500 dark:selection:bg-{{ color }}-700/60 dark:selection:text-white dark:focus:border-{{ color }}-500 dark:focus:bg-slate-700"
            {% for key, val in hx_attrs.items() %}{{ key }}="{{ val }}"{% endfor %} />
 </div>
 {% endmacro %}
@@ -482,7 +482,7 @@
    ============================================ #}
 {% macro filter_select(name, options, value="", label="", color="amber", attrs=None) %}
 {% if label %}
-<label class="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">{{ label }}</label>
+<label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</label>
 {% endif %}
 <select name="{{ name }}"
         class="block w-full appearance-none rounded-xl border border-slate-200 bg-slate-50/50 py-2.5 pl-4 pr-10 text-sm text-slate-900 transition-all focus:border-{{ color }}-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:focus:border-{{ color }}-500"
@@ -545,7 +545,7 @@
                 {% if status %}{{ status|safe }}{% endif %}
             </div>
             {% if subtitle %}
-            <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">{{ subtitle }}</p>
+            <p class="mt-1 text-sm leading-6 text-slate-500 dark:text-slate-400">{{ subtitle }}</p>
             {% endif %}
         </div>
     </div>
@@ -590,7 +590,7 @@
     </div>
     {% endif %}
     <div class="flex-1 min-w-0">
-        <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">{{ label }}</p>
+        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-400 dark:text-slate-500">{{ label }}</p>
         <p class="mt-0.5 text-sm font-medium text-slate-900 dark:text-white">{% if value %}{{ value }}{% elif caller %}{{ caller() }}{% else %}-{% endif %}</p>
     </div>
 </div>
@@ -864,7 +864,7 @@
                 {{ icon|safe }}
             </div>
             {% endif %}
-            <span class="text-sm text-{{ color }}-900 dark:text-{{ color }}-100">{{ message|safe }}</span>
+            <span class="text-sm font-medium text-{{ color }}-900 dark:text-{{ color }}-50">{{ message|safe }}</span>
         </div>
         {% if actions %}
         <div class="flex items-center gap-3 text-sm">

@@ -1,129 +1,60 @@
-{# HTMX partial: Auto-refreshing KPI cards for monitoring dashboard #}
-{% from "components/ui/macros.html" import stats_card %}
-
-{# Live indicator — pulses to show data is fresh #}
-<div class="flex items-center justify-end gap-2 mb-2">
-    <span class="relative flex h-2 w-2">
-        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-        <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-    </span>
-    <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums">Live &middot; {{ now.strftime('%H:%M:%S') if now else '' }}</span>
-</div>
-
-{# Device KPIs #}
-<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-    {{ stats_card("Devices Online", stats.devices_online, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}
-    {{ stats_card("Devices Offline", stats.devices_offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3"/></svg>', color="rose", color2="pink") }}
-    {{ stats_card("Active Alarms", stats.alarms_open, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>', color="amber", color2="orange") }}
-    {{ stats_card("Subscribers Online", stats.subscribers_online, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>', color="blue", color2="indigo") }}
-</div>
-
-{# ONU Status KPIs (if ONTs exist) #}
-{% if onu_summary and onu_summary.total > 0 %}
-<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mt-4">
-    {{ stats_card("ONTs Online", onu_summary.online, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a5 5 0 010-7.072m5.656 0a5 5 0 010 7.072M13 12a1 1 0 11-2 0 1 1 0 012 0z"/></svg>', color="emerald", color2="teal") }}
-    {{ stats_card("ONTs Offline", onu_summary.offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3"/></svg>', color="rose", color2="pink") }}
-    {{ stats_card("Low Signal", onu_summary.low_signal, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
-    {{ stats_card("Total ONTs", onu_summary.total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>', color="blue", color2="indigo") }}
-</div>
-{% endif %}
-
-{# VPN Tunnel Health #}
-{% if vpn_tunnels %}
-<div class="mt-4 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-    <div class="flex items-center justify-between mb-3">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
-            <span class="inline-flex items-center gap-1.5">
-                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
-                VPN Tunnels
+{# HTMX partial: compact monitoring snapshot for NOC scan speed #}
+<div class="space-y-3">
+    <div class="flex items-center justify-between gap-3">
+        <div>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Network Snapshot</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Current device and ONT state for quick triage confirmation.</p>
+        </div>
+        <div class="inline-flex items-center gap-2 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">
+            <span class="relative flex h-2 w-2">
+                <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
             </span>
-        </h3>
-        <a href="/admin/network/vpn" class="text-xs font-medium text-cyan-600 hover:text-cyan-700 dark:text-cyan-400 dark:hover:text-cyan-300">Manage &rarr;</a>
-    </div>
-    <div class="space-y-2">
-        {% for tunnel in vpn_tunnels %}
-        <div class="flex items-center justify-between rounded-lg border px-3 py-2 {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if tunnel.up else 'border-rose-200 bg-rose-50/50 dark:border-rose-800/40 dark:bg-rose-900/10' if not tunnel.stale else 'border-amber-200 bg-amber-50/50 dark:border-amber-800/40 dark:bg-amber-900/10' }}">
-            <div class="flex items-center gap-2.5">
-                <span class="relative flex h-2.5 w-2.5 flex-shrink-0">
-                    {% if tunnel.up %}
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-                    {% else %}
-                    <span class="relative inline-flex h-2.5 w-2.5 rounded-full {{ 'bg-rose-500' if not tunnel.stale else 'bg-amber-500' }}"></span>
-                    {% endif %}
-                </span>
-                <div>
-                    <span class="text-sm font-medium text-slate-900 dark:text-white">{{ tunnel.name }}</span>
-                    {% if tunnel.endpoint %}
-                    <span class="ml-1.5 text-xs font-mono text-slate-400 dark:text-slate-500">{{ tunnel.endpoint }}</span>
-                    {% endif %}
-                </div>
-            </div>
-            <div class="flex items-center gap-3 text-xs tabular-nums">
-                <span class="text-slate-500 dark:text-slate-400" title="Last handshake">{{ tunnel.handshake_ago }}</span>
-                <span class="text-emerald-600 dark:text-emerald-400" title="Received">&darr; {{ tunnel.rx }}</span>
-                <span class="text-amber-600 dark:text-amber-400" title="Sent">&uarr; {{ tunnel.tx }}</span>
-            </div>
+            Live{% if now %} · {{ now.strftime('%H:%M:%S') }}{% endif %}
         </div>
-        {% endfor %}
     </div>
-</div>
-{% endif %}
 
-{# Site Reachability Summary #}
-{% if site_reachability %}
-<div class="mt-4 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-    <h3 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">
-        <span class="inline-flex items-center gap-1.5">
-            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            Site Reachability
-        </span>
-    </h3>
-    <div class="space-y-2">
-        {% for site in site_reachability %}
-        <div class="flex items-center gap-3">
-            <div class="flex-1 min-w-0">
-                <div class="flex items-center justify-between mb-1">
-                    <span class="text-xs font-medium text-slate-700 dark:text-slate-300 truncate">{{ site.name }}</span>
-                    <span class="text-xs tabular-nums {{ 'text-emerald-600 dark:text-emerald-400' if site.reachable_pct >= 80 else 'text-amber-600 dark:text-amber-400' if site.reachable_pct >= 50 else 'text-rose-600 dark:text-rose-400' }}">{{ site.reachable_pct }}%</span>
-                </div>
-                <div class="h-1.5 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700">
-                    {% set online_w = (site.online / site.total * 100) | round(0) | int if site.total else 0 %}
-                    {% set degraded_w = (site.degraded / site.total * 100) | round(0) | int if site.total else 0 %}
-                    <div class="flex h-full">
-                        {% if online_w > 0 %}<div class="h-full bg-emerald-500" style="width: {{ online_w }}%"></div>{% endif %}
-                        {% if degraded_w > 0 %}<div class="h-full bg-amber-400" style="width: {{ degraded_w }}%"></div>{% endif %}
-                    </div>
-                </div>
-            </div>
-            <span class="text-xs text-slate-400 dark:text-slate-500 tabular-nums whitespace-nowrap">{{ site.online + site.degraded }}/{{ site.total }}</span>
+    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-xl border border-emerald-200/70 bg-emerald-50/80 px-4 py-3 dark:border-emerald-900/40 dark:bg-emerald-900/20">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">Devices Online</p>
+            <p class="mt-2 text-2xl font-bold tabular-nums text-emerald-950 dark:text-emerald-100">{{ stats.devices_online }}</p>
+            <p class="mt-1 text-xs text-emerald-700 dark:text-emerald-300">Reachable infrastructure</p>
         </div>
-        {% endfor %}
+        <div class="rounded-xl border border-rose-200/70 bg-rose-50/80 px-4 py-3 dark:border-rose-900/40 dark:bg-rose-900/20">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">Devices Offline</p>
+            <p class="mt-2 text-2xl font-bold tabular-nums text-rose-950 dark:text-rose-100">{{ stats.devices_offline }}</p>
+            <p class="mt-1 text-xs text-rose-700 dark:text-rose-300">Hard-down infrastructure</p>
+        </div>
+        <div class="rounded-xl border border-amber-200/70 bg-amber-50/80 px-4 py-3 dark:border-amber-900/40 dark:bg-amber-900/20">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-amber-700 dark:text-amber-300">Open Alarms</p>
+            <p class="mt-2 text-2xl font-bold tabular-nums text-amber-950 dark:text-amber-100">{{ stats.alarms_open }}</p>
+            <p class="mt-1 text-xs text-amber-700 dark:text-amber-300">Rules currently firing</p>
+        </div>
+        <div class="rounded-xl border border-blue-200/70 bg-blue-50/80 px-4 py-3 dark:border-blue-900/40 dark:bg-blue-900/20">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-blue-700 dark:text-blue-300">Subscribers Online</p>
+            <p class="mt-2 text-2xl font-bold tabular-nums text-blue-950 dark:text-blue-100">{{ stats.subscribers_online }}</p>
+            <p class="mt-1 text-xs text-blue-700 dark:text-blue-300">Sessions currently up</p>
+        </div>
     </div>
-</div>
-{% endif %}
 
-{# PON Outages Alert #}
-{% if pon_outages %}
-<div class="mt-4 rounded-xl border border-rose-200 bg-rose-50/50 px-4 py-3 dark:border-rose-800/50 dark:bg-rose-900/20">
-    <div class="flex items-center gap-2 mb-1">
-        <svg class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
-        <span class="text-sm font-semibold text-rose-700 dark:text-rose-300">{{ pon_outages | length }} PON port outage{{ 's' if pon_outages | length != 1 }}</span>
+    {% if onu_summary and onu_summary.total > 0 %}
+    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-xl border border-emerald-200/70 bg-white px-4 py-3 dark:border-emerald-900/30 dark:bg-slate-800/80">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONTs Online</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.online }}</p>
+        </div>
+        <div class="rounded-xl border border-rose-200/70 bg-white px-4 py-3 dark:border-rose-900/30 dark:bg-slate-800/80">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONTs Offline</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.offline }}</p>
+        </div>
+        <div class="rounded-xl border border-amber-200/70 bg-white px-4 py-3 dark:border-amber-900/30 dark:bg-slate-800/80">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.low_signal }}</p>
+        </div>
+        <div class="rounded-xl border border-slate-200/70 bg-white px-4 py-3 dark:border-slate-700/60 dark:bg-slate-800/80">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Total ONTs</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.total }}</p>
+        </div>
     </div>
-    <p class="text-xs text-rose-600 dark:text-rose-400">
-        {% for o in pon_outages[:3] %}{{ o.pon_port_name }} ({{ o.offline_count }} offline){{ ', ' if not loop.last }}{% endfor %}
-        {% if pon_outages | length > 3 %} and {{ pon_outages | length - 3 }} more{% endif %}
-    </p>
+    {% endif %}
 </div>
-{% endif %}
-
-{# Active Alarms Summary #}
-{% if alarms %}
-<div class="mt-4 rounded-xl border border-amber-200 bg-amber-50/50 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-900/20">
-    <div class="flex items-center gap-2">
-        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/></svg>
-        <span class="text-sm font-semibold text-amber-700 dark:text-amber-300">{{ alarms | length }} active alarm{{ 's' if alarms | length != 1 }}</span>
-        <a href="/admin/network/alarms" class="ml-auto text-xs font-medium text-amber-700 hover:text-amber-800 dark:text-amber-400 dark:hover:text-amber-300">View all &rarr;</a>
-    </div>
-</div>
-{% endif %}

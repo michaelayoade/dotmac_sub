@@ -10,13 +10,14 @@ A comprehensive guide for developers working on the DotMac Subscription Manageme
 2. [Technology Stack](#technology-stack)
 3. [Project Structure](#project-structure)
 4. [User Portals & Journeys](#user-portals--journeys)
-5. [Implementation Guide](#implementation-guide)
-6. [Code Patterns & Best Practices](#code-patterns--best-practices)
-7. [Working with Templates](#working-with-templates)
-8. [Database & Models](#database--models)
-9. [Authentication & Authorization](#authentication--authorization)
-10. [Testing](#testing)
-11. [DEM Data (SRTM 30m)](#dem-data-srtm-30m)
+5. [UI Design Governance](#ui-design-governance)
+6. [Implementation Guide](#implementation-guide)
+7. [Code Patterns & Best Practices](#code-patterns--best-practices)
+8. [Working with Templates](#working-with-templates)
+9. [Database & Models](#database--models)
+10. [Authentication & Authorization](#authentication--authorization)
+11. [Testing](#testing)
+12. [DEM Data (SRTM 30m)](#dem-data-srtm-30m)
 
 ---
 
@@ -282,11 +283,69 @@ Dashboard (/reseller/dashboard)
 
 ---
 
+## UI Design Governance
+
+UI work in this repo is governed by the design docs, not by ad hoc taste.
+
+Read these before making substantial UI changes:
+
+- `docs/PRODUCTION_UI_BRIEF.md`
+- `docs/FRONTEND_SPEC.md`
+- `docs/DESIGN_REVIEW_CHECKLIST.md`
+
+Use them in this order:
+
+1. `PRODUCTION_UI_BRIEF.md`
+   This is the policy layer. It defines density, page anatomy, semantic color use, dashboard rules, HTMX stability rules, and review standards.
+2. `FRONTEND_SPEC.md`
+   This is the implementation layer. It documents context shapes, route/template contracts, macro usage, and module-specific UI expectations.
+3. `DESIGN_REVIEW_CHECKLIST.md`
+   This is the merge gate. Use it before submitting or approving UI-heavy changes.
+
+### Required Workflow For UI Changes
+
+For any admin UI change, redesign, shared macro update, or new template:
+
+1. Check the page type in `PRODUCTION_UI_BRIEF.md`.
+   Determine whether the page is a dashboard, list page, detail page, or form-driven work surface.
+2. Reuse shared macros first.
+   Prefer `page_header`, `card`, `filter_bar`, `stats_card`, `data_table`, `status_badge`, and related macros over page-local patterns.
+3. Keep the first viewport task-oriented.
+   Do not let decorative treatments push the work surface below the fold.
+4. Run the design checklist.
+   Use `docs/DESIGN_REVIEW_CHECKLIST.md` and mark non-applicable items as `N/A`.
+5. Reflect shared changes in docs.
+   If you introduce a new standard UI pattern, update `docs/FRONTEND_SPEC.md`.
+
+### Pull Request Expectation
+
+UI-facing pull requests should complete the design section in:
+
+- `.github/PULL_REQUEST_TEMPLATE.md`
+
+That template is intentionally short. The detailed reasoning belongs in:
+
+- `docs/DESIGN_REVIEW_CHECKLIST.md`
+
+### Practical Rules
+
+- One primary action per screen header.
+- Use module accent colors for orientation, not state.
+- Use semantic colors for status and risk.
+- Keep dashboard KPI strips compact.
+- Keep filters directly above tables on list pages.
+- Preserve layout stability for HTMX-polled regions.
+- Prefer denser operational layouts over showcase-style hero compositions.
+
+---
+
 ## Implementation Guide
 
 ### Adding a New Feature
 
 Follow this step-by-step guide to add a new feature to the application.
+
+If the feature includes UI work, complete the UI design governance steps above before opening the PR.
 
 #### Step 1: Create the Database Model
 

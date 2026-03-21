@@ -2,10 +2,12 @@ import importlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
+from starlette.requests import Request
 
 from app.models.catalog import ConnectionType, NasConfigBackup, NasDevice, NasVendor
 from app.models.network import (
@@ -122,7 +124,97 @@ def test_extract_enhanced_fields_includes_shaper_and_mikrotik_api_tags():
     assert fields["shaper_enabled"] == "true"
     assert fields["shaper_target"] == "this_router"
     assert fields["shaping_type"] == "queue_tree"
+    assert fields["wireless_access_list"] == "true"
+    assert fields["disabled_customers_address_list"] == "false"
     assert fields["blocking_rules_enabled"] == "true"
+
+
+def test_nas_index_renders_status_cards_with_non_active_buckets(db_session, monkeypatch):
+    device_id = uuid4()
+    request = Request({"type": "http", "method": "GET", "path": "/admin/network/nas", "headers": []})
+
+    monkeypatch.setattr(
+        nas_web,
+        "_base_context",
+        lambda _request, _db, active_page, active_menu="network": {
+            "request": _request,
+            "active_page": active_page,
+            "active_menu": active_menu,
+            "current_user": SimpleNamespace(name="Admin User", email="admin@example.com", initials="AU"),
+            "sidebar_stats": SimpleNamespace(
+                notifications_unread=0,
+                sidebar_logo_url="",
+                sidebar_logo_dark_url="",
+                app_name="DotMac Subs",
+                module_states={},
+                feature_states={},
+            ),
+            "csrf_token": "test-token",
+        },
+    )
+    monkeypatch.setattr(
+        nas_web,
+        "_get_form_options",
+        lambda _db: {
+            "vendors": [SimpleNamespace(value="mikrotik", label="MikroTik")],
+            "pop_sites": [],
+            "organizations": [],
+            "statuses": [
+                SimpleNamespace(value="active", label="Active"),
+                SimpleNamespace(value="offline", label="Offline"),
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        nas_web.nas_service,
+        "build_nas_dashboard_data",
+        lambda *args, **kwargs: {
+            "devices": [
+                SimpleNamespace(
+                    id=device_id,
+                    name="Edge NAS",
+                    model="CCR2004",
+                    ip_address="192.0.2.10",
+                    vendor=SimpleNamespace(value="mikrotik"),
+                    supported_connection_types=[],
+                    status=SimpleNamespace(value="offline"),
+                    last_seen_at=None,
+                )
+            ],
+            "ping_statuses": {str(device_id): {"state": "unreachable", "label": "Unreachable"}},
+            "runtime_statuses": {},
+            "runtime_last_seen": {},
+            "stats": {
+                "by_vendor": {"mikrotik": 1},
+                "by_status": {"active": 1, "offline": 1},
+            },
+            "pagination": {
+                "page": 1,
+                "total_pages": 1,
+                "total": 1,
+                "has_prev": False,
+                "has_next": False,
+            },
+            "filters": {
+                "vendor": None,
+                "nas_type": None,
+                "status": None,
+                "pop_site_id": None,
+                "partner_org_id": None,
+                "online_status": None,
+                "search": None,
+                "refresh": None,
+            },
+        },
+    )
+
+    response = nas_web.nas_index(request=request, db=db_session)
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "NAS Devices" in body
+    assert "Edge NAS" in body
+    assert "Offline" in body
 
 
 def test_build_nas_payload_requires_nas_ip_when_radius_authorization_selected(db_session):
@@ -926,6 +1018,27 @@ def test_tr069_queue_device_job_creates_and_executes(db_session, acs_server, mon
     )
     assert job.command == "refreshObject"
     assert job.status == Tr069JobStatus.succeeded
+
+
+def test_tr069_dashboard_data_decodes_huawei_hex_serial_for_display(db_session, acs_server):
+    tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="48575443858C4184",
+            oui="485754",
+            product_class="HG8145X6",
+            is_active=True,
+        ),
+    )
+
+    data = web_network_tr069_service.tr069_dashboard_data(
+        db_session,
+        acs_server_id=str(acs_server.id),
+    )
+
+    assert len(data["unconfigured_devices"]) == 1
+    assert data["unconfigured_devices"][0].display_serial_number == "HWTC858C4184"
 
 
 def test_network_map_context_includes_network_device_markers(db_session):

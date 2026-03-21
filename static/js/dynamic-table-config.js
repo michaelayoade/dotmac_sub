@@ -92,6 +92,9 @@
 
     renderKeyedCell(columnKey, value) {
       const key = String(columnKey || "").toLowerCase();
+      if (this.tableKey === "subscribers") {
+        return this.renderSubscriberCell(key, value);
+      }
       if (key === "status") {
         return `<td class="whitespace-nowrap px-6 py-4">${this.renderStatusBadge(value)}</td>`;
       }
@@ -113,6 +116,35 @@
       }
       if (key === "email") {
         return `<td class="whitespace-nowrap px-6 py-4"><span class="text-sm text-slate-600 dark:text-slate-400">${escapeHtml(this.formatValue(value))}</span></td>`;
+      }
+      return this.renderDefaultCell(value);
+    }
+
+    renderSubscriberCell(key, value) {
+      if (key === "subscriber_number") {
+        return `<td class="whitespace-nowrap px-6 py-4">
+          <div class="space-y-1">
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">${escapeHtml(this.formatValue(value) || "No subscriber number")}</p>
+            ${
+              this.rows
+                ? ""
+                : ""
+            }
+          </div>
+        </td>`;
+      }
+      if (key === "subscriber_name") {
+        return this.renderDefaultCell(value);
+      }
+      if (key === "status") {
+        return `<td class="px-6 py-4">
+          <div class="space-y-1.5">
+            ${this.renderStatusBadge(value)}
+          </div>
+        </td>`;
+      }
+      if (key === "reseller_name" || key === "subscription_name") {
+        return `<td class="px-6 py-4"><span class="text-sm text-slate-600 dark:text-slate-300">${escapeHtml(this.formatValue(value) || "—")}</span></td>`;
       }
       return this.renderDefaultCell(value);
     }
@@ -326,6 +358,65 @@
               const cells = visibleColumns
                 .map((column, index) => {
                   const value = this.formatValue(row[column.column_key]);
+                  if (this.tableKey === "subscribers") {
+                    if (column.column_key === "subscriber_number") {
+                      const accountNumber = this.formatValue(row.account_number);
+                      return `<td class="whitespace-nowrap px-6 py-4">
+                        <div class="space-y-1">
+                          <p class="text-sm font-semibold text-slate-900 dark:text-white">${escapeHtml(value || "No subscriber number")}</p>
+                          ${
+                            accountNumber
+                              ? `<p class="text-xs text-slate-500 dark:text-slate-400">Account <span class="font-mono">${escapeHtml(accountNumber)}</span></p>`
+                              : ""
+                          }
+                        </div>
+                      </td>`;
+                    }
+                    if (column.column_key === "subscriber_name") {
+                      const phone = this.formatValue(row.phone);
+                      const email = this.formatValue(row.email);
+                      const subtitle = phone || email || row.subscriber_type || "";
+                      return `<td class="px-6 py-4">
+                        <a href="${escapeHtml(detailUrl || "#")}" class="flex items-center gap-3">
+                          <span class="flex h-10 w-10 items-center justify-center rounded-full bg-gradient-to-br from-amber-100 to-orange-100 text-amber-700 dark:from-amber-900/30 dark:to-orange-900/30 dark:text-amber-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
+                          </span>
+                          <span class="min-w-0">
+                            <span class="block truncate text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">${escapeHtml(value || "View details")}</span>
+                            ${
+                              subtitle
+                                ? `<span class="block truncate text-xs text-slate-500 dark:text-slate-400">${escapeHtml(subtitle)}</span>`
+                                : ""
+                            }
+                          </span>
+                        </a>
+                      </td>`;
+                    }
+                    if (column.column_key === "status") {
+                      return `<td class="px-6 py-4">
+                        <div class="space-y-1.5">
+                          ${this.renderStatusBadge(value)}
+                          <p class="text-xs text-slate-500 dark:text-slate-400">${row.billing_enabled ? "Billing enabled" : "Billing disabled"}</p>
+                        </div>
+                      </td>`;
+                    }
+                    if (column.column_key === "reseller_name") {
+                      return `<td class="px-6 py-4">
+                        <div class="space-y-1">
+                          <p class="text-sm text-slate-700 dark:text-slate-300">${escapeHtml(this.formatValue(value) || "Direct")}</p>
+                          <p class="text-xs text-slate-500 dark:text-slate-400">${escapeHtml(this.titleCase(row.subscriber_type || "subscriber"))}</p>
+                        </div>
+                      </td>`;
+                    }
+                    if (column.column_key === "subscription_name") {
+                      return `<td class="px-6 py-4">
+                        <div class="space-y-1">
+                          <p class="text-sm text-slate-700 dark:text-slate-300">${escapeHtml(this.formatValue(value) || "No active subscription")}</p>
+                          <p class="text-xs text-slate-500 dark:text-slate-400">${escapeHtml(this.formatDate(row.created_at))}</p>
+                        </div>
+                      </td>`;
+                    }
+                  }
                   if (index === 0 && detailUrl) {
                     const icon =
                       this.tableKey === "customers"

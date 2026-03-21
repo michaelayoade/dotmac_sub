@@ -113,7 +113,6 @@ def _build_recent_activities(
             actor_name = (
                 metadata.get("actor_name")
                 or metadata.get("actor_email")
-                or (str(event.actor_id) if event.actor_id else None)
                 or "System"
             )
 
@@ -341,10 +340,15 @@ def dashboard(request: Request, db: Session):
             "total_mappings": total_mappings,
             "is_healthy": (
                 last_sync is not None
-                and (datetime.now(UTC) - last_sync).total_seconds() < 7200
+                and (
+                    datetime.now(UTC)
+                    - (last_sync if last_sync.tzinfo is not None else last_sync.replace(tzinfo=UTC))
+                ).total_seconds()
+                < 7200
             ) if last_sync else False,
         }
     except Exception:
+        logger.debug("Failed to load sync status for dashboard", exc_info=True)
         sync_status = {"last_sync": None, "total_mappings": 0, "is_healthy": False}
 
     # --- Monitoring device summary (for operations dashboard) ---
@@ -359,6 +363,7 @@ def dashboard(request: Request, db: Session):
     try:
         onu_summary = network_monitoring_service.get_onu_status_summary(db)
     except Exception:
+        logger.debug("Failed to load ONU summary for dashboard", exc_info=True)
         onu_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
 
     # --- VPN tunnel status ---
@@ -368,7 +373,64 @@ def dashboard(request: Request, db: Session):
 
         vpn_tunnels = _get_vpn_tunnel_status()
     except Exception:
-        pass
+        logger.debug("Failed to load VPN tunnel status for dashboard", exc_info=True)
+
+    # --- Pending service orders ---
+    pending_orders = 0
+    try:
+        from app.services.provisioning_managers import service_orders
+
+        so_stats = service_orders.get_dashboard_stats(db)
+        pending_orders = so_stats.get("pending", 0) + so_stats.get("in_progress", 0)
+    except ImportError:
+        logger.debug("provisioning_managers not available, skipping service order stats")
+    except Exception:
+        logger.error("Failed to load service order stats for dashboard", exc_info=True)
+
+    # --- Attention items (things needing action) ---
+    attention_items: list[dict] = []
+    total_alarms = (
+        net_stats["alarms_critical"]
+        + net_stats["alarms_major"]
+        + net_stats["alarms_minor"]
+        + net_stats["alarms_warning"]
+    )
+    if net_stats["alarms_critical"] > 0:
+        attention_items.append({
+            "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
+            "href": "/admin/network/alarms",
+            "severity": "critical",
+        })
+    if net_stats["alarms_major"] > 0:
+        attention_items.append({
+            "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
+            "href": "/admin/network/alarms",
+            "severity": "major",
+        })
+    if net_stats.get("offline_count", 0) > 0:
+        attention_items.append({
+            "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
+            "href": "/admin/network/monitoring",
+            "severity": "warning",
+        })
+    if overdue_amount > 0:
+        attention_items.append({
+            "label": f"₦{overdue_amount:,.0f} overdue receivables",
+            "href": "/admin/billing",
+            "severity": "warning",
+        })
+    if sub_stats["suspended_count"] > 0:
+        attention_items.append({
+            "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
+            "href": "/admin/subscribers?status=suspended",
+            "severity": "info",
+        })
+    if pending_orders > 0:
+        attention_items.append({
+            "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
+            "href": "/admin/provisioning",
+            "severity": "info",
+        })
 
     return templates.TemplateResponse(
         "admin/dashboard/index.html",
@@ -388,7 +450,9 @@ def dashboard(request: Request, db: Session):
             "recent_activities": recent_activities,
             "recent_subscribers": sub_stats["recent_subscribers"],
             "active_alarms": net_stats["active_alarms"],
-            "todays_jobs": [],
+            "attention_items": attention_items,
+            "pending_orders": pending_orders,
+            "total_alarms": total_alarms,
             "now": datetime.now(),
             "active_page": "dashboard",
             "current_user": current_user,

@@ -116,9 +116,18 @@ def _form_float_or_none(form: FormData, key: str) -> float | None:
 
 
 @router.get("/olts", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def olts_list(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def olts_list(
+    request: Request,
+    search: str | None = None,
+    status: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
     """List all OLT devices."""
-    page_data = web_network_core_devices_service.olts_list_page_data(db)
+    page_data = web_network_core_devices_service.olts_list_page_data(
+        db,
+        search=search,
+        status=status,
+    )
     context = _base_context(request, db, active_page="olts")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/olts/index.html", context)
@@ -963,6 +972,7 @@ def olt_backup_compare(
 @router.get("/onts", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
 def onts_list(
     request: Request,
+    view: str = "list",
     status: str | None = None,
     olt_id: str | None = None,
     pon_port_id: str | None = None,
@@ -980,6 +990,7 @@ def onts_list(
     """List all ONT/CPE devices with advanced filtering."""
     page_data = web_network_core_devices_service.onts_list_page_data(
         db,
+        view=view,
         status=status,
         olt_id=olt_id,
         pon_port_id=pon_port_id,

@@ -1,6 +1,7 @@
 """Admin catalog management web routes."""
 
 import logging
+from typing import cast
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -523,7 +524,7 @@ def catalog_subscription_edit(
             status_code=404,
         )
 
-    subscription = web_catalog_subscriptions_service.edit_form_data(subscription_obj)
+    subscription = web_catalog_subscriptions_service.edit_form_data(db, subscription_obj)
     context = _base_context(request, db, active_page="subscriptions")
     context.update(web_catalog_subscriptions_service.subscription_form_context(db, subscription))
     context["activities"] = build_audit_activities(db, "subscription", str(subscription_id))
@@ -585,11 +586,15 @@ def catalog_subscription_update(
 
     try:
         actor_id = _get_actor_id(request)
+        ipv4_block_ids = cast(list[object], subscription.get("ipv4_block_ids") or [])
+        ipv4_addresses = cast(list[object], subscription.get("ipv4_addresses") or [])
         updated = web_catalog_subscriptions_service.update_subscription_with_audit(
             db,
             subscription_id,
             payload_data,
             str(subscription.get("service_password") or ""),
+            [str(value).strip() for value in ipv4_block_ids if str(value).strip()],
+            [str(value).strip() for value in ipv4_addresses if str(value).strip()],
             request,
             actor_id,
         )

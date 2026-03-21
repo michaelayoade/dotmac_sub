@@ -1,9 +1,10 @@
 import builtins
 import logging
+from datetime import UTC, datetime
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import func, or_
+from sqlalchemy import and_, case, func, not_, or_
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import TaxRate
@@ -16,6 +17,7 @@ from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
     SubscriberCustomField,
+    SubscriberStatus,
     UserType,
 )
 from app.schemas.subscriber import (
@@ -47,6 +49,100 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 _validate_enum = validate_enum
+
+
+def _metadata_flag(value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    if isinstance(value, int):
+        return value == 1
+    return False
+
+
+def is_splynx_deleted_import(subscriber: Subscriber) -> bool:
+    """Return whether a subscriber represents a Splynx soft-deleted import."""
+    metadata = subscriber.metadata_ or {}
+    if _metadata_flag(metadata.get("splynx_deleted")):
+        return True
+    if not getattr(subscriber, "splynx_customer_id", None):
+        return False
+    if subscriber.is_active:
+        return False
+    if subscriber.status != SubscriberStatus.canceled:
+        return False
+    raw_status = str(metadata.get("splynx_status") or "").strip().lower()
+    return raw_status not in {"", "deleted", "canceled"}
+
+
+def _metadata_text_clause(key: str):
+    return func.lower(func.trim(func.coalesce(Subscriber.metadata_[key].as_string(), "")))
+
+
+def splynx_deleted_import_clause():
+    """Return a SQL clause matching Splynx soft-deleted imported subscribers."""
+    splynx_deleted = _metadata_text_clause("splynx_deleted")
+    splynx_status = _metadata_text_clause("splynx_status")
+    return or_(
+        splynx_deleted.in_(("1", "true", "yes", "on")),
+        and_(
+            Subscriber.splynx_customer_id.is_not(None),
+            Subscriber.is_active.is_(False),
+            Subscriber.status == SubscriberStatus.canceled,
+            not_(splynx_status.in_(("", "deleted", "canceled"))),
+        ),
+    )
+
+
+def visible_subscriber_clause():
+    """Return a SQL clause for subscribers that should appear in admin stats."""
+    return and_(
+        Subscriber.user_type != UserType.system_user,
+        not_(splynx_deleted_import_clause()),
+    )
+
+
+def _coerce_utc_datetime(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _metadata_datetime(metadata: dict | None, key: str) -> datetime | None:
+    if not metadata:
+        return None
+    value = metadata.get(key)
+    if isinstance(value, datetime):
+        return _coerce_utc_datetime(value)
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        logger.debug("Could not parse metadata datetime key=%s value=%r", key, value)
+        return None
+    return _coerce_utc_datetime(parsed)
+
+
+def get_effective_created_at(subscriber: Subscriber) -> datetime | None:
+    metadata = subscriber.metadata_ or {}
+    source_created = _metadata_datetime(metadata, "splynx_date_add")
+    if source_created is not None:
+        return source_created
+    if getattr(subscriber, "splynx_customer_id", None) and subscriber.account_start_date:
+        return _coerce_utc_datetime(subscriber.account_start_date)
+    return _coerce_utc_datetime(subscriber.created_at)
+
+
+def get_effective_updated_at(subscriber: Subscriber) -> datetime | None:
+    metadata = subscriber.metadata_ or {}
+    source_updated = _metadata_datetime(metadata, "splynx_last_update")
+    if source_updated is not None:
+        return source_updated
+    return _coerce_utc_datetime(subscriber.updated_at)
 
 
 def _validate_tax_rate(db: Session, tax_rate_id: str | None):
@@ -310,8 +406,14 @@ class Subscribers(ListResponseMixin):
         if search:
             term = search.strip()
             if term:
-                from app.models.catalog import AccessCredential, Subscription
-                from app.models.network import OntAssignment, OntUnit
+                from app.models.catalog import AccessCredential, NasDevice, Subscription
+                from app.models.network import (
+                    FdhCabinet,
+                    OntAssignment,
+                    OntUnit,
+                    Splitter,
+                )
+                from app.models.network_monitoring import PopSite
 
                 like = f"%{term}%"
                 # Direct subscriber fields
@@ -360,6 +462,39 @@ class Subscribers(ListResponseMixin):
                     .correlate(Subscriber)
                     .exists()
                 )
+                # Provisioning access point / NAS identity
+                nas_match = Subscriber.subscriptions.any(
+                    Subscription.provisioning_nas_device.has(
+                        or_(
+                            NasDevice.name.ilike(like),
+                            NasDevice.code.ilike(like),
+                        )
+                    )
+                )
+                # POP site serving the subscription via its NAS/access point
+                pop_site_match = Subscriber.subscriptions.any(
+                    Subscription.provisioning_nas_device.has(
+                        NasDevice.pop_site.has(
+                            or_(
+                                PopSite.name.ilike(like),
+                                PopSite.code.ilike(like),
+                            )
+                        )
+                    )
+                )
+                # Fiber cabinet reached through ONT -> splitter -> FDH cabinet
+                cabinet_match = Subscriber.ont_assignments.any(
+                    OntAssignment.ont_unit.has(
+                        OntUnit.splitter.has(
+                            Splitter.fdh.has(
+                                or_(
+                                    FdhCabinet.name.ilike(like),
+                                    FdhCabinet.code.ilike(like),
+                                )
+                            )
+                        ),
+                    )
+                )
                 query = query.filter(or_(
                     direct_conditions,
                     Subscriber.id.in_(
@@ -372,6 +507,9 @@ class Subscribers(ListResponseMixin):
                     ),
                     cred_match,
                     ont_match,
+                    nas_match,
+                    pop_site_match,
+                    cabinet_match,
                 ))
         # Backwards-compat: allow filtering by legacy "person_id" keyword.
         if person_id:
@@ -468,37 +606,32 @@ class Subscribers(ListResponseMixin):
     @staticmethod
     def count_stats(db: Session) -> dict:
         """Return subscriber counts for dashboard stats."""
-        total = (
-            db.query(func.count(Subscriber.id))
-            .filter(Subscriber.user_type != UserType.system_user)
-            .scalar()
-            or 0
-        )
-        active = (
-            db.query(func.count(Subscriber.id))
-            .filter(Subscriber.is_active.is_(True))
-            .filter(Subscriber.user_type != UserType.system_user)
-            .scalar() or 0
-        )
-        # Count individuals (subscribers without organization)
-        persons = (
-            db.query(func.count(Subscriber.id))
-            .filter(Subscriber.organization_id.is_(None))
-            .filter(Subscriber.user_type != UserType.system_user)
-            .scalar() or 0
-        )
-        # Count organizations (subscribers with organization)
-        organizations = (
-            db.query(func.count(Subscriber.id))
-            .filter(Subscriber.organization_id.is_not(None))
-            .filter(Subscriber.user_type != UserType.system_user)
-            .scalar() or 0
-        )
+        total, active, persons, organizations = db.execute(
+            db.query(
+                func.count(Subscriber.id),
+                func.coalesce(
+                    func.sum(case((Subscriber.is_active.is_(True), 1), else_=0)),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(case((Subscriber.organization_id.is_(None), 1), else_=0)),
+                    0,
+                ),
+                func.coalesce(
+                    func.sum(
+                        case((Subscriber.organization_id.is_not(None), 1), else_=0)
+                    ),
+                    0,
+                ),
+            )
+            .filter(visible_subscriber_clause())
+            .statement
+        ).one()
         return {
-            "total": total,
-            "active": active,
-            "persons": persons,
-            "organizations": organizations,
+            "total": int(total or 0),
+            "active": int(active or 0),
+            "persons": int(persons or 0),
+            "organizations": int(organizations or 0),
         }
 
     @staticmethod
@@ -522,8 +655,14 @@ class Subscribers(ListResponseMixin):
         if search:
             term = search.strip()
             if term:
-                from app.models.catalog import AccessCredential, Subscription
-                from app.models.network import OntAssignment, OntUnit
+                from app.models.catalog import AccessCredential, NasDevice, Subscription
+                from app.models.network import (
+                    FdhCabinet,
+                    OntAssignment,
+                    OntUnit,
+                    Splitter,
+                )
+                from app.models.network_monitoring import PopSite
 
                 like = f"%{term}%"
                 query = query.filter(or_(
@@ -536,6 +675,7 @@ class Subscribers(ListResponseMixin):
                     Subscriber.account_number.ilike(like),
                     Subscriber.address_line1.ilike(like),
                     Subscriber.city.ilike(like),
+                    Subscriber.notes.ilike(like),
                     Subscriber.id.in_(
                         db.query(Subscription.subscriber_id).filter(or_(
                             Subscription.login.ilike(like),
@@ -553,6 +693,36 @@ class Subscribers(ListResponseMixin):
                         db.query(OntAssignment.subscriber_id).join(
                             OntUnit, OntUnit.id == OntAssignment.ont_unit_id,
                         ).filter(OntUnit.serial_number.ilike(like))
+                    ),
+                    Subscriber.subscriptions.any(
+                        Subscription.provisioning_nas_device.has(
+                            or_(
+                                NasDevice.name.ilike(like),
+                                NasDevice.code.ilike(like),
+                            )
+                        )
+                    ),
+                    Subscriber.subscriptions.any(
+                        Subscription.provisioning_nas_device.has(
+                            NasDevice.pop_site.has(
+                                or_(
+                                    PopSite.name.ilike(like),
+                                    PopSite.code.ilike(like),
+                                )
+                            )
+                        )
+                    ),
+                    Subscriber.ont_assignments.any(
+                        OntAssignment.ont_unit.has(
+                            OntUnit.splitter.has(
+                                Splitter.fdh.has(
+                                    or_(
+                                        FdhCabinet.name.ilike(like),
+                                        FdhCabinet.code.ilike(like),
+                                    )
+                                )
+                            ),
+                        )
                     ),
                 ))
         if organization_id:
@@ -577,7 +747,7 @@ class Subscribers(ListResponseMixin):
             recent_subscribers.
         """
         import calendar
-        from datetime import UTC, datetime, timedelta
+        from datetime import timedelta
 
         now = datetime.now(UTC)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -587,36 +757,37 @@ class Subscribers(ListResponseMixin):
             .filter(Subscriber.user_type != UserType.system_user)
             .all()
         )
-        total = len(all_subs)
-        active_count = sum(1 for s in all_subs if s.is_active)
+        dashboard_subs = [s for s in all_subs if not is_splynx_deleted_import(s)]
+        total = len(dashboard_subs)
+        active_count = sum(1 for s in dashboard_subs if s.is_active)
         inactive_count = total - active_count
 
         # New this month
         new_this_month = sum(
-            1 for s in all_subs
-            if s.created_at is not None and s.created_at >= month_start
+            1 for s in dashboard_subs
+            if (
+                (created_at := get_effective_created_at(s)) is not None
+                and created_at >= month_start
+            )
         )
-
-        # Suspended (subscribers with status=suspended on their account)
-        from app.models.subscriber import SubscriberStatus as SubStatus
 
         suspended_count = 0
         canceled_count = 0
-        for s in all_subs:
+        for s in dashboard_subs:
             acct_status = getattr(s, "status", None)
-            if acct_status == SubStatus.suspended:
+            if acct_status == SubscriberStatus.suspended:
                 suspended_count += 1
-            elif acct_status == SubStatus.canceled:
+            elif acct_status == SubscriberStatus.canceled:
                 canceled_count += 1
 
         # Churn rate: canceled in last 30 days / active at start of period
         thirty_days_ago = now - timedelta(days=30)
         churned_recent = sum(
-            1 for s in all_subs
+            1 for s in dashboard_subs
             if (
-                getattr(s, "status", None) == SubStatus.canceled
-                and s.updated_at is not None
-                and s.updated_at >= thirty_days_ago
+                getattr(s, "status", None) == SubscriberStatus.canceled
+                and (updated_at := get_effective_updated_at(s)) is not None
+                and updated_at >= thirty_days_ago
             )
         )
         active_at_start = active_count + churned_recent
@@ -644,11 +815,11 @@ class Subscribers(ListResponseMixin):
                 year -= 1
             labels.append(calendar.month_abbr[month])
             count = sum(
-                1 for s in all_subs
+                1 for s in dashboard_subs
                 if (
-                    s.created_at is not None
-                    and s.created_at.year == year
-                    and s.created_at.month == month
+                    (created_at := get_effective_created_at(s)) is not None
+                    and created_at.year == year
+                    and created_at.month == month
                 )
             )
             values.append(count)
@@ -657,8 +828,8 @@ class Subscribers(ListResponseMixin):
 
         # Recent subscribers
         recent = sorted(
-            all_subs,
-            key=lambda s: s.created_at or datetime.min.replace(tzinfo=UTC),
+            dashboard_subs,
+            key=lambda s: get_effective_created_at(s) or datetime.min.replace(tzinfo=UTC),
             reverse=True,
         )[:10]
 

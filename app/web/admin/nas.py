@@ -114,6 +114,7 @@ def nas_index(
     )
 
     return templates.TemplateResponse(
+        request,
         "admin/network/nas/index.html",
         {
             **_base_context(request, db, "nas"),

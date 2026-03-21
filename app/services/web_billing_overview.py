@@ -12,7 +12,7 @@ from uuid import UUID
 from sqlalchemy import func, or_
 
 from app.models.billing import Invoice, InvoiceStatus
-from app.models.subscriber import Reseller, Subscriber
+from app.models.subscriber import Reseller, Subscriber, UserType
 from app.services import billing as billing_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.common import validate_enum
@@ -40,11 +40,33 @@ def _month_end(value: date) -> date:
     return next_month - timedelta(days=1)
 
 
+def _billing_location_options(db) -> list[str]:
+    rows = (
+        db.query(
+            func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city).label("location")
+        )
+        .filter((Subscriber.user_type.is_(None)) | (Subscriber.user_type != UserType.system_user))
+        .filter(
+            func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city).is_not(None)
+        )
+        .distinct()
+        .all()
+    )
+    return sorted(
+        {
+            str(row.location).strip()
+            for row in rows
+            if getattr(row, "location", None) and str(row.location).strip()
+        }
+    )
+
+
 def build_overview_data(
     db,
     *,
     partner_id: str | None = None,
     location: str | None = None,
+    period: str = "this_month",
 ) -> dict[str, object]:  # type: ignore[type-arg]
     """Build billing dashboard data via centralized reporting service."""
     from app.services.billing.reporting import billing_reporting
@@ -53,11 +75,11 @@ def build_overview_data(
         db,
         partner_id=partner_id,
         location=location,
+        period=period,
     )
     result["selected_partner_id"] = (partner_id or "").strip() or None
     result["selected_location"] = (location or "").strip() or None
 
-    from app.models.network_monitoring import PopSite
     from app.models.subscriber import Reseller
 
     # Partner options from Reseller table (efficient, not from invoice scan)
@@ -72,14 +94,7 @@ def build_overview_data(
         for r in partner_rows
     ]
 
-    # Location options from PopSite table (not subscriber address fields)
-    pop_sites = (
-        db.query(PopSite)
-        .filter(PopSite.is_active.is_(True))
-        .order_by(PopSite.name)
-        .all()
-    )
-    result["location_options"] = [p.name for p in pop_sites if p.name]
+    result["location_options"] = _billing_location_options(db)
     return result
 
 
@@ -413,7 +428,6 @@ def build_ar_aging_data(
         )
     }
 
-    from app.models.network_monitoring import PopSite
     from app.models.subscriber import Reseller as ResellerModel
 
     partner_rows = (
@@ -423,13 +437,7 @@ def build_ar_aging_data(
         .all()
     )
     partner_options = {str(r.id): r.name for r in partner_rows}
-    pop_sites = (
-        db.query(PopSite)
-        .filter(PopSite.is_active.is_(True))
-        .order_by(PopSite.name)
-        .all()
-    )
-    location_options = {p.name for p in pop_sites if p.name}
+    location_options = set(_billing_location_options(db))
 
     filtered_invoices = []
     for invoice in period_filtered_invoices:

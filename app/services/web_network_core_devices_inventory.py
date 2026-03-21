@@ -297,7 +297,12 @@ def devices_filter_data(
     return filter_devices(devices, search=search, status=status, vendor=vendor)
 
 
-def olts_list_page_data(db: Session) -> dict[str, object]:
+def olts_list_page_data(
+    db: Session,
+    *,
+    search: str | None = None,
+    status: str | None = None,
+) -> dict[str, object]:
     """Return OLT list payload with per-OLT stats."""
     raw_olts = network_service.olt_devices.list(
         db=db,
@@ -478,6 +483,81 @@ def olts_list_page_data(db: Session) -> dict[str, object]:
         }
         )
 
-    stats = {"total": len(olts), "active": sum(1 for o in olts if o["is_active"])}
+    term = (search or "").strip().lower()
+    filtered_olts = olts
+    if term:
+        filtered_olts = [
+            item
+            for item in filtered_olts
+            if term in str(item.get("name") or "").lower()
+            or term in str(item.get("hostname") or "").lower()
+            or term in str(item.get("vendor") or "").lower()
+            or term in str(item.get("model") or "").lower()
+            or term in str(item.get("mgmt_ip") or "").lower()
+        ]
 
-    return {"olts": olts, "olt_stats": olt_stats, "stats": stats}
+    normalized_status = (status or "").strip().lower()
+    if normalized_status == "attention":
+        filtered_olts = [
+            item
+            for item in filtered_olts
+            if item.get("runtime_ping_state") == "fail"
+            or item.get("runtime_snmp_state") == "fail"
+        ]
+    elif normalized_status == "healthy":
+        filtered_olts = [
+            item
+            for item in filtered_olts
+            if item.get("runtime_ping_state") == "ok"
+            and item.get("runtime_snmp_state") in {"ok", "unknown"}
+        ]
+    elif normalized_status == "unmonitored":
+        filtered_olts = [
+            item
+            for item in filtered_olts
+            if item.get("runtime_ping_state") == "unknown"
+            and item.get("runtime_snmp_state") == "unknown"
+        ]
+
+    attention_items = [
+        item
+        for item in olts
+        if item.get("runtime_ping_state") == "fail"
+        or item.get("runtime_snmp_state") == "fail"
+    ]
+    healthy_count = sum(
+        1
+        for item in olts
+        if item.get("runtime_ping_state") == "ok"
+        and item.get("runtime_snmp_state") in {"ok", "unknown"}
+    )
+    unmonitored_count = sum(
+        1
+        for item in olts
+        if item.get("runtime_ping_state") == "unknown"
+        and item.get("runtime_snmp_state") == "unknown"
+    )
+    total_pon_ports = sum(int(item.get("pon_ports") or 0) for item in olts)
+
+    stats = {
+        "total": len(filtered_olts),
+        "fleet_total": len(olts),
+        "active": sum(1 for o in filtered_olts if o["is_active"]),
+        "attention": len(attention_items),
+        "healthy": healthy_count,
+        "unmonitored": unmonitored_count,
+        "total_pon_ports": total_pon_ports,
+    }
+
+    attention_summary = attention_items[:6]
+
+    return {
+        "olts": filtered_olts,
+        "olt_stats": olt_stats,
+        "stats": stats,
+        "attention_summary": attention_summary,
+        "filters": {
+            "search": search or "",
+            "status": normalized_status,
+        },
+    }

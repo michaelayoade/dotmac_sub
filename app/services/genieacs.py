@@ -26,6 +26,12 @@ class GenieACSError(Exception):
     pass
 
 
+class GenieACSMethodNotAllowedError(GenieACSError):
+    """Raised when a GenieACS endpoint rejects the HTTP method."""
+
+    pass
+
+
 class GenieACSClient:
     """HTTP client for GenieACS NBI (Northbound Interface).
 
@@ -82,6 +88,8 @@ class GenieACSClient:
                 return response
         except httpx.HTTPStatusError as e:
             logger.error(f"GenieACS API error: {e.response.status_code} - {e.response.text}")
+            if e.response.status_code == 405:
+                raise GenieACSMethodNotAllowedError("API error: 405") from e
             raise GenieACSError(f"API error: {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error(f"GenieACS request error: {e}")
@@ -122,8 +130,16 @@ class GenieACSClient:
             Device document
         """
         encoded_id = quote(device_id, safe="")
-        response = self._request("GET", f"/devices/{encoded_id}")
-        return cast(dict[str, Any], response.json())
+        try:
+            response = self._request("GET", f"/devices/{encoded_id}")
+            return cast(dict[str, Any], response.json())
+        except GenieACSMethodNotAllowedError:
+            # Some GenieACS deployments reject GET /devices/{id} but still support
+            # query-based lookup on /devices.
+            devices = self.list_devices(query={"_id": device_id})
+            if devices:
+                return devices[0]
+            raise
 
     def delete_device(self, device_id: str) -> None:
         """Delete device.
@@ -645,5 +661,9 @@ class GenieACSClient:
         # GenieACS stores values in _value field
         if isinstance(current, dict) and "_value" in current:
             return current["_value"]
+
+        # Parameter nodes without _value are metadata objects, not usable values.
+        if isinstance(current, dict):
+            return None
 
         return current

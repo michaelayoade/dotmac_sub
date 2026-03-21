@@ -18,9 +18,10 @@
                             </svg>
                         </button>
                     </th>
-                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Type</th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Service Identity</th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Contact</th>
                     <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
-                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Created</th>
+                    <th scope="col" class="px-5 py-3.5 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Since</th>
                     <th scope="col" class="px-5 py-3.5 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
                 </tr>
             </thead>
@@ -31,6 +32,9 @@
                 {% set name = (subscriber.first_name ~ ' ' ~ subscriber.last_name) if subscriber.person else (subscriber.organization.name if subscriber.organization else 'Subscriber') %}
                 {% set email = subscriber.email if subscriber.person else (subscriber.organization.domain if subscriber.organization else '') %}
                 {% set sub_status = subscriber.status.value if subscriber.status is not string and subscriber.status else (subscriber.status | default('active')) %}
+                {% set account_identity = subscriber.account_number or None %}
+                {% set subscriber_identity = subscriber.subscriber_number or None %}
+                {% set phone_identity = subscriber.phone or None %}
 
                 <tr class="group transition-colors hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5">
                     <td class="w-12 px-3 py-4">
@@ -50,35 +54,72 @@
                                     </span>
                                     <svg class="h-3.5 w-3.5 text-slate-400 opacity-0 transition-all group-hover/link:opacity-100 group-hover/link:translate-x-0.5 group-hover/link:text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                                 </a>
-                                {% if email %}
-                                <p class="mt-0.5 truncate text-sm text-slate-500 dark:text-slate-400">{{ email }}</p>
-                                {% elif subscriber.person %}
-                                <p class="mt-0.5 inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
-                                    Email missing
-                                </p>
-                                {% endif %}
+                                <div class="mt-1 flex flex-wrap gap-1.5">
+                                    {{ type_badge(sub_type) }}
+                                    {% if subscriber.billing_enabled %}
+                                    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-semibold text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300">Billing On</span>
+                                    {% else %}
+                                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">Billing Off</span>
+                                    {% endif %}
+                                </div>
                             </div>
                         </div>
                     </td>
-                    <td class="whitespace-nowrap px-5 py-4">
-                        {{ type_badge(sub_type) }}
+                    <td class="px-5 py-4">
+                        <div class="space-y-1 text-sm">
+                            {% if account_identity %}
+                            <p class="font-medium text-slate-900 dark:text-white">Account <span class="font-mono">{{ account_identity }}</span></p>
+                            {% endif %}
+                            {% if subscriber_identity %}
+                            <p class="text-slate-600 dark:text-slate-300">Subscriber <span class="font-mono">{{ subscriber_identity }}</span></p>
+                            {% endif %}
+                            {% if not account_identity and not subscriber_identity %}
+                            <p class="text-slate-500 dark:text-slate-400">No account identity yet</p>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td class="px-5 py-4">
+                        <div class="space-y-1 text-sm">
+                            {% if phone_identity %}
+                            <p class="font-medium text-slate-900 dark:text-white">{{ phone_identity }}</p>
+                            {% endif %}
+                            {% if email %}
+                            <p class="truncate text-slate-600 dark:text-slate-300">{{ email }}</p>
+                            {% elif subscriber.person %}
+                            <p class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                                Email missing
+                            </p>
+                            {% else %}
+                            <p class="text-slate-500 dark:text-slate-400">No contact method</p>
+                            {% endif %}
+                        </div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4">
-                        {% if sub_status == 'suspended' %}
-                        {{ status_badge("Blocked", "warning") }}
-                        {% elif sub_status == 'active' %}
-                        {{ status_badge("Active", "active") }}
-                        {% else %}
-                        {{ status_badge(sub_status | title, "inactive") }}
-                        {% endif %}
+                        <div class="space-y-1.5">
+                            {% if sub_status == 'suspended' %}
+                            {{ status_badge("Suspended", "warning") }}
+                            {% elif sub_status == 'active' %}
+                            {{ status_badge("Active", "active") }}
+                            {% else %}
+                            {{ status_badge(sub_status | title, "inactive") }}
+                            {% endif %}
+                            {% if subscriber.is_active %}
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Record enabled</p>
+                            {% else %}
+                            <p class="text-xs text-slate-500 dark:text-slate-400">Record inactive</p>
+                            {% endif %}
+                        </div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4">
                         <div class="text-sm font-medium text-slate-900 dark:text-white">
                             {{ subscriber.created_at.strftime('%b %d, %Y') if subscriber.created_at else 'N/A' }}
                         </div>
+                        <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            {{ subscriber.created_at.strftime('%H:%M') if subscriber.created_at else '' }}
+                        </div>
                     </td>
                     <td class="whitespace-nowrap px-5 py-4 text-right">
-                        <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                        <div class="flex items-center justify-end gap-1 opacity-100 md:opacity-0 transition-opacity group-hover:opacity-100">
                             {{ row_action("/admin/subscribers/" ~ subscriber.id, icon_view(), "View details", "amber") }}
                             {{ row_action("/admin/subscribers/" ~ subscriber.id ~ "/edit", icon_edit(), "Edit subscriber", "slate") }}
                             {% if subscriber.is_active %}
@@ -113,7 +154,7 @@
                     color2="orange",
                     action_label="Add Subscriber",
                     action_href="/admin/subscribers/new",
-                    colspan=6
+                    colspan=7
                 ) }}
                 {% endif %}
             </tbody>

@@ -407,7 +407,16 @@ class WireGuardServerService:
         connected_peers = sum(
             1
             for p in peers
-            if p.last_handshake_at and (now - p.last_handshake_at).total_seconds() < 180
+            if p.last_handshake_at
+            and (
+                now
+                - (
+                    p.last_handshake_at
+                    if p.last_handshake_at.tzinfo is not None
+                    else p.last_handshake_at.replace(tzinfo=UTC)
+                )
+            ).total_seconds()
+            < 180
         )
 
         return {

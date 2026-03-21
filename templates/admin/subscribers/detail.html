@@ -35,149 +35,173 @@
 {% block page_header %}
 {{ ambient_background("amber", "emerald") }}
 {% set subscriber_status = subscriber.status.value if subscriber.status is not string and subscriber.status else (subscriber.status | default('active')) %}
-
-<div class="relative z-30 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6 animate-fade-in-up">
-    <div class="flex items-start gap-4">
-        <!-- Enhanced Avatar -->
-        <div class="relative group">
-            <div class="absolute inset-0 rounded-2xl bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600{% else %}from-violet-500 to-purple-600{% endif %} opacity-0 blur-xl transition-opacity group-hover:opacity-50"></div>
-            {% set person_first_initial = (subscriber.first_name or '')[:1] if subscriber.first_name else '' %}
-            {% set person_last_initial = (subscriber.last_name or '')[:1] if subscriber.first_name else '' %}
-            {% set organization_initials = (subscriber.organization.name or '')[:2] if subscriber.organization else '' %}
-            {% set subscriber_first_initial = (subscriber.first_name or '')[:1] %}
-            {% set subscriber_last_initial = (subscriber.last_name or '')[:1] %}
-            <div class="relative flex h-16 w-16 items-center justify-center rounded-2xl text-xl font-bold shadow-lg
-                {% if subscriber_status == 'active' %}bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600 shadow-amber-500/25{% else %}from-violet-500 to-purple-600 shadow-violet-500/25{% endif %} text-white
-                {% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
-                {% if subscriber.first_name %}
-                    {{ (person_first_initial ~ person_last_initial) or 'S' }}
-                {% elif subscriber.organization %}
-                    {{ (organization_initials or 'OR') | upper }}
-                {% else %}
-                    {{ (subscriber_first_initial ~ subscriber_last_initial) or 'S' }}
-                {% endif %}
-            </div>
-        </div>
-        <div>
-            <div class="flex items-center gap-3">
-                <h1 class="text-2xl font-bold text-slate-900 dark:text-white font-display tracking-tight">
-                    {% if subscriber.first_name %}
-                    {{ subscriber.first_name }} {{ subscriber.last_name }}
-                    {% elif subscriber.organization %}
-                    {{ subscriber.organization.name }}
-                    {% else %}
-                    {{ (subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim or 'Subscriber' }}
-                    {% endif %}
-                </h1>
-                {% if subscriber_status == 'suspended' %}
-                {{ status_badge("Blocked", "warning", size="sm") }}
-                {% elif subscriber_status == 'active' %}
-                {{ status_badge("Active", "active", size="sm") }}
-                {% else %}
-                {{ status_badge("Inactive", "inactive", size="sm") }}
-                {% endif %}
-            </div>
-            <div class="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500 dark:text-slate-400">
-                {% if subscriber.subscriber_number %}
-                <span class="flex items-center gap-1.5">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V8a2 2 0 00-2-2h-5m-4 0V5a2 2 0 114 0v1m-4 0a2 2 0 104 0m-5 8a2 2 0 100-4 2 2 0 000 4zm0 0c1.306 0 2.417.835 2.83 2M9 14a3.001 3.001 0 00-2.83 2M15 11h3m-3 4h2"/></svg>
-                    <span class="font-mono text-xs">{{ subscriber.subscriber_number }}</span>
-                </span>
-                {% endif %}
-                <span class="flex items-center gap-1.5">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z"/></svg>
-                    {{ subscriber.subscriber_type | title }}
-                </span>
-                <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
-                    {{ billing_config.category.value | replace('_', ' ') | title if billing_config and billing_config.category else 'Residential' }}
-                </span>
-                <span class="flex items-center gap-1.5">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                    Since {{ subscriber.created_at.strftime('%b %Y') if subscriber.created_at else 'Jan 2024' }}
-                </span>
-            </div>
-        </div>
-    </div>
-    <div class="flex flex-wrap items-center gap-2">
-        {% set subscription_link = "/admin/catalog/subscriptions/new" %}
-        {% if subscriber and subscriber.id %}
-            {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ subscriber.id %}
+{% set subscriber_display_name = (subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim if subscriber.first_name else (subscriber.organization.name if subscriber.organization else ((subscriber.first_name ~ ' ' ~ subscriber.last_name)|trim or 'Subscriber')) %}
+{% set primary_account_number = accounts[0].account_number if accounts and accounts|length > 0 and accounts[0].account_number else (('Account ' ~ ((accounts[0].id|string)[:8])) if accounts and accounts|length > 0 else None) %}
+{% set primary_device = equipment[0] if equipment and equipment|length > 0 else None %}
+{% set primary_device_serial = primary_device.serial if primary_device and primary_device.serial else None %}
+{% set credential_count = access_credentials|length if access_credentials else 0 %}
+{% set open_service_orders = service_orders|length if service_orders else 0 %}
+{% set active_subscription_count = subscriptions|length if subscriptions else 0 %}
+{% set online_ns = namespace(count=0) %}
+{% if subscriptions %}
+    {% for sub in subscriptions %}
+        {% if online_status.get(sub.id|string, false) %}
+            {% set online_ns.count = online_ns.count + 1 %}
         {% endif %}
-        <a href="{{ subscription_link }}" class="group inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:shadow-md hover:border-amber-300 hover:-translate-y-0.5 dark:border-amber-800/60 dark:bg-gradient-to-r dark:from-amber-900/20 dark:to-orange-900/20 dark:text-amber-300 dark:hover:border-amber-700">
-            <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-            Create Subscription
-        </a>
-        <a href="/admin/provisioning/orders/new?subscriber={{ subscriber.id }}" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
-            <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-            New Service
-        </a>
-        <div x-data="{ open: false }" class="relative z-40">
-            <button x-on:click="open = !open" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
-            </button>
-            <div x-show="open" x-on:click.outside="open = false" x-cloak
-                 x-transition:enter="transition ease-out duration-200"
-                 x-transition:enter-start="opacity-0 scale-95"
-                 x-transition:enter-end="opacity-100 scale-100"
-                 x-transition:leave="transition ease-in duration-150"
-                 x-transition:leave-start="opacity-100 scale-100"
-                 x-transition:leave-end="opacity-0 scale-95"
-                 class="absolute right-0 mt-2 w-52 rounded-2xl border border-slate-200 bg-white/95 py-2 shadow-xl backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/95 z-50">
-                <a href="/admin/subscribers/{{ subscriber.id }}/edit" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                    Edit Details
-                </a>
-                {% if subscriber.organization_id %}
-                <a href="/admin/subscribers/{{ subscriber.id }}/organization/edit" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>
-                    Edit Organization
-                </a>
+    {% endfor %}
+{% endif %}
+{% set online_subscription_count = online_ns.count %}
+
+<div class="relative z-30 mb-6 animate-fade-in-up">
+    <div class="rounded-3xl border border-slate-200/70 bg-white/95 p-5 shadow-sm backdrop-blur-sm dark:border-slate-700/70 dark:bg-slate-800/95">
+        <div class="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+            <div class="flex items-start gap-4">
+                {% set person_first_initial = (subscriber.first_name or '')[:1] if subscriber.first_name else '' %}
+                {% set person_last_initial = (subscriber.last_name or '')[:1] if subscriber.first_name else '' %}
+                {% set organization_initials = (subscriber.organization.name or '')[:2] if subscriber.organization else '' %}
+                {% set subscriber_first_initial = (subscriber.first_name or '')[:1] %}
+                {% set subscriber_last_initial = (subscriber.last_name or '')[:1] %}
+                <div class="flex h-16 w-16 flex-shrink-0 items-center justify-center rounded-2xl text-xl font-bold shadow-sm {% if subscriber_status == 'active' %}bg-gradient-to-br {% if subscriber.subscriber_type == 'organization' %}from-amber-500 to-orange-600{% else %}from-violet-500 to-purple-600{% endif %} text-white{% elif subscriber_status == 'suspended' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300{% else %}bg-slate-200 text-slate-500 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                    {% if subscriber.first_name %}
+                        {{ (person_first_initial ~ person_last_initial) or 'S' }}
+                    {% elif subscriber.organization %}
+                        {{ (organization_initials or 'OR') | upper }}
+                    {% else %}
+                        {{ (subscriber_first_initial ~ subscriber_last_initial) or 'S' }}
+                    {% endif %}
+                </div>
+                <div class="min-w-0">
+                    <div class="flex flex-wrap items-center gap-2">
+                        <h1 class="text-2xl font-bold text-slate-900 dark:text-white font-display tracking-tight">{{ subscriber_display_name }}</h1>
+                        {% if subscriber_status == 'suspended' %}
+                        {{ status_badge("Suspended", "warning", size="sm") }}
+                        {% elif subscriber_status == 'active' %}
+                        {{ status_badge("Active", "active", size="sm") }}
+                        {% else %}
+                        {{ status_badge("Inactive", "inactive", size="sm") }}
+                        {% endif %}
+                        {% if (stats.balance_due | default(0)) > 0 %}
+                        {{ status_badge("Balance Due", "error", size="sm") }}
+                        {% endif %}
+                        {% if primary_device and primary_device.online %}
+                        {{ status_badge("Device Online", "success", size="sm") }}
+                        {% elif primary_device %}
+                        {{ status_badge("Device Offline", "error", size="sm") }}
+                        {% endif %}
+                    </div>
+                    <div class="mt-2 flex flex-wrap gap-2">
+                        {% if subscriber.subscriber_number %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">Subscriber <span class="ml-1 font-mono">{{ subscriber.subscriber_number }}</span></span>
+                        {% endif %}
+                        {% if primary_account_number %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">Account <span class="ml-1 font-mono">{{ primary_account_number }}</span></span>
+                        {% endif %}
+                        {% if primary_device_serial %}
+                        <span class="inline-flex items-center rounded-full bg-cyan-50 px-3 py-1 text-xs font-medium text-cyan-800 dark:bg-cyan-900/20 dark:text-cyan-200">ONT <span class="ml-1 font-mono">{{ primary_device_serial }}</span></span>
+                        {% endif %}
+                        {% if access_credentials and access_credentials[0].username %}
+                        <span class="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 text-xs font-medium text-blue-800 dark:bg-blue-900/20 dark:text-blue-200">PPPoE <span class="ml-1 font-mono">{{ access_credentials[0].username }}</span></span>
+                        {% endif %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ subscriber.subscriber_type | title }}</span>
+                        <span class="inline-flex items-center rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">{{ billing_config.category.value | replace('_', ' ') | title if billing_config and billing_config.category else 'Residential' }}</span>
+                    </div>
+                    <p class="mt-3 text-sm text-slate-600 dark:text-slate-300">Service, billing, and access identity for support, collections, and provisioning.</p>
+                </div>
+            </div>
+            <div class="flex flex-wrap items-center gap-2 xl:max-w-md xl:justify-end">
+                {% set subscription_link = "/admin/catalog/subscriptions/new" %}
+                {% if subscriber and subscriber.id %}
+                    {% set subscription_link = "/admin/catalog/subscriptions/new?account_id=" ~ subscriber.id %}
                 {% endif %}
-                <a href="/admin/billing/invoices/create?subscriber={{ subscriber.id }}" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
-                    <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    Create Invoice
+                {% if primary_ont_tr069_url %}
+                <a href="{{ primary_ont_tr069_url }}" class="inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-2.5 text-sm font-semibold text-cyan-700 transition hover:border-cyan-300 hover:bg-cyan-100 dark:border-cyan-900/40 dark:bg-cyan-900/20 dark:text-cyan-300">Manage ONT</a>
+                {% elif primary_ont_url %}
+                <a href="{{ primary_ont_url }}" class="inline-flex items-center gap-2 rounded-xl border border-cyan-200 bg-cyan-50 px-4 py-2.5 text-sm font-semibold text-cyan-700 transition hover:border-cyan-300 hover:bg-cyan-100 dark:border-cyan-900/40 dark:bg-cyan-900/20 dark:text-cyan-300">Manage ONT</a>
+                {% endif %}
+                <a href="/admin/billing?subscriber={{ subscriber.id }}" class="inline-flex items-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2.5 text-sm font-semibold text-emerald-700 transition hover:border-emerald-300 hover:bg-emerald-100 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">Billing</a>
+                <a href="{{ subscription_link }}" class="group inline-flex items-center gap-2 rounded-xl border border-amber-200 bg-gradient-to-r from-amber-50 to-orange-50 px-4 py-2.5 text-sm font-semibold text-amber-700 shadow-sm transition-all hover:shadow-md hover:border-amber-300 hover:-translate-y-0.5 dark:border-amber-800/60 dark:from-amber-900/20 dark:to-orange-900/20 dark:text-amber-300 dark:hover:border-amber-700">
+                    <svg class="h-4 w-4 transition-transform group-hover:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Create Subscription
                 </a>
-                {% if accounts %}
-                <div class="border-t border-slate-100 dark:border-slate-700 my-1"></div>
-                {% for account in accounts %}
-                {% set account_status = account.status | default('active') %}
-                {% set account_status_val = account_status.value if account_status is not string else account_status %}
-                {% if account_status_val == 'active' %}
-                <button hx-post="/admin/billing/accounts/{{ account.id }}/deactivate"
-                        hx-confirm="Deactivate account {{ account.account_number or account.id }} before deleting?"
-                        class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                    Deactivate Account {{ account.account_number or (account.id | string)[:8] }}
-                </button>
-                {% endif %}
-                <button hx-delete="/admin/billing/accounts/{{ account.id }}"
-                        hx-confirm="Delete billing account {{ account.account_number or account.id }}? This action cannot be undone."
-                        class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    Delete Account {{ account.account_number or (account.id | string)[:8] }}
-                </button>
-                {% endfor %}
-                {% endif %}
-                <a href="/admin/subscribers/{{ subscriber.id }}/suspend" class="flex items-center gap-3 px-4 py-2.5 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                    Suspend Service
+                <a href="/admin/provisioning/orders/new?subscriber={{ subscriber.id }}" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30 hover:-translate-y-0.5">
+                    <svg class="h-4 w-4 transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                    New Service
                 </a>
-                <div class="border-t border-slate-100 dark:border-slate-700 my-1"></div>
-                {% if subscriber.is_active %}
-                <button hx-post="/admin/subscribers/{{ subscriber.id }}/deactivate"
-                        hx-confirm="Deactivate this subscriber before deleting?"
-                        class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
-                    Deactivate Subscriber
-                </button>
-                {% else %}
-                <button hx-delete="/admin/subscribers/{{ subscriber.id }}"
-                        hx-confirm="Move this deactivated subscriber to recovery queue?"
-                        class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    Delete Subscriber
-                </button>
-                {% endif %}
+                <div x-data="{ open: false }" class="relative z-40">
+                    <button x-on:click="open = !open" class="inline-flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 shadow-sm transition-all hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v.01M12 12v.01M12 19v.01M12 6a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2zm0 7a1 1 0 110-2 1 1 0 010 2z"/></svg>
+                    </button>
+                    <div x-show="open" x-on:click.outside="open = false" x-cloak
+                         x-transition:enter="transition ease-out duration-200"
+                         x-transition:enter-start="opacity-0 scale-95"
+                         x-transition:enter-end="opacity-100 scale-100"
+                         x-transition:leave="transition ease-in duration-150"
+                         x-transition:leave-start="opacity-100 scale-100"
+                         x-transition:leave-end="opacity-0 scale-95"
+                         class="absolute right-0 mt-2 w-52 rounded-2xl border border-slate-200 bg-white/95 py-2 shadow-xl backdrop-blur-sm dark:border-slate-700 dark:bg-slate-800/95 z-50">
+                        <a href="/admin/subscribers/{{ subscriber.id }}/edit" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                            Edit Details
+                        </a>
+                        {% if subscriber.organization_id %}
+                        <a href="/admin/subscribers/{{ subscriber.id }}/organization/edit" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 21h18M5 21V7l8-4v18M19 21V11l-6-4"/></svg>
+                            Edit Organization
+                        </a>
+                        {% endif %}
+                        <a href="/admin/billing/invoices/create?subscriber={{ subscriber.id }}" class="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 transition-colors">
+                            <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                            Create Invoice
+                        </a>
+                        {% if accounts %}
+                        <div class="border-t border-slate-100 dark:border-slate-700 my-1"></div>
+                        {% for account in accounts %}
+                        {% set account_status = account.status | default('active') %}
+                        {% set account_status_val = account_status.value if account_status is not string else account_status %}
+                        {% if account_status_val == 'active' %}
+                        <button hx-post="/admin/billing/accounts/{{ account.id }}/deactivate"
+                                hx-confirm="Deactivate account {{ account.account_number or account.id }} before deleting?"
+                                class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20 transition-colors">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                            Deactivate Account {{ account.account_number or (account.id | string)[:8] }}
+                        </button>
+                        {% endif %}
+                        <button hx-delete="/admin/billing/accounts/{{ account.id }}"
+                                hx-confirm="Delete billing account {{ account.account_number or account.id }}? This action cannot be undone."
+                                class="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20 transition-colors">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            Delete Account {{ account.account_number or (account.id | string)[:8] }}
+                        </button>
+                        {% endfor %}
+                        {% endif %}
+                        <a href="/admin/subscribers/{{ subscriber.id }}/suspend" class="flex items-center gap-3 px-4 py-2.5 text-sm text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/20 transition-colors">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636"/></svg>
+                            Suspend Service
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div class="rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-3 dark:border-slate-700/70 dark:bg-slate-900/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Billing</p>
+                <p class="mt-2 text-lg font-bold tabular-nums {% if (stats.balance_due | default(0)) > 0 %}text-rose-600 dark:text-rose-400{% else %}text-emerald-600 dark:text-emerald-400{% endif %}">₦{{ "{:,.2f}".format(stats.balance_due | default(0)) }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Monthly bill ₦{{ "{:,.2f}".format(stats.monthly_bill | default(0)) }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-3 dark:border-slate-700/70 dark:bg-slate-900/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service</p>
+                <p class="mt-2 text-lg font-bold text-slate-900 dark:text-white">{{ online_subscription_count }}/{{ active_subscription_count }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Online subscriptions / active services</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-3 dark:border-slate-700/70 dark:bg-slate-900/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Access</p>
+                <p class="mt-2 text-lg font-bold text-slate-900 dark:text-white">{{ credential_count }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ access_credentials[0].username if access_credentials and access_credentials[0].username else 'No PPPoE / RADIUS credential yet' }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/70 bg-slate-50/80 px-4 py-3 dark:border-slate-700/70 dark:bg-slate-900/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Network</p>
+                <p class="mt-2 text-lg font-bold text-slate-900 dark:text-white">{% if primary_device %}{{ 'Online' if primary_device.online else 'Offline' }}{% else %}Unassigned{% endif %}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{% if primary_device_serial %}ONT {{ primary_device_serial }}{% elif open_service_orders > 0 %}{{ open_service_orders }} service order{{ 's' if open_service_orders != 1 else '' }}{% else %}No ONT linked yet{% endif %}</p>
             </div>
         </div>
     </div>
@@ -321,23 +345,17 @@
         </div>
     </div>
     <div class="stat-card group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 150ms;">
-        <div class="stat-glow absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br from-emerald-500/10 to-teal-500/10 blur-2xl transition-all opacity-50"></div>
+        <div class="stat-glow absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br from-slate-400/10 to-slate-500/10 blur-2xl transition-all opacity-50"></div>
         <div class="relative">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">ONT Status</p>
-            <p class="mt-1 flex items-center gap-2 text-lg font-bold text-emerald-600 dark:text-emerald-400 font-display">
-                <span class="relative flex h-2.5 w-2.5">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
-                </span>
-                Online
-            </p>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Since</p>
+            <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white font-display">{{ subscriber.created_at.strftime('%b %Y') if subscriber.created_at else '—' }}</p>
         </div>
     </div>
     <div class="stat-card group relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm transition-all hover:shadow-md hover:-translate-y-0.5 dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up" style="animation-delay: 175ms;">
-        <div class="stat-glow absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br from-violet-500/10 to-purple-500/10 blur-2xl transition-all opacity-50"></div>
+        <div class="stat-glow absolute -right-4 -top-4 h-20 w-20 rounded-full bg-gradient-to-br from-cyan-500/10 to-blue-500/10 blur-2xl transition-all opacity-50"></div>
         <div class="relative">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Services</p>
-            <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white font-display">{{ subscriptions|length if subscriptions else 0 }}</p>
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Open Orders</p>
+            <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white font-display">{{ open_service_orders }}</p>
         </div>
     </div>
 </div>

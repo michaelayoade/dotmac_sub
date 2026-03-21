@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, stats_card %}
+{% from "components/ui/macros.html" import ambient_background, stats_card, icon_network %}
 
 {% block title %}Active Sessions - Admin{% endblock %}
 
@@ -31,7 +31,7 @@
 <div class="space-y-6">
     <!-- Stats -->
     <div class="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card(label="Online Now", value=total_online, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.14 0"/></svg>', color="cyan", color2="sky") }}
+        {{ stats_card(label="Online Now", value=total_online, icon=icon_network(), color="cyan", color2="sky") }}
     </div>
 
     <!-- Search -->

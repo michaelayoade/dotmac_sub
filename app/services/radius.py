@@ -4,6 +4,7 @@ import os
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
 from sqlalchemy import create_engine, or_, text
@@ -545,13 +546,31 @@ def _normalize_external_db_url(value: str | None) -> str | None:
     return db_url
 
 
+def _container_safe_external_db_url(value: str | None) -> str | None:
+    db_url = _normalize_external_db_url(value)
+    if not db_url:
+        return None
+    parsed = urlsplit(db_url)
+    hostname = (parsed.hostname or "").strip().lower()
+    if hostname not in {"localhost", "127.0.0.1"}:
+        return db_url
+
+    host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
+    port = os.getenv("RADIUS_DB_PORT") or "5432"
+    username = parsed.username or ""
+    password = parsed.password or ""
+    auth = username
+    if password:
+        auth = f"{auth}:{password}"
+    netloc = f"{auth}@{host}:{port}" if auth else f"{host}:{port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
 def _bundled_external_db_config() -> dict | None:
     """Fallback external RADIUS DB config for the bundled Docker stack."""
-    db_url = _normalize_external_db_url(os.getenv("RADIUS_SYNC_DB_URL"))
+    db_url = _container_safe_external_db_url(os.getenv("RADIUS_SYNC_DB_URL"))
     if not db_url:
-        db_url = _normalize_external_db_url(os.getenv("RADIUS_DB_DSN"))
-        if db_url and ("@localhost:" in db_url or "@127.0.0.1:" in db_url):
-            db_url = None
+        db_url = _container_safe_external_db_url(os.getenv("RADIUS_DB_DSN"))
     if not db_url:
         host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
         database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
@@ -797,7 +816,7 @@ def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
     metadata = dict(connector.metadata_ or {})
     db_url = auth_config.get("db_url") or connector.base_url
     if db_url:
-        db_url = resolve_secret(db_url)
+        db_url = _container_safe_external_db_url(resolve_secret(db_url))
     if not db_url:
         driver = auth_config.get("driver") or "postgresql+psycopg"
         username = auth_config.get("username")
@@ -808,7 +827,9 @@ def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:
         if not all([username, password, host, database]):
             return None
         port_part = f":{port}" if port else ""
-        db_url = f"{driver}://{username}:{password}@{host}{port_part}/{database}"
+        db_url = _container_safe_external_db_url(
+            f"{driver}://{username}:{password}@{host}{port_part}/{database}"
+        )
     return {
         "db_url": db_url,
         "radcheck_table": _sanitize_table_identifier(

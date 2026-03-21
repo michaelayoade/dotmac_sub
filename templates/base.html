@@ -43,7 +43,7 @@
     <link rel="stylesheet" href="/static/css/design-system.css" />
 
     <!-- CSRF Token Meta Tag -->
-    <meta name="csrf-token" content="{{ csrf_token|default('') }}">
+    <meta name="csrf-token" content="{{ csrf_token|default(request.state.csrf_token if request is defined and request and request.state and request.state.csrf_token is defined else '') }}">
 
     <!-- HTMX (local) -->
     <script src="/static/js/vendor/htmx.min.js"></script>

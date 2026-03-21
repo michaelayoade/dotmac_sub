@@ -308,6 +308,62 @@ def _available_ipv4_strings_for_block(db: Session, *, block: IpBlock) -> list[st
     return available
 
 
+def _subscription_ipv4_form_rows(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+) -> tuple[list[str], list[str]]:
+    assignments = (
+        db.query(IPAssignment)
+        .filter(IPAssignment.subscription_id == subscription_obj.id)
+        .filter(IPAssignment.ip_version == IPVersion.ipv4)
+        .filter(IPAssignment.is_active.is_(True))
+        .order_by(IPAssignment.created_at.asc())
+        .all()
+    )
+    if not assignments:
+        return (
+            [],
+            [subscription_obj.ipv4_address] if subscription_obj.ipv4_address else [],
+        )
+
+    block_ids: list[str] = []
+    addresses: list[str] = []
+    pool_blocks: dict[str, list[IpBlock]] = {}
+    for assignment in assignments:
+        address = getattr(assignment, "ipv4_address", None)
+        ip_text = str(getattr(address, "address", "") or "").strip()
+        if not ip_text:
+            continue
+        addresses.append(ip_text)
+        block_id = ""
+        pool_id = getattr(address, "pool_id", None)
+        if pool_id:
+            pool_key = str(pool_id)
+            if pool_key not in pool_blocks:
+                pool_blocks[pool_key] = (
+                    db.query(IpBlock)
+                    .filter(IpBlock.pool_id == pool_id)
+                    .filter(IpBlock.is_active.is_(True))
+                    .order_by(IpBlock.created_at.asc())
+                    .all()
+                )
+            try:
+                ip_obj = ipaddress.ip_address(ip_text)
+            except ValueError:
+                ip_obj = None
+            if ip_obj is not None:
+                for block in pool_blocks[pool_key]:
+                    try:
+                        if ip_obj in ipaddress.ip_network(str(block.cidr), strict=False):
+                            block_id = str(block.id)
+                            break
+                    except ValueError:
+                        continue
+        block_ids.append(block_id)
+    return block_ids, addresses
+
+
 def _validate_unique_selected_ipv4s(selected_ips: list[str] | None) -> None:
     seen: set[str] = set()
     for raw_ip in selected_ips or []:
@@ -613,11 +669,28 @@ def _allocate_ipv4_assignments_for_subscription(
         requested_ip = ""
         if selected_ips and index < len(selected_ips):
             requested_ip = str(selected_ips[index] or "").strip()
-        address = _resolve_ipv4_for_block(
-            db,
-            block=block,
-            requested_ip=requested_ip or None,
-        )
+        address = None
+        if requested_ip:
+            existing_address = (
+                db.query(IPv4Address)
+                .filter(IPv4Address.address == requested_ip)
+                .first()
+            )
+            existing_assignment = getattr(existing_address, "assignment", None) if existing_address else None
+            if (
+                existing_address
+                and existing_assignment
+                and existing_assignment.subscription_id == subscription_obj.id
+                and existing_assignment.is_active
+                and existing_address.pool_id == block.pool_id
+            ):
+                address = existing_address
+        if address is None:
+            address = _resolve_ipv4_for_block(
+                db,
+                block=block,
+                requested_ip=requested_ip or None,
+            )
         if not address:
             raise ValueError(f"No available IPv4 address in block {block.cidr}.")
         assignment_payload = {
@@ -648,6 +721,36 @@ def _allocate_ipv4_assignments_for_subscription(
             allocated_ip=allocated_ip,
         )
     return allocated
+
+
+def _sync_ipv4_assignments_for_subscription(
+    db: Session,
+    *,
+    subscription_obj: Subscription,
+    block_ids: list[str] | None,
+    selected_ips: list[str] | None = None,
+) -> list[str]:
+    desired_ips = _allocate_ipv4_assignments_for_subscription(
+        db,
+        subscription_obj=subscription_obj,
+        block_ids=block_ids or [],
+        selected_ips=selected_ips,
+    )
+    desired_set = {ip for ip in desired_ips if ip}
+    active_assignments = (
+        db.query(IPAssignment)
+        .filter(IPAssignment.subscription_id == subscription_obj.id)
+        .filter(IPAssignment.ip_version == IPVersion.ipv4)
+        .filter(IPAssignment.is_active.is_(True))
+        .all()
+    )
+    for assignment in active_assignments:
+        address = getattr(assignment, "ipv4_address", None)
+        ip_text = str(getattr(address, "address", "") or "").strip()
+        if ip_text and ip_text in desired_set:
+            continue
+        network_service.ip_assignments.delete(db, str(assignment.id))
+    return desired_ips
 
 
 def ensure_ipv4_blocks_allocatable(
@@ -759,8 +862,12 @@ def error_message(exc: Exception) -> str:
     return exc.detail if hasattr(exc, "detail") else str(exc)
 
 
-def edit_form_data(subscription_obj: Subscription) -> dict[str, object]:
+def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, object]:
     """Convert persisted subscription to form dict."""
+    ipv4_block_ids, ipv4_addresses = _subscription_ipv4_form_rows(
+        db,
+        subscription_obj=subscription_obj,
+    )
     return {
         "id": str(subscription_obj.id),
         "account_id": str(subscription_obj.subscriber_id),
@@ -802,8 +909,8 @@ def edit_form_data(subscription_obj: Subscription) -> dict[str, object]:
             if (subscription_obj.service_status_raw or "").strip().lower() == "permanent_static"
             else "dynamic"
         ),
-        "ipv4_block_ids": [],
-        "ipv4_addresses": [subscription_obj.ipv4_address] if subscription_obj.ipv4_address else [],
+        "ipv4_block_ids": ipv4_block_ids,
+        "ipv4_addresses": ipv4_addresses,
     }
 
 
@@ -1233,6 +1340,8 @@ def update_subscription_with_audit(
     subscription_id: str,
     payload_data: dict[str, object],
     service_password: str | None,
+    ipv4_block_ids: list[str] | None,
+    ipv4_addresses: list[str] | None,
     request: object,
     actor_id: str | None,
 ) -> object:
@@ -1243,6 +1352,17 @@ def update_subscription_with_audit(
     before = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     update_subscription(db, subscription_id, payload_data)
     after = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+    allocated_ips = _sync_ipv4_assignments_for_subscription(
+        db,
+        subscription_obj=after,
+        block_ids=ipv4_block_ids,
+        selected_ips=ipv4_addresses,
+    )
+    primary_ipv4 = allocated_ips[0] if allocated_ips else ""
+    if (after.ipv4_address or "") != primary_ipv4:
+        after.ipv4_address = primary_ipv4 or None
+        db.commit()
+        db.refresh(after)
     entered_password = str(service_password or "").strip()
     try:
         _upsert_access_credential(
@@ -1262,6 +1382,9 @@ def update_subscription_with_audit(
         _reconcile_active_subscription_after_credential_sync(db, subscription_id)
     metadata_payload = build_changes_metadata(before, after) or {}
     metadata_payload["service_password_changed"] = bool(entered_password)
+    if allocated_ips:
+        metadata_payload["allocated_ipv4_count"] = len(allocated_ips)
+        metadata_payload["allocated_ipv4_addresses"] = allocated_ips
 
     log_audit_event(
         db=db,

@@ -381,7 +381,7 @@ def get_subscribers_report_data(db: Session) -> dict:
     active_rate = (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
     recent_subscribers = sorted(
         all_subscribers,
-        key=lambda x: x.created_at if x.created_at else datetime.min,
+        key=lambda x: subscriber_service.get_effective_created_at(x) or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )[:10]
     now = datetime.now(UTC)
@@ -390,7 +390,7 @@ def get_subscribers_report_data(db: Session) -> dict:
         [
             sub
             for sub in all_subscribers
-            if (created_at := _ensure_aware_datetime(sub.created_at)) is not None
+            if (created_at := subscriber_service.get_effective_created_at(sub)) is not None
             and created_at >= month_start
         ]
     )
@@ -441,7 +441,11 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
                 name,
                 subscriber_type or "",
                 status.value if status else "",
-                sub.created_at.isoformat() if sub.created_at else "",
+                (
+                    created_at.isoformat()
+                    if (created_at := subscriber_service.get_effective_created_at(sub)) is not None
+                    else ""
+                ),
             ]
         )
     content = output.getvalue()
@@ -474,7 +478,7 @@ def get_churn_report_data(db: Session) -> dict:
     retention_rate = 100 - churn_rate
     recent_cancellations = sorted(
         cancelled_subscribers,
-        key=lambda x: x.updated_at if x.updated_at else datetime.min,
+        key=lambda x: subscriber_service.get_effective_updated_at(x) or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )[:10]
     churn_reasons = {
@@ -510,7 +514,7 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
         all_subscribers = [
             sub
             for sub in all_subscribers
-            if (updated_at := _ensure_aware_datetime(sub.updated_at)) is not None
+            if (updated_at := subscriber_service.get_effective_updated_at(sub)) is not None
             and updated_at >= cutoff
         ]
     total_subscribers = len(all_subscribers)
@@ -548,7 +552,11 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
                 str(sub.id),
                 name,
                 sub.status.value if sub.status else "",
-                sub.updated_at.isoformat() if sub.updated_at else "",
+                (
+                    updated_at.isoformat()
+                    if (updated_at := subscriber_service.get_effective_updated_at(sub)) is not None
+                    else ""
+                ),
             ]
         )
     content = output.getvalue()

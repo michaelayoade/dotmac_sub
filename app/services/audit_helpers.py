@@ -166,6 +166,12 @@ def humanize_action(action: str | None) -> str:
     return action.replace("_", " ").replace("-", " ").title()
 
 
+def _is_uuid_like(part: str) -> bool:
+    """Check if a URL segment looks like a UUID (hex with optional dashes, 8+ chars)."""
+    stripped = part.replace("-", "")
+    return len(stripped) >= 8 and all(c in "0123456789abcdefABCDEF" for c in stripped)
+
+
 def humanize_entity(entity_type: str | None, entity_id: str | None = None) -> str:
     if not entity_type:
         return "Item"
@@ -176,7 +182,7 @@ def humanize_entity(entity_type: str | None, entity_id: str | None = None) -> st
         for part in parts:
             if part in {"admin", "api", "system", "portal", "vendor", "reseller"}:
                 continue
-            if part.isdigit():
+            if part.isdigit() or _is_uuid_like(part):
                 continue
             cleaned.append(part)
         label = " ".join(cleaned) if cleaned else entity_type.strip("/")

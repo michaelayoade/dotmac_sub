@@ -98,6 +98,8 @@ def _get_site_reachability(db: Session) -> list[dict]:
 
 
 def _format_ago(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
     delta = datetime.now(UTC) - dt
     if delta.total_seconds() < 60:
         return f"{int(delta.total_seconds())}s ago"

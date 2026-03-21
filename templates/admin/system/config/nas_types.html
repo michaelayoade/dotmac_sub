@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+{% from "components/ui/macros.html" import icon_cog, ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
 {% block title %}NAS Types - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("blue", "cyan") }}
 <div class="relative space-y-6">
-    {% call page_header(title="NAS Types", subtitle="Supported NAS vendor types and their capabilities", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>', color="blue", color2="cyan") %}{% endcall %}
+    {% call page_header(title="NAS Types", subtitle="Supported NAS vendor types and their capabilities", icon=icon_cog(), color="blue", color2="cyan") %}{% endcall %}
     {% call card("Configured NAS Types", color="blue") %}
     {% if nas_types %}
     <div class="overflow-x-auto">

@@ -1,10 +1,10 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+{% from "components/ui/macros.html" import icon_cog, ambient_background, page_header, card, animation_styles %}
 {% block title %}System Preferences - Admin{% endblock %}
 {% block content %}
 {{ ambient_background("slate", "gray") }}
 <div class="relative space-y-6">
-    {% call page_header(title="System Preferences & Security", subtitle="Default landing page, portal title, 2FA enforcement, and UI settings", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>', color="slate", color2="gray") %}{% endcall %}
+    {% call page_header(title="System Preferences & Security", subtitle="Default landing page, portal title, 2FA enforcement, and UI settings", icon=icon_cog(), color="slate", color2="gray") %}{% endcall %}
 
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">

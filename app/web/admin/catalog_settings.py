@@ -44,6 +44,7 @@ from app.web.request_parsing import parse_form_data
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog/settings", tags=["web-admin-catalog-settings"])
+legacy_add_ons_router = APIRouter(prefix="/catalog/add-ons", tags=["web-admin-catalog-settings-legacy"])
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
     value = form.get(key, default)
@@ -70,6 +71,16 @@ def _base_context(request: Request, db: Session, active_page: str, settings_tab:
         "sidebar_stats": get_sidebar_stats(db),
         "csrf_token": get_csrf_token(request),
     }
+
+
+@legacy_add_ons_router.get("", response_class=HTMLResponse)
+def add_ons_legacy_index() -> RedirectResponse:
+    return RedirectResponse("/admin/catalog/settings/add-ons", status_code=307)
+
+
+@legacy_add_ons_router.get("/{path:path}", response_class=HTMLResponse)
+def add_ons_legacy_redirect(path: str) -> RedirectResponse:
+    return RedirectResponse(f"/admin/catalog/settings/add-ons/{path}", status_code=307)
 
 
 # =============================================================================

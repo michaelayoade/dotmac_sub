@@ -1,454 +1,414 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
-    ambient_background, page_header, stats_card, card, data_table,
-    table_head, table_row, row_actions, row_action, status_badge,
-    empty_state, action_button, metric_row, alert_count_badge,
-    connection_status, progress_bar,
-    icon_plus, icon_view
+    ambient_background, page_header, card, action_button, info_banner, status_badge,
+    icon_users, icon_server, icon_bell, icon_chart_bar, icon_cog,
+    icon_warning, icon_credit_card, icon_clipboard, icon_building,
+    icon_archive, icon_puzzle, icon_plus, icon_cpu
 %}
 
 {% block title %}Dashboard - DotMac Subs{% endblock %}
 
-{% block charts_js %}
-<script src="/static/js/vendor/chart.min.js"></script>
-<script src="/static/js/charts.js"></script>
-{% endblock %}
-
 {% block content %}
 {{ ambient_background("amber", "slate") }}
 
-<div class="space-y-6">
-    {# ── Header ── #}
-    {% call(content) page_header(
-        "Dashboard",
-        subtitle="Subscription overview and key metrics",
-        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
-        color="amber",
-        color2="amber"
-    ) %}
-        <div class="flex items-center gap-4">
-            <div class="flex items-center gap-2 rounded-full bg-emerald-50 px-3 py-1.5 dark:bg-emerald-900/30">
-                <span class="relative flex h-2 w-2">
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-                </span>
-                <span class="text-xs font-medium text-emerald-700 dark:text-emerald-400">Live</span>
+{% set dev_online = monitoring_summary.devices_online if monitoring_summary else 0 %}
+{% set dev_total = monitoring_summary.devices_total if monitoring_summary else 0 %}
+{% set dev_offline = monitoring_summary.devices_offline if monitoring_summary else 0 %}
+{% set dev_degraded = monitoring_summary.devices_degraded if monitoring_summary else 0 %}
+{% set ont_on = onu_summary.online if onu_summary else 0 %}
+{% set ont_total = onu_summary.total if onu_summary else 0 %}
+{% set ont_low_signal = onu_summary.low_signal if onu_summary else 0 %}
+{% set total_alarms_count = stats.alarms_critical + stats.alarms_major + stats.alarms_minor + stats.alarms_warning %}
+{% set overdue_receivables = (stats.ar_30|default(0)) + (stats.ar_60|default(0)) + (stats.ar_90|default(0)) %}
+
+{% macro kpi_tile(label, value, href, color, helper, variant="default") %}
+<a href="{{ href }}" class="group rounded-2xl border border-slate-200/70 bg-white p-3.5 shadow-sm transition-all hover:-translate-y-0.5 hover:border-{{ color }}-300 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 dark:hover:border-{{ color }}-600/50">
+    <div class="flex items-start justify-between gap-3">
+        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
+        {% if variant == "good" %}
+        {{ status_badge("Good", "success", size="sm", show_icon=False) }}
+        {% elif variant == "watch" %}
+        {{ status_badge("Watch", "warning", size="sm", show_icon=False) }}
+        {% elif variant == "alert" %}
+        {{ status_badge("Alert", "error", size="sm", show_icon=False) }}
+        {% endif %}
+    </div>
+    <p class="mt-2.5 text-[clamp(1.25rem,2.2vw,1.8rem)] font-bold leading-none tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
+    <p class="mt-1.5 text-sm text-slate-600 dark:text-slate-300">{{ helper }}</p>
+</a>
+{% endmacro %}
+
+{% macro launchpad(title, subtitle, color, links) %}
+<div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+    <div class="border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+        <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-{{ color }}-600 dark:text-{{ color }}-400">{{ title }}</p>
+        <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
+    </div>
+    <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+        {% for link in links %}
+        <a href="{{ link.href }}" class="group flex items-center justify-between px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+            <div class="flex items-center gap-3">
+                <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-{{ color }}-100 text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">
+                    {{ link.icon|safe }}
+                </div>
+                <div>
+                    <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ link.label }}</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ link.detail }}</p>
+                </div>
             </div>
-            <span class="text-sm text-slate-400 dark:text-slate-500">Updated {{ now.strftime('%H:%M') if now else '--:--' }}</span>
+            <svg class="h-4 w-4 text-slate-300 transition group-hover:text-{{ color }}-500 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endmacro %}
+
+{% macro priority_row(label, count, detail, href, variant="info") %}
+<a href="{{ href }}" class="group flex items-start justify-between gap-3 rounded-xl border px-4 py-2.5 transition hover:-translate-y-0.5 hover:shadow-sm {% if variant == 'error' %}border-rose-200/80 bg-rose-50/85 hover:border-rose-300 dark:border-rose-900/40 dark:bg-rose-950/25 dark:hover:border-rose-700/50{% elif variant == 'warning' %}border-amber-200/80 bg-amber-50/85 hover:border-amber-300 dark:border-amber-900/40 dark:bg-amber-950/20 dark:hover:border-amber-700/50{% elif variant == 'success' %}border-emerald-200/80 bg-emerald-50/85 hover:border-emerald-300 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:hover:border-emerald-700/50{% else %}border-blue-200/80 bg-blue-50/80 hover:border-blue-300 dark:border-blue-900/40 dark:bg-blue-950/20 dark:hover:border-blue-700/50{% endif %}">
+    <div class="min-w-0">
+        <div class="flex items-center gap-2">
+            {% if variant == "error" %}
+            {{ status_badge("Critical", "error", size="sm", show_icon=False) }}
+            {% elif variant == "warning" %}
+            {{ status_badge("Watch", "warning", size="sm", show_icon=False) }}
+            {% elif variant == "success" %}
+            {{ status_badge("Stable", "success", size="sm", show_icon=False) }}
+            {% else %}
+            {{ status_badge("Open", "info", size="sm", show_icon=False) }}
+            {% endif %}
+            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ label }}</p>
         </div>
+        <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ detail }}</p>
+    </div>
+    <div class="text-right">
+        <p class="text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ count }}</p>
+        <p class="mt-0.5 text-xs text-slate-500 transition group-hover:text-slate-700 dark:text-slate-400 dark:group-hover:text-slate-300">Review</p>
+    </div>
+</a>
+{% endmacro %}
+
+{% macro activity_icon(activity_type) %}
+{% if activity_type == 'activation' %}
+<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+</div>
+{% elif activity_type == 'payment' %}
+<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+</div>
+{% elif activity_type == 'signup' %}
+<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+</div>
+{% else %}
+<div class="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-100 text-slate-600 dark:bg-slate-700/50 dark:text-slate-300">
+    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+</div>
+{% endif %}
+{% endmacro %}
+
+<div class="space-y-6">
+    {% call page_header(
+        title="Operations Center",
+        subtitle="Real-time subscriber, network, and revenue signals for fast operational decisions.",
+        icon=icon_chart_bar(),
+        color="amber",
+        color2="orange"
+    ) %}
+        {{ action_button("Add Subscriber", "/admin/subscribers/new", icon_plus(), "primary", "amber", "orange") }}
     {% endcall %}
 
-    {# ── Operations KPI Row (always visible, above the fold) ── #}
-    <div class="grid grid-cols-1 gap-4 min-[480px]:grid-cols-2 md:grid-cols-4">
-        {{ stats_card(
-            label="Online Subscribers",
-            value=online_count,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
-            color="amber",
-            color2="orange",
-            change=stats.subscribers_change if stats.subscribers_change else None,
-            change_type="positive"
-        ) }}
-        {{ stats_card(
-            label="Devices Online",
-            value=monitoring_summary.devices_online ~ " / " ~ monitoring_summary.devices_total,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="emerald",
-            color2="teal"
-        ) }}
-        {{ stats_card(
-            label="ONTs Online",
-            value=(onu_summary.online if onu_summary else 0) ~ " / " ~ (onu_summary.total if onu_summary else 0),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.636 18.364a9 9 0 010-12.728m12.728 0a9 9 0 010 12.728M9.172 15.828a5 5 0 010-7.072m5.656 0a5 5 0 010 7.072M13 12a1 1 0 11-2 0 1 1 0 012 0z"/></svg>',
-            color="blue",
-            color2="indigo"
-        ) }}
-        {{ stats_card(
-            label="Active Subscriptions",
-            value=stats.active_subscribers,
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
-            color="slate",
-            color2="gray",
-            href="/admin/subscribers"
-        ) }}
-    </div>
-
-    {# ── Network Health & Alarms Row (network-gated) ── #}
-    {% if show_network %}
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-4">
-        {# Network Health Summary #}
-        <div class="lg:col-span-1">
-            {% call card("Network Health", color="emerald") %}
-            {% if stats.olts_total > 0 %}
-            {% set health_pct = network_health.percent if network_health else 0 %}
-            <div class="flex items-center justify-end mb-4 -mt-2">
-                {% if network_health.status == 'healthy' %}
-                    {{ status_badge("Healthy", variant="success") }}
-                {% elif network_health.status == 'warning' %}
-                    {{ status_badge("Warning", variant="warning") }}
-                {% else %}
-                    {{ status_badge("Critical", variant="error") }}
-                {% endif %}
-            </div>
-            <div class="flex items-center justify-center mb-4">
-                <div class="relative flex h-28 w-28 items-center justify-center">
-                    <svg class="h-28 w-28 -rotate-90 transform" viewBox="0 0 100 100">
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="8" class="text-slate-100 dark:text-slate-700"/>
-                        <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="8" stroke-dasharray="{{ (health_pct * 251.2) / 100 }}, 251.2" stroke-linecap="round" class="{% if network_health.status == 'healthy' %}text-emerald-500{% elif network_health.status == 'warning' %}text-amber-500{% else %}text-red-500{% endif %} transition-all duration-1000"/>
-                    </svg>
-                    <div class="absolute inset-0 flex flex-col items-center justify-center">
-                        <span class="text-2xl font-bold text-slate-900 dark:text-white">{{ health_pct }}%</span>
-                        <span class="text-xs text-slate-500 dark:text-slate-400">Uptime</span>
-                    </div>
+    {% if attention_items %}
+    <section class="rounded-2xl border border-amber-200/70 bg-amber-50/90 px-5 py-4 shadow-sm dark:border-amber-900/40 dark:bg-amber-950/20">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div class="flex items-start gap-3">
+                <div class="mt-0.5 flex h-9 w-9 items-center justify-center rounded-xl bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">
+                    {{ icon_warning("h-4 w-4") }}
+                </div>
+                <div>
+                    <p class="text-sm font-semibold text-amber-900 dark:text-amber-100">Attention needed</p>
+                    <p class="mt-1 text-sm text-amber-800 dark:text-amber-200">Highest-priority issues across network, collections, and subscriber operations.</p>
                 </div>
             </div>
-            {{ metric_row("OLTs Online", stats.olts_online ~ "/" ~ stats.olts_total, color="emerald") }}
-            {{ metric_row("ONTs Active", stats.onts_active ~ "/" ~ stats.onts_total, color="amber") }}
-            {% else %}
-            <div class="flex flex-col items-center justify-center py-6">
-                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                    <svg class="h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                </div>
-                <p class="mt-3 text-sm text-slate-500 dark:text-slate-400">Network monitoring not configured</p>
-                <a href="/admin/network/monitoring" class="mt-2 text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Configure Network</a>
-            </div>
-            {% endif %}
-            {% endcall %}
+            <a href="{% if attention_items[0].href %}{{ attention_items[0].href }}{% else %}/admin/dashboard{% endif %}" class="text-sm font-medium text-amber-700 hover:text-amber-900 dark:text-amber-300 dark:hover:text-amber-100">Open first issue →</a>
         </div>
-
-        {# Active Alarms #}
-        <div class="lg:col-span-3">
-            {% call card("Active Alarms", color="rose",
-                actions='<a href="/admin/network/alarms" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
-            ) %}
-            <div class="grid grid-cols-4 gap-3 mb-4">
-                <div class="rounded-xl bg-gradient-to-br from-red-50 to-red-100/50 p-3 dark:from-red-900/20 dark:to-red-900/10 border border-red-100 dark:border-red-900/30">
-                    <p class="text-2xl font-bold text-red-600 dark:text-red-400">{{ stats.alarms_critical }}</p>
-                    <p class="text-xs font-medium text-red-600/70 dark:text-red-400/70">Critical</p>
-                </div>
-                <div class="rounded-xl bg-gradient-to-br from-orange-50 to-orange-100/50 p-3 dark:from-orange-900/20 dark:to-orange-900/10 border border-orange-100 dark:border-orange-900/30">
-                    <p class="text-2xl font-bold text-orange-600 dark:text-orange-400">{{ stats.alarms_major }}</p>
-                    <p class="text-xs font-medium text-orange-600/70 dark:text-orange-400/70">Major</p>
-                </div>
-                <div class="rounded-xl bg-gradient-to-br from-amber-50 to-amber-100/50 p-3 dark:from-amber-900/20 dark:to-amber-900/10 border border-amber-100 dark:border-amber-900/30">
-                    <p class="text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.alarms_minor }}</p>
-                    <p class="text-xs font-medium text-amber-600/70 dark:text-amber-400/70">Minor</p>
-                </div>
-                <div class="rounded-xl bg-gradient-to-br from-blue-50 to-blue-100/50 p-3 dark:from-blue-900/20 dark:to-blue-900/10 border border-blue-100 dark:border-blue-900/30">
-                    <p class="text-2xl font-bold text-blue-600 dark:text-blue-400">{{ stats.alarms_warning }}</p>
-                    <p class="text-xs font-medium text-blue-600/70 dark:text-blue-400/70">Warning</p>
-                </div>
-            </div>
-
-            {% if active_alarms %}
-            <div class="space-y-2">
-                {% for alarm in active_alarms[:3] %}
-                <div class="group flex items-center gap-3 rounded-xl border border-slate-100 bg-slate-50/50 p-3 transition hover:bg-slate-100/50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:bg-slate-700/50">
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg {% if alarm.severity == 'critical' %}bg-red-100 dark:bg-red-900/30{% elif alarm.severity == 'major' %}bg-orange-100 dark:bg-orange-900/30{% elif alarm.severity == 'minor' %}bg-amber-100 dark:bg-amber-900/30{% else %}bg-blue-100 dark:bg-blue-900/30{% endif %}">
-                        <span class="flex h-2.5 w-2.5 rounded-full {% if alarm.severity == 'critical' %}bg-red-500 animate-pulse{% elif alarm.severity == 'major' %}bg-orange-500{% elif alarm.severity == 'minor' %}bg-amber-500{% else %}bg-blue-500{% endif %}"></span>
-                    </div>
-                    <div class="flex-1 min-w-0">
-                        <p class="text-sm font-medium text-slate-900 dark:text-white truncate">{{ alarm.message }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ alarm.device_id or '' }}</p>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="flex flex-col items-center justify-center py-6">
-                <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
-                    <svg class="h-7 w-7 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-                <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">All Clear</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">No active alarms</p>
-            </div>
-            {% endif %}
-            {% endcall %}
-        </div>
-    </div>
-
-    {# ── Server Health (HTMX lazy-loaded) ── #}
-    <div hx-get="/admin/dashboard/server-health"
-         hx-trigger="load"
-         hx-swap="innerHTML">
-        <div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                    <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V7a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2M5 12a2 2 0 00-2 2v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 00-2-2"/></svg>
-                    </div>
-                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Server Health</h3>
-                </div>
-                <span class="text-xs text-slate-400">Loading...</span>
-            </div>
-        </div>
-    </div>
-
-    {% endif %}{# end show_network #}
-
-    {# ── VPN Tunnel Status (network-gated) ── #}
-    {% if show_network %}
-    {% if vpn_tunnels %}
-    <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-        <div class="flex items-center justify-between mb-3">
-            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">VPN Tunnels</h3>
-            <a href="/admin/network/monitoring" class="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">Monitoring &rarr;</a>
-        </div>
-        <div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
-            {% for tunnel in vpn_tunnels %}
-            <div class="flex items-center gap-2.5 rounded-lg border px-3 py-2 {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if tunnel.up else 'border-rose-200 bg-rose-50/50 dark:border-rose-800/40 dark:bg-rose-900/10' }}">
-                <span class="relative flex h-2 w-2 flex-shrink-0">
-                    {% if tunnel.up %}
-                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
-                    {% else %}
-                    <span class="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
-                    {% endif %}
-                </span>
-                <span class="text-sm font-medium text-slate-900 dark:text-white">{{ tunnel.name }}</span>
-                <span class="ml-auto text-xs text-slate-400 tabular-nums">{{ tunnel.handshake_ago }}</span>
-            </div>
-            {% endfor %}
-        </div>
-    </div>
-    {% endif %}
-
-    {% endif %}{# end show_network vpn #}
-
-    {# ── Revenue & Pipeline Row (finance-gated) ── #}
-    {% if show_financials %}
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        {# Revenue Trend Chart #}
-        <div class="lg:col-span-2">
-            {% call card("Revenue Trend", color="amber",
-                actions='<div class="flex items-center gap-3"><select id="revenuePeriod" class="rounded-lg border-0 bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 ring-1 ring-inset ring-slate-200 focus:ring-2 focus:ring-amber-500 dark:bg-slate-700 dark:text-slate-200 dark:ring-slate-600"><option value="30">Last 30 Days</option><option value="90">Last 90 Days</option><option value="365">Last Year</option></select><a href="/admin/reports/revenue" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Full Report</a></div>'
-            ) %}
-            <div class="chart-container" style="height: 280px;">
-                <canvas id="revenueChart"></canvas>
-            </div>
-            {% endcall %}
-        </div>
-
-        {# Churn & Growth Summary (replaces Order Pipeline) #}
-        {% call card("Subscriber Health", color="indigo",
-            actions='<a href="/admin/subscribers" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
-        ) %}
-        <div class="grid grid-cols-3 gap-2 mb-4">
-            <div class="rounded-lg bg-emerald-50 p-2 text-center dark:bg-emerald-900/30">
-                <p class="text-lg font-bold text-emerald-600 dark:text-emerald-400">{{ stats.active_subscribers }}</p>
-                <p class="text-xs text-emerald-600/70 dark:text-emerald-400/70">Active</p>
-            </div>
-            <div class="rounded-lg bg-amber-50 p-2 text-center dark:bg-amber-900/30">
-                <p class="text-lg font-bold text-amber-600 dark:text-amber-400">{{ stats.suspended_accounts }}</p>
-                <p class="text-xs text-amber-600/70 dark:text-amber-400/70">Suspended</p>
-            </div>
-            <div class="rounded-lg bg-slate-50 p-2 text-center dark:bg-slate-700/50">
-                <p class="text-lg font-bold text-slate-900 dark:text-white">{{ stats.subscribers_change }}</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">New (30d)</p>
-            </div>
-        </div>
-        {% if stats.churn_rate is defined and stats.churn_rate %}
-        {{ metric_row("Churn Rate", "{:.1f}%".format(stats.churn_rate), color="rose") }}
-        {% endif %}
-        {{ metric_row("Total Subscribers", stats.total_subscribers, color="blue") }}
-        {% endcall %}
-    </div>
-
-    {# ── Billing & Activity Row ── #}
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-3">
-        {# Accounts Receivable #}
-        <div class="lg:col-span-2">
-            {% call card("Accounts Receivable", color="amber",
-                actions='<a href="/admin/billing" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View Billing</a>'
-            ) %}
-            {% set total_ar = stats.ar_current + stats.ar_30 + stats.ar_60 + stats.ar_90 %}
-            {% if total_ar > 0 %}
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div class="space-y-1">
-                    {{ metric_row("Current", "₦" ~ "{:,.0f}".format(stats.ar_current), color="emerald", mono=True) }}
-                    {{ metric_row("1-30 Days", "₦" ~ "{:,.0f}".format(stats.ar_30), color="amber", mono=True) }}
-                    {{ metric_row("31-60 Days", "₦" ~ "{:,.0f}".format(stats.ar_60), color="orange", mono=True) }}
-                    {{ metric_row("60+ Days", "₦" ~ "{:,.0f}".format(stats.ar_90), color="red", mono=True) }}
-                </div>
-                <div class="flex flex-col items-center justify-center">
-                    <div class="chart-container-sm" style="height: 160px; width: 160px;">
-                        <canvas id="arAgingChart"></canvas>
-                    </div>
-                    <div class="mt-4 text-center">
-                        <p class="text-2xl font-bold text-slate-900 dark:text-white font-mono tabular-nums">₦{{ "{:,.0f}".format(total_ar) }}</p>
-                        <p class="text-sm text-slate-500 dark:text-slate-400">Total Outstanding</p>
-                        {% if stats.suspended_accounts > 0 %}
-                        <p class="mt-2 text-xs text-rose-600 dark:text-rose-400">{{ stats.suspended_accounts }} accounts suspended</p>
-                        {% endif %}
-                    </div>
-                </div>
-            </div>
-            {% else %}
-            <div class="flex flex-col items-center justify-center py-8">
-                <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-emerald-100 dark:bg-emerald-900/30">
-                    <svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                </div>
-                <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">All Accounts Current</p>
-                <p class="text-xs text-slate-500 dark:text-slate-400">No outstanding receivables</p>
-            </div>
-            {% endif %}
-            {% endcall %}
-        </div>
-    </div>
-
-    {% endif %}{# end show_financials #}
-
-    {# ── Recent Activity & Subscribers Row ── #}
-    <div class="grid grid-cols-1 gap-5 lg:grid-cols-2">
-        {# Recent Activity #}
-        {% call card("Recent Activity", color="slate",
-            actions='<a href="/admin/system/audit" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
-        ) %}
-        {% if recent_activities %}
-        <div class="divide-y divide-slate-100 dark:divide-slate-700 -mx-6 -mb-6">
-            {% for activity in recent_activities[:5] %}
-            <div class="flex items-start gap-3 px-6 py-3">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg mt-0.5
-                    {% if activity.type == 'activation' %}bg-emerald-100 dark:bg-emerald-900/30
-                    {% elif activity.type == 'payment' %}bg-amber-100 dark:bg-amber-900/30
-                    {% elif activity.type == 'signup' %}bg-blue-100 dark:bg-blue-900/30
-                    {% else %}bg-slate-100 dark:bg-slate-700{% endif %}">
-                    {% if activity.type == 'activation' %}
-                    <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                    {% elif activity.type == 'payment' %}
-                    <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    {% elif activity.type == 'signup' %}
-                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-                    {% else %}
-                    <svg class="h-4 w-4 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                    {% endif %}
-                </div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ activity.message }}</p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ activity.detail }}</p>
-                </div>
-                <span class="text-xs text-slate-400 dark:text-slate-500 whitespace-nowrap">{{ activity.time }}</span>
-            </div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <div class="flex flex-col items-center justify-center py-10">
-            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-slate-100 dark:bg-slate-700">
-                <svg class="h-7 w-7 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-            </div>
-            <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No Recent Activity</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">Activity will appear here</p>
-        </div>
-        {% endif %}
-        {% endcall %}
-
-        {# Recent Subscribers (subscriber-gated) #}
-        {% if show_subscribers %}
-        {% call card("Recent Subscribers", color="blue",
-            actions='<a href="/admin/subscribers" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View All</a>'
-        ) %}
-        {% if recent_subscribers %}
-        <div class="divide-y divide-slate-100 dark:divide-slate-700 -mx-6 -mb-6">
-            {% for subscriber in recent_subscribers[:5] %}
-            <a href="/admin/subscribers/{{ subscriber.id }}" class="flex items-center gap-3 px-6 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition">
-                <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-blue-600 text-sm font-semibold text-white shadow-sm">
-                    {{ (subscriber.first_name[0] if subscriber.first_name else subscriber.organization.name[0] if subscriber.organization else '?')|upper }}
-                </div>
-                <div class="flex-1 min-w-0">
-                    <p class="text-sm font-medium text-slate-900 dark:text-white truncate">
-                        {% if subscriber.first_name or subscriber.last_name %}
-                        {{ subscriber.first_name or '' }} {{ subscriber.last_name or '' }}
-                        {% elif subscriber.organization %}
-                        {{ subscriber.organization.name }}
-                        {% else %}
-                        Unknown
-                        {% endif %}
-                    </p>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ subscriber.category.value if subscriber.category else 'N/A' }}</p>
-                </div>
-                <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        <div class="mt-3 flex flex-wrap gap-2">
+            {% for item in attention_items[:4] %}
+            <a href="{{ item.href }}" class="inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-sm font-medium {% if item.severity == 'critical' %}border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-900/40 dark:bg-rose-950/35 dark:text-rose-200{% elif item.severity in ['major', 'warning'] %}border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-900/40 dark:bg-amber-950/30 dark:text-amber-200{% else %}border-blue-200 bg-blue-100 text-blue-800 dark:border-blue-900/40 dark:bg-blue-950/30 dark:text-blue-200{% endif %}">
+                <span>{{ item.label }}</span>
             </a>
             {% endfor %}
         </div>
+    </section>
+    {% endif %}
+
+    <section class="grid grid-cols-2 gap-3 lg:grid-cols-3" hx-get="/admin/dashboard/stats" hx-trigger="every 60s" hx-swap="none">
+        {{ kpi_tile(
+            "Subscribers",
+            stats.total_subscribers,
+            "/admin/subscribers",
+            "amber",
+            ("%d active, %+d this month" % (stats.active_subscribers, stats.subscribers_change|default(0))),
+            "good" if stats.active_subscribers > 0 else "default"
+        ) }}
+        {{ kpi_tile(
+            "Online Now",
+            online_count,
+            "/admin/network/sessions",
+            "emerald",
+            "Authenticated access sessions",
+            "good" if online_count > 0 else "watch"
+        ) }}
+        {{ kpi_tile(
+            "Devices",
+            "%d/%d" | format(dev_online, dev_total),
+            "/admin/network/monitoring",
+            "blue",
+            "%d offline devices need review" % dev_offline if dev_offline else "All monitored devices reachable",
+            "good" if dev_offline == 0 else "watch"
+        ) }}
+        {{ kpi_tile(
+            "ONTs",
+            "%d/%d" | format(ont_on, ont_total),
+            "/admin/network/onts",
+            "violet",
+            "%d low signal endpoints" % ont_low_signal if ont_low_signal else "Signal quality looks stable",
+            "watch" if ont_low_signal > 0 else "good"
+        ) }}
+        {% if show_financials %}
+        {{ kpi_tile(
+            "Revenue",
+            "₦%s" | format("{:,.0f}".format(stats.monthly_revenue)),
+            "/admin/billing",
+            "emerald",
+            "Current period revenue view"
+        ) }}
+        {% else %}
+        {{ kpi_tile(
+            "Active Accounts",
+            stats.active_subscribers,
+            "/admin/subscribers",
+            "slate",
+            "Subscribers currently in service"
+        ) }}
+        {% endif %}
+        {% if show_network and total_alarms_count > 0 %}
+        {{ kpi_tile(
+            "Alarms",
+            total_alarms_count,
+            "/admin/network/alarms",
+            "rose",
+            "%d critical alarms open" % stats.alarms_critical,
+            "alert"
+        ) }}
+        {% else %}
+        {{ kpi_tile(
+            "Orders",
+            pending_orders,
+            "/admin/provisioning",
+            "amber",
+            "Provisioning queue waiting on action",
+            "watch" if pending_orders > 0 else "good"
+        ) }}
+        {% endif %}
+    </section>
+
+    <section class="grid gap-4 xl:grid-cols-[minmax(0,1.25fr)_minmax(340px,0.75fr)]">
+        {% call card(
+            title="Priority Queue",
+            icon=icon_warning(),
+            color="amber",
+            actions='<a href="/admin/network/monitoring" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Open NOC →</a>' | safe,
+            padding=False
+        ) %}
+        <div class="space-y-2.5 px-5 py-4">
+            {% if show_network and stats.alarms_critical > 0 %}
+            {{ priority_row("Critical alarms", stats.alarms_critical, "Immediate NOC action required.", "/admin/network/alarms", "error") }}
+            {% endif %}
+            {% if show_network and dev_offline > 0 %}
+            {{ priority_row("Devices offline", dev_offline, "Monitored devices have dropped out of service.", "/admin/network/monitoring", "warning") }}
+            {% endif %}
+            {% if show_network and dev_degraded > 0 %}
+            {{ priority_row("Degraded network", dev_degraded, "Performance issues or threshold breaches need review.", "/admin/network/monitoring", "warning") }}
+            {% endif %}
+            {% if show_network and ont_low_signal > 0 %}
+            {{ priority_row("Low-signal ONTs", ont_low_signal, "Optical signal is below expected operating range.", "/admin/network/onts", "warning") }}
+            {% endif %}
+            {% if pending_orders > 0 %}
+            {{ priority_row("Pending activations", pending_orders, "Provisioning and install work waiting on action.", "/admin/provisioning", "info") }}
+            {% endif %}
+            {% if stats.suspended_accounts > 0 %}
+            {{ priority_row("Suspended subscribers", stats.suspended_accounts, "Support and collections should review service impact.", "/admin/subscribers?status=suspended", "warning") }}
+            {% endif %}
+            {% if show_financials and overdue_receivables > 0 %}
+            {{ priority_row("Overdue receivables", "₦%s" | format("{:,.0f}".format(overdue_receivables)), "Collections risk requiring follow-up.", "/admin/billing", "warning") }}
+            {% endif %}
+            {% if stats.alarms_critical == 0 and dev_offline == 0 and dev_degraded == 0 and ont_low_signal == 0 and pending_orders == 0 and stats.suspended_accounts == 0 and (not show_financials or overdue_receivables == 0) %}
+            <div class="rounded-2xl border border-emerald-200/70 bg-emerald-50/80 px-4 py-4 dark:border-emerald-700/40 dark:bg-emerald-900/20">
+                <div class="flex items-center gap-2">
+                    {{ status_badge("Stable", "success", size="sm", show_icon=False) }}
+                    <p class="text-sm font-semibold text-emerald-900 dark:text-emerald-100">No urgent exceptions</p>
+                </div>
+                <p class="mt-2 text-sm text-emerald-800 dark:text-emerald-200">The current view shows no critical alarms, degraded network groups, pending activation backlog, or suspended-account spikes.</p>
+            </div>
+            {% endif %}
+        </div>
+        <div class="grid gap-px border-t border-slate-200/70 bg-slate-200/70 dark:border-slate-700/70 dark:bg-slate-700/70 md:grid-cols-4">
+            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Critical</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ stats.alarms_critical }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Critical alarms</p>
+            </div>
+            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Offline</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ dev_offline }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Devices down</p>
+            </div>
+            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ ont_low_signal }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">ONTs below threshold</p>
+            </div>
+            <div class="bg-white px-4 py-2.5 dark:bg-slate-800">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Backlog</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ pending_orders }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Provisioning queue</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        <div class="space-y-4">
+            {% if show_subscribers %}
+            {% call card(title="New Subscribers", icon=icon_users(), color="amber",
+                actions=action_button("View All", href="/admin/subscribers", icon=icon_users("h-3 w-3"), variant="ghost", color="amber", size="sm"),
+                padding=False) %}
+            {% if recent_subscribers %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                {% for subscriber in recent_subscribers[:6] %}
+                <a href="/admin/subscribers/{{ subscriber.id }}" class="group flex items-center gap-3 px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-amber-500 to-orange-600 text-sm font-bold text-white shadow-sm">
+                        {{ (subscriber.first_name[0] if subscriber.first_name else subscriber.organization.name[0] if subscriber.organization else '?')|upper }}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">
+                            {% if subscriber.first_name or subscriber.last_name %}
+                            {{ subscriber.first_name or '' }} {{ subscriber.last_name or '' }}
+                            {% elif subscriber.organization %}
+                            {{ subscriber.organization.name }}
+                            {% else %}
+                            Unknown
+                            {% endif %}
+                        </p>
+                        <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                            <span>{{ subscriber.category.value if subscriber.category else 'N/A' }}</span>
+                            <span class="font-mono text-slate-600 dark:text-slate-300">
+                                {{ subscriber.subscriber_code or subscriber.account_number or subscriber.phone or subscriber.phone_number or ('ID ' ~ ((subscriber.id|string)[:8])) }}
+                            </span>
+                        </div>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                            Created
+                            {% if subscriber.created_at %}
+                            {{ subscriber.created_at.strftime('%Y-%m-%d') }}
+                            {% else %}
+                            recently
+                            {% endif %}
+                        </p>
+                    </div>
+                    <svg class="h-4 w-4 text-slate-300 transition group-hover:text-amber-500 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                </a>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="flex flex-col items-center justify-center py-10">
+                <svg class="h-9 w-9 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+                <p class="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">No subscribers yet</p>
+            </div>
+            {% endif %}
+            {% endcall %}
+            {% endif %}
+
+            {% call card(
+                title="Action Links",
+                icon=icon_clipboard(),
+                color="slate",
+                padding=False
+            ) %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+                <a href="/admin/subscribers" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
+                    <span>Subscriber support queue</span>
+                    <span class="font-medium text-slate-500 dark:text-slate-400">{{ stats.active_subscribers }} active</span>
+                </a>
+                <a href="/admin/provisioning" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
+                    <span>Provisioning and installs</span>
+                    <span class="font-medium text-slate-500 dark:text-slate-400">{{ pending_orders }} open</span>
+                </a>
+                <a href="/admin/network/monitoring" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
+                    <span>Network exceptions</span>
+                    <span class="font-medium text-slate-500 dark:text-slate-400">{{ total_alarms_count }} alarms</span>
+                </a>
+                {% if show_financials %}
+                <a href="/admin/billing" class="flex items-center justify-between px-5 py-3 text-sm text-slate-700 transition hover:bg-slate-50 hover:text-slate-900 dark:text-slate-300 dark:hover:bg-slate-700/30 dark:hover:text-white">
+                    <span>Collections and receivables</span>
+                    <span class="font-medium text-slate-500 dark:text-slate-400">₦{{ "{:,.0f}".format(overdue_receivables) }}</span>
+                </a>
+                {% endif %}
+            </div>
+            {% endcall %}
+        </div>
+    </section>
+
+    <section class="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+        {% call card(title="Recent Activity", icon=icon_bell(), color="amber", actions='<a href="/admin/system/audit" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">Open Audit →</a>' | safe, padding=False) %}
+        {% if recent_activities %}
+        <div class="divide-y divide-slate-100 dark:divide-slate-700/60">
+            {% for activity in recent_activities[:6] %}
+            <div class="flex items-start gap-3 px-5 py-4">
+                {{ activity_icon(activity.type) }}
+                <div class="min-w-0 flex-1">
+                    <div class="flex items-start justify-between gap-3">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ activity.message }}</p>
+                        <span class="whitespace-nowrap text-xs tabular-nums text-slate-500 dark:text-slate-400">{{ activity.time }}</span>
+                    </div>
+                    <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">{{ activity.detail }}</p>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
         {% else %}
         <div class="flex flex-col items-center justify-center py-10">
-            <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-blue-100 dark:bg-blue-900/30">
-                <svg class="h-7 w-7 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-            </div>
-            <p class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No Subscribers Yet</p>
-            <p class="text-xs text-slate-500 dark:text-slate-400">Add your first subscriber</p>
-            {{ action_button("Add Subscriber", href="/admin/subscribers/new", icon=icon_plus("h-3.5 w-3.5"), color="amber", size="sm") }}
+            <svg class="h-9 w-9 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            <p class="mt-3 text-sm font-medium text-slate-600 dark:text-slate-300">No recent activity</p>
         </div>
         {% endif %}
         {% endcall %}
-        {% endif %}{# end show_subscribers #}
-    </div>
+
+        <div id="server-health" hx-get="/admin/dashboard/server-health" hx-trigger="load, every 120s" hx-swap="innerHTML">
+            {% include "admin/dashboard/_server_health.html" %}
+        </div>
+    </section>
+
+    <section class="grid gap-4 xl:grid-cols-3">
+        {% if show_subscribers %}
+        {{ launchpad("Operations", "Subscriber servicing, customer records, and support response.", "amber", [
+            {"label": "Subscribers", "detail": "Accounts and lifecycle changes", "href": "/admin/subscribers", "icon": icon_users("h-4 w-4")},
+            {"label": "Customers", "detail": "Identity and account relationships", "href": "/admin/customers", "icon": icon_building("h-4 w-4")},
+            {"label": "Orders", "detail": "Provisioning queue", "href": "/admin/provisioning", "icon": icon_clipboard("h-4 w-4")}
+        ]) }}
+        {% endif %}
+
+        {% if show_network %}
+        {{ launchpad("Network", "Monitoring and access-layer workflows grouped for NOC use.", "blue", [
+            {"label": "Monitoring", "detail": "Health and alarm trends", "href": "/admin/network/monitoring", "icon": icon_chart_bar("h-4 w-4")},
+            {"label": "Devices", "detail": "Core devices", "href": "/admin/network/network-devices", "icon": icon_server("h-4 w-4")},
+            {"label": "OLTs", "detail": "Optical fleet", "href": "/admin/network/olts", "icon": icon_cpu("h-4 w-4")}
+        ]) }}
+        {% endif %}
+
+        {{ launchpad("Control", "Commercial tooling and platform governance surfaces.", "violet", [
+            {"label": "Billing", "detail": "Revenue and collection flow", "href": "/admin/billing", "icon": icon_credit_card("h-4 w-4")},
+            {"label": "Catalog", "detail": "Offers and packaging", "href": "/admin/catalog", "icon": icon_archive("h-4 w-4")},
+            {"label": "Settings", "detail": "Configuration and policy", "href": "/admin/settings", "icon": icon_cog("h-4 w-4")}
+        ]) }}
+    </section>
 </div>
-
-{# ── Quick Actions Bar ── #}
-<div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 hidden lg:block animate-fade-in-up" style="animation-delay: 0.6s">
-    <div class="flex items-center gap-1 rounded-2xl bg-slate-900/95 backdrop-blur-sm px-2 py-2 shadow-2xl shadow-slate-900/50 ring-1 ring-white/10">
-        <a href="/admin/subscribers/new" class="flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/30 hover:from-amber-600 hover:to-amber-700 transition">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
-            New Subscriber
-        </a>
-        <div class="h-6 w-px bg-slate-700 mx-1"></div>
-        <a href="/admin/billing" class="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-white/10 hover:text-white transition">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        </a>
-        <a href="/admin/network/monitoring" class="flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium text-slate-400 hover:bg-white/10 hover:text-white transition">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-        </a>
-    </div>
-</div>
-
-<style>
-@keyframes fadeInUp {
-    from { opacity: 0; transform: translateY(20px); }
-    to { opacity: 1; transform: translateY(0); }
-}
-.animate-fade-in-up { animation: fadeInUp 0.5s ease-out backwards; }
-</style>
-{% endblock %}
-
-{% block scripts %}
-<script>
-document.addEventListener('DOMContentLoaded', function() {
-    const colors = {
-        amber: { 500: '#f59e0b', 400: '#fbbf24' },
-        emerald: { 500: '#10b981', 400: '#34d399' },
-        blue: { 500: '#3b82f6', 400: '#60a5fa' },
-        rose: { 500: '#f43f5e', 400: '#fb7185' },
-        indigo: { 500: '#6366f1', 400: '#818cf8' },
-        slate: { 300: '#cbd5e1', 400: '#94a3b8', 700: '#334155' }
-    };
-
-    // Revenue Trend Chart
-    const revenueCtx = document.getElementById('revenueChart');
-    if (revenueCtx && typeof DotmacCharts !== 'undefined') {
-        const revenueData = {{ revenue_trend | default([45000, 48000, 52000, 49000, 55000, 58000, 62000, 65000, 63000, 68000, 72000, 75000]) | tojson }};
-        const revenueLabels = {{ revenue_labels | default(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']) | tojson }};
-
-        DotmacCharts.createAreaChart(revenueCtx, {
-            labels: revenueLabels,
-            datasets: [{
-                label: 'Revenue',
-                data: revenueData,
-                color: colors.amber[500],
-                fillColor: colors.amber[500] + '20',
-            }]
-        });
-    }
-
-    // AR Aging Chart
-    const arCtx = document.getElementById('arAgingChart');
-    if (arCtx && typeof DotmacCharts !== 'undefined') {
-        DotmacCharts.createDoughnutChart(arCtx, {
-            labels: ['Current', '1-30 Days', '31-60 Days', '60+ Days'],
-            values: [{{ stats.ar_current }}, {{ stats.ar_30 }}, {{ stats.ar_60 }}, {{ stats.ar_90 }}],
-            colors: [colors.emerald[500], colors.amber[500], '#f97316', colors.rose[500]]
-        }, { plugins: { legend: { display: false } } });
-    }
-});
-</script>
 {% endblock %}

@@ -1,6 +1,15 @@
 -- One-time staging setup for Splynx import.
 -- Creates foreign tables to the remote Splynx DB, then snapshots them into local staging tables.
 -- This captures a point-in-time snapshot for a stable one-time migration.
+--
+-- Execute with psql variables instead of embedding credentials in the repo:
+--   psql \
+--     -v splynx_host='your-host' \
+--     -v splynx_port='5435' \
+--     -v splynx_db='splynx_db' \
+--     -v splynx_user='postgres' \
+--     -v splynx_password='secret' \
+--     -f scripts/splynx_staging.sql
 
 BEGIN;
 
@@ -12,11 +21,11 @@ CREATE SCHEMA splynx_fdw;
 DROP SERVER IF EXISTS splynx_server CASCADE;
 CREATE SERVER splynx_server
     FOREIGN DATA WRAPPER postgres_fdw
-    OPTIONS (host '149.102.135.97', port '5435', dbname 'splynx_db');
+    OPTIONS (host :'splynx_host', port :'splynx_port', dbname :'splynx_db');
 
 CREATE USER MAPPING FOR postgres
     SERVER splynx_server
-    OPTIONS (user 'postgres', password 'BBglrgPlwQLHprB3+cgQPk7dKwbZYXKH');
+    OPTIONS (user :'splynx_user', password :'splynx_password');
 
 IMPORT FOREIGN SCHEMA public
     LIMIT TO (

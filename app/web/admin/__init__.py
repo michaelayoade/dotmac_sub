@@ -25,11 +25,13 @@ from app.web.admin.billing_payments import router as billing_payments_router
 from app.web.admin.billing_providers import router as billing_providers_router
 from app.web.admin.billing_reporting import router as billing_reporting_router
 from app.web.admin.catalog import router as catalog_router
+from app.web.admin.catalog_settings import legacy_add_ons_router
 from app.web.admin.catalog_settings import router as catalog_settings_router
 from app.web.admin.configuration import router as configuration_router
 from app.web.admin.customers import contacts_router
 from app.web.admin.customers import router as customers_router
 from app.web.admin.dashboard import router as dashboard_router
+from app.web.admin.design_system import router as design_system_router
 from app.web.admin.gis import router as gis_router
 from app.web.admin.integrations import router as integrations_router
 from app.web.admin.legal import router as legal_router
@@ -63,8 +65,11 @@ from app.web.admin.provisioning import router as provisioning_router
 from app.web.admin.reports import router as reports_router
 from app.web.admin.resellers import router as resellers_router
 from app.web.admin.subscribers import router as subscribers_router
+from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.system import router as system_router
+from app.web.admin.usage import legacy_router as usage_legacy_router
 from app.web.admin.usage import router as usage_router
+from app.web.admin.wireguard import legacy_router as wireguard_legacy_router
 from app.web.admin.wireguard import router as wireguard_router
 from app.web.auth.dependencies import require_web_auth
 
@@ -119,6 +124,7 @@ def admin_reports_hub():
 
 # Include all admin sub-routers
 router.include_router(dashboard_router)
+router.include_router(design_system_router)
 router.include_router(
     subscribers_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("customer"))],
@@ -285,8 +291,14 @@ router.include_router(
     notifications_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("notifications"))],
 )
+router.include_router(support_tickets_router)
 router.include_router(
     wireguard_router,
+    prefix="/network",
+    dependencies=[Depends(module_manager_service.require_module_enabled("vpn"))],
+)
+router.include_router(
+    wireguard_legacy_router,
     prefix="/network",
     dependencies=[Depends(module_manager_service.require_module_enabled("vpn"))],
 )
@@ -301,7 +313,15 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("catalog"))],
 )
 router.include_router(
+    legacy_add_ons_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("catalog"))],
+)
+router.include_router(
     usage_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("catalog"))],
+)
+router.include_router(
+    usage_legacy_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("catalog"))],
 )
 router.include_router(configuration_router, prefix="/system")

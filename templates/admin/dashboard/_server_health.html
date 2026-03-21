@@ -1,52 +1,76 @@
-<div class="relative overflow-hidden rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 animate-fade-in-up">
-    <div class="absolute -right-10 -top-10 h-32 w-32 rounded-full bg-gradient-to-br from-slate-500/10 to-slate-700/5"></div>
-    <div class="relative">
-        <div class="flex items-center justify-between mb-4">
-            <div class="flex items-center gap-2">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V7a2 2 0 012-2h14a2 2 0 012 2v3a2 2 0 01-2 2M5 12a2 2 0 00-2 2v3a2 2 0 002 2h14a2 2 0 002-2v-3a2 2 0 00-2-2"/></svg>
-                </div>
+{% from "components/ui/macros.html" import status_badge, icon_server %}
+
+{% set issue_variant = 'error' if server_health_status.status == 'critical' else 'warning' if server_health_status.status == 'warning' else 'info' %}
+{% set issue_shell = 'border-red-200/60 bg-red-50 dark:border-red-700/40 dark:bg-red-900/20' if server_health_status.status == 'critical' else 'border-amber-200/60 bg-amber-50 dark:border-amber-700/40 dark:bg-amber-900/20' if server_health_status.status == 'warning' else 'border-blue-200/60 bg-blue-50 dark:border-blue-700/40 dark:bg-blue-900/20' %}
+{% set issue_icon = 'text-red-600 dark:text-red-400' if server_health_status.status == 'critical' else 'text-amber-600 dark:text-amber-400' if server_health_status.status == 'warning' else 'text-blue-600 dark:text-blue-400' %}
+{% set issue_title = 'Critical issue' if server_health_status.status == 'critical' else 'Operational warning' if server_health_status.status == 'warning' else 'Operational note' %}
+{% set issue_text = 'text-red-900 dark:text-red-100' if server_health_status.status == 'critical' else 'text-amber-900 dark:text-amber-100' if server_health_status.status == 'warning' else 'text-blue-900 dark:text-blue-100' %}
+{% set issue_body = 'text-red-800 dark:text-red-200' if server_health_status.status == 'critical' else 'text-amber-800 dark:text-amber-200' if server_health_status.status == 'warning' else 'text-blue-800 dark:text-blue-200' %}
+
+<div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/95 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+    <div class="flex items-center justify-between border-b border-slate-200/60 px-5 py-4 dark:border-slate-700/60">
+        <div class="flex items-center gap-3">
+            <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-slate-100 text-slate-700 dark:bg-slate-700/50 dark:text-slate-300">
+                {{ icon_server("h-4 w-4") }}
+            </div>
+            <div>
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">System</p>
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Server Health</h3>
             </div>
-            <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium {% if server_health_status.status == 'critical' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400{% elif server_health_status.status == 'warning' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400{% else %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% endif %}">
-                <span class="h-1.5 w-1.5 rounded-full {% if server_health_status.status == 'critical' %}bg-red-500{% elif server_health_status.status == 'warning' %}bg-amber-500{% else %}bg-emerald-500{% endif %}"></span>
-                {% if server_health_status.status == 'critical' %}Critical{% elif server_health_status.status == 'warning' %}Warning{% else %}Healthy{% endif %}
-            </span>
         </div>
+        {% if server_health_status.status == 'critical' %}
+        {{ status_badge("Critical", "error", size="sm") }}
+        {% elif server_health_status.status == 'warning' %}
+        {{ status_badge("Warning", "warning", size="sm") }}
+        {% else %}
+        {{ status_badge("Healthy", "success", size="sm") }}
+        {% endif %}
+    </div>
 
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-            <div>
-                <p class="text-xs uppercase tracking-wide text-slate-400">Uptime</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ server_health.uptime_display }}</p>
+    <div class="p-5">
+        <div class="grid grid-cols-2 gap-3">
+            <div class="rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-700/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Uptime</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ server_health.uptime_display }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">System availability window</p>
             </div>
-            <div>
-                <p class="text-xs uppercase tracking-wide text-slate-400">Disk Used</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ server_health.disk.used_pct }}</p>
+            <div class="rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-700/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Disk</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ server_health.disk.used_pct }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Storage consumed</p>
             </div>
-            <div>
-                <p class="text-xs uppercase tracking-wide text-slate-400">Memory Used</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">{{ server_health.memory.used_pct }}</p>
+            <div class="rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-700/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Memory</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">{{ server_health.memory.used_pct }}</p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">RAM utilization</p>
             </div>
-            <div>
-                <p class="text-xs uppercase tracking-wide text-slate-400">Load Avg</p>
-                <p class="mt-1 text-lg font-semibold text-slate-900 dark:text-white">
+            <div class="rounded-2xl bg-slate-50 px-4 py-3 dark:bg-slate-700/40">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Load</p>
+                <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">
                     {% if server_health.load_avg %}
                     {{ "%.2f"|format(server_health.load_avg[0]) }}
                     {% else %}
                     --
                     {% endif %}
                 </p>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">1-minute average</p>
             </div>
         </div>
 
         {% if server_health_status.issues %}
-        <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-700 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
-            <p class="font-semibold">Alerts</p>
-            <ul class="mt-2 list-disc pl-4 space-y-1">
-                {% for issue in server_health_status.issues %}
-                <li>{{ issue.message }}</li>
-                {% endfor %}
-            </ul>
+        <div class="mt-4 space-y-2">
+            {% for issue in server_health_status.issues %}
+            <div class="flex items-start gap-3 rounded-2xl border px-4 py-3 {{ issue_shell }}">
+                <svg class="mt-0.5 h-4 w-4 flex-shrink-0 {{ issue_icon }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <p class="text-sm font-semibold {{ issue_text }}">{{ issue_title }}</p>
+                        {{ status_badge(server_health_status.status|title, issue_variant, size="sm") }}
+                    </div>
+                    <p class="mt-1 text-xs {{ issue_body }}">{{ issue.message }}</p>
+                </div>
+            </div>
+            {% endfor %}
         </div>
         {% endif %}
     </div>

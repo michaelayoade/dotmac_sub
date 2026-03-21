@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import status_badge, stats_card, card, data_table, table_head, empty_state, animation_styles %}
+{% from "components/ui/macros.html" import status_badge, stats_card, card, data_table, table_head, empty_state, animation_styles, icon_cpu, icon_check_circle, icon_server, icon_warning %}
 
 {% block title %}{{ olt.name }} - OLT - Admin{% endblock %}
 
@@ -64,12 +64,35 @@
     {# ONT Summary KPI Cards #}
     {% if ont_summary and ont_summary.total > 0 %}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card("ONTs Connected", ont_summary.total, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>', color="blue", color2="indigo") }}
-        {{ stats_card("Online", ont_summary.online, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal") }}
-        {{ stats_card("Offline", ont_summary.offline, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 5.636a9 9 0 010 12.728m0 0l-2.829-2.829m2.829 2.829L21 21M15.536 8.464a5 5 0 010 7.072m0 0l-2.829-2.829m-4.243 2.829a4.978 4.978 0 01-1.414-2.83m-1.414 5.658a9 9 0 01-2.167-9.238m7.824 2.167a1 1 0 111.414 1.414m-1.414-1.414L3 3"/></svg>', color="rose", color2="pink") }}
-        {{ stats_card("Low Signal", ont_summary.low_signal, icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>', color="amber", color2="orange") }}
+        {{ stats_card("ONTs Connected", ont_summary.total, icon=icon_cpu(), color="blue", color2="indigo") }}
+        {{ stats_card("Online", ont_summary.online, icon=icon_check_circle(), color="emerald", color2="teal") }}
+        {{ stats_card("Offline", ont_summary.offline, icon=icon_server(), color="rose", color2="pink") }}
+        {{ stats_card("Low Signal", ont_summary.low_signal, icon=icon_warning(), color="amber", color2="orange") }}
     </div>
     {% endif %}
+
+    <div class="grid gap-4 lg:grid-cols-4">
+        <button @click="activeTab = 'overview'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Health</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Runtime and hardware state</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Device identity, telemetry checks, and board inventory.</p>
+        </button>
+        <button @click="activeTab = 'onts'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Subscriber Impact</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Connected ONTs and optical risk</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Move directly into subscriber-facing faults and low-signal devices.</p>
+        </button>
+        <button @click="activeTab = 'tr069'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Provisioning</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Profiles, TR-069, and service paths</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Use this area for activation, profile control, and ONT discovery.</p>
+        </button>
+        <button @click="activeTab = 'activity'" class="rounded-xl border border-slate-200 bg-white p-4 text-left transition hover:border-blue-300 hover:bg-blue-50/40 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-blue-800 dark:hover:bg-blue-900/10">
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Maintenance</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">Backups, events, and CLI work</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Stay in one maintenance lane instead of scanning the whole tab strip.</p>
+        </button>
+    </div>
 
     {# Tab Navigation #}
     <div class="border-b border-slate-200 dark:border-slate-700">

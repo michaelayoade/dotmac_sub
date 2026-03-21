@@ -16,6 +16,30 @@
 {% block content %}
 {{ ambient_background("emerald", "teal") }}
 
+{% set trend = revenue_trend|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'billed': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
+{% set pmb = payment_method_breakdown|default({'labels': [], 'values': []}) %}
+{% set dp = daily_payments|default({'labels': [], 'values': []}) %}
+{% set ipo = invoicing_period_overlay|default({'labels': [], 'paid': [], 'unpaid': [], 'paid_on_time': [], 'paid_overdue': []}) %}
+{% set tp = top_payers|default({'labels': [], 'values': []}) %}
+{% set mrr = mrr_trend|default({'labels': [], 'values': []}) %}
+{% set arpu = arpu_trend|default({'labels': [], 'values': []}) %}
+{% set cd = chart_data|default({'labels': ['Paid','Pending','Overdue','Draft'], 'values': [0,0,0,0], 'colors': ['#10b981','#3b82f6','#f59e0b','#94a3b8']}) %}
+
+{# ── Local macro: Finance KPI card ── #}
+{% macro finance_kpi(label, amount, count, href, color) %}
+<a href="{{ href }}" class="group rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm transition hover:shadow-md hover:border-{{ color }}-200 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-{{ color }}-700/40">
+    <div class="flex items-center justify-between">
+        <div>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
+            <p class="mt-2 text-lg font-bold tabular-nums text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(amount) }}</p>
+        </div>
+        {% if count is not none %}
+        <span class="rounded-lg bg-{{ color }}-100 px-2.5 py-1 text-lg font-bold tabular-nums text-{{ color }}-700 dark:bg-{{ color }}-900/30 dark:text-{{ color }}-400">{{ count }}</span>
+        {% endif %}
+    </div>
+</a>
+{% endmacro %}
+
 <div class="space-y-6">
     {# ── Page Header ── #}
     {% call(content) page_header(
@@ -28,10 +52,20 @@
         {{ action_button("Export", href="#", icon=icon_plus("h-4 w-4"), variant="secondary", color="emerald") }}
     {% endcall %}
 
+    {# ── Period Filter ── #}
     {% call card(color="emerald") %}
     <form method="get" action="/admin/billing" class="flex flex-wrap items-end gap-3">
-        <div class="w-full sm:w-56">
-            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Partner</label>
+        {% set period_options = [("this_month", "This Month"), ("last_month", "Last Month"), ("this_quarter", "This Quarter"), ("this_year", "Year to Date"), ("all", "All Time")] %}
+        <div class="w-full sm:w-48">
+            <label class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Period</label>
+            <select name="period" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for value, label in period_options %}
+                <option value="{{ value }}" {% if selected_period|default('this_month') == value %}selected{% endif %}>{{ label }}</option>
+                {% endfor %}
+            </select>
+        </div>
+        <div class="w-full sm:w-48">
+            <label class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Partner</label>
             <select name="partner_id" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">All Partners</option>
                 {% for partner in partner_options|default([]) %}
@@ -39,8 +73,8 @@
                 {% endfor %}
             </select>
         </div>
-        <div class="w-full sm:w-56">
-            <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Location</label>
+        <div class="w-full sm:w-48">
+            <label class="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Location</label>
             <select name="location" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 <option value="">All Locations</option>
                 {% for loc in location_options|default([]) %}
@@ -56,81 +90,35 @@
     {% endcall %}
 
     {# ── KPI Cards ── #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card(
-            label="Total Revenue",
-            value="₦" ~ "{:,.2f}".format(stats.total_revenue|default(0)),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="emerald",
-            color2="green"
-        ) }}
-        {{ stats_card(
-            label="Pending Amount",
-            value="₦" ~ "{:,.2f}".format(stats.pending_amount|default(0)),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="blue",
-            color2="indigo"
-        ) }}
-        {{ stats_card(
-            label="Overdue Amount",
-            value="₦" ~ "{:,.2f}".format(stats.overdue_amount|default(0)),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>',
-            color="amber",
-            color2="orange"
-        ) }}
-        {{ stats_card(
-            label="Collection Rate",
-            value="{:.1f}".format(stats.collection_rate|default(0)) ~ "%",
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
-            color="violet",
-            color2="purple"
-        ) }}
-    </div>
+    {% set period_labels = {"this_month": "This Month", "last_month": "Last Month", "this_quarter": "This Quarter", "this_year": "Year to Date", "all": "All Time"} %}
+    {% if selected_period|default('this_month') != 'all' %}
+    <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Showing: {{ period_labels.get(selected_period|default('this_month'), 'This Month') }}</p>
+    {% endif %}
     <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {{ stats_card(
-            label="Payments Received",
-            value="₦" ~ "{:,.2f}".format(stats.payments_amount|default(0)) ~ " (" ~ (stats.payments_count|default(0)) ~ ")",
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>',
-            color="teal",
-            color2="emerald"
-        ) }}
-        {{ stats_card(
-            label="Unpaid Invoices",
-            value="₦" ~ "{:,.2f}".format(stats.unpaid_invoices_amount|default(0)) ~ " (" ~ (stats.unpaid_invoices_count|default(0)) ~ ")",
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>',
-            color="amber",
-            color2="orange"
-        ) }}
-        {{ stats_card(
-            label="Credit Notes",
-            value="₦" ~ "{:,.2f}".format(stats.credit_notes_total|default(0)) ~ " (" ~ (stats.credit_notes_count|default(0)) ~ ")",
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
-            color="violet",
-            color2="purple"
-        ) }}
-    </div>
-    <div class="grid gap-4 sm:grid-cols-3">
-        {{ stats_card(
-            label="Planned Income (Next Period)",
-            value="₦" ~ "{:,.2f}".format(planned_income|default(0)),
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1"/></svg>',
-            color="blue",
-            color2="cyan"
-        ) }}
-        {{ stats_card(
-            label="MRR Growth (MoM)",
-            value="{:.2f}".format(mrr_growth_rate|default(0)) ~ "%",
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 17l4-4 3 3 5-6"/></svg>',
-            color="emerald",
-            color2="teal"
-        ) }}
-        {{ stats_card(
-            label="Net Revenue Retention",
-            value="{:.2f}".format(net_revenue_retention|default(0)) ~ "%",
-            icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m0 0l3-3m-3 3l-3-3"/></svg>',
-            color="violet",
-            color2="purple"
-        ) }}
+        {{ finance_kpi("Payments", stats.payments_amount|default(0), stats.payments_count|default(0), "/admin/billing/payments", "emerald") }}
+        {{ finance_kpi("Paid Invoices", stats.total_revenue|default(0), stats.paid_count|default(0), "/admin/billing/invoices?status=paid", "teal") }}
+        {{ finance_kpi("Unpaid Invoices", stats.unpaid_invoices_amount|default(0), stats.unpaid_invoices_count|default(0), "/admin/billing/invoices?status=unpaid", "amber") }}
+        {{ finance_kpi("Credit Notes", stats.credit_notes_total|default(0), stats.credit_notes_count|default(0), "/admin/billing/credits", "violet") }}
+        {{ finance_kpi("Planned Income", planned_income|default(0), none, "/admin/billing/invoices?status=pending", "blue") }}
+
+        {# Key Metrics (inline — unique layout) #}
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="mb-3 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Key Metrics</p>
+            <div class="grid grid-cols-3 gap-2">
+                <div class="text-center">
+                    <p class="text-base font-bold tabular-nums {% if (stats.collection_rate|default(0)) >= 80 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.1f}".format(stats.collection_rate|default(0)) }}%</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Collection</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-base font-bold tabular-nums {% if (mrr_growth_rate|default(0)) >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">{{ "{:+.1f}".format(mrr_growth_rate|default(0)) }}%</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">MRR Growth</p>
+                </div>
+                <div class="text-center">
+                    <p class="text-base font-bold tabular-nums {% if (net_revenue_retention|default(0)) >= 100 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.1f}".format(net_revenue_retention|default(0)) }}%</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">NRR</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     {# ── Period Comparison ── #}
@@ -138,7 +126,7 @@
     <div class="grid gap-4 md:grid-cols-3">
         {% for period in period_comparison|default([]) %}
         <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/60">
-            <p class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ period.label }}</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ period.label }}</p>
             <dl class="mt-3 space-y-1 text-sm">
                 <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Payments</dt><dd class="font-semibold text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(period.payments_amount|default(0)) }} ({{ period.payments_count|default(0) }})</dd></div>
                 <div class="flex items-center justify-between"><dt class="text-slate-500 dark:text-slate-400">Paid Invoices</dt><dd class="font-semibold text-slate-900 dark:text-white">{{ period.paid_invoices_count|default(0) }}</dd></div>
@@ -158,69 +146,20 @@
     <div class="chart-container" style="min-height: 280px;">
         <canvas id="revenue-trend-chart"></canvas>
     </div>
-    {% set trend = revenue_trend|default({'labels': ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun'], 'billed': [0,0,0,0,0,0], 'collected': [0,0,0,0,0,0]}) %}
-    <script>
-    document.addEventListener('DOMContentLoaded', function() {
-        const ctx = document.getElementById('revenue-trend-chart');
-        if (!ctx) return;
-        const chartData = {
-            labels: {{ trend["labels"] | tojson | safe }},
-            datasets: [
-                { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)' },
-                { label: 'Collected', data: {{ trend["collected"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)' }
-            ]
-        };
-        const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-        DotmacCharts.registerChart('revenue-trend-chart', chart);
-    });
-    </script>
     {% endcall %}
 
     {# ── Payment Methods & Daily Payments ── #}
     <div class="grid gap-6 lg:grid-cols-2">
         {% call card("Payment Method Breakdown", color="violet") %}
-        <div class="chart-container" style="min-height: 280px;">
+        <div class="chart-container h-[320px] sm:h-[340px]">
             <canvas id="payment-method-breakdown-chart"></canvas>
         </div>
-        {% set pmb = payment_method_breakdown|default({'labels': [], 'values': []}) %}
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.getElementById('payment-method-breakdown-chart');
-            if (!ctx) return;
-            const chartData = {
-                labels: {{ pmb["labels"] | tojson | safe }},
-                values: {{ pmb["values"] | tojson | safe }},
-                colors: ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#94a3b8']
-            };
-            const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
-            DotmacCharts.registerChart('payment-method-breakdown-chart', chart);
-        });
-        </script>
         {% endcall %}
 
         {% call card("Daily Payments (Current Month)", color="emerald") %}
         <div class="chart-container" style="min-height: 280px;">
             <canvas id="daily-payments-chart"></canvas>
         </div>
-        {% set dp = daily_payments|default({'labels': [], 'values': []}) %}
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.getElementById('daily-payments-chart');
-            if (!ctx) return;
-            const chartData = {
-                labels: {{ dp["labels"] | tojson | safe }},
-                datasets: [{
-                    label: 'Payments',
-                    data: {{ dp["values"] | tojson | safe }},
-                    backgroundColor: '#10b981'
-                }]
-            };
-            const chart = DotmacCharts.createBarChart(ctx, chartData, {
-                plugins: { legend: { display: false } }
-            });
-            DotmacCharts.registerChart('daily-payments-chart', chart);
-        });
-        </script>
         {% endcall %}
     </div>
 
@@ -231,44 +170,12 @@
             <div class="chart-container" style="min-height: 280px;">
                 <canvas id="invoicing-period-overlay-chart"></canvas>
             </div>
-            {% set ipo = invoicing_period_overlay|default({'labels': [], 'paid': [], 'unpaid': [], 'paid_on_time': [], 'paid_overdue': []}) %}
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const ctx = document.getElementById('invoicing-period-overlay-chart');
-                if (!ctx) return;
-                const chartData = {
-                    labels: {{ ipo["labels"] | tojson | safe }},
-                    datasets: [
-                        { label: 'Paid', data: {{ ipo["paid"] | tojson | safe }}, backgroundColor: '#10b981' },
-                        { label: 'Unpaid', data: {{ ipo["unpaid"] | tojson | safe }}, backgroundColor: '#3b82f6' },
-                        { label: 'Paid On Time', data: {{ ipo["paid_on_time"] | tojson | safe }}, backgroundColor: '#22c55e' },
-                        { label: 'Paid Overdue', data: {{ ipo["paid_overdue"] | tojson | safe }}, backgroundColor: '#f59e0b' }
-                    ]
-                };
-                const chart = DotmacCharts.createBarChart(ctx, chartData, { scales: { x: { stacked: true }, y: { stacked: true } } });
-                DotmacCharts.registerChart('invoicing-period-overlay-chart', chart);
-            });
-            </script>
             {% endcall %}
         </div>
         {% call card("Top 10 Payers", color="violet") %}
-        <div class="chart-container" style="min-height: 280px;">
+        <div class="chart-container h-[320px] sm:h-[340px]">
             <canvas id="top-payers-chart"></canvas>
         </div>
-        {% set tp = top_payers|default({'labels': [], 'values': []}) %}
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.getElementById('top-payers-chart');
-            if (!ctx) return;
-            const chartData = {
-                labels: {{ tp["labels"] | tojson | safe }},
-                values: {{ tp["values"] | tojson | safe }},
-                colors: ['#2563eb', '#0891b2', '#0ea5e9', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#db2777', '#8b5cf6', '#6366f1']
-            };
-            const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
-            DotmacCharts.registerChart('top-payers-chart', chart);
-        });
-        </script>
         {% endcall %}
     </div>
 
@@ -277,38 +184,12 @@
         <div class="chart-container" style="min-height: 260px;">
             <canvas id="mrr-trend-chart"></canvas>
         </div>
-        {% set mrr = mrr_trend|default({'labels': [], 'values': []}) %}
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.getElementById('mrr-trend-chart');
-            if (!ctx) return;
-            const chartData = {
-                labels: {{ mrr["labels"] | tojson | safe }},
-                datasets: [{ label: 'MRR', data: {{ mrr["values"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)', fill: true, tension: 0.35 }]
-            };
-            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-            DotmacCharts.registerChart('mrr-trend-chart', chart);
-        });
-        </script>
         {% endcall %}
 
         {% call card("Average Revenue Per User (ARPU)", color="blue") %}
         <div class="chart-container" style="min-height: 260px;">
             <canvas id="arpu-trend-chart"></canvas>
         </div>
-        {% set arpu = arpu_trend|default({'labels': [], 'values': []}) %}
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.getElementById('arpu-trend-chart');
-            if (!ctx) return;
-            const chartData = {
-                labels: {{ arpu["labels"] | tojson | safe }},
-                datasets: [{ label: 'ARPU', data: {{ arpu["values"] | tojson | safe }}, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)', fill: true, tension: 0.35 }]
-            };
-            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-            DotmacCharts.registerChart('arpu-trend-chart', chart);
-        });
-        </script>
         {% endcall %}
     </div>
 
@@ -324,14 +205,14 @@
                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Create Invoice</span>
             </a>
             <a href="/admin/billing/payments/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-green-100 dark:bg-green-900/30">
-                    <svg class="h-5 w-5 text-green-600 dark:text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                    <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
                 </div>
                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Record Payment</span>
             </a>
             <a href="/admin/billing/credits/new" class="flex flex-col items-center gap-2 rounded-lg border border-slate-200 p-4 text-center hover:border-emerald-300 hover:bg-emerald-50/50 transition dark:border-slate-700 dark:hover:border-emerald-600 dark:hover:bg-emerald-900/20">
-                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-purple-100 dark:bg-purple-900/30">
-                    <svg class="h-5 w-5 text-purple-600 dark:text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
+                    <svg class="h-5 w-5 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12H9m12 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 </div>
                 <span class="text-sm font-medium text-slate-700 dark:text-slate-300">Issue Credit</span>
             </a>
@@ -361,20 +242,6 @@
                     {{ metric_row("Draft", stats.draft_count|default(0), color="slate") }}
                 </div>
             </div>
-            {% set cd = chart_data|default({'labels': ['Paid','Pending','Overdue','Draft'], 'values': [0,0,0,0], 'colors': ['#10b981','#3b82f6','#f59e0b','#94a3b8']}) %}
-            <script>
-            document.addEventListener('DOMContentLoaded', function() {
-                const ctx = document.getElementById('invoice-status-chart');
-                if (!ctx) return;
-                const chartData = {
-                    labels: {{ cd["labels"] | tojson | safe }},
-                    values: {{ cd["values"] | tojson | safe }},
-                    colors: {{ cd["colors"] | tojson | safe }}
-                };
-                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom', plugins: { legend: { display: false } } });
-                DotmacCharts.registerChart('invoice-status-chart', chart);
-            });
-            </script>
             {% else %}
             <div class="text-center py-8">
                 <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
@@ -415,20 +282,20 @@
                 <td class="px-6 py-4">
                     <div class="flex items-center gap-3">
                         <div class="flex h-8 w-8 items-center justify-center rounded-full bg-slate-200 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
-                            {% if invoice.account and invoice.account.subscriber %}
-                                {% if invoice.account.subscriber.person %}
-                                    {{ (invoice.account.first_name[0] ~ invoice.account.last_name[0])|upper }}
-                                {% elif invoice.account.subscriber.organization %}
-                                    {{ invoice.account.subscriber.organization.name[0:2] | upper }}
+                            {% if invoice.account %}
+                                {% if invoice.account.organization %}
+                                    {{ invoice.account.organization.name[0:2] | upper }}
+                                {% elif invoice.account.first_name %}
+                                    {{ (invoice.account.first_name[0] ~ (invoice.account.last_name[0] if invoice.account.last_name else ''))|upper }}
                                 {% else %}AC{% endif %}
                             {% else %}AC{% endif %}
                         </div>
                         <span class="text-sm font-medium text-slate-900 dark:text-white">
-                            {% if invoice.account and invoice.account.subscriber %}
-                                {% if invoice.account.subscriber.person %}
-                                    {{ invoice.account.first_name }} {{ invoice.account.last_name }}
-                                {% elif invoice.account.subscriber.organization %}
-                                    {{ invoice.account.subscriber.organization.name }}
+                            {% if invoice.account %}
+                                {% if invoice.account.organization %}
+                                    {{ invoice.account.organization.name }}
+                                {% elif invoice.account.first_name or invoice.account.last_name %}
+                                    {{ invoice.account.first_name or '' }} {{ invoice.account.last_name or '' }}
                                 {% else %}Account{% endif %}
                             {% else %}Account{% endif %}
                         </span>
@@ -486,4 +353,113 @@
     {% endif %}
     {% endcall %}
 </div>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    if (!window.DotmacCharts) return;
+
+    const chartConfigs = [
+        {
+            id: 'revenue-trend-chart',
+            factory: 'createAreaChart',
+            data: {
+                labels: {{ trend["labels"] | tojson | safe }},
+                datasets: [
+                    { label: 'Billed', data: {{ trend["billed"] | tojson | safe }}, borderColor: '#06b6d4', backgroundColor: 'rgba(6, 182, 212, 0.1)' },
+                    { label: 'Collected', data: {{ trend["collected"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16, 185, 129, 0.1)' }
+                ]
+            },
+            options: {}
+        },
+        {
+            id: 'payment-method-breakdown-chart',
+            factory: 'createDoughnutChart',
+            data: {
+                labels: {{ pmb["labels"] | tojson | safe }},
+                values: {{ pmb["values"] | tojson | safe }},
+                colors: ['#14b8a6', '#3b82f6', '#8b5cf6', '#f59e0b', '#ef4444', '#94a3b8']
+            },
+            options: {
+                legendPosition: 'bottom',
+                cutout: '62%',
+                layout: { padding: 20 },
+                plugins: { legend: { labels: { padding: 12 } } }
+            }
+        },
+        {
+            id: 'daily-payments-chart',
+            factory: 'createBarChart',
+            data: {
+                labels: {{ dp["labels"] | tojson | safe }},
+                datasets: [{ label: 'Payments', data: {{ dp["values"] | tojson | safe }}, backgroundColor: '#10b981' }]
+            },
+            options: { plugins: { legend: { display: false } } }
+        },
+        {
+            id: 'invoicing-period-overlay-chart',
+            factory: 'createBarChart',
+            data: {
+                labels: {{ ipo["labels"] | tojson | safe }},
+                datasets: [
+                    { label: 'Paid', data: {{ ipo["paid"] | tojson | safe }}, backgroundColor: '#10b981' },
+                    { label: 'Unpaid', data: {{ ipo["unpaid"] | tojson | safe }}, backgroundColor: '#3b82f6' },
+                    { label: 'Paid On Time', data: {{ ipo["paid_on_time"] | tojson | safe }}, backgroundColor: '#22c55e' },
+                    { label: 'Paid Overdue', data: {{ ipo["paid_overdue"] | tojson | safe }}, backgroundColor: '#f59e0b' }
+                ]
+            },
+            options: { scales: { x: { stacked: true }, y: { stacked: true } } }
+        },
+        {
+            id: 'top-payers-chart',
+            factory: 'createDoughnutChart',
+            data: {
+                labels: {{ tp["labels"] | tojson | safe }},
+                values: {{ tp["values"] | tojson | safe }},
+                colors: ['#2563eb', '#0891b2', '#0ea5e9', '#22c55e', '#f59e0b', '#f97316', '#ef4444', '#db2777', '#8b5cf6', '#6366f1']
+            },
+            options: {
+                legendPosition: 'bottom',
+                cutout: '58%',
+                layout: { padding: 20 },
+                plugins: { legend: { labels: { padding: 10 } } }
+            }
+        },
+        {
+            id: 'mrr-trend-chart',
+            factory: 'createAreaChart',
+            data: {
+                labels: {{ mrr["labels"] | tojson | safe }},
+                datasets: [{ label: 'MRR', data: {{ mrr["values"] | tojson | safe }}, borderColor: '#10b981', backgroundColor: 'rgba(16,185,129,0.12)', fill: true, tension: 0.35 }]
+            },
+            options: {}
+        },
+        {
+            id: 'arpu-trend-chart',
+            factory: 'createAreaChart',
+            data: {
+                labels: {{ arpu["labels"] | tojson | safe }},
+                datasets: [{ label: 'ARPU', data: {{ arpu["values"] | tojson | safe }}, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.12)', fill: true, tension: 0.35 }]
+            },
+            options: {}
+        },
+        {
+            id: 'invoice-status-chart',
+            factory: 'createDoughnutChart',
+            data: {
+                labels: {{ cd["labels"] | tojson | safe }},
+                values: {{ cd["values"] | tojson | safe }},
+                colors: {{ cd["colors"] | tojson | safe }}
+            },
+            options: { legendPosition: 'bottom', plugins: { legend: { display: false } } }
+        }
+    ];
+
+    chartConfigs.forEach(function(config) {
+        const ctx = document.getElementById(config.id);
+        const factory = DotmacCharts[config.factory];
+        if (!ctx || typeof factory !== 'function') return;
+        const chart = factory(ctx, config.data, config.options || {});
+        DotmacCharts.registerChart(config.id, chart);
+    });
+});
+</script>
 {% endblock %}

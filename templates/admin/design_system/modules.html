@@ -1,0 +1,882 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import
+    ambient_background,
+    page_header,
+    card,
+    icon_badge,
+    status_badge,
+    section_divider,
+    icon_users,
+    icon_user,
+    icon_server,
+    icon_network,
+    icon_location,
+    icon_ticket,
+    icon_invoice,
+    icon_check_circle,
+    icon_lightning,
+    icon_bell,
+    icon_clipboard,
+    icon_archive,
+    icon_credit_card,
+    icon_trending_up,
+    icon_chart_bar,
+    icon_shield,
+    icon_cog,
+    icon_puzzle,
+    icon_heart,
+    icon_cpu,
+    icon_mail,
+    icon_warning,
+    icon_building,
+    icon_database,
+    icon_download,
+    icon_upload,
+    icon_link,
+    icon_filter,
+    icon_refresh
+%}
+
+{% block breadcrumbs %}
+<a href="/admin/dashboard" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Dashboard</a>
+<span class="mx-2 text-slate-400">/</span>
+<a href="/admin/design-system" class="text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Design System</a>
+<span class="mx-2 text-slate-400">/</span>
+<span class="text-slate-900 dark:text-white">Module Map</span>
+{% endblock %}
+
+{% block page_header %}
+{{ page_header(
+    title="Module Map",
+    subtitle="Every page in the system — grouped by function, linked to live routes",
+    icon=icon_building(),
+    color="indigo",
+    color2="violet"
+) }}
+{% endblock %}
+
+{% block content %}
+{{ ambient_background(color1="indigo", color2="violet", position="center") }}
+
+{# ── Quick Stats ── #}
+<div class="mb-8 grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+    {% set cats = [
+        ("Operations", "~130", "amber", "orange"),
+        ("Billing", "~85", "emerald", "teal"),
+        ("Catalog", "~40", "violet", "purple"),
+        ("Network", "~130", "blue", "indigo"),
+        ("System", "~55", "slate", "gray"),
+        ("Total", "~450+", "indigo", "violet")
+    ] %}
+    {% for label, count, c1, c2 in cats %}
+    <div class="rounded-xl border border-slate-200/60 bg-white p-4 text-center dark:border-slate-700/60 dark:bg-slate-800">
+        <p class="text-2xl font-bold text-{{ c1 }}-600 dark:text-{{ c1 }}-400">{{ count }}</p>
+        <p class="text-xs font-medium text-slate-500 dark:text-slate-400">{{ label }} routes</p>
+    </div>
+    {% endfor %}
+</div>
+
+{# ── Jump Nav ── #}
+<nav class="mb-8 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="flex flex-wrap gap-2">
+        {% for id, label, c in [
+            ("operations", "Operations", "amber"),
+            ("billing", "Billing & Finance", "emerald"),
+            ("catalog", "Catalog & Services", "violet"),
+            ("network", "Network & Infrastructure", "blue"),
+            ("vpn", "VPN & Connectivity", "cyan"),
+            ("reports", "Reports & Analytics", "teal"),
+            ("gis", "GIS & Mapping", "green"),
+            ("integrations", "Integrations", "indigo"),
+            ("notifications", "Notifications", "rose"),
+            ("system", "System & Admin", "slate"),
+            ("resellers", "Resellers", "purple")
+        ] %}
+        <a href="#{{ id }}" class="rounded-lg bg-{{ c }}-50 px-3 py-1.5 text-xs font-medium text-{{ c }}-700 transition hover:bg-{{ c }}-100 dark:bg-{{ c }}-900/20 dark:text-{{ c }}-300 dark:hover:bg-{{ c }}-900/40">{{ label }}</a>
+        {% endfor %}
+    </div>
+</nav>
+
+
+{# ═══════════════════════════════════════════════════════════
+   MACRO: Module card renderer
+   ═══════════════════════════════════════════════════════════ #}
+{% macro module_section(id, title, subtitle, icon, color, color2, modules) %}
+<section id="{{ id }}" class="mb-10">
+    <div class="mb-4 flex items-center gap-3">
+        {{ icon_badge(icon, color=color, color2=color2, size="md") }}
+        <div>
+            <h2 class="font-display text-lg font-bold tracking-tight text-slate-900 dark:text-white">{{ title }}</h2>
+            <p class="text-sm text-slate-500 dark:text-slate-400">{{ subtitle }}</p>
+        </div>
+    </div>
+    <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        {% for mod in modules %}
+        <div class="group rounded-xl border border-slate-200/60 bg-white p-5 transition hover:border-{{ color }}-300 hover:shadow-md dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-{{ color }}-600">
+            <div class="mb-3 flex items-start justify-between">
+                <div>
+                    <h3 class="font-semibold text-slate-900 dark:text-white">{{ mod.name }}</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ mod.description }}</p>
+                </div>
+                {% if mod.badge %}
+                {{ status_badge(status=mod.badge, variant=mod.badge_variant or "info", size="sm") }}
+                {% endif %}
+            </div>
+            <div class="space-y-1">
+                {% for page in mod.pages %}
+                <a href="{{ page.url }}" class="flex items-center justify-between rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-{{ color }}-50 dark:hover:bg-{{ color }}-900/20">
+                    <span class="text-slate-700 dark:text-slate-300">{{ page.label }}</span>
+                    <span class="text-[10px] font-mono uppercase text-slate-400 dark:text-slate-500">{{ page.method or "GET" }}</span>
+                </a>
+                {% endfor %}
+            </div>
+            {% if mod.route_file %}
+            <div class="mt-3 border-t border-slate-100 pt-2 dark:border-slate-700/50">
+                <p class="text-[10px] font-mono text-slate-400 dark:text-slate-500">{{ mod.route_file }}</p>
+                {% if mod.service_file %}
+                <p class="text-[10px] font-mono text-slate-400 dark:text-slate-500">{{ mod.service_file }}</p>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</section>
+{{ section_divider() }}
+{% endmacro %}
+
+
+{# ═══════════════════════════════════════════════════════════
+   OPERATIONS
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="operations",
+    title="Operations",
+    subtitle="Day-to-day ISP subscriber and service management",
+    icon=icon_users(),
+    color="amber",
+    color2="orange",
+    modules=[
+        {
+            "name": "Subscribers",
+            "description": "Unified subscriber/account management",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/subscribers.py",
+            "service_file": "app/services/web_subscriber_details.py",
+            "pages": [
+                {"label": "Subscriber List", "url": "/admin/subscribers"},
+                {"label": "New Subscriber", "url": "/admin/subscribers/new"},
+                {"label": "Subscriber Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Edit Subscriber", "url": "#", "method": "GET /:id/edit"},
+                {"label": "Billing Config", "url": "#", "method": "POST"},
+                {"label": "Communications Log", "url": "#", "method": "GET"},
+                {"label": "Bulk Status Change", "url": "#", "method": "POST"},
+                {"label": "Bulk Delete", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Customers (CRM)",
+            "description": "People + Organizations with contacts, addresses, portal access",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/customers.py",
+            "service_file": "app/services/web_customer_lists.py",
+            "pages": [
+                {"label": "Customer List", "url": "/admin/customers"},
+                {"label": "Customer Wizard", "url": "/admin/customers/wizard"},
+                {"label": "New Customer Form", "url": "/admin/customers/new"},
+                {"label": "Person Detail", "url": "#", "method": "GET /person/:id"},
+                {"label": "Organization Detail", "url": "#", "method": "GET /org/:id"},
+                {"label": "Address Management", "url": "#", "method": "POST"},
+                {"label": "Contact Management", "url": "#", "method": "POST"},
+                {"label": "Geocoding", "url": "#", "method": "POST"},
+                {"label": "Portal Access", "url": "#", "method": "POST"},
+                {"label": "Impersonation", "url": "#", "method": "POST"},
+                {"label": "Export CSV", "url": "/admin/customers/export"},
+                {"label": "Bulk Operations", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Provisioning",
+            "description": "Service orders, workflows, appointments, bulk activation",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/provisioning.py",
+            "service_file": "app/services/web_provisioning_bulk_activate.py",
+            "pages": [
+                {"label": "Provisioning Dashboard", "url": "/admin/provisioning"},
+                {"label": "Service Orders List", "url": "/admin/provisioning/orders"},
+                {"label": "New Service Order", "url": "/admin/provisioning/orders/new"},
+                {"label": "Order Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Appointments List", "url": "/admin/provisioning/appointments"},
+                {"label": "Workflows List", "url": "/admin/provisioning/workflows"},
+                {"label": "New Workflow", "url": "/admin/provisioning/workflows/new"},
+                {"label": "Bulk Activate", "url": "/admin/provisioning/bulk-activate"},
+                {"label": "Service Migration", "url": "/admin/provisioning/migrate"}
+            ]
+        },
+        {
+            "name": "Support Tickets",
+            "description": "Customer support ticket lifecycle",
+            "route_file": "app/web/admin/support_tickets.py",
+            "pages": [
+                {"label": "Tickets List", "url": "/admin/support/tickets"},
+                {"label": "New Ticket", "url": "/admin/support/tickets/new"},
+                {"label": "Ticket Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Ticket Edit", "url": "#", "method": "GET /:id/edit"},
+                {"label": "Add Comment", "url": "#", "method": "POST"},
+                {"label": "Auto-assign", "url": "#", "method": "POST"},
+                {"label": "Link / Merge", "url": "#", "method": "POST"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   BILLING & FINANCE
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="billing",
+    title="Billing & Finance",
+    subtitle="Invoicing, payments, collections, and financial reporting",
+    icon=icon_credit_card(),
+    color="emerald",
+    color2="teal",
+    modules=[
+        {
+            "name": "Invoices",
+            "description": "Invoice lifecycle — draft, issue, send, pay, void",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/billing_invoices.py",
+            "service_file": "app/services/web_billing_invoices.py",
+            "pages": [
+                {"label": "Billing Overview", "url": "/admin/billing"},
+                {"label": "Invoice List", "url": "/admin/billing/invoices"},
+                {"label": "New Invoice", "url": "/admin/billing/invoices/new"},
+                {"label": "Invoice Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Edit Invoice", "url": "#", "method": "GET /:id/edit"},
+                {"label": "Export CSV", "url": "/admin/billing/invoices/export.csv"},
+                {"label": "Bulk Issue / Send / Void", "url": "#", "method": "POST"},
+                {"label": "Batch Generate", "url": "/admin/billing/invoices/batch"},
+                {"label": "Invoice Cache", "url": "/admin/billing/cache"},
+                {"label": "AR Aging Report", "url": "/admin/billing/ar-aging"},
+                {"label": "Ledger View", "url": "/admin/billing/ledger"}
+            ]
+        },
+        {
+            "name": "Payments",
+            "description": "Payment recording, allocation, reversals, import",
+            "route_file": "app/web/admin/billing_payments.py",
+            "service_file": "app/services/web_billing_payments.py",
+            "pages": [
+                {"label": "Payments List", "url": "/admin/billing/payments"},
+                {"label": "New Payment", "url": "/admin/billing/payments/new"},
+                {"label": "Unallocated Payments", "url": "/admin/billing/payments/unallocated"},
+                {"label": "Payment Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Allocate / Reverse", "url": "#", "method": "POST"},
+                {"label": "Export CSV", "url": "/admin/billing/payments/export.csv"}
+            ]
+        },
+        {
+            "name": "Billing Accounts",
+            "description": "Account-level billing configuration and statements",
+            "route_file": "app/web/admin/billing_accounts.py",
+            "pages": [
+                {"label": "Accounts List", "url": "/admin/billing/accounts"},
+                {"label": "New Account", "url": "/admin/billing/accounts/new"},
+                {"label": "Account Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Statement CSV", "url": "#", "method": "GET"},
+                {"label": "Send Statement", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Credits & Adjustments",
+            "description": "Credit notes and balance adjustments",
+            "route_file": "app/web/admin/billing_credits.py",
+            "pages": [
+                {"label": "Credits List", "url": "/admin/billing/credits"},
+                {"label": "New Credit Note", "url": "/admin/billing/credits/new"}
+            ]
+        },
+        {
+            "name": "Collections & Dunning",
+            "description": "Debt collection workflows and dunning policies",
+            "route_file": "app/web/admin/billing_dunning.py",
+            "pages": [
+                {"label": "Dunning Management", "url": "/admin/billing/dunning"},
+                {"label": "Collection Accounts", "url": "/admin/billing/collection-accounts"},
+                {"label": "New Collection Account", "url": "#", "method": "POST"},
+                {"label": "Pause / Resume / Close", "url": "#", "method": "POST"},
+                {"label": "Payment Arrangements", "url": "/admin/billing/payment-arrangements"}
+            ]
+        },
+        {
+            "name": "Payment Config",
+            "description": "Channels, providers, tax rates",
+            "badge": "Settings",
+            "badge_variant": "draft",
+            "route_file": "app/web/admin/billing_channels.py",
+            "pages": [
+                {"label": "Payment Channels", "url": "/admin/billing/payment-channels"},
+                {"label": "Payment Providers", "url": "/admin/billing/payment-providers"},
+                {"label": "Tax Rates", "url": "/admin/billing/tax-rates"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   CATALOG & SERVICES
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="catalog",
+    title="Catalog & Services",
+    subtitle="Service plans, subscriptions, pricing, usage metering",
+    icon=icon_archive(),
+    color="violet",
+    color2="purple",
+    modules=[
+        {
+            "name": "Offers & Plans",
+            "description": "Service plan definitions with pricing, speeds, and RADIUS profiles",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/catalog.py",
+            "service_file": "app/services/web_catalog_offers.py",
+            "pages": [
+                {"label": "Catalog Overview", "url": "/admin/catalog"},
+                {"label": "Offers List", "url": "/admin/catalog/offers"},
+                {"label": "New Offer", "url": "/admin/catalog/offers/create"},
+                {"label": "Offer Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Edit Offer", "url": "#", "method": "GET /:id/edit"},
+                {"label": "Duplicate Offer", "url": "#", "method": "POST"},
+                {"label": "Add-ons List", "url": "/admin/catalog/settings/add-ons"},
+                {"label": "New Add-on", "url": "/admin/catalog/settings/add-ons/new"},
+                {"label": "Products List", "url": "/admin/catalog/products"},
+                {"label": "Pricing Matrices", "url": "/admin/catalog/pricing-matrices"}
+            ]
+        },
+        {
+            "name": "Subscriptions",
+            "description": "Active service subscriptions linked to plans",
+            "route_file": "app/web/admin/catalog.py",
+            "service_file": "app/services/web_catalog_subscriptions.py",
+            "pages": [
+                {"label": "Subscriptions List", "url": "/admin/catalog/subscriptions"}
+            ]
+        },
+        {
+            "name": "Usage & FUP",
+            "description": "Usage metering, fair use policy, charge posting",
+            "route_file": "app/web/admin/usage.py",
+            "service_file": "app/services/web_usage.py",
+            "pages": [
+                {"label": "Usage Dashboard", "url": "/admin/catalog/usage"},
+                {"label": "FUP Calculator", "url": "/admin/catalog/usage/fup-calculator"},
+                {"label": "Usage Records", "url": "/admin/catalog/usage/records"},
+                {"label": "Usage Charges", "url": "/admin/catalog/usage/charges"}
+            ]
+        },
+        {
+            "name": "Catalog Settings",
+            "description": "Region zones, speed profiles, ONU types",
+            "badge": "Settings",
+            "badge_variant": "draft",
+            "route_file": "app/web/admin/catalog_settings.py",
+            "pages": [
+                {"label": "Catalog Settings Hub", "url": "/admin/system/catalog-settings"},
+                {"label": "Region Zones", "url": "/admin/system/region-zones"},
+                {"label": "Speed Profiles", "url": "/admin/system/speed-profiles"},
+                {"label": "ONU Types", "url": "/admin/system/onu-types"},
+                {"label": "ONT Provisioning Profiles", "url": "/admin/network/ont-provisioning-profiles"},
+                {"label": "Vendor Capabilities", "url": "/admin/system/vendor-capabilities"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   NETWORK & INFRASTRUCTURE
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="network",
+    title="Network & Infrastructure",
+    subtitle="Physical network, OLTs, ONTs, IP addressing, monitoring, RADIUS",
+    icon=icon_server(),
+    color="blue",
+    color2="indigo",
+    modules=[
+        {
+            "name": "Network Hub",
+            "description": "Consolidated device view and discovery",
+            "route_file": "app/web/admin/network.py",
+            "pages": [
+                {"label": "Network Hub", "url": "/admin/network"},
+                {"label": "Consolidated Devices", "url": "/admin/network/network-devices"},
+                {"label": "Device Search", "url": "/admin/network/devices/search"},
+                {"label": "Device Discovery", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "OLTs",
+            "description": "Optical Line Terminals — backbone of FTTH network",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/network_olts_onts.py",
+            "service_file": "app/services/web_network_olts.py",
+            "pages": [
+                {"label": "OLT List", "url": "/admin/network/olts"},
+                {"label": "New OLT", "url": "/admin/network/olts/new"},
+                {"label": "OLT Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Edit OLT", "url": "#", "method": "GET /:id/edit"},
+                {"label": "Provision / Sync", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "ONTs",
+            "description": "Optical Network Terminals at subscriber premises",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/network_olts_onts.py",
+            "service_file": "app/services/web_network_onts.py",
+            "pages": [
+                {"label": "ONT List", "url": "/admin/network/onts"},
+                {"label": "ONT Detail", "url": "#", "method": "GET /:id"},
+                {"label": "ONT Ports", "url": "#", "method": "GET /:id/ports"},
+                {"label": "ONT Discovery", "url": "/admin/network/ont-discovery"},
+                {"label": "Auto-Bind ONTs", "url": "#", "method": "POST"},
+                {"label": "Bulk Bind", "url": "#", "method": "POST"},
+                {"label": "Provision ONT", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "CPEs",
+            "description": "Customer Premises Equipment — routers, bridges",
+            "route_file": "app/web/admin/network_cpes.py",
+            "pages": [
+                {"label": "CPE List", "url": "/admin/network/cpes"},
+                {"label": "New CPE", "url": "/admin/network/cpes/new"},
+                {"label": "CPE Detail", "url": "#", "method": "GET /:id"},
+                {"label": "WiFi Networks", "url": "#", "method": "GET"},
+                {"label": "Reboot", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Core Devices",
+            "description": "Routers, switches, aggregation equipment",
+            "route_file": "app/web/admin/network_core_devices.py",
+            "pages": [
+                {"label": "Core Device List", "url": "/admin/network/core-devices"},
+                {"label": "New Core Device", "url": "/admin/network/core-devices/new"},
+                {"label": "Device Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Network Backups", "url": "/admin/network/backups"}
+            ]
+        },
+        {
+            "name": "NAS Devices",
+            "description": "Network Access Servers — PPPoE authentication",
+            "route_file": "app/web/admin/nas.py",
+            "pages": [
+                {"label": "NAS Management", "url": "/admin/network/nas"},
+                {"label": "New NAS Device", "url": "/admin/network/nas/devices/new"},
+                {"label": "NAS Detail", "url": "#", "method": "GET /:id"}
+            ]
+        },
+        {
+            "name": "IP Management",
+            "description": "IP pools, address allocation, DHCP",
+            "route_file": "app/web/admin/network_ip_management.py",
+            "pages": [
+                {"label": "IP Management", "url": "/admin/network/ip-management"},
+                {"label": "New IP Pool", "url": "/admin/network/ip-management/pools/new"},
+                {"label": "Import Pools", "url": "/admin/network/ip-management/pools/import"},
+                {"label": "Pool Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Allocate Address", "url": "#", "method": "POST"},
+                {"label": "Reconcile Pools", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "RADIUS",
+            "description": "Authentication servers, groups, credential import",
+            "route_file": "app/web/admin/network_radius.py",
+            "pages": [
+                {"label": "RADIUS Management", "url": "/admin/network/radius"},
+                {"label": "New RADIUS Server", "url": "/admin/network/radius/servers/new"},
+                {"label": "RADIUS Groups", "url": "/admin/network/radius/groups"},
+                {"label": "Import Credentials", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Fiber Plant",
+            "description": "Fiber infrastructure, strands, splice closures, FDH",
+            "route_file": "app/web/admin/network_fiber_plant.py",
+            "pages": [
+                {"label": "Fiber Plant View", "url": "/admin/network/fiber-plant"},
+                {"label": "Fiber Map", "url": "/admin/network/fiber-map"},
+                {"label": "Fiber Strands", "url": "/admin/network/fiber-strands"},
+                {"label": "Splice Closures", "url": "/admin/network/fiber-splice-closures"},
+                {"label": "Change Requests", "url": "/admin/network/fiber-change-requests"}
+            ]
+        },
+        {
+            "name": "PoP Sites & Zones",
+            "description": "Points of Presence and service area zones",
+            "route_file": "app/web/admin/network_pop_sites.py",
+            "pages": [
+                {"label": "PoP Sites", "url": "/admin/network/pop-sites"},
+                {"label": "New PoP Site", "url": "/admin/network/pop-sites/new"},
+                {"label": "Zones List", "url": "/admin/network/zones"},
+                {"label": "New Zone", "url": "/admin/network/zones/new"}
+            ]
+        },
+        {
+            "name": "Monitoring & Alarms",
+            "description": "Device health, SNMP polling, alarm rules",
+            "route_file": "app/web/admin/network_monitoring.py",
+            "pages": [
+                {"label": "Monitoring Dashboard", "url": "/admin/network/monitoring"},
+                {"label": "Alarms Dashboard", "url": "/admin/network/alarms"},
+                {"label": "New Alarm Rule", "url": "/admin/network/alarms/rules/new"}
+            ]
+        },
+        {
+            "name": "Speed Tests",
+            "description": "Subscriber speed test results and analytics",
+            "route_file": "app/web/admin/network_speedtests.py",
+            "pages": [
+                {"label": "Speed Tests List", "url": "/admin/network/speedtests"},
+                {"label": "Analytics", "url": "/admin/network/speedtests/analytics"},
+                {"label": "New Speed Test", "url": "/admin/network/speedtests/new"}
+            ]
+        },
+        {
+            "name": "TR-069 / ACS",
+            "description": "TR-069 auto-configuration servers for CPE management",
+            "route_file": "app/web/admin/network_tr069.py",
+            "pages": [
+                {"label": "TR-069 Dashboard", "url": "/admin/network/tr069"},
+                {"label": "New ACS Server", "url": "/admin/network/tr069/acs/new"},
+                {"label": "ACS Detail", "url": "#", "method": "GET /:id"}
+            ]
+        },
+        {
+            "name": "DNS & Threats",
+            "description": "DNS threat detection and filtering",
+            "route_file": "app/web/admin/network_dns_threats.py",
+            "pages": [
+                {"label": "DNS Threats", "url": "/admin/network/dns-threats"},
+                {"label": "New Threat Rule", "url": "/admin/network/dns-threats/new"}
+            ]
+        },
+        {
+            "name": "Network Topology",
+            "description": "Weathermap and site surveys",
+            "route_file": "app/web/admin/network_weathermap.py",
+            "pages": [
+                {"label": "Network Weathermap", "url": "/admin/network/weathermap"},
+                {"label": "Site Surveys", "url": "/admin/network/site-survey"},
+                {"label": "New Survey", "url": "/admin/network/site-survey/new"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   VPN & CONNECTIVITY
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="vpn",
+    title="VPN & Connectivity",
+    subtitle="WireGuard and OpenVPN tunnel management",
+    icon=icon_shield(),
+    color="cyan",
+    color2="teal",
+    modules=[
+        {
+            "name": "WireGuard VPN",
+            "description": "VPN servers, peers, tunnels, health scanning",
+            "route_file": "app/web/admin/wireguard.py",
+            "service_file": "app/services/web_vpn_management.py",
+            "pages": [
+                {"label": "VPN Dashboard", "url": "/admin/network/vpn"},
+                {"label": "New Server", "url": "/admin/network/vpn/servers/new"},
+                {"label": "Server Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Peers List", "url": "/admin/network/vpn/peers"},
+                {"label": "New Peer", "url": "/admin/network/vpn/peers/new"},
+                {"label": "Regenerate Key", "url": "#", "method": "POST"},
+                {"label": "Revoke Peer", "url": "#", "method": "POST"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   REPORTS & ANALYTICS
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="reports",
+    title="Reports & Analytics",
+    subtitle="Revenue, subscriber, network, churn, and usage reporting",
+    icon=icon_chart_bar(),
+    color="teal",
+    color2="emerald",
+    modules=[
+        {
+            "name": "Reports Hub",
+            "description": "All analytical reports with CSV export",
+            "route_file": "app/web/admin/reports.py",
+            "service_file": "app/services/web_reports.py",
+            "pages": [
+                {"label": "Reports Hub", "url": "/admin/reports/hub"},
+                {"label": "Revenue Report", "url": "/admin/reports/revenue"},
+                {"label": "Subscribers Report", "url": "/admin/reports/subscribers"},
+                {"label": "Subscriptions Report", "url": "/admin/reports/subscriptions"},
+                {"label": "Network Report", "url": "/admin/reports/network"},
+                {"label": "Usage Report", "url": "/admin/reports/usage"},
+                {"label": "Billing Report", "url": "/admin/reports/billing"},
+                {"label": "Custom Reports", "url": "/admin/reports/custom"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   GIS & MAPPING
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="gis",
+    title="GIS & Mapping",
+    subtitle="Geographic information, coverage areas, location management",
+    icon=icon_location(),
+    color="green",
+    color2="emerald",
+    modules=[
+        {
+            "name": "GIS Dashboard",
+            "description": "Map views, location management, coverage",
+            "route_file": "app/web/admin/gis.py",
+            "pages": [
+                {"label": "GIS Dashboard", "url": "/admin/gis"},
+                {"label": "New Location", "url": "/admin/gis/locations/new"},
+                {"label": "Edit Location", "url": "#", "method": "GET /:id/edit"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   INTEGRATIONS
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="integrations",
+    title="Integrations",
+    subtitle="Third-party connectors, webhooks, marketplace",
+    icon=icon_puzzle(),
+    color="indigo",
+    color2="blue",
+    modules=[
+        {
+            "name": "Integration Hub",
+            "description": "Connectors, marketplace, installed integrations",
+            "route_file": "app/web/admin/integrations.py",
+            "pages": [
+                {"label": "Connectors List", "url": "/admin/integrations/connectors"},
+                {"label": "Marketplace", "url": "/admin/integrations/marketplace"},
+                {"label": "Installed", "url": "/admin/integrations/installed"},
+                {"label": "Integration Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Configure / Test / Enable", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Webhooks",
+            "description": "Outbound webhook endpoints",
+            "route_file": "app/web/admin/integrations.py",
+            "pages": [
+                {"label": "Webhooks List", "url": "/admin/integrations/webhooks"},
+                {"label": "New Webhook", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "WhatsApp",
+            "description": "WhatsApp Business integration settings",
+            "route_file": "app/web/admin/integrations.py",
+            "pages": [
+                {"label": "WhatsApp Settings", "url": "#", "method": "POST"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   NOTIFICATIONS
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="notifications",
+    title="Notifications",
+    subtitle="Alert policies, templates, on-call rotations, delivery tracking",
+    icon=icon_bell(),
+    color="rose",
+    color2="pink",
+    modules=[
+        {
+            "name": "Notification System",
+            "description": "Templates, alert policies, on-call schedules",
+            "route_file": "app/web/admin/notifications.py",
+            "pages": [
+                {"label": "Notification Templates", "url": "/admin/notifications/templates"},
+                {"label": "New Template", "url": "/admin/notifications/templates/new"},
+                {"label": "Alert Policies", "url": "/admin/notifications/policies"},
+                {"label": "New Policy", "url": "/admin/notifications/policies/new"},
+                {"label": "On-Call Rotations", "url": "/admin/notifications/on-call"},
+                {"label": "Delivery Log", "url": "/admin/notifications/delivery-log"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   SYSTEM & ADMIN
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="system",
+    title="System & Admin",
+    subtitle="Platform configuration, users, security, maintenance",
+    icon=icon_cog(),
+    color="slate",
+    color2="gray",
+    modules=[
+        {
+            "name": "Dashboard",
+            "description": "Admin overview with KPIs, activity, health",
+            "badge": "Core",
+            "badge_variant": "active",
+            "route_file": "app/web/admin/dashboard.py",
+            "service_file": "app/services/web_admin_dashboard.py",
+            "pages": [
+                {"label": "Dashboard", "url": "/admin/dashboard"},
+                {"label": "Stats Partial (HTMX)", "url": "/admin/dashboard/stats"},
+                {"label": "Activity Partial (HTMX)", "url": "/admin/dashboard/activity"},
+                {"label": "Server Health (HTMX)", "url": "/admin/dashboard/server-health"}
+            ]
+        },
+        {
+            "name": "Users & Roles",
+            "description": "Admin user accounts, roles, permissions (RBAC)",
+            "route_file": "app/web/admin/system.py",
+            "pages": [
+                {"label": "Users List", "url": "/admin/system/users"},
+                {"label": "New User", "url": "/admin/system/users/new"},
+                {"label": "User Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Roles List", "url": "/admin/system/roles"},
+                {"label": "New Role", "url": "/admin/system/roles/new"},
+                {"label": "Permissions List", "url": "/admin/system/permissions"}
+            ]
+        },
+        {
+            "name": "API Keys",
+            "description": "API key management for programmatic access",
+            "route_file": "app/web/admin/system.py",
+            "pages": [
+                {"label": "API Keys List", "url": "/admin/system/api-keys"},
+                {"label": "New API Key", "url": "/admin/system/api-keys/new"},
+                {"label": "Revoke Key", "url": "#", "method": "POST"}
+            ]
+        },
+        {
+            "name": "Settings & Configuration",
+            "description": "System settings, modules, company info",
+            "badge": "Settings",
+            "badge_variant": "draft",
+            "route_file": "app/web/admin/system.py",
+            "pages": [
+                {"label": "Settings Hub", "url": "/admin/system/settings-hub"},
+                {"label": "Configuration", "url": "/admin/system/configuration"},
+                {"label": "Module Manager", "url": "/admin/system/modules"},
+                {"label": "Company Info", "url": "/admin/system/company-info"},
+                {"label": "Organization", "url": "/admin/system/organization"},
+                {"label": "Admin Hub", "url": "/admin/system/admin-hub"}
+            ]
+        },
+        {
+            "name": "Audit & Monitoring",
+            "description": "Audit trail, system health, logs, scheduler",
+            "route_file": "app/web/admin/system.py",
+            "pages": [
+                {"label": "Audit Log", "url": "/admin/system/audit"},
+                {"label": "System Health", "url": "/admin/system/health"},
+                {"label": "System Logs", "url": "/admin/system/logs"},
+                {"label": "Scheduler Status", "url": "/admin/system/scheduler"},
+                {"label": "DB Inspector", "url": "/admin/system/db-inspector"}
+            ]
+        },
+        {
+            "name": "Data Management",
+            "description": "Import, export, and backup tools",
+            "route_file": "app/web/admin/system.py",
+            "pages": [
+                {"label": "Import Wizard", "url": "/admin/system/import"},
+                {"label": "Export Tool", "url": "/admin/system/export"}
+            ]
+        },
+        {
+            "name": "Legal Documents",
+            "description": "Terms, privacy policy, compliance documents",
+            "route_file": "app/web/admin/legal.py",
+            "pages": [
+                {"label": "Legal Documents", "url": "/admin/system/legal"},
+                {"label": "New Document", "url": "/admin/system/legal/new"},
+                {"label": "Document Detail", "url": "#", "method": "GET /:id"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ═══════════════════════════════════════════════════════════
+   RESELLERS
+   ═══════════════════════════════════════════════════════════ #}
+{{ module_section(
+    id="resellers",
+    title="Resellers",
+    subtitle="Reseller partner management and subscriber linking",
+    icon=icon_building(),
+    color="purple",
+    color2="violet",
+    modules=[
+        {
+            "name": "Reseller Management",
+            "description": "Reseller accounts, subscriber links, portal invites",
+            "route_file": "app/web/admin/resellers.py",
+            "service_file": "app/services/web_admin_resellers.py",
+            "pages": [
+                {"label": "Resellers List", "url": "/admin/resellers"},
+                {"label": "New Reseller", "url": "/admin/resellers/new"},
+                {"label": "Reseller Detail", "url": "#", "method": "GET /:id"},
+                {"label": "Edit Reseller", "url": "#", "method": "GET /:id/edit"},
+                {"label": "Link Subscriber", "url": "#", "method": "POST"},
+                {"label": "Portal Invite", "url": "#", "method": "POST"}
+            ]
+        }
+    ]
+) }}
+
+
+{# ── Design System Link ── #}
+<div class="mt-4 mb-8 text-center">
+    <a href="/admin/design-system" class="text-sm text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
+        ← Back to Design System Components
+    </a>
+</div>
+
+{% endblock %}

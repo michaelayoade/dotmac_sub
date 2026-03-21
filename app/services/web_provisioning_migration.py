@@ -229,8 +229,12 @@ def _subscriber_olt_port(subscriber: Subscriber) -> str:
 
 def _table_row(subscriber: Subscriber) -> dict[str, Any]:
     current = _current_subscription(subscriber)
+    subscriber_label = subscriber.full_name or subscriber.display_name or subscriber.email or "Subscriber"
     return {
         "subscriber_id": str(subscriber.id),
+        "subscriber_label": subscriber_label,
+        "subscriber_number": subscriber.subscriber_number or "",
+        "account_number": subscriber.account_number or "",
         "status": subscriber.status.value if subscriber.status else "",
         "portal_login": _subscriber_login(subscriber, current),
         "full_name": subscriber.full_name,
@@ -262,6 +266,7 @@ def build_selection_table(db: Session, *, filters: MigrationFilters, limit: int 
 def _preview_changes(db: Session, row: dict[str, Any], targets: MigrationTargets) -> dict[str, Any]:
     out = {
         "subscriber_id": row["subscriber_id"],
+        "subscriber_label": row.get("subscriber_label") or row["full_name"] or "Subscriber",
         "full_name": row["full_name"],
         "changes": [],
     }

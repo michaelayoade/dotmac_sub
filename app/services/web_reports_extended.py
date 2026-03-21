@@ -5,10 +5,13 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.subscriber import Subscriber
+from app.services import subscriber as subscriber_service
 from app.services.common import parse_date_filter as _parse_date
 
 logger = logging.getLogger(__name__)
@@ -20,30 +23,47 @@ logger = logging.getLogger(__name__)
 
 def get_subscriber_growth_data(db: Session, *, days: int = 30) -> dict:
     """Daily subscriber counts by status over last N days."""
-    from app.models.subscriber import Subscriber, SubscriberStatus
+    from app.models.subscriber import SubscriberStatus
 
     end = datetime.now(UTC)
     start = end - timedelta(days=days)
 
-    total = db.scalar(select(func.count()).select_from(Subscriber)) or 0
+    visible_subscribers = [
+        SimpleNamespace(
+            status=row.status,
+            metadata_=row.metadata_,
+            splynx_customer_id=row.splynx_customer_id,
+            account_start_date=row.account_start_date,
+            created_at=row.created_at,
+        )
+        for row in db.execute(
+            select(
+                Subscriber.status,
+                Subscriber.metadata_,
+                Subscriber.splynx_customer_id,
+                Subscriber.account_start_date,
+                Subscriber.created_at,
+            ).where(subscriber_service.visible_subscriber_clause())
+        ).all()
+    ]
+    total = len(visible_subscribers)
 
     # Count by status
     status_counts: dict[str, int] = {}
     for s in SubscriberStatus:
-        count = db.scalar(
-            select(func.count())
-            .select_from(Subscriber)
-            .where(Subscriber.status == s)
-        ) or 0
+        count = sum(1 for row in visible_subscribers if row.status == s)
         status_counts[s.value] = count
 
     # New this month
     month_start = end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    new_this_month = db.scalar(
-        select(func.count())
-        .select_from(Subscriber)
-        .where(Subscriber.created_at >= month_start)
-    ) or 0
+    new_this_month = sum(
+        1
+        for row in visible_subscribers
+        if (
+            (created_at := subscriber_service.get_effective_created_at(row)) is not None
+            and created_at >= month_start
+        )
+    )
 
     # Simple daily chart data (placeholder — real impl would group by date)
     chart_labels = [(start + timedelta(days=i)).strftime("%Y-%m-%d") for i in range(days)]

@@ -11,7 +11,7 @@ from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
 from app.models.domain_settings import SettingDomain
@@ -567,7 +567,12 @@ def build_payments_list_data(
         total = db.scalar(select(func.count()).select_from(filtered_subquery)) or 0
         status_totals = _build_status_totals(filtered_subquery)
 
-        base_stmt = _apply_payment_filters(select(Payment)).order_by(Payment.created_at.desc())
+        base_stmt = (
+            _apply_payment_filters(
+                select(Payment).options(joinedload(Payment.account).joinedload(Subscriber.organization))
+            )
+            .order_by(Payment.created_at.desc())
+        )
         payments = list(db.scalars(base_stmt.offset(offset).limit(per_page)).all())
         for payment in payments:
             _enrich_payment_row(payment)

@@ -44,6 +44,26 @@ def _parse_date(val) -> datetime | None:
     return None
 
 
+def _resolve_credit_note_application_amount(
+    row: dict,
+    *,
+    credit_note_total: Decimal,
+    application_count: int,
+) -> Decimal | None:
+    """Resolve application amount conservatively.
+
+    Prefer explicit amount columns from Splynx when present. Only fall back to
+    the full credit note total when there is exactly one linked invoice.
+    """
+    for key in ("amount", "total", "sum"):
+        raw = row.get(key)
+        if raw not in (None, ""):
+            return Decimal(str(raw))
+    if application_count == 1:
+        return credit_note_total
+    return None
+
+
 def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
     """Migrate Splynx tickets → SplynxArchivedTicket + Messages."""
     from app.models.splynx_archive import (
@@ -51,11 +71,9 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
         SplynxArchivedTicketMessage,
     )
 
-    # Check if already populated
-    existing = db.scalar(select(func.count(SplynxArchivedTicket.id)))
-    if existing and existing > 0:
-        logger.info("Tickets already populated (%d), skipping", existing)
-        return
+    existing_ticket_ids = set(
+        db.scalars(select(SplynxArchivedTicket.splynx_ticket_id)).all()
+    )
 
     query = """
         SELECT t.*, ts.title_for_agent as status_name
@@ -68,6 +86,8 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
     created = 0
 
     for row in tickets:
+        if row["id"] in existing_ticket_ids:
+            continue
         subscriber_id = customer_mapping.get(row.get("customer_id"))
 
         ticket = SplynxArchivedTicket(
@@ -101,6 +121,9 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
         WHERE deleted='0'
         ORDER BY ticket_id, id
     """
+    existing_message_ids = set(
+        db.scalars(select(SplynxArchivedTicketMessage.splynx_message_id)).all()
+    )
     # Build ticket ID → UUID mapping
     ticket_map = {
         t.splynx_ticket_id: t.id
@@ -110,6 +133,8 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
     msg_created = 0
     for batch in fetch_batched(conn, msg_query, batch_size=2000):
         for row in batch:
+            if row["id"] in existing_message_ids:
+                continue
             ticket_id = ticket_map.get(row.get("ticket_id"))
             if not ticket_id:
                 continue
@@ -134,6 +159,7 @@ def migrate_tickets(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
             )
             msg.created_at = _parse_date(row.get("date")) or datetime.now(UTC)
             db.add(msg)
+            existing_message_ids.add(row["id"])
             msg_created += 1
 
         db.flush()
@@ -150,15 +176,14 @@ def migrate_emails(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
         CommunicationStatus,
     )
 
-    # Check if already populated
-    existing = db.scalar(
-        select(func.count(CommunicationLog.id)).where(
-            CommunicationLog.channel == CommunicationChannel.email
-        )
+    existing_message_ids = set(
+        db.scalars(
+            select(CommunicationLog.splynx_message_id).where(
+                CommunicationLog.channel == CommunicationChannel.email,
+                CommunicationLog.splynx_message_id.isnot(None),
+            )
+        ).all()
     )
-    if existing and existing > 0:
-        logger.info("Email logs already populated (%d), skipping", existing)
-        return
 
     status_map = {
         "sent": CommunicationStatus.sent,
@@ -174,6 +199,8 @@ def migrate_emails(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
 
     for batch in fetch_batched(conn, query, batch_size=5000):
         for row in batch:
+            if row["id"] in existing_message_ids:
+                continue
             subscriber_id = customer_mapping.get(row.get("customer_id"))
             status = status_map.get(row.get("status"), CommunicationStatus.sent)
 
@@ -189,6 +216,7 @@ def migrate_emails(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
             )
             log.created_at = _parse_date(row.get("datetime_added")) or datetime.now(UTC)
             db.add(log)
+            existing_message_ids.add(row["id"])
             created += 1
 
         db.flush()
@@ -207,14 +235,14 @@ def migrate_sms(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
         CommunicationStatus,
     )
 
-    existing = db.scalar(
-        select(func.count(CommunicationLog.id)).where(
-            CommunicationLog.channel == CommunicationChannel.sms
-        )
+    existing_message_ids = set(
+        db.scalars(
+            select(CommunicationLog.splynx_message_id).where(
+                CommunicationLog.channel == CommunicationChannel.sms,
+                CommunicationLog.splynx_message_id.isnot(None),
+            )
+        ).all()
     )
-    if existing and existing > 0:
-        logger.info("SMS logs already populated (%d), skipping", existing)
-        return
 
     status_map = {
         "sent": CommunicationStatus.sent,
@@ -228,6 +256,8 @@ def migrate_sms(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
 
     for batch in fetch_batched(conn, query, batch_size=5000):
         for row in batch:
+            if row["id"] in existing_message_ids:
+                continue
             subscriber_id = customer_mapping.get(row.get("customer_id"))
             status = status_map.get(row.get("status"), CommunicationStatus.sent)
 
@@ -243,6 +273,7 @@ def migrate_sms(conn, db, customer_mapping: dict[int, uuid.UUID]) -> None:
             )
             log.created_at = _parse_date(row.get("datetime_added")) or datetime.now(UTC)
             db.add(log)
+            existing_message_ids.add(row["id"])
             created += 1
 
         db.flush()
@@ -256,10 +287,10 @@ def migrate_mrr_snapshots(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
     """Migrate Splynx mrr_statistics → MrrSnapshot."""
     from app.models.mrr_snapshot import MrrSnapshot
 
-    existing = db.scalar(select(func.count(MrrSnapshot.id)))
-    if existing and existing > 0:
-        logger.info("MRR snapshots already populated (%d), skipping", existing)
-        return
+    existing_pairs = {
+        (str(row[0]), row[1])
+        for row in db.execute(select(MrrSnapshot.subscriber_id, MrrSnapshot.snapshot_date)).all()
+    }
 
     query = """
         SELECT customer_id, date, total as mrr
@@ -280,6 +311,10 @@ def migrate_mrr_snapshots(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
             if not snapshot_date:
                 skipped += 1
                 continue
+            key = (str(subscriber_id), snapshot_date)
+            if key in existing_pairs:
+                skipped += 1
+                continue
 
             mrr = Decimal(str(row.get("mrr") or "0"))
 
@@ -291,6 +326,7 @@ def migrate_mrr_snapshots(conn, db, customer_mapping: dict[int, uuid.UUID]) -> N
                 splynx_customer_id=row.get("customer_id"),
             )
             db.add(snapshot)
+            existing_pairs.add(key)
             created += 1
 
         db.flush()
@@ -306,50 +342,66 @@ def migrate_credit_note_applications(
 ) -> None:
     """Migrate Splynx credit_notes_to_invoices → CreditNoteApplication."""
     from app.models.billing import CreditNote, CreditNoteApplication
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
 
-    existing = db.scalar(select(func.count(CreditNoteApplication.id)))
-    if existing and existing > 0:
-        logger.info("Credit note applications already populated (%d), skipping", existing)
-        return
-
-    # Build credit note mapping by splynx number
-    # Credit notes don't have splynx_id mapping, so match by position
-    cn_list = db.scalars(
-        select(CreditNote).order_by(CreditNote.created_at)
-    ).all()
-    # Build a simple ID-based mapping via the credit_notes table order
-    cn_query = "SELECT id FROM credit_notes ORDER BY id"  # Splynx table has id column
-    splynx_cns = fetch_all(conn, cn_query)
-    cn_map: dict[int, uuid.UUID] = {}
-    for i, row in enumerate(splynx_cns):
-        if i < len(cn_list):
-            cn_map[row["id"]] = cn_list[i].id
-
-    # Get credit note totals for amount
-    cn_totals = {
-        cn.id: cn.total for cn in cn_list
+    cn_map = {
+        m.splynx_id: m.dotmac_id
+        for m in db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.credit_note
+            )
+        ).all()
     }
 
-    query = "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id"
-    rows = fetch_all(conn, query)
+    cn_totals = {
+        cn.id: cn.total for cn in db.scalars(select(CreditNote)).all()
+    }
+    existing_pairs = {
+        (str(app.credit_note_id), str(app.invoice_id))
+        for app in db.scalars(select(CreditNoteApplication)).all()
+    }
+    application_counts: dict[int, int] = {}
+    for row in fetch_all(conn, "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id"):
+        credit_note_id = row.get("credit_note_id")
+        if credit_note_id is not None:
+            application_counts[credit_note_id] = application_counts.get(credit_note_id, 0) + 1
+
+    rows = fetch_all(conn, "SELECT * FROM credit_notes_to_invoices ORDER BY credit_note_id")
     created = 0
     skipped = 0
 
     for row in rows:
-        cn_id = cn_map.get(row.get("credit_note_id"))
+        splynx_credit_note_id = row.get("credit_note_id")
+        cn_id = cn_map.get(splynx_credit_note_id)
         inv_id = invoice_mapping.get(row.get("invoice_id"))
         if not cn_id or not inv_id:
             skipped += 1
             continue
+        key = (str(cn_id), str(inv_id))
+        if key in existing_pairs:
+            skipped += 1
+            continue
 
-        # Use credit note total as amount (no per-invoice amount in Splynx)
-        amount = cn_totals.get(cn_id, Decimal("0"))
+        amount = _resolve_credit_note_application_amount(
+            row,
+            credit_note_total=cn_totals.get(cn_id, Decimal("0")),
+            application_count=application_counts.get(splynx_credit_note_id, 0),
+        )
+        if amount is None:
+            logger.warning(
+                "Skipping credit note application for Splynx credit_note_id=%s invoice_id=%s: ambiguous amount",
+                splynx_credit_note_id,
+                row.get("invoice_id"),
+            )
+            skipped += 1
+            continue
         app = CreditNoteApplication(
             credit_note_id=cn_id,
             invoice_id=inv_id,
             amount=amount,
         )
         db.add(app)
+        existing_pairs.add(key)
         created += 1
 
     db.flush()

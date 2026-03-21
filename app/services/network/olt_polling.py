@@ -809,7 +809,15 @@ def poll_olt_ont_signals(
                 # was already below threshold (avoids spam on every poll).
                 recently_alerted = (
                     ont.signal_updated_at is not None
-                    and (now - ont.signal_updated_at).total_seconds() < alert_cooldown_sec
+                    and (
+                        now
+                        - (
+                            ont.signal_updated_at
+                            if ont.signal_updated_at.tzinfo is not None
+                            else ont.signal_updated_at.replace(tzinfo=UTC)
+                        )
+                    ).total_seconds()
+                    < alert_cooldown_sec
                     and prev_signal is not None
                     and prev_signal < warn_thresh
                 )
