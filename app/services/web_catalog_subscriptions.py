@@ -1340,11 +1340,41 @@ def _subscription_radius_sync_evidence(
             .first()
         )
 
+    external_jobs = (
+        db.query(RadiusSyncJob)
+        .filter(RadiusSyncJob.is_active.is_(True))
+        .filter(RadiusSyncJob.connector_config_id.isnot(None))
+        .filter(
+            or_(
+                RadiusSyncJob.sync_users.is_(True),
+                RadiusSyncJob.sync_nas_clients.is_(True),
+            )
+        )
+        .all()
+    )
+    external_job_ids = [job.id for job in external_jobs]
+    external_run = None
+    if external_job_ids:
+        external_run = (
+            db.query(RadiusSyncRun)
+            .filter(RadiusSyncRun.job_id.in_(external_job_ids))
+            .order_by(RadiusSyncRun.finished_at.desc(), RadiusSyncRun.started_at.desc())
+            .first()
+        )
+    external_details = external_run.details if external_run and isinstance(external_run.details, dict) else {}
+
     return {
         "internal_user": radius_user,
         "nas_clients": nas_clients,
         "nas_client_count": len(nas_clients),
         "last_sync_run": last_sync_run,
+        "external_job_count": len(external_jobs),
+        "external_run": external_run,
+        "external_users_synced": int(external_details.get("external_users_synced") or 0),
+        "external_nas_synced": int(external_details.get("external_nas_synced") or 0),
+        "external_credentials_scanned": int(external_details.get("credentials_scanned") or 0),
+        "external_nas_devices_synced": int(external_details.get("nas_devices_synced") or 0),
+        "external_error": str(external_details.get("error") or ""),
     }
 
 
@@ -1383,6 +1413,15 @@ def _subscription_enforcement_state(db: Session, subscription: Subscription) -> 
         "runtime_entry": runtime_entry,
         "last_event": last_event,
     }
+
+
+def _subscription_external_radius_rows(
+    db: Session,
+    credential: AccessCredential | None,
+) -> list[dict[str, object]]:
+    if not credential or not credential.username:
+        return []
+    return radius_service.read_external_radius_rows_for_username(db, credential.username)
 
 
 def subscription_detail_context(db: Session, subscription: Subscription) -> dict[str, object]:
@@ -1427,6 +1466,7 @@ def subscription_detail_context(db: Session, subscription: Subscription) -> dict
     notification_evidence = _subscription_notifications(db, subscription)
     radius_sync_evidence = _subscription_radius_sync_evidence(db, subscription, credential)
     enforcement_state = _subscription_enforcement_state(db, subscription)
+    external_radius_rows = _subscription_external_radius_rows(db, credential)
     return {
         "access_credential": credential,
         "password_sync": password_sync,
@@ -1442,6 +1482,7 @@ def subscription_detail_context(db: Session, subscription: Subscription) -> dict
         "notification_evidence": notification_evidence,
         "radius_sync_evidence": radius_sync_evidence,
         "enforcement_state": enforcement_state,
+        "external_radius_rows": external_radius_rows,
     }
 
 

@@ -1,13 +1,20 @@
 from decimal import Decimal
+from datetime import UTC, datetime
+import sqlite3
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from starlette.datastructures import FormData
 
 from app.models.billing import TaxRate
-from app.models.catalog import AccessCredential
+from app.models.catalog import AccessCredential, NasDevice
+from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
+from app.models.event_store import EventStatus, EventStore
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import IPAssignment
+from app.models.notification import Notification, NotificationChannel, NotificationStatus, NotificationTemplate
+from app.models.radius import RadiusClient, RadiusServer, RadiusSyncJob, RadiusSyncRun, RadiusSyncStatus, RadiusUser
 from app.models.subscriber import Address, ChannelType, SubscriberChannel
 from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
@@ -213,6 +220,214 @@ def test_subscription_form_context_prefers_service_address_tax_for_commercial_po
     assert rows["tax_rate"]["effective"] == "Service VAT (5.00%)"
     assert rows["tax_rate"]["source"] == "Service address"
     assert rows["tax_rate"]["override"] == "Customer VAT (7.50%)"
+
+
+def test_subscription_detail_context_exposes_events_notifications_and_radius_sync(
+    db_session,
+    subscription,
+    subscriber,
+):
+    web_catalog_subscriptions_service._upsert_access_credential(
+        db_session,
+        subscriber_id=subscriber.id,
+        username="105000111",
+        plain_password="VisiblePass123",
+        radius_profile_id=None,
+    )
+    credential = (
+        db_session.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscriber.id)
+        .one()
+    )
+
+    nas_device = NasDevice(name="Karu", nas_ip="172.16.0.1", shared_secret="plain:secret")
+    radius_server = RadiusServer(name="Primary RADIUS", host="127.0.0.1")
+    db_session.add_all([nas_device, radius_server])
+    db_session.flush()
+
+    subscription.provisioning_nas_device_id = nas_device.id
+    db_session.add(
+        RadiusUser(
+            subscriber_id=subscriber.id,
+            subscription_id=subscription.id,
+            access_credential_id=credential.id,
+            username=credential.username,
+            secret_hash=credential.secret_hash,
+            is_active=True,
+            last_sync_at=datetime(2026, 3, 21, 10, 0, tzinfo=UTC),
+        )
+    )
+    db_session.add(
+        RadiusClient(
+            server_id=radius_server.id,
+            nas_device_id=nas_device.id,
+            client_ip="172.16.0.1",
+            shared_secret_hash="hashed",
+            description="Karu",
+            is_active=True,
+        )
+    )
+    db_session.add(
+        EventStore(
+            event_id=uuid4(),
+            event_type="subscription.suspended",
+            payload={"from_status": "active", "to_status": "suspended", "reason": "dunning"},
+            status=EventStatus.failed,
+            subscription_id=subscription.id,
+            account_id=subscriber.id,
+            failed_handlers=[{"handler": "NotificationHandler", "error": "smtp"}],
+        )
+    )
+    template = NotificationTemplate(
+        name="Subscription Suspended",
+        code="subscription_suspended",
+        channel=NotificationChannel.email,
+        body="Suspended",
+        is_active=True,
+    )
+    db_session.add(template)
+    db_session.flush()
+    db_session.add(
+        Notification(
+            template_id=template.id,
+            channel=NotificationChannel.email,
+            recipient=subscriber.email,
+            subject="Service suspended",
+            body="Suspended",
+            status=NotificationStatus.queued,
+        )
+    )
+    db_session.commit()
+
+    context = web_catalog_subscriptions_service.subscription_detail_context(
+        db_session,
+        subscription,
+    )
+
+    assert context["domain_events"][0]["event_type"] == "subscription.suspended"
+    assert context["domain_events"][0]["failed_handler_text"] == "NotificationHandler"
+    assert context["notification_evidence"]["items"][0]["template_code"] == "subscription_suspended"
+    assert context["radius_sync_evidence"]["internal_user"].username == "105000111"
+    assert context["radius_sync_evidence"]["nas_client_count"] == 1
+
+
+def test_subscription_detail_context_exposes_latest_external_radius_sync_run(
+    db_session,
+    subscription,
+    subscriber,
+):
+    radius_server = RadiusServer(name="External RADIUS", host="127.0.0.2")
+    connector = ConnectorConfig(
+        name="External RADIUS DB",
+        connector_type=ConnectorType.custom,
+        auth_type=ConnectorAuthType.none,
+        is_active=True,
+    )
+    db_session.add_all([radius_server, connector])
+    db_session.flush()
+
+    sync_job = RadiusSyncJob(
+        name="Nightly external sync",
+        server_id=radius_server.id,
+        connector_config_id=connector.id,
+        sync_users=True,
+        sync_nas_clients=True,
+        is_active=True,
+    )
+    db_session.add(sync_job)
+    db_session.flush()
+    db_session.add(
+        RadiusSyncRun(
+            job_id=sync_job.id,
+            status=RadiusSyncStatus.success,
+            details={
+                "external_users_synced": 12,
+                "external_nas_synced": 4,
+                "credentials_scanned": 12,
+                "nas_devices_synced": 4,
+            },
+        )
+    )
+    db_session.commit()
+
+    context = web_catalog_subscriptions_service.subscription_detail_context(
+        db_session,
+        subscription,
+    )
+
+    assert context["radius_sync_evidence"]["external_job_count"] == 1
+    assert context["radius_sync_evidence"]["external_run"].status == RadiusSyncStatus.success
+    assert context["radius_sync_evidence"]["external_users_synced"] == 12
+    assert context["radius_sync_evidence"]["external_nas_synced"] == 4
+
+
+def test_subscription_detail_context_reads_live_external_radius_rows(
+    db_session,
+    subscription,
+    subscriber,
+    tmp_path,
+):
+    web_catalog_subscriptions_service._upsert_access_credential(
+        db_session,
+        subscriber_id=subscriber.id,
+        username="105000222",
+        plain_password="SecretPass123",
+        radius_profile_id=None,
+    )
+
+    db_path = tmp_path / "radius_external.sqlite"
+    conn = sqlite3.connect(db_path)
+    conn.execute("CREATE TABLE radcheck (username TEXT, attribute TEXT, op TEXT, value TEXT)")
+    conn.execute("CREATE TABLE radreply (username TEXT, attribute TEXT, op TEXT, value TEXT)")
+    conn.execute("CREATE TABLE radusergroup (username TEXT, groupname TEXT, priority INTEGER)")
+    conn.execute(
+        "INSERT INTO radcheck (username, attribute, op, value) VALUES (?, ?, ?, ?)",
+        ("105000222", "Cleartext-Password", ":=", "SecretPass123"),
+    )
+    conn.execute(
+        "INSERT INTO radreply (username, attribute, op, value) VALUES (?, ?, ?, ?)",
+        ("105000222", "Framed-Pool", ":=", "pppoe-karu"),
+    )
+    conn.execute(
+        "INSERT INTO radusergroup (username, groupname, priority) VALUES (?, ?, ?)",
+        ("105000222", "fiber-1000gb", 0),
+    )
+    conn.commit()
+    conn.close()
+
+    radius_server = RadiusServer(name="SQLite RADIUS", host="127.0.0.3")
+    connector = ConnectorConfig(
+        name="SQLite external RADIUS",
+        connector_type=ConnectorType.custom,
+        auth_type=ConnectorAuthType.none,
+        base_url=f"sqlite:///{db_path}",
+        is_active=True,
+    )
+    db_session.add_all([radius_server, connector])
+    db_session.flush()
+    db_session.add(
+        RadiusSyncJob(
+            name="SQLite sync",
+            server_id=radius_server.id,
+            connector_config_id=connector.id,
+            sync_users=True,
+            sync_nas_clients=True,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    context = web_catalog_subscriptions_service.subscription_detail_context(
+        db_session,
+        subscription,
+    )
+
+    source = context["external_radius_rows"][0]
+    assert source["available"] is True
+    assert source["radcheck"][0]["attribute"] == "Cleartext-Password"
+    assert source["radcheck"][0]["value"] == "••••••••"
+    assert source["radreply"][0]["value"] == "pppoe-karu"
+    assert source["radusergroup"][0]["groupname"] == "fiber-1000gb"
 
 
 def test_send_subscription_credentials_uses_email_and_sms_targets(

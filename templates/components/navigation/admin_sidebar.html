@@ -4,7 +4,7 @@
 {% set parent_for_page = {
     'dashboard': 'dashboard',
     'subscribers': 'customers', 'customers': 'customers', 'contacts': 'customers',
-    'provisioning': 'provisioning', 'provisioning-migrate': 'provisioning', 'workflows': 'provisioning', 'appointments': 'provisioning',
+    'provisioning': 'system', 'provisioning-migrate': 'system', 'workflows': 'system', 'appointments': 'system',
     'support-tickets': 'support-tickets',
     'billing': 'billing', 'accounts': 'billing', 'invoices': 'billing', 'payments': 'billing',
     'credits': 'billing', 'ar-aging': 'billing', 'dunning': 'billing', 'billing-cache': 'billing',
@@ -127,9 +127,6 @@
     {% if module_states.get('customer', True) %}
     {{ nav_link("Customers", "/admin/customers", icon_customers, "customers") }}
     {% endif %}
-    {% if module_states.get('provisioning', True) %}
-    {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count) }}
-    {% endif %}
     {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
 
     {{ section_label("Operations") }}
@@ -158,6 +155,9 @@
     {% endif %}
     {% if module_states.get('notifications', True) %}
     {{ nav_link("Notifications", "/admin/notifications/templates", icon_notifications, "notifications") }}
+    {% endif %}
+    {% if module_states.get('provisioning', True) %}
+    {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count) }}
     {% endif %}
     {{ nav_link("System", "/admin/settings", icon_settings, "system") }}
 </div>

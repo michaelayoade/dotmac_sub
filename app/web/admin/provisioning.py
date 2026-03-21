@@ -19,7 +19,6 @@ from app.models.provisioning import (
     ProvisioningStepType,
     ProvisioningVendor,
     ServiceOrderStatus,
-    ServiceOrderType,
     TaskStatus,
 )
 from app.schemas.notification import NotificationCreate
@@ -32,7 +31,6 @@ from app.schemas.provisioning import (
     ProvisioningTaskUpdate,
     ProvisioningWorkflowCreate,
     ProvisioningWorkflowUpdate,
-    ServiceOrderCreate,
     ServiceOrderUpdate,
 )
 from app.services import notification as notification_service
@@ -479,82 +477,6 @@ def orders_list(
     return templates.TemplateResponse("admin/provisioning/index.html", {**ctx, "show_orders": True})
 
 
-# ---------------------------------------------------------------------------
-# Service Orders - Create
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/orders/new",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:write"))],
-)
-def order_create_form(
-    request: Request,
-    subscriber: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    prefill_subscriber_id = ""
-    prefill_subscriber_label = ""
-    if subscriber:
-        try:
-            selected_subscriber = subscriber_service.subscribers.get(db, subscriber)
-            prefill_subscriber_id = str(selected_subscriber.id)
-            prefill_subscriber_label = _subscriber_label(selected_subscriber)
-        except Exception:
-            prefill_subscriber_id = ""
-            prefill_subscriber_label = ""
-
-    ctx = _ctx(request, db, "provisioning")
-    ctx.update(
-        {
-            "order": None,
-            "order_types": ["new_install", "upgrade", "downgrade", "disconnect"],
-            "statuses": [s.value for s in ServiceOrderStatus],
-            "prefill_subscriber_id": prefill_subscriber_id,
-            "prefill_subscriber_label": prefill_subscriber_label,
-        }
-    )
-    return templates.TemplateResponse("admin/provisioning/form.html", ctx)
-
-
-@router.post(
-    "/orders",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:write"))],
-)
-def order_create(
-    request: Request,
-    db: Session = Depends(get_db),
-    subscriber_id: str = Form(...),
-    subscription_id: str | None = Form(default=None),
-    order_type: str | None = Form(default=None),
-    notes: str | None = Form(default=None),
-) -> RedirectResponse:
-    parsed_order_type = ServiceOrderType(order_type) if order_type else None
-    payload = ServiceOrderCreate(
-        account_id=UUID(subscriber_id),
-        subscription_id=UUID(subscription_id) if subscription_id else None,
-        order_type=parsed_order_type,
-        notes=notes,
-    )
-    order = provisioning_service.service_orders.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="service_order",
-        entity_id=str(order.id),
-        actor_id=_actor_id(request),
-        metadata={
-            "order_type": order_type or None,
-            "subscription_id": subscription_id or None,
-            "subscriber_id": subscriber_id,
-        },
-    )
-    return RedirectResponse(
-        url=f"/admin/provisioning/orders/{order.id}", status_code=303
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -655,85 +577,6 @@ def order_add_comment(
     return RedirectResponse(url=f"/admin/provisioning/orders/{order_id}", status_code=303)
 
 
-# ---------------------------------------------------------------------------
-# Service Orders - Edit
-# ---------------------------------------------------------------------------
-
-
-@router.get(
-    "/orders/{order_id}/edit",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:write"))],
-)
-def order_edit_form(
-    request: Request,
-    order_id: UUID,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    order = provisioning_service.service_orders.get(db, str(order_id))
-    if not order:
-        ctx = _ctx(request, db, "provisioning")
-        return templates.TemplateResponse("admin/errors/404.html", ctx, status_code=404)
-
-    ctx = _ctx(request, db, "provisioning")
-    ctx.update(
-        {
-            "order": order,
-            "order_types": ["new_install", "upgrade", "downgrade", "disconnect"],
-            "statuses": [s.value for s in ServiceOrderStatus],
-        }
-    )
-    return templates.TemplateResponse("admin/provisioning/form.html", ctx)
-
-
-@router.post(
-    "/orders/{order_id}/edit",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("provisioning:write"))],
-)
-def order_edit(
-    request: Request,
-    order_id: UUID,
-    db: Session = Depends(get_db),
-    subscriber_id: str | None = Form(default=None),
-    subscription_id: str | None = Form(default=None),
-    order_type: str | None = Form(default=None),
-    notes: str | None = Form(default=None),
-    status: str | None = Form(default=None),
-) -> RedirectResponse:
-    before = provisioning_service.service_orders.get(db, str(order_id))
-    before_state = model_to_dict(before) if before else None
-    update_data: dict[str, object] = {}
-    if subscriber_id:
-        update_data["subscriber_id"] = UUID(subscriber_id)
-    if subscription_id:
-        update_data["subscription_id"] = UUID(subscription_id)
-    if status:
-        update_data["status"] = ServiceOrderStatus(status)
-    if order_type is not None:
-        update_data["order_type"] = order_type or None
-    if notes is not None:
-        update_data["notes"] = notes
-
-    payload = ServiceOrderUpdate.model_validate(update_data)
-    provisioning_service.service_orders.update(db, str(order_id), payload)
-    after = provisioning_service.service_orders.get(db, str(order_id))
-    metadata = None
-    if before_state is not None and after:
-        changes = diff_dicts(before_state, model_to_dict(after))
-        metadata = {"changes": changes} if changes else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata=metadata,
-    )
-    return RedirectResponse(
-        url=f"/admin/provisioning/orders/{order_id}", status_code=303
-    )
 
 
 # ---------------------------------------------------------------------------

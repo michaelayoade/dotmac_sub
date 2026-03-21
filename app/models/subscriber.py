@@ -238,6 +238,7 @@ class Subscriber(Base):
         UUID(as_uuid=True), ForeignKey("tax_rates.id")
     )
     billing_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    captive_redirect_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Billing address (can differ from contact address)
     billing_name: Mapped[str | None] = mapped_column(String(160))

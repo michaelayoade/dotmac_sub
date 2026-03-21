@@ -417,6 +417,14 @@
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                         </div>
+                        <div class="mt-4 flex items-center gap-3">
+                            <input type="checkbox" name="captive_redirect_enabled" id="captive_redirect_enabled" value="true"
+                                   {% if customer and customer.captive_redirect_enabled %}checked{% endif %}
+                                   class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700" />
+                            <label for="captive_redirect_enabled" class="text-sm text-slate-700 dark:text-slate-300">
+                                Redirect to customer portal when blocked/expired (captive portal)
+                            </label>
+                        </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                             <div>
                                 <label for="billing_day" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Day</label>

@@ -51,7 +51,6 @@
                 </td>
                 <td class="whitespace-nowrap px-6 py-4 text-right text-sm">
                     <a href="/admin/provisioning/orders/{{ order.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300">View</a>
-                    <a href="/admin/provisioning/orders/{{ order.id }}/edit" class="ml-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">Edit</a>
                 </td>
             </tr>
             {% else %}
@@ -61,12 +60,8 @@
                         <svg class="h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/>
                         </svg>
-                        <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No service orders found</p>
-                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Create a new order to get started.</p>
-                        <a href="/admin/provisioning/orders/new" class="mt-4 inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
-                            New Order
-                        </a>
+                        <p class="mt-4 text-sm font-medium text-slate-900 dark:text-white">No service orders</p>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Orders are created automatically when subscriptions are activated.</p>
                     </div>
                 </td>
             </tr>

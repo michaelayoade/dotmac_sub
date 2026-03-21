@@ -306,6 +306,258 @@ def _emit_subscription_status_event(
             account_id=subscription.subscriber_id,
         )
 
+def _validate_plan_change(
+    db: Session,
+    subscription: Subscription,
+    new_offer_id: str,
+) -> None:
+    """Validate that a plan change is allowed.
+
+    Checks:
+    - New offer exists and is active
+    - Service type compatibility (residential ↔ residential only)
+    - Regional availability (if offer has region_zone_id)
+    - Billing mode compatibility (prepaid ↔ prepaid, postpaid ↔ postpaid)
+    """
+    new_offer = db.get(CatalogOffer, new_offer_id)
+    if not new_offer:
+        raise HTTPException(status_code=404, detail="Target offer not found")
+
+    old_offer = db.get(CatalogOffer, subscription.offer_id)
+
+    # Service type check: don't allow residential → business cross-change
+    if old_offer and new_offer:
+        old_type = getattr(old_offer, "service_type", None)
+        new_type = getattr(new_offer, "service_type", None)
+        if old_type and new_type and old_type != new_type:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot change from {old_type.value} to {new_type.value} plan. "
+                f"Upgrade/downgrade must be within the same service class.",
+            )
+
+    # Billing mode check: prepaid stays prepaid, postpaid stays postpaid
+    sub_mode = subscription.billing_mode
+    if sub_mode and new_offer:
+        new_mode = getattr(new_offer, "billing_mode", None)
+        if new_mode and sub_mode != new_mode:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot change from {sub_mode.value} to {new_mode.value} billing. "
+                f"Plan changes must stay within the same billing mode.",
+            )
+
+    # Region availability check
+    if new_offer.region_zone_id:
+        from app.models.subscriber import Subscriber
+
+        subscriber = db.get(Subscriber, subscription.subscriber_id)
+        if subscriber and hasattr(subscriber, "pop_site_id") and subscriber.pop_site_id:
+            from app.models.network_monitoring import PopSite
+
+            pop = db.get(PopSite, subscriber.pop_site_id)
+            if pop and pop.zone_id and str(pop.zone_id) != str(new_offer.region_zone_id):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Offer '{new_offer.name}' is not available in your service region.",
+                )
+
+
+def _billing_cycle_days(db: Session, offer_id) -> int:
+    """Resolve the number of days in a billing cycle for an offer."""
+    price = (
+        db.query(OfferPrice)
+        .filter(OfferPrice.offer_id == offer_id,
+                OfferPrice.price_type == PriceType.recurring,
+                OfferPrice.is_active.is_(True))
+        .first()
+    )
+    cycle = price.billing_cycle.value if price and price.billing_cycle else "monthly"
+    return {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90, "annual": 365}.get(cycle, 30)
+
+
+def _calculate_proration(
+    db: Session,
+    subscription: Subscription,
+    new_offer_id: str,
+) -> dict:
+    """Calculate proration amounts for a mid-cycle plan change.
+
+    Supports daily, weekly, monthly, and annual billing cycles.
+
+    Returns dict with:
+    - credit_amount: unused portion of current plan to refund
+    - charge_amount: prorated charge for new plan
+    - net_amount: charge - credit (positive = customer owes, negative = credit)
+    - days_remaining: days left in current billing cycle
+    - days_in_cycle: total days in billing cycle
+    """
+    from decimal import Decimal
+
+    now = datetime.now(UTC)
+    next_billing = subscription.next_billing_at
+    if not next_billing:
+        return {"credit_amount": Decimal("0"), "charge_amount": Decimal("0"),
+                "net_amount": Decimal("0"), "days_remaining": 0, "days_in_cycle": 30}
+
+    # Resolve cycle length from the current offer's billing cycle
+    cycle_days = _billing_cycle_days(db, subscription.offer_id)
+    if next_billing.tzinfo is None:
+        next_billing = next_billing.replace(tzinfo=UTC)
+    cycle_start = next_billing - timedelta(days=cycle_days)
+    days_elapsed = max(0, (now - cycle_start).days)
+    days_remaining = max(0, cycle_days - days_elapsed)
+
+    if days_remaining == 0:
+        return {"credit_amount": Decimal("0"), "charge_amount": Decimal("0"),
+                "net_amount": Decimal("0"), "days_remaining": 0, "days_in_cycle": cycle_days}
+
+    # Get old and new recurring prices
+    old_price_row = (
+        db.query(OfferPrice.amount)
+        .filter(OfferPrice.offer_id == subscription.offer_id,
+                OfferPrice.price_type == PriceType.recurring,
+                OfferPrice.is_active.is_(True))
+        .first()
+    )
+    new_price_row = (
+        db.query(OfferPrice.amount)
+        .filter(OfferPrice.offer_id == new_offer_id,
+                OfferPrice.price_type == PriceType.recurring,
+                OfferPrice.is_active.is_(True))
+        .first()
+    )
+
+    old_price = Decimal(str(old_price_row[0])) if old_price_row else Decimal("0")
+    new_price = Decimal(str(new_price_row[0])) if new_price_row else Decimal("0")
+
+    daily_old = old_price / Decimal(str(cycle_days))
+    daily_new = new_price / Decimal(str(cycle_days))
+    remaining = Decimal(str(days_remaining))
+
+    credit_amount = (daily_old * remaining).quantize(Decimal("0.01"))
+    charge_amount = (daily_new * remaining).quantize(Decimal("0.01"))
+    net_amount = (charge_amount - credit_amount).quantize(Decimal("0.01"))
+
+    return {
+        "credit_amount": credit_amount,
+        "charge_amount": charge_amount,
+        "net_amount": net_amount,
+        "days_remaining": days_remaining,
+        "days_in_cycle": cycle_days,
+        "old_daily_rate": daily_old.quantize(Decimal("0.01")),
+        "new_daily_rate": daily_new.quantize(Decimal("0.01")),
+    }
+
+
+def _generate_proration_invoice(
+    db: Session,
+    subscription: Subscription,
+    proration: dict,
+    old_offer_name: str,
+    new_offer_name: str,
+) -> None:
+    """Generate a proration invoice or credit note for a plan change.
+
+    For **prepaid** subscribers (already paid for the cycle):
+    - Upgrade: invoice for the price difference (remaining days)
+    - Downgrade: credit note for the overpayment (remaining days)
+
+    For **postpaid** subscribers (pay at end of cycle):
+    - The next invoice will naturally reflect the new rate
+    - Only generate an adjustment if changing mid-cycle with partial billing
+    """
+    from decimal import Decimal
+
+    # Postpaid: next invoice naturally reflects new rate — skip mid-cycle proration
+    billing_mode = getattr(subscription, "billing_mode", None)
+    if billing_mode and hasattr(billing_mode, "value"):
+        billing_mode = billing_mode.value
+    if billing_mode == "postpaid":
+        logger.info(
+            "Skipping proration for postpaid subscription %s — next invoice will reflect new rate",
+            subscription.id,
+        )
+        return
+
+    from app.models.billing import (
+        CreditNote,
+        CreditNoteStatus,
+        Invoice,
+        InvoiceLine,
+        InvoiceStatus,
+        TaxApplication,
+    )
+    from app.services import numbering
+
+    net = proration["net_amount"]
+    if abs(net) < Decimal("1.00"):
+        # Skip tiny amounts
+        return
+
+    subscriber_id = str(subscription.subscriber_id)
+    days = proration["days_remaining"]
+
+    if net > 0:
+        # Customer owes more — generate invoice
+        invoice_number = numbering.generate_number(
+            db, SettingDomain.billing, "invoice_number",
+            "invoice_number_enabled", "invoice_number_prefix",
+            "invoice_number_padding", "invoice_number_start",
+        )
+        invoice = Invoice(
+            account_id=subscriber_id,
+            invoice_number=invoice_number,
+            currency="NGN",
+            subtotal=net,
+            tax_total=Decimal("0"),
+            total=net,
+            balance_due=net,
+            status=InvoiceStatus.issued,
+            memo=f"Plan change proration: {old_offer_name} → {new_offer_name} ({days} days remaining)",
+        )
+        db.add(invoice)
+        db.flush()
+        line = InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description=f"Proration: upgrade to {new_offer_name} ({days} days)",
+            quantity=Decimal("1"),
+            unit_price=net,
+            amount=net,
+            tax_application=TaxApplication.exclusive,
+            is_active=True,
+        )
+        db.add(line)
+        logger.info(
+            "Generated proration invoice %s for ₦%s (upgrade %s → %s)",
+            invoice_number, net, old_offer_name, new_offer_name,
+        )
+    else:
+        # Customer gets credit — generate credit note
+        credit_amount = abs(net)
+        credit_number = numbering.generate_number(
+            db, SettingDomain.billing, "credit_note_number",
+            "credit_note_number_enabled", "credit_note_number_prefix",
+            "credit_note_number_padding", "credit_note_number_start",
+        )
+        credit = CreditNote(
+            account_id=subscriber_id,
+            credit_number=credit_number,
+            currency="NGN",
+            subtotal=credit_amount,
+            tax_total=Decimal("0"),
+            total=credit_amount,
+            status=CreditNoteStatus.issued,
+            memo=f"Plan change credit: {old_offer_name} → {new_offer_name} ({days} days remaining)",
+        )
+        db.add(credit)
+        logger.info(
+            "Generated proration credit %s for ₦%s (downgrade %s → %s)",
+            credit_number, credit_amount, old_offer_name, new_offer_name,
+        )
+
+
 def _emit_offer_change_event(
     db: Session,
     subscription: Subscription,
@@ -617,6 +869,20 @@ class Subscriptions(ListResponseMixin):
             str(service_address_id) if service_address_id else None,
         )
         catalog_validators.validate_offer_active(db, offer_id)
+
+        # Plan change validation and proration
+        offer_changing = (
+            "offer_id" in data
+            and str(data["offer_id"]) != str(subscription.offer_id)
+            and subscription.status == SubscriptionStatus.active
+        )
+        proration_result = None
+        if offer_changing:
+            _validate_plan_change(db, subscription, str(data["offer_id"]))
+            proration_result = _calculate_proration(
+                db, subscription, str(data["offer_id"])
+            )
+
         status = data.get("status", subscription.status)
         start_at = _ensure_utc(data.get("start_at", subscription.start_at))
         end_at = _ensure_utc(data.get("end_at", subscription.end_at))
@@ -710,6 +976,19 @@ class Subscriptions(ListResponseMixin):
             and subscription.status == SubscriptionStatus.active
         ):
             _emit_offer_change_event(db, subscription, str(previous_offer_id))
+
+            # Generate proration invoice/credit for the plan change
+            if proration_result and proration_result.get("net_amount"):
+                old_offer = db.get(CatalogOffer, previous_offer_id)
+                new_offer = db.get(CatalogOffer, subscription.offer_id)
+                _generate_proration_invoice(
+                    db,
+                    subscription,
+                    proration_result,
+                    old_offer.name if old_offer else "Previous Plan",
+                    new_offer.name if new_offer else "New Plan",
+                )
+                db.commit()
 
         return subscription
 

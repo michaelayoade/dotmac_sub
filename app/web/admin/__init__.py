@@ -102,11 +102,8 @@ def operations_service_orders_legacy():
 
 @router.get("/operations/service-orders/new")
 def operations_service_orders_new_legacy(subscriber: str | None = None):
-    """Legacy route redirect for service order create form."""
-    url = "/admin/provisioning/orders/new"
-    if subscriber:
-        url = f"{url}?subscriber={subscriber}"
-    return RedirectResponse(url=url, status_code=307)
+    """Legacy route redirect — create form removed, redirect to orders list."""
+    return RedirectResponse(url="/admin/provisioning/orders", status_code=307)
 
 
 @router.get("/settings")

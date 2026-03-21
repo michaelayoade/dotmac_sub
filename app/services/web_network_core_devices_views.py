@@ -19,6 +19,7 @@ from app.models.network_monitoring import (
     DeviceInterface,
     NetworkDevice,
 )
+from app.models.provisioning import ProvisioningRun
 from app.services import network as network_service
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
@@ -28,6 +29,41 @@ from app.services.web_network_core_devices_inventory import (
 logger = logging.getLogger(__name__)
 
 _VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
+
+
+def _summarize_provisioning_run(run: ProvisioningRun) -> dict[str, object]:
+    payload = run.output_payload if isinstance(run.output_payload, dict) else {}
+    raw_results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    step_results: list[dict[str, str]] = []
+    success_count = 0
+    failed_count = 0
+    for raw in raw_results:
+        if not isinstance(raw, dict):
+            continue
+        status = str(raw.get("status") or "").strip().lower()
+        if status == "success":
+            success_count += 1
+        elif status == "failed":
+            failed_count += 1
+        step_results.append(
+            {
+                "step_type": str(raw.get("step_type") or raw.get("name") or "step"),
+                "status": status or "unknown",
+                "detail": str(raw.get("detail") or raw.get("message") or "").strip(),
+            }
+        )
+    return {
+        "id": str(run.id),
+        "workflow_name": run.workflow.name if run.workflow else "Provisioning Workflow",
+        "status": run.status.value if run.status else "unknown",
+        "started_at": run.started_at,
+        "completed_at": run.completed_at,
+        "error_message": run.error_message or "",
+        "step_results": step_results[:6],
+        "step_count": len(step_results),
+        "success_count": success_count,
+        "failed_count": failed_count,
+    }
 
 
 def _normalize_port_name(value: str | None) -> str:
@@ -1585,6 +1621,18 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     available_profiles = ont_provisioning_profiles.list(db, is_active=True, limit=50)
 
+    provisioning_runs: list[dict[str, object]] = []
+    subscription_id = getattr(assignment, "subscription_id", None) if assignment else None
+    if subscription_id:
+        raw_runs = (
+            db.query(ProvisioningRun)
+            .filter(ProvisioningRun.subscription_id == subscription_id)
+            .order_by(ProvisioningRun.started_at.desc(), ProvisioningRun.created_at.desc())
+            .limit(5)
+            .all()
+        )
+        provisioning_runs = [_summarize_provisioning_run(run) for run in raw_runs]
+
     # Available firmware images matching this ONT's vendor
     from app.models.network import OntFirmwareImage
 
@@ -1613,6 +1661,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "network_path": network_path,
         "subscriber_info": subscriber_info,
         "provisioning_info": provisioning_info,
+        "provisioning_runs": provisioning_runs,
         "available_profiles": available_profiles,
         "available_firmware": available_firmware,
         "capabilities": capabilities,

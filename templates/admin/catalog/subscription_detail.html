@@ -317,7 +317,243 @@
                                 {% endfor %}
                             </div>
                         </div>
+
+                        <div>
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white">RADIUS Sync Evidence</h4>
+                            <div class="mt-3 space-y-3">
+                                <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                            {{ radius_sync_evidence.internal_user.username if radius_sync_evidence.internal_user else 'No internal RADIUS user' }}
+                                        </p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                                            {% if radius_sync_evidence.internal_user and radius_sync_evidence.internal_user.last_sync_at %}
+                                            Synced {{ radius_sync_evidence.internal_user.last_sync_at.strftime('%b %d, %Y %H:%M') }}
+                                            {% else %}
+                                            Not synced
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {% if radius_sync_evidence.internal_user %}
+                                        Internal `radius_users` row is active{% if radius_sync_evidence.internal_user.radius_profile %} · Profile {{ radius_sync_evidence.internal_user.radius_profile.name }}{% endif %}
+                                        {% else %}
+                                        No internal RADIUS sync row is linked to the current access credential.
+                                        {% endif %}
+                                    </p>
+                                </div>
+                                <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ radius_sync_evidence.nas_client_count }} NAS client registration{{ '' if radius_sync_evidence.nas_client_count == 1 else 's' }}</p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                                            {% if radius_sync_evidence.last_sync_run and radius_sync_evidence.last_sync_run.finished_at %}
+                                            Last sync {{ radius_sync_evidence.last_sync_run.finished_at.strftime('%b %d, %Y %H:%M') }}
+                                            {% else %}
+                                            No sync run recorded
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {% if radius_sync_evidence.nas_clients %}
+                                        {{ radius_sync_evidence.nas_clients | map(attribute='server.name') | join(', ') }}
+                                        {% else %}
+                                        Selected NAS is not registered on any active RADIUS server row.
+                                        {% endif %}
+                                    </p>
+                                </div>
+                                <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="text-sm font-medium text-slate-900 dark:text-white">
+                                            {% if radius_sync_evidence.external_run %}
+                                            External sync {{ radius_sync_evidence.external_run.status.value | replace('_', ' ') | title }}
+                                            {% elif radius_sync_evidence.external_job_count %}
+                                            External sync configured
+                                            {% else %}
+                                            No external sync job
+                                            {% endif %}
+                                        </p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                                            {% if radius_sync_evidence.external_run and radius_sync_evidence.external_run.finished_at %}
+                                            {{ radius_sync_evidence.external_run.finished_at.strftime('%b %d, %Y %H:%M') }}
+                                            {% elif radius_sync_evidence.external_run and radius_sync_evidence.external_run.started_at %}
+                                            Started {{ radius_sync_evidence.external_run.started_at.strftime('%b %d, %Y %H:%M') }}
+                                            {% else %}
+                                            No run recorded
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {{ radius_sync_evidence.external_users_synced }} external user{{ '' if radius_sync_evidence.external_users_synced == 1 else 's' }} synced
+                                        · {{ radius_sync_evidence.external_nas_synced }} external NAS row{{ '' if radius_sync_evidence.external_nas_synced == 1 else 's' }} synced
+                                    </p>
+                                    {% if radius_sync_evidence.external_credentials_scanned or radius_sync_evidence.external_nas_devices_synced %}
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        Scanned {{ radius_sync_evidence.external_credentials_scanned }} credential{{ '' if radius_sync_evidence.external_credentials_scanned == 1 else 's' }}
+                                        · {{ radius_sync_evidence.external_nas_devices_synced }} NAS device{{ '' if radius_sync_evidence.external_nas_devices_synced == 1 else 's' }}
+                                    </p>
+                                    {% endif %}
+                                    {% if radius_sync_evidence.external_error %}
+                                    <p class="mt-1 text-xs text-rose-600 dark:text-rose-300">{{ radius_sync_evidence.external_error }}</p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div>
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Enforcement State</h4>
+                            <div class="mt-3 space-y-3">
+                                <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                    <div class="flex items-center justify-between gap-3">
+                                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ enforcement_state.label }}</p>
+                                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                                            {% if enforcement_state.runtime_entry.updated_at %}
+                                            {{ enforcement_state.runtime_entry.updated_at[:16] | replace('T', ' ') }}
+                                            {% elif enforcement_state.last_event and enforcement_state.last_event.created_at %}
+                                            {{ enforcement_state.last_event.created_at.strftime('%b %d, %Y %H:%M') }}
+                                            {% else %}
+                                            No recent enforcement record
+                                            {% endif %}
+                                        </p>
+                                    </div>
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ enforcement_state.detail }}</p>
+                                    {% if enforcement_state.runtime_entry %}
+                                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                        Original IP {{ enforcement_state.runtime_entry.original_ipv4 or '—' }} · Reject IP {{ enforcement_state.runtime_entry.reject_ipv4 or '—' }} · Reason {{ enforcement_state.runtime_entry.reject_reason or '—' }}
+                                    </p>
+                                    {% endif %}
+                                </div>
+                            </div>
+                        </div>
                     </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="grid gap-6 lg:grid-cols-2">
+                    <div>
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Domain Events</h3>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ domain_events|length }} recent</span>
+                        </div>
+                        <div class="mt-3 space-y-3">
+                            {% for event in domain_events %}
+                            <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                <div class="flex items-center justify-between gap-3">
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.label }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at.strftime('%b %d, %Y %H:%M') if event.created_at else '—' }}</p>
+                                </div>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ event.status }}{% if event.processed_at %} · processed{% endif %}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ event.detail }}</p>
+                                {% if event.failed_handler_text %}
+                                <p class="mt-1 text-xs text-rose-600 dark:text-rose-300">Failed handlers: {{ event.failed_handler_text }}</p>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No domain events recorded for this subscription yet.</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div>
+                        <div class="flex items-center justify-between">
+                            <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Notification Queue</h3>
+                            <span class="text-xs text-slate-500 dark:text-slate-400">
+                                {{ notification_evidence.targets.email|length }} email · {{ notification_evidence.targets.sms|length }} SMS target{{ '' if (notification_evidence.targets.email|length + notification_evidence.targets.sms|length) == 1 else 's' }}
+                            </span>
+                        </div>
+                        <div class="mt-3 space-y-3">
+                            {% for notification in notification_evidence.items %}
+                            <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                                <div class="flex items-center justify-between gap-3">
+                                    <p class="text-sm font-medium text-slate-900 dark:text-white">{{ notification.subject }}</p>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ notification.created_at.strftime('%b %d, %Y %H:%M') if notification.created_at else '—' }}</p>
+                                </div>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ notification.channel }} · {{ notification.status }} · {{ notification.recipient }}</p>
+                                {% if notification.template_code %}
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Template: {{ notification.template_code }}</p>
+                                {% endif %}
+                                {% if notification.last_error %}
+                                <p class="mt-1 text-xs text-rose-600 dark:text-rose-300">{{ notification.last_error }}</p>
+                                {% endif %}
+                            </div>
+                            {% else %}
+                            <div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No recent queued notifications matched this subscriber contact set.</div>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                <div class="flex items-center justify-between gap-4">
+                    <div>
+                        <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">External FreeRADIUS Rows</h3>
+                        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Live read of external `radcheck`, `radreply`, and `radusergroup` rows for the current PPPoE username.</p>
+                    </div>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">{{ external_radius_rows|length }} connector{{ '' if external_radius_rows|length == 1 else 's' }}</span>
+                </div>
+                <div class="mt-4 space-y-4">
+                    {% for source in external_radius_rows %}
+                    <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ source.job_name }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ source.server_name or 'Unknown server' }}</p>
+                            </div>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">
+                                {% if source.available %}
+                                {{ source.radcheck|length }} check · {{ source.radreply|length }} reply · {{ source.radusergroup|length }} group
+                                {% else %}
+                                Unavailable
+                                {% endif %}
+                            </p>
+                        </div>
+                        {% if source.error %}
+                        <p class="mt-3 text-xs text-rose-600 dark:text-rose-300">{{ source.error }}</p>
+                        {% else %}
+                        <div class="mt-3 grid gap-4 lg:grid-cols-3">
+                            <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+                                <div class="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">radcheck</div>
+                                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                                    {% for row in source.radcheck %}
+                                    <div class="px-3 py-2 text-xs">
+                                        <p class="font-mono text-slate-700 dark:text-slate-200">{{ row.attribute }} {{ row.op }} {{ row.value }}</p>
+                                    </div>
+                                    {% else %}
+                                    <div class="px-3 py-4 text-xs text-slate-500 dark:text-slate-400">No external password/check rows.</div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+                                <div class="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">radreply</div>
+                                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                                    {% for row in source.radreply %}
+                                    <div class="px-3 py-2 text-xs">
+                                        <p class="font-mono text-slate-700 dark:text-slate-200">{{ row.attribute }} {{ row.op }} {{ row.value }}</p>
+                                    </div>
+                                    {% else %}
+                                    <div class="px-3 py-4 text-xs text-slate-500 dark:text-slate-400">No external reply rows.</div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
+                                <div class="bg-slate-50 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">radusergroup</div>
+                                <div class="divide-y divide-slate-200 dark:divide-slate-700">
+                                    {% for row in source.radusergroup %}
+                                    <div class="px-3 py-2 text-xs">
+                                        <p class="font-mono text-slate-700 dark:text-slate-200">{{ row.groupname }}{% if row.priority %} · priority {{ row.priority }}{% endif %}</p>
+                                    </div>
+                                    {% else %}
+                                    <div class="px-3 py-4 text-xs text-slate-500 dark:text-slate-400">No external user-group rows.</div>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% else %}
+                    <div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No external RADIUS sync connectors are configured for live row verification.</div>
+                    {% endfor %}
                 </div>
             </div>
 

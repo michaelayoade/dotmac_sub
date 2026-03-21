@@ -207,6 +207,142 @@ def _read_external_radius_credentials(config: dict) -> list[dict[str, str]]:
     return list(selected.values())
 
 
+def _mask_external_radius_value(attribute: str, value: str) -> str:
+    attr = str(attribute or "").strip().lower()
+    text = str(value or "")
+    if attr in {"cleartext-password", "crypt-password"}:
+        if not text:
+            return ""
+        return "••••••••"
+    return text
+
+
+def _read_external_radius_user_records(config: dict, username: str) -> dict[str, list[dict[str, str]]]:
+    username_text = str(username or "").strip()
+    if not username_text:
+        return {"radcheck": [], "radreply": [], "radusergroup": []}
+
+    radcheck = config["radcheck_table"]
+    radreply = config["radreply_table"]
+    radusergroup = config["radusergroup_table"]
+    engine = create_engine(config["db_url"])
+    result = {"radcheck": [], "radreply": [], "radusergroup": []}
+
+    with engine.begin() as conn:
+        for row in conn.execute(
+            text(
+                f"SELECT username, attribute, op, value FROM {radcheck} WHERE username = :u ORDER BY attribute, value"
+            ),  # noqa: S608
+            {"u": username_text},
+        ):
+            result["radcheck"].append(
+                {
+                    "username": str(row.username or "").strip(),
+                    "attribute": str(row.attribute or "").strip(),
+                    "op": str(row.op or "").strip(),
+                    "value": _mask_external_radius_value(
+                        str(row.attribute or "").strip(),
+                        str(row.value or "").strip(),
+                    ),
+                }
+            )
+        for row in conn.execute(
+            text(
+                f"SELECT username, attribute, op, value FROM {radreply} WHERE username = :u ORDER BY attribute, value"
+            ),  # noqa: S608
+            {"u": username_text},
+        ):
+            result["radreply"].append(
+                {
+                    "username": str(row.username or "").strip(),
+                    "attribute": str(row.attribute or "").strip(),
+                    "op": str(row.op or "").strip(),
+                    "value": str(row.value or "").strip(),
+                }
+            )
+        for row in conn.execute(
+            text(
+                f"SELECT username, groupname, priority FROM {radusergroup} WHERE username = :u ORDER BY priority, groupname"
+            ),  # noqa: S608
+            {"u": username_text},
+        ):
+            result["radusergroup"].append(
+                {
+                    "username": str(row.username or "").strip(),
+                    "groupname": str(row.groupname or "").strip(),
+                    "priority": str(row.priority if row.priority is not None else "").strip(),
+                }
+            )
+    return result
+
+
+def read_external_radius_rows_for_username(db: Session, username: str) -> list[dict[str, Any]]:
+    username_text = str(username or "").strip()
+    if not username_text:
+        return []
+
+    jobs = (
+        db.query(RadiusSyncJob)
+        .filter(RadiusSyncJob.is_active.is_(True))
+        .filter(RadiusSyncJob.connector_config_id.isnot(None))
+        .filter(
+            or_(
+                RadiusSyncJob.sync_users.is_(True),
+                RadiusSyncJob.sync_nas_clients.is_(True),
+            )
+        )
+        .order_by(RadiusSyncJob.name.asc())
+        .all()
+    )
+
+    rows: list[dict[str, Any]] = []
+    for job in jobs:
+        config = _external_db_config(db, job)
+        if not config:
+            rows.append(
+                {
+                    "job_name": job.name,
+                    "server_name": job.server.name if job.server else "",
+                    "available": False,
+                    "error": "External connector is not fully configured.",
+                    "radcheck": [],
+                    "radreply": [],
+                    "radusergroup": [],
+                }
+            )
+            continue
+        try:
+            external_rows = _read_external_radius_user_records(config, username_text)
+            rows.append(
+                {
+                    "job_name": job.name,
+                    "server_name": job.server.name if job.server else "",
+                    "available": True,
+                    "error": "",
+                    **external_rows,
+                }
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to read external RADIUS rows for %s via job %s",
+                username_text,
+                job.id,
+                exc_info=True,
+            )
+            rows.append(
+                {
+                    "job_name": job.name,
+                    "server_name": job.server.name if job.server else "",
+                    "available": False,
+                    "error": str(exc),
+                    "radcheck": [],
+                    "radreply": [],
+                    "radusergroup": [],
+                }
+            )
+    return rows
+
+
 def import_access_credentials_from_external_radius(
     db: Session,
     *,
