@@ -15,7 +15,7 @@
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                     <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ t.name }}</td>
                     <td class="px-4 py-3 text-sm font-mono tabular-nums text-slate-700 dark:text-slate-300">{{ t.rate if t.rate is defined else '--' }}%</td>
-                    <td class="px-4 py-3">{% if t.is_active is defined and t.is_active %}{{ status_badge("Active", "active", size="sm") }}{% else %}{{ status_badge("Active", "active", size="sm") }}{% endif %}</td>
+                    <td class="px-4 py-3">{% if t.is_active is defined and t.is_active %}{{ status_badge("Active", "active", size="sm") }}{% else %}{{ status_badge("Inactive", "inactive", size="sm") }}{% endif %}</td>
                 </tr>
                 {% endfor %}
             </tbody>
