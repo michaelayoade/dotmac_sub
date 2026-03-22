@@ -119,8 +119,12 @@ def _snmp_get_single(device: NetworkDevice, oid: str) -> float | None:
     if not mgmt_ip:
         return None
 
+    # Use device's configured SNMP version (normalize to CLI format)
+    raw_ver = str(getattr(device, "snmp_version", "") or "2c").strip().lower()
+    version = "1" if raw_ver in ("1", "v1") else "2c"
+
     try:
-        result = snmp_get(mgmt_ip, community, oid, timeout=8)
+        result = snmp_get(mgmt_ip, community, oid, timeout=8, version=version)
         if result is not None:
             return float(result)
     except (ValueError, TypeError):
@@ -485,3 +489,201 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
     db.commit()
     logger.info("NAS monitoring sync complete: synced=%d skipped=%d errors=%d", synced, skipped, errors)
     return {"synced": synced, "skipped": skipped, "errors": errors}
+
+
+# ── Vendor SNMP OID Mappings ────────────────────────────────────────
+
+
+# Common SNMP OIDs for device system metrics by vendor
+_VENDOR_HEALTH_OIDS: dict[str, dict[str, str]] = {
+    "mikrotik": {
+        "cpu": ".1.3.6.1.2.1.25.3.3.1.2.1",  # hrProcessorLoad
+        "memory_total": ".1.3.6.1.2.1.25.2.3.1.5.65536",
+        "memory_used": ".1.3.6.1.2.1.25.2.3.1.6.65536",
+        "uptime": ".1.3.6.1.2.1.1.3.0",
+        "temperature": ".1.3.6.1.4.1.14988.1.1.3.10.0",
+    },
+    "huawei": {
+        "cpu": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.5.67108873",
+        "memory_total": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.7.67108873",
+        "memory_used": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.8.67108873",
+        "uptime": ".1.3.6.1.2.1.1.3.0",
+        "temperature": ".1.3.6.1.4.1.2011.5.25.31.1.1.1.1.11.67108873",
+    },
+    "generic": {
+        "cpu": ".1.3.6.1.2.1.25.3.3.1.2.1",  # HOST-RESOURCES-MIB
+        "uptime": ".1.3.6.1.2.1.1.3.0",  # sysUpTime
+    },
+}
+
+# Huawei OLT OIDs for ONT optical signal monitoring
+_HUAWEI_ONT_SIGNAL_OID = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4"  # hwGponOntOpticalDdmRxPower
+
+
+def poll_device_system_metrics(
+    db: Session,
+    device: NetworkDevice,
+    *,
+    vendor: str | None = None,
+) -> dict[str, int]:
+    """Poll CPU, memory, temperature via SNMP for a device.
+
+    Args:
+        db: Database session.
+        device: The network device to poll.
+        vendor: Vendor hint (mikrotik, huawei, generic). Auto-detected if None.
+
+    Returns:
+        {polled, stored, errors}
+    """
+    if not device.snmp_community:
+        return {"polled": 0, "stored": 0, "errors": 0}
+
+    ip = str(device.mgmt_ip or "")
+    if not ip:
+        return {"polled": 0, "stored": 0, "errors": 0}
+
+    # Auto-detect vendor from sysDescr if not provided
+    if not vendor:
+        vendor_str = str(device.vendor or device.device_type or "").lower()
+        if "mikrotik" in vendor_str or "routeros" in vendor_str:
+            vendor = "mikrotik"
+        elif "huawei" in vendor_str:
+            vendor = "huawei"
+        else:
+            vendor = "generic"
+
+    oid_map = _VENDOR_HEALTH_OIDS.get(vendor, _VENDOR_HEALTH_OIDS["generic"])
+
+    polled = 0
+    stored = 0
+    errors = 0
+    now = datetime.now(UTC)
+    metric_type_map = {
+        "cpu": MetricType.cpu,
+        "memory_used": MetricType.memory,
+        "temperature": MetricType.temperature,
+        "uptime": MetricType.uptime,
+    }
+
+    for metric_name, oid in oid_map.items():
+        try:
+            value = _snmp_get_single(device, oid)
+            if value is None:
+                continue
+            polled += 1
+
+            # For memory, compute percentage if we have total
+            numeric_value = float(value)
+
+            # Map to MetricType
+            mt = metric_type_map.get(metric_name)
+            if mt is None:
+                continue
+
+            # Special: compute memory % from used/total
+            if metric_name == "memory_used" and "memory_total" in oid_map:
+                total_val = _snmp_get_single(device, oid_map["memory_total"])
+                if total_val and float(total_val) > 0:
+                    numeric_value = (float(value) / float(total_val)) * 100
+                    polled += 1
+
+            dm = DeviceMetric(
+                device_id=device.id,
+                metric_type=mt,
+                value=numeric_value,
+                recorded_at=now,
+            )
+            db.add(dm)
+            stored += 1
+        except Exception as exc:
+            errors += 1
+            logger.debug("SNMP poll failed for %s OID %s: %s", device.name, oid, exc)
+
+    if stored > 0:
+        db.flush()
+        push_device_health_metrics(device, {
+            k: v for k, v in [
+                ("cpu", _latest_metric_value(db, device.id, MetricType.cpu)),
+                ("memory", _latest_metric_value(db, device.id, MetricType.memory)),
+                ("temperature", _latest_metric_value(db, device.id, MetricType.temperature)),
+            ] if v is not None
+        })
+
+    return {"polled": polled, "stored": stored, "errors": errors}
+
+
+def _latest_metric_value(db: Session, device_id, metric_type: MetricType) -> float | None:
+    """Get the most recent metric value for a device."""
+    row = db.scalars(
+        select(DeviceMetric.value)
+        .where(DeviceMetric.device_id == device_id, DeviceMetric.metric_type == metric_type)
+        .order_by(DeviceMetric.recorded_at.desc())
+        .limit(1)
+    ).first()
+    return float(row) if row is not None else None
+
+
+def poll_onu_signal_strength(
+    db: Session,
+    olt_device: NetworkDevice,
+) -> dict[str, int]:
+    """Delegate ONT signal polling to the OLT polling service.
+
+    Resolves the corresponding ``OLTDevice`` record for the monitoring device,
+    updates ``OntUnit`` signal fields there, and returns summarized counts.
+    """
+    from app.models.network import OLTDevice
+    from app.services.network import olt_polling as olt_polling_service
+
+    host = str(olt_device.mgmt_ip or olt_device.hostname or "").strip()
+    if not host:
+        return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 0}
+
+    olt = db.scalars(
+        select(OLTDevice).where(
+            OLTDevice.is_active.is_(True),
+            (OLTDevice.mgmt_ip == host) | (OLTDevice.hostname == host),
+        )
+    ).first()
+    if not olt:
+        logger.warning(
+            "Monitoring device %s has no matching OLT inventory record for signal polling",
+            olt_device.name,
+        )
+        return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 1}
+
+    community = None
+    if olt.snmp_ro_community:
+        try:
+            from app.services.credential_crypto import decrypt_credential
+
+            community = decrypt_credential(olt.snmp_ro_community)
+        except Exception as exc:
+            logger.warning("Failed to decrypt OLT SNMP community for %s: %s", olt.name, exc)
+            return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 1}
+
+    result = olt_polling_service.poll_olt_ont_signals(db, olt, community=community)
+    olt_polling_service.push_signal_metrics_to_victoriametrics(db)
+
+    warning_threshold, _ = olt_polling_service.get_signal_thresholds(db)
+    # Count low-signal ONTs directly from updated inventory.
+    from app.models.network import OntUnit
+
+    low_signal = db.scalar(
+        select(func.count())
+        .select_from(OntUnit)
+        .where(
+            OntUnit.is_active.is_(True),
+            OntUnit.olt_device_id == olt.id,
+            OntUnit.olt_rx_signal_dbm.is_not(None),
+            OntUnit.olt_rx_signal_dbm < warning_threshold,
+        )
+    ) or 0
+
+    return {
+        "polled": int(result.get("polled", 0)),
+        "stored": int(result.get("updated", 0)),
+        "low_signal": int(low_signal),
+        "errors": int(result.get("errors", 0)),
+    }
