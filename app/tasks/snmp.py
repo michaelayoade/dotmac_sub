@@ -41,6 +41,7 @@ def discover_interfaces() -> dict[str, int]:
             )
             created_total += created
             updated_total += updated
+        session.commit()
         return {"created": created_total, "updated": updated_total}
     except Exception:
         session.rollback()
@@ -67,6 +68,7 @@ def walk_interfaces() -> dict[str, int]:
                 session, device, snapshots, create_missing=False
             )
             updated_total += updated
+        session.commit()
         return {"updated": updated_total}
     except Exception:
         session.rollback()

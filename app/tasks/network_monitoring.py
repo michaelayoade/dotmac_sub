@@ -76,6 +76,15 @@ def refresh_core_device_snmp() -> dict[str, int]:
                             poll_custom_snmp_oids(session, device)
                         except Exception as exc:
                             logger.warning("Custom OID poll failed for %s: %s", device.id, exc)
+                        # Poll interface traffic counters for bandwidth
+                        try:
+                            from app.services.monitoring_metrics import (
+                                poll_interface_traffic,
+                            )
+
+                            poll_interface_traffic(session, device)
+                        except Exception as exc:
+                            logger.warning("Interface traffic poll failed for %s: %s", device.id, exc)
                         # Update subscriber impact count
                         try:
                             from app.services.monitoring_metrics import (
