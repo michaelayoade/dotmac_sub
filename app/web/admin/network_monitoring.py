@@ -1,5 +1,6 @@
 """Admin network monitoring and alarms web routes."""
 
+import html as html_mod
 import logging
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -272,19 +273,37 @@ def monitoring_device_bulk_action(
     stats = web_network_monitoring_service.execute_device_bulk_action(
         db, device_ids, action
     )
+    return HTMLResponse(_render_bulk_result(stats, action))
+
+
+def _render_bulk_result(stats: dict, action: str) -> str:
+    """Build the HTML snippet for the bulk action result banner."""
     error = stats.get("error")
     if error:
-        html = (
+        return (
             '<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm'
-            f' text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{error}</div>'
+            " text-rose-700 dark:border-rose-800 dark:bg-rose-900/20"
+            f' dark:text-rose-400">{html_mod.escape(error)}</div>'
         )
-    else:
-        label = _ACTION_LABELS.get(action, action)
-        skipped_text = f", {stats['skipped']} skipped (max 50)" if stats.get("skipped") else ""
-        html = (
-            '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm'
-            " text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400"
-            f'">Bulk <strong>{label}</strong>: {stats["succeeded"]} succeeded, {stats["failed"]} failed'
-            f"{skipped_text}.</div>"
+
+    label = html_mod.escape(_ACTION_LABELS.get(action, action))
+    skipped_text = (
+        f", {stats['skipped']} skipped (max 50)" if stats.get("skipped") else ""
+    )
+    body = (
+        f"Bulk <strong>{label}</strong>: {stats['succeeded']} succeeded,"
+        f" {stats['failed']} failed{skipped_text}."
+    )
+
+    # Pick banner colour: green when some succeeded, amber when all failed.
+    if stats["succeeded"] == 0 and stats["failed"] > 0:
+        return (
+            '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm'
+            " text-amber-700 dark:border-amber-800 dark:bg-amber-900/20"
+            f' dark:text-amber-400">{body}</div>'
         )
-    return HTMLResponse(html)
+    return (
+        '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm'
+        " text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20"
+        f' dark:text-emerald-400">{body}</div>'
+    )

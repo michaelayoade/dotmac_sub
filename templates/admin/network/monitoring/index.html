@@ -571,14 +571,16 @@
                       hx-target="#device-bulk-result"
                       hx-swap="innerHTML"
                       hx-indicator="#device-bulk-spinner"
+                      hx-on::response-error="let el=document.getElementById('device-bulk-result'); el.textContent=''; let d=document.createElement('div'); d.className='rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400'; d.textContent='Server error — please try again.'; el.appendChild(d)"
                       class="inline">
                     {{ csrf_token_field | safe }}
                     <template x-for="id in selected" :key="id">
                         <input type="hidden" name="device_ids" :value="id">
                     </template>
                     <input type="hidden" name="action" :value="bulkAction">
+                    <span x-show="selected.length > 50" class="text-xs text-amber-600 dark:text-amber-400">Only the first 50 will be processed.</span>
                     <button type="submit" :disabled="!bulkAction"
-                        x-on:click="if (bulkAction === 'deactivate' && !confirm('Deactivate ' + selected.length + ' device(s)? They will no longer be monitored.')) $event.preventDefault()"
+                        x-on:click="if (bulkAction === 'deactivate' && !confirm('Deactivate ' + Math.min(selected.length, 50) + ' device(s)? They will no longer be monitored.')) $event.preventDefault()"
                         class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                         Execute

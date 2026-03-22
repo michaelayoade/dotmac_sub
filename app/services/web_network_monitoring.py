@@ -611,43 +611,65 @@ def execute_device_bulk_action(
         deactivate          – soft-delete (is_active=False)
 
     Returns:
-        Stats dict with succeeded/failed/skipped counts.
+        Stats dict with succeeded/failed/skipped counts and optional error.
     """
     from app.models.network_monitoring import NetworkDevice
+    from app.services.common import coerce_uuid
 
     if action not in _MONITORING_BULK_ACTIONS:
-        return {"succeeded": 0, "failed": 0, "skipped": 0, "error": f"Invalid action: {action}"}
+        return {"succeeded": 0, "failed": 0, "skipped": 0, "error": "Invalid action"}
 
     if not device_ids:
         return {"succeeded": 0, "failed": 0, "skipped": 0, "error": "No devices selected"}
 
     capped = device_ids[:_MAX_BULK]
     skipped = len(device_ids) - len(capped)
+    if skipped:
+        logger.warning(
+            "Bulk %s: %d device IDs exceeded cap of %d, %d skipped",
+            action, len(device_ids), _MAX_BULK, skipped,
+        )
     succeeded = 0
     failed = 0
 
-    for did in capped:
-        device = db.get(NetworkDevice, did)
-        if not device:
+    for raw_id in capped:
+        uid = coerce_uuid(raw_id)
+        if uid is None:
+            logger.warning("Bulk %s: invalid device ID skipped: %s", action, raw_id)
             failed += 1
             continue
-        try:
-            if action == "enable_monitoring":
-                device.ping_enabled = True
-                device.snmp_enabled = True
-            elif action == "disable_monitoring":
-                device.ping_enabled = False
-                device.snmp_enabled = False
-            elif action == "enable_notifications":
-                device.send_notifications = True
-            elif action == "disable_notifications":
-                device.send_notifications = False
-            elif action == "deactivate":
-                device.is_active = False
-            succeeded += 1
-        except Exception:
-            logger.exception("Bulk %s failed for device %s", action, did)
+        device = db.get(NetworkDevice, uid)
+        if not device or (not device.is_active and action != "deactivate"):
+            logger.warning("Bulk %s: device %s not found or inactive", action, uid)
             failed += 1
+            continue
+        if action == "enable_monitoring":
+            device.ping_enabled = True
+            device.snmp_enabled = True
+        elif action == "disable_monitoring":
+            device.ping_enabled = False
+            device.snmp_enabled = False
+        elif action == "enable_notifications":
+            device.send_notifications = True
+        elif action == "disable_notifications":
+            device.send_notifications = False
+        elif action == "deactivate":
+            device.is_active = False
+        succeeded += 1
 
-    db.commit()
+    if succeeded > 0:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception(
+                "Bulk %s commit failed for %d devices", action, len(capped),
+            )
+            return {
+                "succeeded": 0,
+                "failed": len(capped),
+                "skipped": skipped,
+                "error": "Database error — no changes were saved. Please try again.",
+            }
+
     return {"succeeded": succeeded, "failed": failed, "skipped": skipped}
