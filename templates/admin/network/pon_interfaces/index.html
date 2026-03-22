@@ -1,0 +1,116 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, action_button, stats_card, icon_server, icon_view %}
+
+{% block title %}PON Interfaces - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("cyan", "blue") }}
+
+<div class="relative space-y-8">
+    {% call page_header(
+        title="PON Interfaces",
+        subtitle="Single-view snapshot of modeled and monitored PON interface health",
+        icon=icon_server(),
+        color="cyan",
+        color2="blue",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "PON Interfaces"}]
+    ) %}
+        {{ action_button("OLT Fleet", "/admin/network/olts", icon_view(), "secondary", "slate") }}
+    {% endcall %}
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
+        {{ stats_card("Total", stats.total, icon=icon_server(), color="cyan", color2="blue") }}
+        {{ stats_card("Up", stats.up, icon=icon_server(), color="emerald", color2="teal") }}
+        {{ stats_card("Down", stats.down, icon=icon_server(), color="rose", color2="pink") }}
+        {{ stats_card("Unknown", stats.unknown, icon=icon_server(), color="slate", color2="gray") }}
+        {{ stats_card("Aliased", stats.aliased, icon=icon_server(), color="amber", color2="orange") }}
+    </div>
+
+    <form method="GET" action="/admin/network/pon-interfaces" class="flex flex-wrap items-center gap-3 rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <input type="text" name="search" value="{{ filters.search }}" placeholder="Search OLT, interface, alias..."
+               class="min-w-[240px] flex-1 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        <select name="status" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="" {% if not filters.status %}selected{% endif %}>All statuses</option>
+            <option value="up" {% if filters.status == 'up' %}selected{% endif %}>Up</option>
+            <option value="down" {% if filters.status == 'down' %}selected{% endif %}>Down</option>
+            <option value="unknown" {% if filters.status == 'unknown' %}selected{% endif %}>Unknown</option>
+        </select>
+        <select name="olt_id" class="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <option value="" {% if not filters.olt_id %}selected{% endif %}>All OLTs</option>
+            {% for olt in olts %}
+            <option value="{{ olt.id }}" {% if filters.olt_id == olt.id %}selected{% endif %}>{{ olt.name }}</option>
+            {% endfor %}
+        </select>
+        <button type="submit" class="rounded-xl bg-gradient-to-r from-cyan-500 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:-translate-y-0.5">Apply</button>
+        {% if filters.search or filters.status or filters.olt_id %}
+        <a href="/admin/network/pon-interfaces" class="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Clear</a>
+        {% endif %}
+    </form>
+
+    <section class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <table class="w-full text-left text-sm">
+            <thead>
+                <tr class="border-b border-slate-100 dark:border-slate-700/60">
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Interface</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Alias</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscribers</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Source</th>
+                    <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Description</th>
+                    <th class="px-6 py-3 text-right text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400"></th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
+                {% for row in rows %}
+                <tr class="align-top hover:bg-slate-50 dark:hover:bg-slate-700/20">
+                    <td class="px-6 py-4">
+                        <p class="font-semibold text-slate-900 dark:text-white">{{ row.olt_name }}</p>
+                        <p class="mt-0.5 font-mono text-xs text-slate-500 dark:text-slate-400">{{ row.olt_ip or '—' }}</p>
+                    </td>
+                    <td class="px-6 py-4">
+                        <p class="font-medium text-slate-900 dark:text-white">{{ row.name }}</p>
+                    </td>
+                    <td class="px-6 py-4">
+                        <form method="POST" action="/admin/network/pon-interfaces/alias" class="flex items-center gap-2">
+                            <input type="hidden" name="pon_port_id" value="{{ row.pon_port_id or '' }}">
+                            <input type="hidden" name="olt_id" value="{{ row.olt_id }}">
+                            <input type="hidden" name="interface_name" value="{{ row.name }}">
+                            <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+                            <input type="text" name="alias" value="{{ row.alias or '' }}" placeholder="Add alias"
+                                   class="w-40 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <button type="submit" class="rounded-lg bg-slate-900 px-2.5 py-1.5 text-xs font-semibold text-white dark:bg-white dark:text-slate-900">Save</button>
+                        </form>
+                    </td>
+                    <td class="px-6 py-4">
+                        {% if row.status == 'up' %}
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ row.status_label }}</span>
+                        {% elif row.status == 'down' %}
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>{{ row.status_label }}</span>
+                        {% else %}
+                        <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>{{ row.status_label }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 tabular-nums text-slate-700 dark:text-slate-300">{{ row.subscriber_count }}</td>
+                    <td class="px-6 py-4">
+                        {% if row.kind == 'modeled' %}
+                        <span class="inline-flex rounded-full bg-cyan-100 px-2.5 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300">Modeled</span>
+                        {% else %}
+                        <span class="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">Discovered</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4 text-slate-600 dark:text-slate-300">{{ row.description or '—' }}</td>
+                    <td class="px-6 py-4 text-right">
+                        <a href="{{ row.onts_url }}" class="text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">View ONTs</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr>
+                    <td colspan="8" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No PON interfaces match the current filters.</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+</div>
+{% endblock %}

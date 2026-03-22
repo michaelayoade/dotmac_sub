@@ -26,6 +26,7 @@ from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services import web_network_olts as web_network_olts_service
+from app.services import web_network_pon_interfaces as web_network_pon_interfaces_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
@@ -131,6 +132,47 @@ def olts_list(
     context = _base_context(request, db, active_page="olts")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/olts/index.html", context)
+
+
+@router.get("/pon-interfaces", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+def pon_interfaces_list(
+    request: Request,
+    search: str | None = None,
+    status: str | None = None,
+    olt_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    context = _base_context(request, db, active_page="pon-interfaces")
+    context.update(
+        web_network_pon_interfaces_service.build_page_data(
+            db,
+            search=search,
+            status=status,
+            olt_id=olt_id,
+        )
+    )
+    return templates.TemplateResponse("admin/network/pon_interfaces/index.html", context)
+
+
+@router.post("/pon-interfaces/alias", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def pon_interface_save_alias(
+    request: Request,
+    olt_id: str = Form(""),
+    interface_name: str = Form(""),
+    alias: str = Form(""),
+    pon_port_id: str = Form(""),
+    return_to: str = Form("/admin/network/pon-interfaces"),
+    db: Session = Depends(get_db),
+):
+    web_network_pon_interfaces_service.save_alias(
+        db,
+        olt_id=olt_id,
+        interface_name=interface_name,
+        alias=alias,
+        pon_port_id=pon_port_id or None,
+    )
+    target = return_to or "/admin/network/pon-interfaces"
+    return RedirectResponse(url=target, status_code=303)
 
 
 @router.get("/olts/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])

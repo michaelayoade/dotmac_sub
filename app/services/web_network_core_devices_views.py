@@ -136,8 +136,16 @@ def _pon_port_display_text(pon_port: object | None) -> str | None:
     """Return PON port label as '<last-port-segment> - <description>' when possible."""
     if not pon_port:
         return None
-    notes_text = str(getattr(pon_port, "notes", "") or "").strip()
+    from app.services.web_network_pon_interfaces import parse_pon_port_notes
+
+    alias_text, cleaned_notes = parse_pon_port_notes(getattr(pon_port, "notes", None))
+    notes_text = str(cleaned_notes or "").strip()
     name_text = str(getattr(pon_port, "name", "") or "").strip()
+    if alias_text:
+        if name_text:
+            port_segment = name_text.split("/")[-1].strip() or name_text
+            return f"{port_segment} - {alias_text}"
+        return alias_text
     if notes_text:
         if name_text:
             port_segment = name_text.split("/")[-1].strip() or name_text

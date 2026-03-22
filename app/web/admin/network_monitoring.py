@@ -4,7 +4,7 @@ import logging
 import subprocess
 from datetime import UTC, datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -244,3 +244,47 @@ def alarms_rules_create(request: Request, db: Session = Depends(get_db)):
         }
     )
     return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
+
+
+# ── Bulk actions on monitoring devices ────────────────────────────────
+
+_ACTION_LABELS: dict[str, str] = {
+    "enable_monitoring": "Enable Monitoring",
+    "disable_monitoring": "Disable Monitoring",
+    "enable_notifications": "Enable Notifications",
+    "disable_notifications": "Disable Notifications",
+    "deactivate": "Deactivate",
+}
+
+
+@router.post(
+    "/monitoring/bulk-action",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
+def monitoring_device_bulk_action(
+    request: Request,
+    action: str = Form(""),
+    device_ids: list[str] = Form(default=[]),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Execute a bulk action on selected monitoring devices."""
+    stats = web_network_monitoring_service.execute_device_bulk_action(
+        db, device_ids, action
+    )
+    error = stats.get("error")
+    if error:
+        html = (
+            '<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm'
+            f' text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{error}</div>'
+        )
+    else:
+        label = _ACTION_LABELS.get(action, action)
+        skipped_text = f", {stats['skipped']} skipped (max 50)" if stats.get("skipped") else ""
+        html = (
+            '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm'
+            " text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400"
+            f'">Bulk <strong>{label}</strong>: {stats["succeeded"]} succeeded, {stats["failed"]} failed'
+            f"{skipped_text}.</div>"
+        )
+    return HTMLResponse(html)

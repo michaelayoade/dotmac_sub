@@ -581,3 +581,73 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
         results.append(row)
 
     return results
+
+
+# ── Bulk actions on monitoring devices ────────────────────────────────
+
+_MONITORING_BULK_ACTIONS = frozenset({
+    "enable_monitoring",
+    "disable_monitoring",
+    "enable_notifications",
+    "disable_notifications",
+    "deactivate",
+})
+
+_MAX_BULK = 50
+
+
+def execute_device_bulk_action(
+    db: Session,
+    device_ids: list[str],
+    action: str,
+) -> dict[str, Any]:
+    """Execute a bulk action on selected monitoring devices.
+
+    Supported actions:
+        enable_monitoring   – set ping_enabled=True, snmp_enabled=True
+        disable_monitoring  – set ping_enabled=False, snmp_enabled=False
+        enable_notifications – set send_notifications=True
+        disable_notifications – set send_notifications=False
+        deactivate          – soft-delete (is_active=False)
+
+    Returns:
+        Stats dict with succeeded/failed/skipped counts.
+    """
+    from app.models.network_monitoring import NetworkDevice
+
+    if action not in _MONITORING_BULK_ACTIONS:
+        return {"succeeded": 0, "failed": 0, "skipped": 0, "error": f"Invalid action: {action}"}
+
+    if not device_ids:
+        return {"succeeded": 0, "failed": 0, "skipped": 0, "error": "No devices selected"}
+
+    capped = device_ids[:_MAX_BULK]
+    skipped = len(device_ids) - len(capped)
+    succeeded = 0
+    failed = 0
+
+    for did in capped:
+        device = db.get(NetworkDevice, did)
+        if not device:
+            failed += 1
+            continue
+        try:
+            if action == "enable_monitoring":
+                device.ping_enabled = True
+                device.snmp_enabled = True
+            elif action == "disable_monitoring":
+                device.ping_enabled = False
+                device.snmp_enabled = False
+            elif action == "enable_notifications":
+                device.send_notifications = True
+            elif action == "disable_notifications":
+                device.send_notifications = False
+            elif action == "deactivate":
+                device.is_active = False
+            succeeded += 1
+        except Exception:
+            logger.exception("Bulk %s failed for device %s", action, did)
+            failed += 1
+
+    db.commit()
+    return {"succeeded": succeeded, "failed": failed, "skipped": skipped}
