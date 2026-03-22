@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -287,7 +288,7 @@ class DeviceInterface(Base):
     )
     speed_mbps: Mapped[int | None] = mapped_column(Integer)
     mac_address: Mapped[str | None] = mapped_column(String(64))
-    snmp_index: Mapped[int | None] = mapped_column(Integer)
+    snmp_index: Mapped[int | None] = mapped_column(BigInteger)
 
     # Counter state for bps delta calculation (updated by SNMP polling)
     last_in_octets: Mapped[float | None] = mapped_column(Float)
