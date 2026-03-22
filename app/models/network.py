@@ -1015,8 +1015,8 @@ class OntAssignment(Base):
     ont_unit_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ont_units.id"), nullable=False
     )
-    pon_port_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("pon_ports.id"), nullable=False
+    pon_port_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("pon_ports.id"), nullable=True
     )
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")

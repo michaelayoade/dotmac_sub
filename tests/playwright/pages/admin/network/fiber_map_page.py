@@ -18,7 +18,7 @@ class FiberMapPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the fiber map page is loaded."""
-        expect(self.page.get_by_role("heading", name="Fiber", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="Fiber Plant Map", exact=True)).to_be_visible()
 
     def expect_map_visible(self) -> None:
         """Assert the map component is visible."""

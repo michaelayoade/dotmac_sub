@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.ont_action_common import ActionResult, get_ont_or_error
+from app.services.web_network_service_ports import _parse_ont_id_on_olt
 
 logger = logging.getLogger(__name__)
 
@@ -191,11 +192,11 @@ class OntWriteService:
             )
 
         # We need the ONT number within the PON port; parse from external_id or assignment
-        ont_number = ont.external_id
-        if not ont_number or not ont_number.isdigit():
+        ont_number = _parse_ont_id_on_olt(ont.external_id)
+        if ont_number is None:
             return ActionResult(
                 success=False,
-                message="ONT external_id (ONT number) is not set or not numeric.",
+                message="ONT external_id does not contain a usable ONT number.",
             )
 
         # Resolve VLAN ID integer from UUID
@@ -219,7 +220,7 @@ class OntWriteService:
             success, message = configure_ont_iphost(
                 olt,
                 fsp,
-                int(ont_number),
+                ont_number,
                 vlan_id=vlan_int,
                 ip_mode=mgmt_ip_mode,
                 ip_address=mgmt_ip_address,
@@ -278,10 +279,10 @@ class OntWriteService:
         if not fsp:
             return ActionResult(success=False, message="Cannot determine FSP.")
 
-        ont_number = ont.external_id
-        if not ont_number or not ont_number.isdigit():
+        ont_number = _parse_ont_id_on_olt(ont.external_id)
+        if ont_number is None:
             return ActionResult(
-                success=False, message="ONT external_id is not set or not numeric."
+                success=False, message="ONT external_id does not contain a usable ONT number."
             )
 
         try:
@@ -292,7 +293,7 @@ class OntWriteService:
             success, message = create_single_service_port(
                 olt,
                 fsp,
-                int(ont_number),
+                ont_number,
                 gem_index,
                 vlan_id,
                 user_vlan=user_vlan,

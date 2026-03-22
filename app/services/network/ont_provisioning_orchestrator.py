@@ -26,7 +26,14 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntProvisioningProfile, OntProvisioningStatus, OntUnit
+from app.models.network import (
+    OLTDevice,
+    OntAssignment,
+    OntProvisioningProfile,
+    OntProvisioningStatus,
+    OntUnit,
+)
+from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -149,6 +156,127 @@ def _rollback_service_ports(
 
 class OntProvisioningOrchestrator:
     """Orchestrates end-to-end ONT provisioning."""
+
+    @staticmethod
+    def validate_prerequisites(db: Session, ont_id: str) -> dict:
+        """Check all prerequisites before provisioning.
+
+        Returns a dict with:
+        - ready: bool — all checks pass
+        - checks: list of {name, status, message, can_auto_fix}
+        """
+        from app.models.catalog import (
+            AccessCredential,
+            Subscription,
+            SubscriptionStatus,
+        )
+        from app.models.domain_settings import SettingDomain
+        from app.services import settings_spec
+
+        checks: list[dict] = []
+        ont = db.get(OntUnit, coerce_uuid(ont_id))
+
+        # 1. ONT exists and is active
+        if not ont:
+            checks.append({"name": "ONT exists", "status": "fail", "message": "ONT not found", "can_auto_fix": False})
+            return {"ready": False, "checks": checks}
+        checks.append({"name": "ONT exists", "status": "ok", "message": f"{ont.serial_number} ({ont.vendor or ''} {ont.model or ''})", "can_auto_fix": False})
+
+        # 2. OLT assigned
+        if ont.olt_device_id:
+            olt = db.get(OLTDevice, ont.olt_device_id)
+            checks.append({"name": "OLT assigned", "status": "ok", "message": olt.name if olt else str(ont.olt_device_id), "can_auto_fix": False})
+        else:
+            checks.append({"name": "OLT assigned", "status": "fail", "message": "No OLT — assign ONT to an OLT first", "can_auto_fix": False})
+
+        # 3. Board + Port (FSP) set
+        if ont.board and ont.port is not None:
+            checks.append({"name": "OLT position (F/S/P)", "status": "ok", "message": f"{ont.board}/{ont.port}", "can_auto_fix": False})
+        else:
+            checks.append({"name": "OLT position (F/S/P)", "status": "fail", "message": "Board/port not set — discover from OLT or enter manually", "can_auto_fix": False})
+
+        # 4. Provisioning profile
+        if ont.provisioning_profile_id:
+            profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+            checks.append({"name": "Provisioning profile", "status": "ok", "message": profile.name if profile else "Set", "can_auto_fix": False})
+        else:
+            # Check for default
+            default_profile = (
+                db.query(OntProvisioningProfile)
+                .filter(OntProvisioningProfile.is_active.is_(True))
+                .first()
+            )
+            if default_profile:
+                checks.append({"name": "Provisioning profile", "status": "warn", "message": f"Not set — will use default: {default_profile.name}", "can_auto_fix": True})
+            else:
+                checks.append({"name": "Provisioning profile", "status": "fail", "message": "No profile — create one in Catalog → Provisioning Profiles", "can_auto_fix": False})
+
+        # 5. OLT SSH credentials
+        if ont.olt_device_id:
+            olt = db.get(OLTDevice, ont.olt_device_id)
+            if olt and olt.ssh_username and olt.ssh_password:
+                checks.append({"name": "OLT SSH credentials", "status": "ok", "message": f"User: {olt.ssh_username}", "can_auto_fix": False})
+            else:
+                checks.append({"name": "OLT SSH credentials", "status": "fail", "message": "SSH not configured on OLT", "can_auto_fix": False})
+
+        # 6. Subscriber assignment
+        assignment = (
+            db.query(OntAssignment)
+            .filter(OntAssignment.ont_unit_id == ont.id, OntAssignment.active.is_(True))
+            .first()
+        )
+        if assignment and assignment.subscriber_id:
+            from app.models.subscriber import Subscriber
+            sub = db.get(Subscriber, assignment.subscriber_id)
+            sub_name = f"{sub.first_name or ''} {sub.last_name or ''}".strip() if sub else str(assignment.subscriber_id)
+            checks.append({"name": "Subscriber assigned", "status": "ok", "message": sub_name, "can_auto_fix": False})
+
+            # 7. Active subscription
+            active_sub = (
+                db.query(Subscription)
+                .filter(
+                    Subscription.subscriber_id == assignment.subscriber_id,
+                    Subscription.status == SubscriptionStatus.active,
+                )
+                .first()
+            )
+            if active_sub:
+                checks.append({"name": "Active subscription", "status": "ok", "message": str(active_sub.id)[:8] + "...", "can_auto_fix": False})
+            else:
+                checks.append({"name": "Active subscription", "status": "warn", "message": "No active subscription", "can_auto_fix": False})
+
+            # 8. PPPoE credentials
+            cred = (
+                db.query(AccessCredential)
+                .filter(
+                    AccessCredential.subscriber_id == assignment.subscriber_id,
+                    AccessCredential.is_active.is_(True),
+                )
+                .first()
+            )
+            if cred:
+                checks.append({"name": "PPPoE credential", "status": "ok", "message": cred.username, "can_auto_fix": False})
+            else:
+                pppoe_enabled = settings_spec.resolve_value(db, SettingDomain.radius, "pppoe_auto_generate_enabled")
+                if pppoe_enabled is True:
+                    checks.append({"name": "PPPoE credential", "status": "warn", "message": "None — will auto-generate", "can_auto_fix": True})
+                else:
+                    checks.append({"name": "PPPoE credential", "status": "fail", "message": "None — auto-gen disabled", "can_auto_fix": False})
+        else:
+            checks.append({"name": "Subscriber assigned", "status": "warn", "message": "No subscriber — provisioning will skip PPPoE", "can_auto_fix": False})
+
+        # 9. TR-069 ACS
+        acs_server_id = ont.tr069_acs_server_id
+        if not acs_server_id and ont.olt_device_id:
+            olt = db.get(OLTDevice, ont.olt_device_id)
+            acs_server_id = getattr(olt, "tr069_acs_server_id", None) if olt else None
+        if acs_server_id:
+            checks.append({"name": "TR-069 ACS server", "status": "ok", "message": "Configured", "can_auto_fix": False})
+        else:
+            checks.append({"name": "TR-069 ACS server", "status": "warn", "message": "Not configured — TR-069 steps will be skipped", "can_auto_fix": False})
+
+        ready = all(c["status"] != "fail" for c in checks)
+        return {"ready": ready, "checks": checks}
 
     @staticmethod
     def provision_ont(
@@ -471,7 +599,7 @@ class OntProvisioningOrchestrator:
                     logger.warning("PPPoE OMCI failed for service #%d: %s", i, msg)
 
             step_ms = int((time.monotonic() - step_start) * 1000)
-            omci_success = omci_ok > 0
+            omci_success = omci_errors == 0 and omci_ok == len(pppoe_services)
             omci_msg = f"Configured {omci_ok}, failed {omci_errors}"
             result.steps.append(
                 ProvisioningStepResult(11, "Configure PPPoE via OMCI", omci_success, omci_msg, step_ms)

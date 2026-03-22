@@ -92,7 +92,7 @@ class TestIPManagement:
         page = IPManagementPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
-        expect(admin_page.locator("table")).to_be_visible()
+        expect(admin_page.locator("table").first).to_be_visible()
 
 
 class TestFiberMap:
@@ -121,7 +121,7 @@ class TestNetworkAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/network/olt-devices?limit=10",
+            "/api/v1/olt-devices?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -134,7 +134,7 @@ class TestNetworkAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/network/ont-devices?limit=10",
+            "/api/v1/ont-units?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -147,7 +147,7 @@ class TestNetworkAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/network/vlans?limit=10",
+            "/api/v1/vlans?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -160,7 +160,7 @@ class TestNetworkAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/network/ip-pools?limit=10",
+            "/api/v1/ip-pools?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -173,7 +173,7 @@ class TestNetworkAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/catalog/radius-profiles?limit=10",
+            "/api/v1/radius-profiles?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200

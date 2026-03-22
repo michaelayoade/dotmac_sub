@@ -64,6 +64,50 @@ def _create_org(db_session) -> Organization:
     db_session.refresh(org)
     return org
 
+
+def test_reference_ont_options_include_huawei_dotted_external_ids(db_session) -> None:
+    from app.services.web_network_service_ports import _reference_ont_options
+
+    olt = OLTDevice(name="Reference OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    pon = PonPort(olt_id=olt.id, name="0/2/1")
+    db_session.add(pon)
+    db_session.commit()
+    db_session.refresh(pon)
+
+    target = OntUnit(serial_number="TARGET-ONT", board="0/2", port="1", external_id="5")
+    ref = OntUnit(
+        serial_number="REF-ONT",
+        board="0/2",
+        port="1",
+        external_id="huawei:4194320640.7",
+    )
+    db_session.add_all([target, ref])
+    db_session.commit()
+    db_session.refresh(target)
+    db_session.refresh(ref)
+
+    db_session.add_all(
+        [
+            OntAssignment(ont_unit_id=target.id, pon_port_id=pon.id, active=True),
+            OntAssignment(ont_unit_id=ref.id, pon_port_id=pon.id, active=True),
+        ]
+    )
+    db_session.commit()
+
+    options = _reference_ont_options(
+        db_session,
+        target_ont_id=str(target.id),
+        olt_id=str(olt.id),
+    )
+
+    assert len(options) == 1
+    assert options[0]["id"] == str(ref.id)
+    assert "ONT-ID 7" in options[0]["label"]
+
 # ---------------------------------------------------------------------------
 # Phase 1: Service-port SSH parsing and filtering
 # ---------------------------------------------------------------------------
@@ -1217,6 +1261,121 @@ class TestProvisioningOrchestrator:
             ("user-a", "pass-a", 1),
             ("user-b", "pass-b", 2),
         ]
+
+    def test_partial_pppoe_omci_failure_marks_provision_failed(self, db_session, monkeypatch, subscriber) -> None:
+        from app.services.network.ont_provisioning_orchestrator import (
+            OntProvisioningOrchestrator,
+        )
+
+        ont = OntUnit(serial_number="TEST-PROV-PPPOE-OMCI-PARTIAL", board="0/2", port="1", external_id="5")
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        olt = OLTDevice(name="PPPoE Partial OLT", vendor="Huawei", model="MA5608T")
+        db_session.add(olt)
+        db_session.commit()
+        db_session.refresh(olt)
+
+        pon = PonPort(olt_id=olt.id, name="0/2/1")
+        db_session.add(pon)
+        db_session.commit()
+        db_session.refresh(pon)
+
+        db_session.add(
+            OntAssignment(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            )
+        )
+        db_session.commit()
+
+        org = _create_org(db_session)
+        profile = OntProvisioningProfile(
+            organization_id=org.id,
+            name="PPPoE Partial Profile",
+        )
+        db_session.add(profile)
+        db_session.commit()
+        db_session.refresh(profile)
+
+        monkeypatch.setattr(
+            "app.services.network.ont_provisioning_orchestrator.build_spec_from_profile",
+            lambda *_args, **_kwargs: ProvisioningSpec(
+                wan_services=[
+                    WanServiceSpec(
+                        service_type="internet",
+                        vlan_id=201,
+                        gem_index=1,
+                        connection_type="pppoe",
+                        pppoe_username_template="user-a",
+                        pppoe_password="pass-a",
+                        pppoe_password_mode="static",
+                    ),
+                    WanServiceSpec(
+                        service_type="iptv",
+                        vlan_id=202,
+                        gem_index=2,
+                        connection_type="pppoe",
+                        pppoe_username_template="user-b",
+                        pppoe_password="pass-b",
+                        pppoe_password_mode="static",
+                    ),
+                ],
+                pppoe_omci_vlan=201,
+            ),
+        )
+        monkeypatch.setattr(
+            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
+            lambda *_args, **_kwargs: (True, "created"),
+        )
+        monkeypatch.setattr(
+            "app.services.network.ont_provisioning_orchestrator.bind_tr069_server_profile",
+            lambda *_args, **_kwargs: (True, "bound"),
+        )
+        monkeypatch.setattr(
+            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
+            lambda *_args, **_kwargs: True,
+        )
+
+        omci_calls = {"count": 0}
+
+        def _fake_omci(*_args, **_kwargs):
+            omci_calls["count"] += 1
+            if omci_calls["count"] == 1:
+                return True, "configured"
+            return False, "olt rejected"
+
+        monkeypatch.setattr(
+            "app.services.network.ont_provisioning_orchestrator.configure_ont_pppoe_omci",
+            _fake_omci,
+        )
+
+        from app.services.network.ont_actions import OntActions
+
+        monkeypatch.setattr(
+            OntActions,
+            "set_pppoe_credentials",
+            staticmethod(lambda *_args, **_kwargs: SimpleNamespace(success=True, message="ok")),
+        )
+
+        with patch("app.services.events.dispatcher.emit_event") as mock_emit:
+            result = OntProvisioningOrchestrator.provision_ont(
+                db_session,
+                str(ont.id),
+                str(profile.id),
+                dry_run=False,
+                tr069_olt_profile_id=7,
+            )
+
+        assert result.success is False
+        assert any(step.step == 11 and not step.success for step in result.steps)
+        refreshed = db_session.get(OntUnit, ont.id)
+        assert refreshed is not None
+        assert refreshed.provisioning_status == OntProvisioningStatus.failed
+        mock_emit.assert_not_called()
 
     def test_failed_reprovision_clears_previous_last_provisioned_at(self, db_session, monkeypatch) -> None:
         from datetime import UTC, datetime

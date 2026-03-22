@@ -71,6 +71,75 @@ class TestUpdateWanConfig:
         assert "invalid" in result.message.lower()
 
 
+class TestUpdateManagementIp:
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write._resolve_olt_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_ssh_ont.configure_ont_iphost")
+    @patch("app.services.network.cpe.Vlans.get")
+    def test_accepts_huawei_dotted_external_id(
+        self,
+        mock_vlan_get,
+        mock_configure,
+        mock_get,
+        mock_resolve,
+        mock_emit,
+    ):
+        ont = MagicMock(external_id="huawei:4194320640.5")
+        assignment = MagicMock()
+        assignment.pon_port = MagicMock(name="0/1/3")
+        assignment.pon_port.name = "0/1/3"
+        mock_get.return_value = (ont, None)
+        mock_resolve.return_value = (MagicMock(), assignment, None)
+        mock_vlan_get.return_value = MagicMock(tag=203)
+        mock_configure.return_value = (True, "ok")
+        db = MagicMock()
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+            mgmt_vlan_id=FAKE_UUID,
+        )
+
+        assert result.success is True
+        mock_configure.assert_called_once()
+        assert mock_configure.call_args.args[2] == 5
+
+
+class TestUpdateServicePort:
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write._resolve_olt_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
+    def test_accepts_huawei_dotted_external_id(
+        self,
+        mock_create,
+        mock_get,
+        mock_resolve,
+        mock_emit,
+    ):
+        ont = MagicMock(external_id="huawei:4194320640.5")
+        assignment = MagicMock()
+        assignment.pon_port = MagicMock(name="0/1/3")
+        assignment.pon_port.name = "0/1/3"
+        mock_get.return_value = (ont, None)
+        mock_resolve.return_value = (MagicMock(), assignment, None)
+        mock_create.return_value = (True, "created")
+        db = MagicMock()
+
+        result = OntWriteService.update_service_port(
+            db,
+            "ont-1",
+            vlan_id=203,
+            gem_index=1,
+        )
+
+        assert result.success is True
+        mock_create.assert_called_once()
+        assert mock_create.call_args.args[2] == 5
+
+
 class TestMoveOnt:
     """ONT move tests."""
 

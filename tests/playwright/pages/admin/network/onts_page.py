@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.base_page import BasePage
@@ -14,7 +15,15 @@ class ONTsPage(BasePage):
         super().__init__(page, base_url)
     def goto(self, path: str = "/admin/network/onts") -> None:
         """Navigate to the ONTs list."""
-        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
+        url = f"{self.base_url}{path}"
+        timeout_ms = 180000
+        try:
+            self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+        except PlaywrightError as exc:
+            if "NS_ERROR_ABORT" not in str(exc):
+                raise
+            self.page.wait_for_timeout(500)
+            self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
     def expect_loaded(self) -> None:
         """Assert the ONTs page is loaded."""

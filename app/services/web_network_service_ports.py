@@ -20,6 +20,23 @@ from app.services.network.vlan_chain import validate_chain
 logger = logging.getLogger(__name__)
 
 
+def _parse_ont_id_on_olt(external_id: str | None) -> int | None:
+    """Extract the ONT ID from supported external_id formats.
+
+    Supported formats:
+    - "5" -> 5
+    - "huawei:4194320640.5" -> 5
+    """
+    ext = (external_id or "").strip()
+    if ext.isdigit():
+        return int(ext)
+    if "." in ext:
+        dot_part = ext.rsplit(".", 1)[-1]
+        if dot_part.isdigit():
+            return int(dot_part)
+    return None
+
+
 def _resolve_ont_olt_context(
     db: Session, ont_id: str
 ) -> tuple[OntUnit | None, OLTDevice | None, str | None, int | None]:
@@ -62,15 +79,7 @@ def _resolve_ont_olt_context(
 
     # ONT-ID extraction from external_id
     # Formats: "5" (plain), "huawei:4194320640.5" (SNMP), "smartolt:SERIAL" (no ID)
-    ont_id_on_olt: int | None = None
-    ext = (ont.external_id or "").strip()
-    if ext.isdigit():
-        ont_id_on_olt = int(ext)
-    elif "." in ext:
-        # SNMP format: "huawei:4194320640.5" → ONT-ID is the part after the dot
-        dot_part = ext.rsplit(".", 1)[-1]
-        if dot_part.isdigit():
-            ont_id_on_olt = int(dot_part)
+    ont_id_on_olt = _parse_ont_id_on_olt(ont.external_id)
 
     return ont, olt, fsp, ont_id_on_olt
 
@@ -102,8 +111,8 @@ def _reference_ont_options(
         if not pon_port or str(pon_port.olt_id) != olt_id:
             continue
 
-        external_id = (ont.external_id or "").strip()
-        if not external_id.isdigit():
+        ont_id_on_olt = _parse_ont_id_on_olt(ont.external_id)
+        if ont_id_on_olt is None:
             continue
 
         option_id = str(ont.id)
@@ -113,7 +122,7 @@ def _reference_ont_options(
 
         port_label = pon_port.name or f"{ont.board or '?'} / {ont.port or '?'}"
         serial = ont.serial_number or "Unknown serial"
-        label = f"{serial} | ONT-ID {external_id} | {port_label}"
+        label = f"{serial} | ONT-ID {ont_id_on_olt} | {port_label}"
         options.append({"id": option_id, "label": label})
 
     options.sort(key=lambda item: item["label"].lower())

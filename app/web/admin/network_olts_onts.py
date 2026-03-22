@@ -2297,6 +2297,23 @@ def ont_provisioning_preview(
 # ────────────────────────────────────────────────────────────────────
 
 
+@router.get("/onts/{ont_id}/preflight", dependencies=[Depends(require_permission("network:read"))])
+def ont_preflight_check(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+):
+    """Pre-flight validation for ONT provisioning. Returns JSON checklist."""
+    from fastapi.responses import JSONResponse
+
+    from app.services.network.ont_provisioning_orchestrator import (
+        OntProvisioningOrchestrator,
+    )
+
+    result = OntProvisioningOrchestrator.validate_prerequisites(db, ont_id)
+    return JSONResponse(result)
+
+
 @router.post("/onts/{ont_id}/provision", dependencies=[Depends(require_permission("network:write"))])
 def ont_provision(
     request: Request,
