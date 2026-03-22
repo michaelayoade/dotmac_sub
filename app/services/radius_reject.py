@@ -48,6 +48,7 @@ _RUNTIME_STATE_KEY = "reject_ip_runtime_state"
 _RUNTIME_STATE_VERSION = 1
 _INITIAL_PUSH_KEY = "reject_ip_initial_push_done_at"
 _STATUS_BLOCKED = {
+    SubscriptionStatus.blocked,
     SubscriptionStatus.suspended,
     SubscriptionStatus.canceled,
     SubscriptionStatus.expired,

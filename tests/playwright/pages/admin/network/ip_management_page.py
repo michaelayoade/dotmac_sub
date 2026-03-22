@@ -14,7 +14,7 @@ class IPManagementPage(BasePage):
         super().__init__(page, base_url)
     def goto(self, path: str = "/admin/network/ip-management") -> None:
         """Navigate to the IP management page."""
-        super().goto(path)
+        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
 
     def expect_loaded(self) -> None:
         """Assert the IP management page is loaded."""

@@ -215,6 +215,22 @@ class TestCaptiveRedirectPersistence:
         payload = SubscriberUpdate(captive_redirect_enabled=True)
         assert payload.captive_redirect_enabled is True
 
+    def test_save_radius_config_persists_explicit_captive_redirect_toggle(self, db_session) -> None:
+        from app.services.domain_settings import radius_settings
+        from app.services.web_system_config import save_radius_config
+
+        save_radius_config(
+            db_session,
+            {
+                "captive_redirect_enabled": "true",
+                "captive_portal_ip": "203.0.113.10/32",
+                "captive_portal_url": "https://example.com/portal",
+            },
+        )
+
+        setting = radius_settings.get_by_key(db_session, "captive_redirect_enabled")
+        assert setting.value_text == "true"
+
     def test_billing_override_payload_sets_captive_redirect_flag(self) -> None:
         from app.services.web_customer_actions import _billing_override_payload
 

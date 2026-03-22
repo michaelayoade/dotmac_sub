@@ -333,11 +333,8 @@
                                 <p class="text-xs text-slate-500 dark:text-slate-400">Started {{ sub.start_at.strftime('%b %d, %Y') if sub.start_at else 'Pending' }}</p>
                             </div>
                             {% set sub_status = sub.status.value %}
-                            {% if sub_status == 'active' %}
-                            {{ status_badge("Active", "active", size="sm") }}
-                            {% else %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ sub_status | title }}</span>
-                            {% endif %}
+                            {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
+                            {{ status_badge(sub_status_labels.get(sub_status, sub_status | replace('_', ' ') | title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
                         </div>
                         {% endfor %}
                     </div>

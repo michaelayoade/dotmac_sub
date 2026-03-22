@@ -14,7 +14,7 @@ class OLTsPage(BasePage):
         super().__init__(page, base_url)
     def goto(self, path: str = "/admin/network/olts") -> None:
         """Navigate to the OLTs list."""
-        super().goto(path)
+        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
 
     def expect_loaded(self) -> None:
         """Assert the OLTs page is loaded."""

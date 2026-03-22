@@ -42,11 +42,28 @@
                     </div>
                     {% endif %}
                     <!-- Status indicator -->
-                    <span class="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white dark:ring-slate-900 {% if customer.is_active %}bg-indigo-500{% else %}bg-slate-400{% endif %}">
-                        {% if customer.is_active %}
+                    {% set status_icon = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
+                    {% set status_ring = {
+                        'active': 'bg-indigo-500',
+                        'blocked': 'bg-rose-500',
+                        'suspended': 'bg-amber-500',
+                        'disabled': 'bg-slate-500',
+                        'new': 'bg-blue-500',
+                        'canceled': 'bg-rose-400',
+                        'delinquent': 'bg-orange-500',
+                        'inactive': 'bg-slate-400'
+                    } %}
+                    <span class="absolute -bottom-1 -right-1 flex h-6 w-6 items-center justify-center rounded-full ring-4 ring-white dark:ring-slate-900 {{ status_ring.get(status_icon, 'bg-slate-400') }}">
+                        {% if status_icon == 'active' %}
                         <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"/></svg>
+                        {% elif status_icon in ['blocked', 'canceled'] %}
+                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M6 18L18 6M6 6l12 12"/></svg>
+                        {% elif status_icon == 'suspended' or status_icon == 'delinquent' %}
+                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                        {% elif status_icon == 'new' %}
+                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                         {% else %}
-                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636"/></svg>
+                        <svg class="h-3.5 w-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M20 12H4"/></svg>
                         {% endif %}
                     </span>
                 </div>
@@ -64,10 +81,14 @@
                             Organization
                         </span>
                         {% endif %}
-                        {% if customer.is_active %}
-                        {{ status_badge("Active", "active", size="sm") }}
-                        {% else %}
-                        {{ status_badge("Inactive", "inactive", size="sm") }}
+                        {% set cs = customer.status.value if customer.status else ('active' if customer.is_active else 'inactive') %}
+                        {% set status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
+                        {{ status_badge(status_labels.get(cs, cs|title), cs, size="sm") }}
+                        {% if customer.captive_redirect_enabled %}
+                        <span class="inline-flex items-center gap-1 rounded-lg bg-cyan-50 px-2 py-0.5 text-xs font-medium text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-300" title="Captive portal redirect enabled">
+                            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                            Captive Portal
+                        </span>
                         {% endif %}
                     </div>
                     <div class="mt-2 flex flex-wrap items-center gap-4 text-sm text-slate-500 dark:text-slate-400">
@@ -618,7 +639,18 @@
                                     <div class="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-blue-100 to-blue-50 text-blue-600 dark:from-blue-900/40 dark:to-blue-900/20 dark:text-blue-400">
                                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
                                     </div>
-                                    <span class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-white dark:ring-slate-800 {% if subscriber.is_active %}bg-indigo-500{% else %}bg-slate-400{% endif %}"></span>
+                                    {% set subscriber_status_dot = subscriber.status.value if subscriber.status else ('active' if subscriber.is_active else 'inactive') %}
+                                    {% set subscriber_status_ring = {
+                                        'active': 'bg-indigo-500',
+                                        'blocked': 'bg-rose-500',
+                                        'suspended': 'bg-amber-500',
+                                        'disabled': 'bg-slate-500',
+                                        'new': 'bg-blue-500',
+                                        'canceled': 'bg-rose-400',
+                                        'delinquent': 'bg-orange-500',
+                                        'inactive': 'bg-slate-400'
+                                    } %}
+                                    <span class="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full ring-2 ring-white dark:ring-slate-800 {{ subscriber_status_ring.get(subscriber_status_dot, 'bg-slate-400') }}"></span>
                                 </div>
                                 <div>
                                     <p class="text-sm font-semibold text-slate-900 dark:text-white">
@@ -629,11 +661,9 @@
                                 </div>
                             </div>
                             <div class="flex items-center gap-3">
-                                {% if subscriber.is_active %}
-                                {{ status_badge("Active", "active", size="sm") }}
-                                {% else %}
-                                {{ status_badge("Inactive", "inactive", size="sm") }}
-                                {% endif %}
+                                {% set subscriber_status = subscriber.status.value if subscriber.status else ('active' if subscriber.is_active else 'inactive') %}
+                                {% set subscriber_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'new': 'New', 'canceled': 'Canceled', 'delinquent': 'Delinquent', 'inactive': 'Inactive'} %}
+                                {{ status_badge(subscriber_status_labels.get(subscriber_status, subscriber_status | title), subscriber_status if subscriber_status in subscriber_status_labels else 'default', size="sm") }}
                                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </div>
                         </a>
@@ -675,8 +705,16 @@
                         <div class="px-5 py-4">
                             <div class="flex items-start justify-between">
                                 <div class="flex items-start gap-3">
-                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl {% if sub_status == 'active' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl {% if sub_status == 'active' %}bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-400{% elif sub_status in ['pending', 'suspended', 'delinquent'] %}bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400{% elif sub_status in ['blocked', 'canceled', 'expired'] %}bg-rose-50 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400{% else %}bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                                        {% if sub_status == 'active' %}
                                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        {% elif sub_status in ['blocked', 'canceled', 'expired'] %}
+                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                        {% elif sub_status in ['pending', 'suspended', 'delinquent'] %}
+                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                        {% else %}
+                                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 12H4"/></svg>
+                                        {% endif %}
                                     </div>
                                     <div>
                                         <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</p>
@@ -1113,13 +1151,8 @@
                             <div>
                                 <div class="flex items-center gap-2">
                                     <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</p>
-                                    {% if sub_status == 'active' %}
-                                    {{ status_badge("Active", "active", size="sm") }}
-                                    {% elif sub_status == 'suspended' %}
-                                    <span class="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">Suspended</span>
-                                    {% else %}
-                                    <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ sub_status | replace('_', ' ') | title }}</span>
-                                    {% endif %}
+                                    {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
+                                    {{ status_badge(sub_status_labels.get(sub_status, sub_status|replace('_', ' ')|title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
                                 </div>
                                 <div class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
                                     {% if account and account.account_number %}

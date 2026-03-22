@@ -53,6 +53,4 @@ class AdminDashboardPage(BasePage):
 
     def click_billing_link(self) -> None:
         """Click the link to billing page."""
-        self.page.get_by_role("link", name="Invoices").or_(
-            self.page.get_by_role("link", name="Payments")
-        ).first.click()
+        self.page.get_by_role("link", name="Billing").first.click()

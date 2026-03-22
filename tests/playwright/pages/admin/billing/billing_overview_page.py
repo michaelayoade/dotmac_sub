@@ -15,7 +15,7 @@ class BillingOverviewPage(BasePage):
 
     def goto(self, path: str = "/admin/billing") -> None:
         """Navigate to the billing overview."""
-        super().goto(path)
+        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded")
 
     def expect_loaded(self) -> None:
         """Assert the billing overview is loaded."""

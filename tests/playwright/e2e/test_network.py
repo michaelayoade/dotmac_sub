@@ -51,7 +51,7 @@ class TestONTs:
         page = ONTsPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
-        expect(admin_page.locator("table")).to_be_visible()
+        expect(admin_page.locator("table").first).to_be_visible()
 
     def test_new_ont_button(self, admin_page: Page, settings):
         """New ONT button should navigate to form."""

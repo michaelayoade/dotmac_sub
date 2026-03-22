@@ -6,6 +6,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import pytest
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect, sync_playwright
 
 from tests.playwright.helpers.api import api_post_form, bearer_headers
@@ -37,6 +38,7 @@ def playwright_instance():
 
 @pytest.fixture(scope="session")
 def browser(playwright_instance, settings: E2ESettings):
+    print(f"[e2e] browser setup name={settings.browser}", flush=True)
     browser_name = settings.browser
     browser_type = getattr(playwright_instance, browser_name, None)
     if browser_type is None:
@@ -59,6 +61,7 @@ def browser(playwright_instance, settings: E2ESettings):
 
     browser = browser_type.launch(**launch_kwargs)
     yield browser
+    print("[e2e] browser teardown", flush=True)
     browser.close()
 
 
@@ -77,8 +80,15 @@ def _require_admin_credentials(settings: E2ESettings) -> tuple[str, str]:
 
 @pytest.fixture(scope="session")
 def admin_token(settings: E2ESettings, api_context) -> str:
+    print("[e2e] admin_token setup", flush=True)
     username, password = _require_admin_credentials(settings)
-    return login_for_token(api_context, username, password)
+    try:
+        token = login_for_token(api_context, username, password)
+        print("[e2e] admin_token acquired", flush=True)
+        return token
+    except Exception as exc:
+        print(f"[e2e] admin_token failed: {type(exc).__name__}: {exc}", flush=True)
+        raise
 
 
 @pytest.fixture(scope="session")
@@ -160,6 +170,7 @@ def _write_storage_state(browser, settings: E2ESettings, token: str, role: str) 
 
 @pytest.fixture(scope="session")
 def admin_storage_state(browser, settings: E2ESettings, admin_token: str) -> Path:
+    print("[e2e] admin_storage_state setup", flush=True)
     return _write_storage_state(browser, settings, admin_token, "admin")
 
 
@@ -175,11 +186,17 @@ def user_storage_state(browser, settings: E2ESettings, user_token: str) -> Path:
 
 @pytest.fixture()
 def admin_context(browser, settings: E2ESettings, admin_storage_state: Path):
+    print(f"[e2e] admin_context setup storage_state={admin_storage_state}", flush=True)
     context = browser.new_context(storage_state=admin_storage_state)
     context.set_default_timeout(settings.action_timeout_ms)
     context.set_default_navigation_timeout(settings.navigation_timeout_ms)
     yield context
-    context.close()
+    try:
+        print("[e2e] admin_context teardown", flush=True)
+        context.close()
+    except PlaywrightError:
+        print("[e2e] admin_context teardown ignored PlaywrightError", flush=True)
+        pass
 
 
 @pytest.fixture()
@@ -188,7 +205,10 @@ def agent_context(browser, settings: E2ESettings, agent_storage_state: Path):
     context.set_default_timeout(settings.action_timeout_ms)
     context.set_default_navigation_timeout(settings.navigation_timeout_ms)
     yield context
-    context.close()
+    try:
+        context.close()
+    except PlaywrightError:
+        pass
 
 
 @pytest.fixture()
@@ -197,28 +217,46 @@ def user_context(browser, settings: E2ESettings, user_storage_state: Path):
     context.set_default_timeout(settings.action_timeout_ms)
     context.set_default_navigation_timeout(settings.navigation_timeout_ms)
     yield context
-    context.close()
+    try:
+        context.close()
+    except PlaywrightError:
+        pass
 
 
 @pytest.fixture()
 def admin_page(admin_context):
+    print("[e2e] admin_page setup", flush=True)
     page = admin_context.new_page()
     yield page
-    page.close()
+    try:
+        print("[e2e] admin_page teardown", flush=True)
+        if not page.is_closed():
+            page.close()
+    except PlaywrightError:
+        print("[e2e] admin_page teardown ignored PlaywrightError", flush=True)
+        pass
 
 
 @pytest.fixture()
 def agent_page(agent_context):
     page = agent_context.new_page()
     yield page
-    page.close()
+    try:
+        if not page.is_closed():
+            page.close()
+    except PlaywrightError:
+        pass
 
 
 @pytest.fixture()
 def user_page(user_context):
     page = user_context.new_page()
     yield page
-    page.close()
+    try:
+        if not page.is_closed():
+            page.close()
+    except PlaywrightError:
+        pass
 
 
 @pytest.fixture()

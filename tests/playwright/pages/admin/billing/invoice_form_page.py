@@ -27,7 +27,7 @@ class InvoiceFormPage(BasePage):
 
     def select_account(self, account_label: str) -> None:
         """Select a billing account."""
-        self.page.get_by_label("Account").select_option(label=account_label)
+        self.page.locator("select[name='account_id']").select_option(label=account_label)
 
     def fill_invoice_number(self, number: str) -> None:
         """Fill the invoice number."""

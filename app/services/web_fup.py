@@ -236,6 +236,7 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
         sort_order = 0
     days_of_week_raw = form.getlist("days_of_week")
     days_of_week = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
+    is_active = str(form.get("is_active", "")).lower() in {"on", "true", "1"}
 
     fup_policies.add_rule(
         db,
@@ -252,6 +253,7 @@ def handle_add_rule(db: Session, offer_id: str, form: FormData) -> None:
         time_end=time_end,
         enabled_by_rule_id=enabled_by_rule_id,
         days_of_week=days_of_week,
+        is_active=is_active,
     )
     logger.info("Added FUP rule for offer %s", offer_id)
 

@@ -2,6 +2,9 @@
 
 import ipaddress
 
+from app.models.catalog import SubscriptionStatus
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.services import radius_reject
 
 
@@ -86,3 +89,37 @@ def test_block_chain_rejects_tcp_udp_then_drops_rest():
     drop_idx = next(i for i, cmd in enumerate(commands) if "dotmac-block-drop-non-oss" in cmd and " action=drop " in cmd)
     assert tcp_idx < drop_idx
     assert udp_idx < drop_idx
+
+
+def test_enforce_subscription_reject_ip_treats_blocked_subscription_as_captive_redirect(
+    db_session, subscription, subscriber
+):
+    subscriber.captive_redirect_enabled = True
+    subscription.status = SubscriptionStatus.blocked
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.radius,
+                key="reject_ip_negative",
+                value_text="10.12.0.0/16",
+                value_type=SettingValueType.string,
+                is_active=True,
+            ),
+            DomainSetting(
+                domain=SettingDomain.radius,
+                key="reject_ip_blocked",
+                value_text="10.11.0.0/16",
+                value_type=SettingValueType.string,
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = radius_reject.enforce_subscription_reject_ip(db_session, str(subscription.id))
+
+    assert result["ok"] is True
+    assert result["mode"] == "block"
+    assigned_ip = ipaddress.ip_address(result["ip"])
+    assert assigned_ip in ipaddress.ip_network("10.12.0.0/16")
+    assert assigned_ip not in ipaddress.ip_network("10.11.0.0/16")

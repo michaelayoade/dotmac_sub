@@ -23,7 +23,7 @@ class InvoicesPage(BasePage):
 
     def filter_by_status(self, status: str) -> None:
         """Filter invoices by status."""
-        self.page.get_by_label("Status").select_option(status)
+        self.page.locator("select[name='status']").select_option(status)
 
     def search(self, query: str) -> None:
         """Search invoices."""

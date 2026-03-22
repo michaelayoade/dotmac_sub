@@ -117,15 +117,8 @@
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% set sub_status = subscription.status.value if subscription.status else 'pending' %}
-                            {% if sub_status == 'active' %}
-                            {{ status_badge("Active", "active", size="sm") }}
-                            {% elif sub_status == 'suspended' %}
-                            <span class="inline-flex items-center rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-medium text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">Blocked</span>
-                            {% elif sub_status == 'canceled' %}
-                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">Canceled</span>
-                            {% else %}
-                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">{{ sub_status | title }}</span>
-                            {% endif %}
+                            {% set sub_status_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled', 'pending': 'Pending', 'stopped': 'Stopped', 'hidden': 'Hidden', 'archived': 'Archived', 'canceled': 'Canceled', 'expired': 'Expired'} %}
+                            {{ status_badge(sub_status_labels.get(sub_status, sub_status | replace('_', ' ') | title), sub_status if sub_status in sub_status_labels else 'default', size="sm") }}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">
                             {{ subscription.start_at.strftime('%b %d, %Y') if subscription.start_at else '—' }}

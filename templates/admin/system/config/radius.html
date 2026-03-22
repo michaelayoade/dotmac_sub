@@ -28,7 +28,13 @@
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Periodic Restart</label><input type="text" name="periodic_restart_enabled" value="{{ radius.periodic_restart_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Restart Frequency</label><input type="text" name="restart_frequency" value="{{ radius.restart_frequency or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Restart Time</label><input type="text" name="restart_time" value="{{ radius.restart_time or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Redirect Enabled</label><input type="text" name="captive_redirect_enabled" value="{{ radius.captive_redirect_enabled or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="true/false"></div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Redirect Enabled</label>
+                <select name="captive_redirect_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="false" {% if not radius.captive_redirect_enabled or radius.captive_redirect_enabled == 'false' %}selected{% endif %}>Disabled</option>
+                    <option value="true" {% if radius.captive_redirect_enabled == 'true' %}selected{% endif %}>Enabled</option>
+                </select>
+            </div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Portal IP/CIDR</label><input type="text" name="captive_portal_ip" value="{{ radius.captive_portal_ip or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="203.0.113.10"></div>
             <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Captive Portal URL</label><input type="text" name="captive_portal_url" value="{{ radius.captive_portal_url or '' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="https://oss.dotmac.ng/portal/billing"></div>
         </div>

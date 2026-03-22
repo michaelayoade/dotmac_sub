@@ -33,7 +33,7 @@ class TestCatalogAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/catalog/offers?limit=10",
+            "/api/v1/offers?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -46,7 +46,7 @@ class TestCatalogAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/catalog/subscriptions?limit=10",
+            "/api/v1/subscriptions?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200

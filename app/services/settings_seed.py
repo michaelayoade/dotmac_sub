@@ -915,6 +915,27 @@ def seed_radius_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("PPPOE_DEFAULT_PASSWORD_LENGTH", "12"),
     )
+    # Captive portal redirect settings
+    captive_enabled_raw = os.getenv("RADIUS_CAPTIVE_REDIRECT_ENABLED", "false")
+    radius_settings.ensure_by_key(
+        db,
+        key="captive_redirect_enabled",
+        value_type=SettingValueType.boolean,
+        value_text=captive_enabled_raw,
+        value_json=captive_enabled_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    radius_settings.ensure_by_key(
+        db,
+        key="captive_portal_ip",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("RADIUS_CAPTIVE_PORTAL_IP", ""),
+    )
+    radius_settings.ensure_by_key(
+        db,
+        key="captive_portal_url",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("RADIUS_CAPTIVE_PORTAL_URL", ""),
+    )
 
 
 def seed_billing_settings(db: Session) -> None:

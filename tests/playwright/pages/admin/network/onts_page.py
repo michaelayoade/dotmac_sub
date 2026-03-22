@@ -14,7 +14,7 @@ class ONTsPage(BasePage):
         super().__init__(page, base_url)
     def goto(self, path: str = "/admin/network/onts") -> None:
         """Navigate to the ONTs list."""
-        super().goto(path)
+        self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
 
     def expect_loaded(self) -> None:
         """Assert the ONTs page is loaded."""

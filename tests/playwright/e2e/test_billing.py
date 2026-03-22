@@ -65,7 +65,7 @@ class TestInvoicesList:
         page.goto()
         page.expect_loaded()
         # Filter dropdown should exist
-        expect(admin_page.get_by_label("Status")).to_be_visible()
+        expect(admin_page.locator("select[name='status']")).to_be_visible()
 
 
 class TestInvoiceForm:
@@ -82,8 +82,9 @@ class TestInvoiceForm:
         form = InvoiceFormPage(admin_page, settings.base_url)
         form.goto_new()
         form.expect_loaded()
-        # Should have account selector
-        expect(admin_page.get_by_label("Account")).to_be_visible()
+        # New flow starts with customer selection, then resolves billing account.
+        expect(admin_page.locator("input[data-typeahead-input]").first).to_be_visible()
+        expect(admin_page.locator("#customer-account-select")).to_be_visible()
 
     def test_invoice_form_cancel(self, admin_page: Page, settings):
         """Cancel should return to invoices list."""
@@ -120,7 +121,7 @@ class TestBillingAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/billing/invoices?limit=10",
+            "/api/v1/invoices?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -133,7 +134,7 @@ class TestBillingAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/billing/payments?limit=10",
+            "/api/v1/payments?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -146,7 +147,7 @@ class TestBillingAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/subscriber-accounts?limit=10",
+            "/api/v1/search/accounts?q=cu&limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -162,7 +163,7 @@ class TestBillingAPI:
 
         response = api_get(
             api_context,
-            f"/api/v1/billing/ledger?account_id={account_id}&limit=10",
+            f"/api/v1/ledger-entries?account_id={account_id}&limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -181,7 +182,7 @@ class TestBillingWorkflows:
         dashboard.goto()
         dashboard.expect_loaded()
         dashboard.click_billing_link()
-        admin_page.wait_for_url("**/billing/**")
+        admin_page.wait_for_url("**/admin/billing", wait_until="domcontentloaded")
 
     def test_billing_to_invoices_navigation(self, admin_page: Page, settings):
         """Should navigate from billing overview to invoices."""
@@ -199,5 +200,5 @@ class TestBillingWorkflows:
 
         form = InvoiceFormPage(admin_page, settings.base_url)
         form.expect_loaded()
-        # Verify account selector is populated
-        expect(admin_page.get_by_label("Account")).to_be_visible()
+        expect(admin_page.locator("input[data-typeahead-input]").first).to_be_visible()
+        expect(admin_page.locator("#customer-account-select")).to_be_visible()

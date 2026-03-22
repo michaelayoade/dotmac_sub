@@ -131,6 +131,7 @@ class FupPolicies:
         time_end: time | None = None,
         enabled_by_rule_id: str | None = None,
         days_of_week: list[int] | None = None,
+        is_active: bool = True,
     ) -> FupRule:
         """Add a rule to an FUP policy.
 
@@ -177,6 +178,7 @@ class FupPolicies:
             time_end=time_end,
             enabled_by_rule_id=coerce_uuid(enabled_by_rule_id) if enabled_by_rule_id else None,
             days_of_week=days_of_week,
+            is_active=is_active,
         )
         db.add(rule)
         db.commit()
@@ -220,6 +222,10 @@ class FupPolicies:
             "threshold_unit",
             "action",
             "speed_reduction_percent",
+            "time_start",
+            "time_end",
+            "enabled_by_rule_id",
+            "days_of_week",
             "is_active",
         }
         for key, value in kwargs.items():
@@ -229,6 +235,8 @@ class FupPolicies:
                 value = validate_enum(value, enum_fields[key], key)
             if key == "name" and isinstance(value, str):
                 value = value.strip()
+            if key == "enabled_by_rule_id":
+                value = coerce_uuid(value) if value else None
             setattr(rule, key, value)
         rule.updated_at = datetime.now(UTC)
         db.commit()
@@ -293,6 +301,7 @@ class FupPolicies:
         target_policy = FupPolicies._get_policy(db, target_policy_id)
 
         cloned: list[FupRule] = []
+        rule_map: dict[str, FupRule] = {}
         for source_rule in source_policy.rules:
             rule = FupRule(
                 policy_id=target_policy.id,
@@ -304,10 +313,22 @@ class FupPolicies:
                 threshold_unit=source_rule.threshold_unit,
                 action=source_rule.action,
                 speed_reduction_percent=source_rule.speed_reduction_percent,
+                cooldown_minutes=source_rule.cooldown_minutes,
+                time_start=source_rule.time_start,
+                time_end=source_rule.time_end,
+                days_of_week=list(source_rule.days_of_week) if source_rule.days_of_week else None,
                 is_active=source_rule.is_active,
             )
             db.add(rule)
             cloned.append(rule)
+            rule_map[str(source_rule.id)] = rule
+        db.flush()
+        for source_rule in source_policy.rules:
+            cloned_rule = rule_map[str(source_rule.id)]
+            if source_rule.enabled_by_rule_id:
+                cloned_rule.enabled_by_rule_id = rule_map[
+                    str(source_rule.enabled_by_rule_id)
+                ].id
         db.commit()
         for rule in cloned:
             db.refresh(rule)
