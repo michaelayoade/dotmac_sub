@@ -7,10 +7,14 @@ import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import markdown
+import markdown  # type: ignore[import-untyped]
 from PIL import Image
 from playwright.sync_api import sync_playwright
+
+if TYPE_CHECKING:
+    from PIL.Image import Image as PILImage
 
 
 @dataclass(frozen=True)
@@ -40,7 +44,8 @@ def _resolve_image_path(src: str, screenshots_dir: Path) -> Path | None:
 
 
 def _image_to_data_uri(path: Path, max_width: int, quality: int) -> str:
-    with Image.open(path) as img:
+    with Image.open(path) as opened_img:
+        img: PILImage = opened_img
         img.load()
         if img.width > max_width:
             ratio = max_width / img.width

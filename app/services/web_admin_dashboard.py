@@ -228,8 +228,8 @@ def dashboard(request: Request, db: Session):
     arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
     # --- AR aging breakdown ---
-    ar_30 = 0
-    ar_60 = 0
+    ar_30 = 0.0
+    ar_60 = 0.0
     try:
         from sqlalchemy import text as sa_text
 
@@ -571,7 +571,7 @@ def dashboard_stats_partial(request: Request, db: Session):
     try:
         from app.services import billing as _billing_svc
 
-        b_stats = _billing_svc.invoices.get_billing_stats(db)
+        b_stats = _billing_svc.billing_reporting.get_dashboard_stats(db)
         monthly_revenue = b_stats.get("stats", {}).get("payments_amount", 0)
     except Exception:
         pass

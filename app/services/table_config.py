@@ -525,10 +525,8 @@ class TableConfigurationService:
 
         # Exclude Splynx soft-deleted imports and system users for subscriber tables
         if definition.model is Subscriber:
-            from app.models.subscriber import UserType
             from app.services.subscriber import splynx_deleted_import_clause
 
-            query = query.filter(Subscriber.user_type != UserType.system_user)
             query = query.filter(~splynx_deleted_import_clause())
 
         q = request_params.get("q")

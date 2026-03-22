@@ -206,35 +206,35 @@ def list_nodes_and_edges(
     # Build node list. When no links exist yet, fall back to active inventory so the
     # topology page remains useful as a starting canvas instead of rendering empty.
     if device_ids:
-        devices = list(
-            db.scalars(
-                select(NetworkDevice)
-                .options(joinedload(NetworkDevice.pop_site))
-                .where(NetworkDevice.id.in_(device_ids))
-                .where(NetworkDevice.pop_site_id == coerce_uuid(pop_site_id) if pop_site_id else True)
-            ).all()
+        stmt = (
+            select(NetworkDevice)
+            .options(joinedload(NetworkDevice.pop_site))
+            .where(NetworkDevice.id.in_(device_ids))
         )
+        if pop_site_id:
+            stmt = stmt.where(NetworkDevice.pop_site_id == coerce_uuid(pop_site_id))
+        devices = list(db.scalars(stmt).all())
     else:
-        devices = list(
-            db.scalars(
-                select(NetworkDevice)
-                .options(joinedload(NetworkDevice.pop_site))
-                .where(NetworkDevice.is_active.is_(True))
-                .where(
-                    (
-                        NetworkDevice.role.in_(TOPOLOGY_DEFAULT_ROLES)
-                        & (
-                            NetworkDevice.device_type.is_(None)
-                            | NetworkDevice.device_type.in_(TOPOLOGY_DEFAULT_TYPES)
-                        )
+        stmt = (
+            select(NetworkDevice)
+            .options(joinedload(NetworkDevice.pop_site))
+            .where(NetworkDevice.is_active.is_(True))
+            .where(
+                (
+                    NetworkDevice.role.in_(TOPOLOGY_DEFAULT_ROLES)
+                    & (
+                        NetworkDevice.device_type.is_(None)
+                        | NetworkDevice.device_type.in_(TOPOLOGY_DEFAULT_TYPES)
                     )
-                    | NetworkDevice.device_type.in_(TOPOLOGY_DEFAULT_TYPES)
                 )
-                .where(NetworkDevice.pop_site_id == coerce_uuid(pop_site_id) if pop_site_id else True)
-                .order_by(NetworkDevice.name.asc())
-                .limit(500)
-            ).all()
+                | NetworkDevice.device_type.in_(TOPOLOGY_DEFAULT_TYPES)
+            )
+            .order_by(NetworkDevice.name.asc())
+            .limit(500)
         )
+        if pop_site_id:
+            stmt = stmt.where(NetworkDevice.pop_site_id == coerce_uuid(pop_site_id))
+        devices = list(db.scalars(stmt).all())
 
     allowed_device_ids = {dev.id for dev in devices}
     nodes = []

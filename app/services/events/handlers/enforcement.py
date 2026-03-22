@@ -355,11 +355,10 @@ class EnforcementHandler:
                 return
 
             # Grace period: send warning first, suspend after N hours
-            grace_hours = int(
-                settings_spec.resolve_value(
-                    db, SettingDomain.billing, "suspension_grace_hours"
-                ) or 48
+            grace_setting = settings_spec.resolve_value(
+                db, SettingDomain.billing, "suspension_grace_hours"
             )
+            grace_hours = int(str(grace_setting or 48))
 
             # Check if invoice just became overdue (within grace period)
             invoice_id = event.invoice_id or event.payload.get("invoice_id")

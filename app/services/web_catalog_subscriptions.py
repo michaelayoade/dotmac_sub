@@ -114,7 +114,7 @@ def _format_commercial_value(key: str, value: object | None) -> str:
         return f"{value} day(s)"
     if key == "min_balance":
         try:
-            return f"NGN {Decimal(value):,.2f}"
+            return f"NGN {Decimal(str(value)):,.2f}"
         except Exception:
             return str(value)
     return str(value)
@@ -1684,19 +1684,19 @@ def subscription_form_context(
         "current_service_login": getattr(current_credential, "username", "") if current_credential else "",
         "current_service_password": current_password or "",
         "credential_targets": credential_targets or {"email": [], "sms": []},
-        "commercial_policy": (
-            _subscription_commercial_policy(
-                db,
-                _subscription_policy_subject(
-                    db,
-                    subscription,
-                    default_billing_mode=default_billing_mode,
-                ),
-            )
-            if subscriber_id
-            else {"rows": []}
-        ),
+        "commercial_policy": {"rows": []},
     }
+    if subscriber_id:
+        policy_subject = _subscription_policy_subject(
+            db,
+            subscription,
+            default_billing_mode=str(default_billing_mode),
+        )
+        if policy_subject is not None:
+            context["commercial_policy"] = _subscription_commercial_policy(
+                db,
+                policy_subject,
+            )
     if error:
         context["error"] = error
     return context
@@ -1897,7 +1897,7 @@ def create_subscription_with_audit(
             if pppoe_auto_generate or (existing_credential and getattr(existing_credential, "secret_hash", None))
             else generated_password
         )
-        update_payload = {
+        update_payload: dict[str, object] = {
             "service_status_raw": "permanent_static"
             if str(form.get("ipv4_method") or "").strip().lower() == "permanent_static"
             else "dynamic",

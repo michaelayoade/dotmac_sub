@@ -179,6 +179,13 @@ ignore_errors = true
 
 [[tool.mypy.overrides]]
 module = [
+    "tests",
+    "tests.*",
+]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = [
     "app.services.catalog.add_ons",
     "app.services.catalog.credentials",
     "app.services.catalog.offers",

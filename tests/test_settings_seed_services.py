@@ -285,7 +285,7 @@ class TestSeedCollectionsSettings:
         assert setting.value_json == ["2026-01-01"]
 
 
-class TestSeedBillingSettings:
+class TestSeedBillingNotificationSettings:
     def test_seeds_phase7_notification_keys(self, db_session):
         settings_seed.seed_billing_settings(db_session)
 

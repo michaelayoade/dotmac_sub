@@ -61,7 +61,7 @@ def find_nearby_locations(
     tags=["gis-locations"],
 )
 def get_geo_location(location_id: UUID, db: Session = Depends(get_db)):
-    return gis_service.geo_locations.get(db, location_id)
+    return gis_service.geo_locations.get(db, str(location_id))
 
 
 @router.get(
@@ -109,7 +109,7 @@ def list_geo_locations(
 def update_geo_location(
     location_id: UUID, payload: GeoLocationUpdate, db: Session = Depends(get_db)
 ):
-    return gis_service.geo_locations.update(db, location_id, payload)
+    return gis_service.geo_locations.update(db, str(location_id), payload)
 
 
 @router.delete(
@@ -118,7 +118,7 @@ def update_geo_location(
     tags=["gis-locations"],
 )
 def delete_geo_location(location_id: UUID, db: Session = Depends(get_db)):
-    gis_service.geo_locations.delete(db, location_id)
+    gis_service.geo_locations.delete(db, str(location_id))
 
 
 @router.post(
@@ -152,7 +152,7 @@ def find_areas_containing_point(
     tags=["gis-areas"],
 )
 def get_geo_area(area_id: UUID, db: Session = Depends(get_db)):
-    return gis_service.geo_areas.get(db, area_id)
+    return gis_service.geo_areas.get(db, str(area_id))
 
 
 @router.get(
@@ -194,7 +194,7 @@ def list_geo_areas(
     tags=["gis-areas"],
 )
 def update_geo_area(area_id: UUID, payload: GeoAreaUpdate, db: Session = Depends(get_db)):
-    return gis_service.geo_areas.update(db, area_id, payload)
+    return gis_service.geo_areas.update(db, str(area_id), payload)
 
 
 @router.delete(
@@ -203,7 +203,7 @@ def update_geo_area(area_id: UUID, payload: GeoAreaUpdate, db: Session = Depends
     tags=["gis-areas"],
 )
 def delete_geo_area(area_id: UUID, db: Session = Depends(get_db)):
-    gis_service.geo_areas.delete(db, area_id)
+    gis_service.geo_areas.delete(db, str(area_id))
 
 
 @router.get(
@@ -218,7 +218,7 @@ def check_area_contains_point(
     db: Session = Depends(get_db),
 ):
     """Check if a point is contained within a GeoArea polygon."""
-    result = gis_service.geo_areas.contains_point(db, area_id, latitude, longitude)
+    result = gis_service.geo_areas.contains_point(db, str(area_id), latitude, longitude)
     return {"area_id": area_id, "latitude": latitude, "longitude": longitude, "contained": result}
 
 
@@ -265,7 +265,7 @@ def create_geo_layer(payload: GeoLayerCreate, db: Session = Depends(get_db)):
     tags=["gis-layers"],
 )
 def get_geo_layer(layer_id: UUID, db: Session = Depends(get_db)):
-    return gis_service.geo_layers.get(db, layer_id)
+    return gis_service.geo_layers.get(db, str(layer_id))
 
 
 @router.get(
@@ -301,7 +301,7 @@ def list_geo_layers(
     tags=["gis-layers"],
 )
 def update_geo_layer(layer_id: UUID, payload: GeoLayerUpdate, db: Session = Depends(get_db)):
-    return gis_service.geo_layers.update(db, layer_id, payload)
+    return gis_service.geo_layers.update(db, str(layer_id), payload)
 
 
 @router.delete(
@@ -310,7 +310,7 @@ def update_geo_layer(layer_id: UUID, payload: GeoLayerUpdate, db: Session = Depe
     tags=["gis-layers"],
 )
 def delete_geo_layer(layer_id: UUID, db: Session = Depends(get_db)):
-    gis_service.geo_layers.delete(db, layer_id)
+    gis_service.geo_layers.delete(db, str(layer_id))
 
 
 @router.get(
@@ -447,12 +447,12 @@ def subscriber_locations(
 
     Returns GeoJSON-compatible list of subscriber address points.
     """
-    from sqlalchemy import select
+    import sqlalchemy as sa
 
     from app.models.subscriber import Address, Subscriber
 
     stmt = (
-        select(
+        getattr(sa, "select")(
             Subscriber.id,
             (Subscriber.first_name + " " + Subscriber.last_name).label("name"),
             Subscriber.status,
@@ -468,7 +468,7 @@ def subscriber_locations(
         .order_by(Subscriber.created_at.desc())
         .limit(limit)
     )
-    rows = db.execute(stmt).all()
+    rows = getattr(db, "execute")(stmt).all()
     return {
         "type": "FeatureCollection",
         "features": [

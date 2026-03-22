@@ -35,7 +35,7 @@ def build_accounts_list_data(
         accounts = subscriber_service.accounts.list(
             db=db,
             subscriber_id=None,
-            reseller_id=UUID(reseller_id) if reseller_id else None,
+            reseller_id=reseller_id,
             order_by="created_at",
             order_dir="desc",
             limit=per_page,

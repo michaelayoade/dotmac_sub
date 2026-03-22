@@ -565,6 +565,7 @@ def rollback_window_hours(db: Session) -> int:
 
 
 def list_history(db: Session, *, limit: int = 50) -> list[dict[str, Any]]:
+    db.expire_all()
     return _history_entries(db)[:limit]
 
 
@@ -809,6 +810,7 @@ def rollback_import(
             is_secret=False,
         ),
     )
+    db.expire_all()
     return {
         "import_id": import_id,
         "rolled_back_rows": deleted_rows,

@@ -587,17 +587,17 @@ class BillingReporting:
                 for r in db.execute(dp_stmt).all()
             }
 
-            labels: list[str] = []
-            values: list[float] = []
+            month_labels: list[str] = []
+            month_values: list[float] = []
             cursor = datetime(chart_start.year, chart_start.month, 1, tzinfo=UTC)
             end_cursor = datetime(chart_end.year, chart_end.month, 1, tzinfo=UTC)
             while cursor < end_cursor:
-                labels.append(cursor.strftime("%b %Y"))
-                values.append(dp_rows.get((cursor.year, cursor.month), 0.0))
+                month_labels.append(cursor.strftime("%b %Y"))
+                month_values.append(dp_rows.get((cursor.year, cursor.month), 0.0))
                 cursor = _next_month_start(cursor)
-            daily_payments = {"labels": labels, "values": values}
+            daily_payments = {"labels": month_labels, "values": month_values}
         else:
-            dp_stmt = (
+            daily_stmt = (
                 select(
                     cast(func.date(payment_ts), String).label("day_key"),
                     func.sum(Payment.amount).label("total"),
@@ -609,18 +609,20 @@ class BillingReporting:
                 )
                 .group_by("day_key")
             )
-            dp_stmt = _scope_payment_stmt(dp_stmt)
-            dp_rows = {str(r.day_key): float(r.total or 0) for r in db.execute(dp_stmt).all()}
+            daily_stmt = _scope_payment_stmt(daily_stmt)
+            daily_rows = {
+                str(r.day_key): float(r.total or 0) for r in db.execute(daily_stmt).all()
+            }
 
-            labels = []
-            values = []
+            day_labels: list[str] = []
+            day_values: list[float] = []
             cursor = chart_start
             while cursor < chart_end:
                 day_key = cursor.date().isoformat()
-                labels.append(cursor.strftime("%b %d"))
-                values.append(dp_rows.get(day_key, 0.0))
+                day_labels.append(cursor.strftime("%b %d"))
+                day_values.append(daily_rows.get(day_key, 0.0))
                 cursor += timedelta(days=1)
-            daily_payments = {"labels": labels, "values": values}
+            daily_payments = {"labels": day_labels, "values": day_values}
 
         # --- Invoicing period overlay (last 6 months, SQL) ---
         inv_overlay_stmt = select(

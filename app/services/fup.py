@@ -358,8 +358,8 @@ def _threshold_gb(rule: FupRule) -> float:
 
 def _time_in_window(
     check_time: datetime | None,
-    start: datetime | None,
-    end: datetime | None,
+    start: time | None,
+    end: time | None,
     inverse: bool = False,
 ) -> bool:
     """Check if a time falls within a start-end window.
@@ -372,7 +372,7 @@ def _time_in_window(
     if check_time is None:
         return True
 
-    t = check_time.time() if isinstance(check_time, datetime) else check_time
+    t = check_time.time()
 
     if start <= end:
         in_window = start <= t <= end

@@ -134,7 +134,7 @@
         {{ kpi_tile(
             "PON Interfaces",
             "%d / %d" | format(pon_up, pon_total),
-            "/admin/network/olts",
+            "/admin/network/pon-interfaces",
             "cyan",
             "%d down, %d unknown" % (pon_down, pon_unknown) if pon_total else "No monitored PON interfaces"
         ) }}

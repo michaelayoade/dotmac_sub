@@ -79,8 +79,9 @@ def _get_subscriber(db: Session, subscriber_id: str):
 
 
 def _load_tax_rates(db: Session):
+    query = getattr(db, "query")
     return (
-        db.query(TaxRate)
+        query(TaxRate)
         .filter(TaxRate.is_active.is_(True))
         .order_by(TaxRate.name.asc())
         .all()
@@ -103,8 +104,9 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
     if customer_type == "person":
         subscriber = customer
     else:
+        query = getattr(db, "query")
         subscriber = (
-            db.query(Subscriber)
+            query(Subscriber)
             .filter(Subscriber.organization_id == customer.id)
             .order_by(Subscriber.created_at.asc())
             .first()
@@ -112,7 +114,7 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
         if not subscriber:
             return defaults
         others = (
-            db.query(Subscriber)
+            query(Subscriber)
             .filter(Subscriber.organization_id == customer.id)
             .all()
         )
@@ -356,7 +358,12 @@ def customer_new(
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
-    pop_sites = db.query(PopSite).filter(PopSite.is_active.is_(True)).order_by(PopSite.name).all()
+    pop_sites = (
+        getattr(db, "query")(PopSite)
+        .filter(PopSite.is_active.is_(True))
+        .order_by(PopSite.name)
+        .all()
+    )
 
     return templates.TemplateResponse(
         "admin/customers/form.html",

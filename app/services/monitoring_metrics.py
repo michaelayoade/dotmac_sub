@@ -115,8 +115,10 @@ def _snmp_get_single(device: NetworkDevice, oid: str) -> float | None:
     from app.services.credential_crypto import decrypt_credential
     from app.services.snmp_client import snmp_get
 
-    mgmt_ip = device.mgmt_ip
-    community = decrypt_credential(device.snmp_community) if device.snmp_community else "public"
+    mgmt_ip = str(device.mgmt_ip) if device.mgmt_ip else None
+    community = (
+        decrypt_credential(device.snmp_community) if device.snmp_community else "public"
+    ) or "public"
     if not mgmt_ip:
         return None
 

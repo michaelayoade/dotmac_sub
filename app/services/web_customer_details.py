@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -111,7 +112,7 @@ def _format_billing_value(key: str, value: object | None) -> str:
         return f"{value} day(s)"
     if key == "min_balance":
         try:
-            return f"NGN {Decimal(value):,.2f}"
+            return f"NGN {Decimal(str(value)):,.2f}"
         except Exception:
             return str(value)
     return str(value)
@@ -156,11 +157,12 @@ def _billing_policy_snapshot(db: Session, accounts: list[Subscriber]) -> dict[st
         ("min_balance", "Minimum Balance", True),
         ("tax_rate", "Tax Rate", False),
     ]
-    rows: list[dict[str, str]] = []
+    rows: list[dict[str, object]] = []
     has_overrides = False
     has_mixed = False
 
     for key, label, uses_global in fields:
+        override: object | None
         raw_values: list[object | None] = []
         effective_values: list[object | None] = []
         for account in accounts:
@@ -183,10 +185,13 @@ def _billing_policy_snapshot(db: Session, accounts: list[Subscriber]) -> dict[st
             override = "Mixed"
             has_mixed = True
         else:
-            raw = next((value for value in raw_values if value is not None), None)
+            resolved_raw: object | None = next(
+                (value for value in raw_values if value is not None),
+                None,
+            )
             effective = effective_values[0] if effective_values else None
-            override = raw
-            if raw is None:
+            override = resolved_raw
+            if resolved_raw is None:
                 source = "Global default" if uses_global else "Not set"
             else:
                 source = "Customer override"
@@ -571,7 +576,7 @@ def _build_common_financials(db: Session, account_ids):
 
 def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, object]:
     if not account_ids:
-        empty_summary = {
+        empty_summary: dict[str, int] = {
             "open_tickets": 0,
             "recent_communications": 0,
             "active_service_orders": 0,
@@ -686,7 +691,7 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         else []
     )
 
-    relationship_summary = {
+    relationship_summary: dict[str, int] = {
         "open_tickets": sum(1 for ticket in support_tickets if ticket.status not in RESOLVED_TICKET_STATUSES),
         "recent_communications": len(communication_logs),
         "active_service_orders": sum(1 for order in service_orders if order.status in ACTIVE_SERVICE_ORDER_STATUSES),
@@ -955,6 +960,10 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         account_ids,
         subscriptions,
     )
+    relationship_summary = cast(
+        dict[str, int],
+        relationship_data["relationship_summary"],
+    )
     stats = {
         "total_subscribers": len(subscribers),
         "total_subscriptions": len(subscriptions),
@@ -962,14 +971,14 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "balance_due": balance_due,
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
-        "open_tickets": relationship_data["relationship_summary"]["open_tickets"],
-        "active_service_orders": relationship_data["relationship_summary"]["active_service_orders"],
-        "service_orders": relationship_data["relationship_summary"]["active_service_orders"],
-        "active_credentials": relationship_data["relationship_summary"]["active_credentials"],
+        "open_tickets": relationship_summary["open_tickets"],
+        "active_service_orders": relationship_summary["active_service_orders"],
+        "service_orders": relationship_summary["active_service_orders"],
+        "active_credentials": relationship_summary["active_credentials"],
         "active_network_assets": (
-            relationship_data["relationship_summary"]["active_cpes"]
-            + relationship_data["relationship_summary"]["active_onts"]
-            + relationship_data["relationship_summary"]["active_ip_assignments"]
+            relationship_summary["active_cpes"]
+            + relationship_summary["active_onts"]
+            + relationship_summary["active_ip_assignments"]
         ),
     }
     try:
@@ -1115,6 +1124,10 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         account_ids,
         subscriptions,
     )
+    relationship_summary = cast(
+        dict[str, int],
+        relationship_data["relationship_summary"],
+    )
     stats = {
         "total_subscribers": len(subscribers),
         "total_subscriptions": len(subscriptions),
@@ -1122,14 +1135,14 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         "balance_due": balance_due,
         "total_addresses": len(addresses),
         "total_contacts": len(contacts),
-        "open_tickets": relationship_data["relationship_summary"]["open_tickets"],
-        "active_service_orders": relationship_data["relationship_summary"]["active_service_orders"],
-        "service_orders": relationship_data["relationship_summary"]["active_service_orders"],
-        "active_credentials": relationship_data["relationship_summary"]["active_credentials"],
+        "open_tickets": relationship_summary["open_tickets"],
+        "active_service_orders": relationship_summary["active_service_orders"],
+        "service_orders": relationship_summary["active_service_orders"],
+        "active_credentials": relationship_summary["active_credentials"],
         "active_network_assets": (
-            relationship_data["relationship_summary"]["active_cpes"]
-            + relationship_data["relationship_summary"]["active_onts"]
-            + relationship_data["relationship_summary"]["active_ip_assignments"]
+            relationship_summary["active_cpes"]
+            + relationship_summary["active_onts"]
+            + relationship_summary["active_ip_assignments"]
         ),
     }
     try:

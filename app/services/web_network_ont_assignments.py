@@ -85,13 +85,17 @@ def has_active_assignment(db: Session, ont_id: str) -> bool:
 
 def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     """Create ONT assignment and activate ONT."""
+    resolved_pon_port_id = (
+        coerce_uuid(str(values["pon_port_id"]))
+        if values.get("pon_port_id")
+        else getattr(ont, "pon_port_id", None)
+    )
+    if resolved_pon_port_id is None:
+        raise ValueError("PON port is required")
+
     payload = OntAssignmentCreate(
         ont_unit_id=ont.id,
-        pon_port_id=(
-            coerce_uuid(str(values["pon_port_id"]))
-            if values.get("pon_port_id")
-            else None
-        ),
+        pon_port_id=resolved_pon_port_id,
         subscriber_id=coerce_uuid(str(values["account_id"])),
         subscription_id=(
             coerce_uuid(str(values["subscription_id"]))

@@ -467,11 +467,14 @@ def _build_layer_features(
     features: list[GeoFeatureRead] = []
     if layer.source_type.value == "locations":
         is_active_filter = _coerce_filter_bool(_layer_filter_value(layer.filters, "is_active"))
+        location_type = _layer_filter_value(layer.filters, "location_type")
+        address_id = _layer_filter_value(layer.filters, "address_id")
+        pop_site_id = _layer_filter_value(layer.filters, "pop_site_id")
         locations = GeoLocations.list(
             db,
-            location_type=_layer_filter_value(layer.filters, "location_type"),
-            address_id=_layer_filter_value(layer.filters, "address_id"),
-            pop_site_id=_layer_filter_value(layer.filters, "pop_site_id"),
+            location_type=str(location_type) if isinstance(location_type, str) else None,
+            address_id=str(address_id) if isinstance(address_id, str) else None,
+            pop_site_id=str(pop_site_id) if isinstance(pop_site_id, str) else None,
             is_active=True if is_active_filter is None else is_active_filter,
             min_latitude=min_latitude,
             min_longitude=min_longitude,
@@ -506,9 +509,10 @@ def _build_layer_features(
             )
     elif layer.source_type.value == "areas":
         is_active_filter = _coerce_filter_bool(_layer_filter_value(layer.filters, "is_active"))
+        area_type = _layer_filter_value(layer.filters, "area_type")
         areas = GeoAreas.list(
             db,
-            area_type=_layer_filter_value(layer.filters, "area_type"),
+            area_type=str(area_type) if isinstance(area_type, str) else None,
             is_active=True if is_active_filter is None else is_active_filter,
             min_latitude=min_latitude,
             min_longitude=min_longitude,

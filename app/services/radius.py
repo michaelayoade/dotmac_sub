@@ -226,7 +226,11 @@ def _read_external_radius_user_records(config: dict, username: str) -> dict[str,
     radreply = config["radreply_table"]
     radusergroup = config["radusergroup_table"]
     engine = create_engine(config["db_url"])
-    result = {"radcheck": [], "radreply": [], "radusergroup": []}
+    result: dict[str, list[dict[str, str]]] = {
+        "radcheck": [],
+        "radreply": [],
+        "radusergroup": [],
+    }
 
     with engine.begin() as conn:
         for row in conn.execute(

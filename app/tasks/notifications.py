@@ -24,7 +24,7 @@ SENDING_TIMEOUT_MINUTES = 5
 MAX_RETRIES = 3
 
 
-def _deliver_notification_queue(db, batch_size: int = 50) -> dict[str, int]:
+def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int]:
     now = datetime.now(UTC)
     stuck_threshold = now - timedelta(minutes=SENDING_TIMEOUT_MINUTES)
 
@@ -141,12 +141,16 @@ def _deliver_notification_queue(db, batch_size: int = 50) -> dict[str, int]:
     return {"delivered": delivered, "retried": retried, "failed": failed}
 
 
+def _deliver_notification_queue(db, batch_size: int = 50) -> int:
+    return _deliver_notification_queue_stats(db, batch_size=batch_size)["delivered"]
+
+
 @celery_app.task(name="app.tasks.notifications.deliver_notification_queue")
 def deliver_notification_queue() -> dict[str, int]:
     """Process queued notifications and retry failed ones."""
     session = SessionLocal()
     try:
-        result = _deliver_notification_queue(session)
+        result = _deliver_notification_queue_stats(session)
         logger.info(
             "Notification queue processed: delivered=%d, retried=%d, failed=%d",
             result["delivered"], result["retried"], result["failed"],

@@ -79,7 +79,7 @@ def evaluate_fup_rules() -> dict[str, int]:
             # Get current usage from quota bucket
             from app.services.usage import _resolve_or_create_quota_bucket
 
-            bucket = _resolve_or_create_quota_bucket(session, sub)
+            bucket = _resolve_or_create_quota_bucket(session, sub, now)
             if not bucket:
                 continue
 

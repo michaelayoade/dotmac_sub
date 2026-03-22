@@ -22,6 +22,14 @@ def _build_me_response(
     scopes: list[str],
 ) -> MeResponse:
     """Build a MeResponse from a subscriber or system user and auth claims."""
+    gender = "unknown"
+    preferred_contact_method: str | None = None
+    if isinstance(person, Subscriber):
+        if person.gender is not None:
+            gender = person.gender.value
+        if person.preferred_contact_method is not None:
+            preferred_contact_method = person.preferred_contact_method.value
+
     return MeResponse(
         id=person.id,
         first_name=person.first_name,
@@ -32,12 +40,8 @@ def _build_me_response(
         email_verified=getattr(person, "email_verified", False),
         phone=person.phone,
         date_of_birth=getattr(person, "date_of_birth", None),
-        gender=person.gender.value if getattr(person, "gender", None) else "unknown",
-        preferred_contact_method=(
-            person.preferred_contact_method.value
-            if getattr(person, "preferred_contact_method", None)
-            else None
-        ),
+        gender=gender,
+        preferred_contact_method=preferred_contact_method,
         locale=getattr(person, "locale", None),
         timezone=getattr(person, "timezone", None),
         roles=roles,
@@ -69,6 +73,7 @@ def get_me(
     scopes: list[str],
 ) -> MeResponse:
     """Return the current user's profile information."""
+    principal: Subscriber | SystemUser
     if principal_type == "system_user":
         principal = _get_system_user_or_404(db, principal_id)
     else:
@@ -85,12 +90,14 @@ def update_me(
     scopes: list[str],
 ) -> MeResponse:
     """Update the current user's profile and return the updated profile."""
+    person: Subscriber | SystemUser
+    disallowed_fields: set[str]
     if principal_type == "system_user":
         person = _get_system_user_or_404(db, principal_id)
         disallowed_fields = {"date_of_birth", "gender", "preferred_contact_method", "locale", "timezone"}
     else:
         person = _get_subscriber_or_404(db, principal_id)
-        disallowed_fields: set[str] = set()
+        disallowed_fields = set()
 
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():

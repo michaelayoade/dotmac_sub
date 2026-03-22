@@ -268,6 +268,8 @@ class SubscriptionChangeRequests(ListResponseMixin):
             SubscriptionUpdate(offer_id=request.requested_offer_id),
         )
         subscription = db.get(Subscription, request.subscription_id)
+        if subscription is None:
+            raise HTTPException(status_code=404, detail="Subscription not found after update")
 
         now = datetime.now(UTC)
         request.status = SubscriptionChangeStatus.applied

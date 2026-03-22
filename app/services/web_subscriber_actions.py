@@ -178,6 +178,14 @@ def update_subscriber_from_full_form(
             marketing_opt_in=form_data.get("marketing_opt_in"),
             notes=form_data.get("notes"),
             account_start_date=form_data.get("account_start_date"),
+            billing_enabled_override=form_data.get("billing_enabled_override"),
+            billing_day=form_data.get("billing_day"),
+            payment_due_days=form_data.get("payment_due_days"),
+            grace_period_days=form_data.get("grace_period_days"),
+            min_balance=form_data.get("min_balance"),
+            captive_redirect_enabled=form_data.get("captive_redirect_enabled"),
+            tax_rate_id=form_data.get("tax_rate_id"),
+            payment_method=form_data.get("payment_method"),
             metadata_json=form_data.get("metadata_json"),
         )
     elif customer_type == "organization":
@@ -193,6 +201,14 @@ def update_subscriber_from_full_form(
             website=form_data.get("website"),
             org_notes=form_data.get("org_notes"),
             org_account_start_date=form_data.get("org_account_start_date"),
+            billing_enabled_override=form_data.get("billing_enabled_override"),
+            billing_day=form_data.get("billing_day"),
+            payment_due_days=form_data.get("payment_due_days"),
+            grace_period_days=form_data.get("grace_period_days"),
+            min_balance=form_data.get("min_balance"),
+            captive_redirect_enabled=form_data.get("captive_redirect_enabled"),
+            tax_rate_id=form_data.get("tax_rate_id"),
+            payment_method=form_data.get("payment_method"),
         )
     else:
         raise ValueError("customer_type must be person or organization")
