@@ -260,8 +260,6 @@ def apply_instant_plan_change(
 ) -> dict:
     """Instantly apply a plan change for the customer."""
     from app.services import subscription_changes as change_service
-    from app.services.events import emit_event
-    from app.services.events.types import EventType
 
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
@@ -310,28 +308,13 @@ def apply_instant_plan_change(
         request_id=str(change_request.id),
     )
 
-    event_type = (
-        EventType.subscription_upgraded
-        if new_price > old_price
-        else EventType.subscription_downgraded
-    )
-    emit_event(
-        db,
-        event_type,
-        {
-            "subscription_id": subscription_id,
-            "old_offer": old_name,
-            "new_offer": new_name,
-            "price_difference": str(new_price - old_price),
-        },
-    )
-
     return {
         "old_offer_name": old_name,
         "new_offer_name": new_name,
         "old_price": old_price,
         "new_price": new_price,
         "price_difference": new_price - old_price,
+        "proration": None,
     }
 
 

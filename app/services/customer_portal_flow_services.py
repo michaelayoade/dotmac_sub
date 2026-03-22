@@ -12,21 +12,192 @@ from sqlalchemy.orm import Session
 from app.models.bandwidth import BandwidthSample
 from app.models.catalog import CatalogOffer, Subscription, SubscriptionStatus
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+from app.models.usage import UsageRecord
 from app.services import catalog as catalog_service
 from app.services import customer_portal_context
 from app.services import provisioning as provisioning_service
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
-from app.services.customer_portal_flow_common import (
-    _compute_total_pages,
-    _resolve_next_billing_date,
-)
 from app.services.customer_portal_flow_changes import (
     get_offer_price_summary,
     get_plan_change_copy,
 )
+from app.services.customer_portal_flow_common import (
+    _compute_total_pages,
+    _resolve_next_billing_date,
+)
 
 logger = logging.getLogger(__name__)
+
+_PORTAL_VISIBLE_SERVICE_STATUSES = [
+    SubscriptionStatus.pending,
+    SubscriptionStatus.active,
+    SubscriptionStatus.blocked,
+    SubscriptionStatus.suspended,
+    SubscriptionStatus.stopped,
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+]
+
+
+def _get_fup_status(db: Session, offer_id: str | None, subscription_id: str) -> dict | None:
+    """Get FUP status for a subscription's offer, if a policy exists."""
+    if not offer_id:
+        return None
+    try:
+        from app.services.fup import FupPolicies
+
+        policy = FupPolicies.get_by_offer(db, offer_id)
+        if not policy or not policy.is_active:
+            return None
+
+        # Compute current usage for this billing period
+        now = datetime.now(UTC)
+        subscription = db.get(Subscription, coerce_uuid(subscription_id))
+        period_start = now - timedelta(days=30)
+        if subscription and subscription.next_billing_at:
+            nba = _as_utc(subscription.next_billing_at) or now
+            cycle_days = 30
+            period_start = nba - timedelta(days=cycle_days)
+
+        usage_gb = _usage_total_gb(
+            db,
+            subscription_id=subscription_id,
+            start_at=period_start,
+            end_at=now,
+        )
+
+        # Fallback to estimated traffic volume if accounting records are unavailable.
+        if usage_gb <= 0:
+            rows = (
+                db.query(
+                    func.avg(BandwidthSample.rx_bps).label("rx"),
+                    func.avg(BandwidthSample.tx_bps).label("tx"),
+                )
+                .filter(
+                    BandwidthSample.subscription_id == coerce_uuid(subscription_id),
+                    BandwidthSample.sample_at >= period_start,
+                    BandwidthSample.sample_at <= now,
+                )
+                .first()
+            )
+            if rows and (rows.rx or rows.tx):
+                span_seconds = max(0, (now - period_start).total_seconds())
+                total_bytes = ((float(rows.rx or 0) + float(rows.tx or 0)) / 8.0) * span_seconds
+                usage_gb = total_bytes / (1024 ** 3)
+
+        # Get the data cap from the first active rule
+        allowance_gb = None
+        active_rules = [r for r in (policy.rules or []) if r.is_active]
+        active_rules.sort(key=lambda r: r.sort_order or 0)
+        if active_rules:
+            from app.services.fup import _threshold_gb
+            allowance_gb = max(_threshold_gb(rule) for rule in active_rules)
+
+        usage_pct = 0.0
+        if allowance_gb and allowance_gb > 0:
+            usage_pct = min(100.0, (usage_gb / allowance_gb) * 100)
+
+        # Determine status level
+        status_level = "normal"
+        if usage_pct >= 100:
+            status_level = "exceeded"
+        elif usage_pct >= 80:
+            status_level = "warning"
+
+        # Policy doesn't have a name field; use offer or generic label
+        policy_label = "Fair Usage Policy"
+        if hasattr(policy, "offer") and policy.offer and hasattr(policy.offer, "name"):
+            policy_label = f"FUP — {policy.offer.name}"
+
+        return {
+            "policy_name": policy_label,
+            "usage_gb": round(usage_gb, 2),
+            "allowance_gb": round(allowance_gb, 2) if allowance_gb else None,
+            "usage_pct": round(usage_pct, 1),
+            "status_level": status_level,
+            "rules_count": len(active_rules),
+        }
+    except Exception as exc:
+        logger.warning("Failed to get FUP status for offer %s: %s", offer_id, exc)
+        return None
+
+
+def _usage_total_gb(
+    db: Session,
+    *,
+    subscription_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> float:
+    total = (
+        db.query(func.coalesce(func.sum(UsageRecord.total_gb), 0))
+        .filter(
+            UsageRecord.subscription_id == coerce_uuid(subscription_id),
+            UsageRecord.recorded_at >= start_at,
+            UsageRecord.recorded_at <= end_at,
+        )
+        .scalar()
+    )
+    return float(total or 0)
+
+
+def _daily_usage_records(
+    db: Session,
+    *,
+    subscription_id: str,
+    start_at: datetime,
+    end_at: datetime,
+) -> dict[Any, float]:
+    bucket = func.date_trunc("day", UsageRecord.recorded_at)
+    rows = (
+        db.query(
+            bucket.label("bucket_start"),
+            func.coalesce(func.sum(UsageRecord.total_gb), 0).label("total_gb"),
+        )
+        .filter(
+            UsageRecord.subscription_id == coerce_uuid(subscription_id),
+            UsageRecord.recorded_at >= start_at,
+            UsageRecord.recorded_at <= end_at,
+        )
+        .group_by(bucket)
+        .all()
+    )
+    result: dict[Any, float] = {}
+    for row in rows:
+        bucket_start = _as_utc(row.bucket_start)
+        if bucket_start is None:
+            continue
+        result[bucket_start.date()] = float(row.total_gb or 0)
+    return result
+
+
+def _get_pppoe_credentials(db: Session, subscriber_id: str | None) -> dict | None:
+    """Get PPPoE credentials for a subscriber, if any exist."""
+    if not subscriber_id:
+        return None
+    try:
+        from app.models.catalog import AccessCredential, ConnectionType
+
+        cred = (
+            db.query(AccessCredential)
+            .filter(
+                AccessCredential.subscriber_id == coerce_uuid(subscriber_id),
+                AccessCredential.connection_type == ConnectionType.pppoe,
+                AccessCredential.is_active.is_(True),
+            )
+            .first()
+        )
+        if not cred:
+            return None
+        return {
+            "username": cred.username,
+            "has_password": bool(cred.secret_hash),
+        }
+    except Exception as exc:
+        logger.warning("Failed to get PPPoE credentials for subscriber %s: %s", subscriber_id, exc)
+        return None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -63,7 +234,7 @@ def _resolve_usage_subscription_id(db: Session, customer: dict) -> str | None:
         db.query(Subscription)
         .filter(
             Subscription.subscriber_id == UUID(str(account_id)),
-            Subscription.status.in_([SubscriptionStatus.active, SubscriptionStatus.pending]),
+            Subscription.status.in_(_PORTAL_VISIBLE_SERVICE_STATUSES),
         )
         .order_by(Subscription.created_at.desc())
         .first()
@@ -80,30 +251,12 @@ def _daily_bandwidth_usage(
     page: int,
     per_page: int,
 ) -> tuple[list[Any], int]:
-    bucket = func.date_trunc("day", BandwidthSample.sample_at)
-
-    rows = (
-        db.query(
-            bucket.label("bucket_start"),
-            func.avg(BandwidthSample.rx_bps).label("rx_bps"),
-            func.avg(BandwidthSample.tx_bps).label("tx_bps"),
-        )
-        .filter(
-            BandwidthSample.subscription_id == coerce_uuid(subscription_id),
-            BandwidthSample.sample_at >= start_at,
-            BandwidthSample.sample_at <= end_at,
-        )
-        .group_by(bucket)
-        .order_by(bucket.desc())
-        .all()
+    by_day_usage = _daily_usage_records(
+        db,
+        subscription_id=subscription_id,
+        start_at=start_at,
+        end_at=end_at,
     )
-
-    by_day: dict[Any, tuple[float, float]] = {}
-    for row in rows:
-        bucket_start = _as_utc(row.bucket_start)
-        if bucket_start is None:
-            continue
-        by_day[bucket_start.date()] = (float(row.rx_bps or 0), float(row.tx_bps or 0))
 
     start_day_dt = _as_utc(start_at) or start_at
     end_day_dt = _as_utc(end_at) or end_at
@@ -119,9 +272,24 @@ def _daily_bandwidth_usage(
         effective_end = min(end_at, day_end)
         span_seconds = max(0.0, (effective_end - effective_start).total_seconds())
 
-        rx_bps, tx_bps = by_day.get(day, (0.0, 0.0))
-        total_bytes = ((rx_bps + tx_bps) / 8.0) * span_seconds
-        total_gb = total_bytes / (1024 ** 3)
+        total_gb = by_day_usage.get(day)
+        if total_gb is None:
+            rows = (
+                db.query(
+                    func.avg(BandwidthSample.rx_bps).label("rx_bps"),
+                    func.avg(BandwidthSample.tx_bps).label("tx_bps"),
+                )
+                .filter(
+                    BandwidthSample.subscription_id == coerce_uuid(subscription_id),
+                    BandwidthSample.sample_at >= effective_start,
+                    BandwidthSample.sample_at <= effective_end,
+                )
+                .first()
+            )
+            rx_bps = float(rows.rx_bps or 0) if rows else 0.0
+            tx_bps = float(rows.tx_bps or 0) if rows else 0.0
+            total_bytes = ((rx_bps + tx_bps) / 8.0) * span_seconds
+            total_gb = total_bytes / (1024 ** 3)
 
         daily_records.append(
             SimpleNamespace(
@@ -269,6 +437,15 @@ def get_usage_page(
         end_at=end_at,
     )
 
+    # Resolve FUP status from subscriber's primary subscription offer
+    fup_status = None
+    if subscription:
+        fup_status = _get_fup_status(
+            db,
+            str(subscription.offer_id) if subscription.offer_id else None,
+            subscription_id_str,
+        )
+
     return {
         "usage_records": usage_records,
         "period": period,
@@ -277,6 +454,7 @@ def get_usage_page(
         "total": total,
         "total_pages": _compute_total_pages(total, per_page),
         "usage_summary": usage_summary,
+        "fup_status": fup_status,
     }
 
 
@@ -302,26 +480,35 @@ def get_services_page(
     if not account_id_str:
         return empty_result
 
-    services = catalog_service.subscriptions.list(
-        db=db,
-        subscriber_id=account_id_str,
-        offer_id=None,
-        status=SubscriptionStatus.active.value,
-        order_by="created_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=(page - 1) * per_page,
+    query = db.query(Subscription).filter(
+        Subscription.subscriber_id == coerce_uuid(account_id_str),
+        Subscription.status.in_(_PORTAL_VISIBLE_SERVICE_STATUSES),
+    )
+    if status:
+        query = query.filter(
+            Subscription.status == _validate_enum(status, SubscriptionStatus, "status")
+        )
+
+    services = (
+        query.order_by(Subscription.created_at.desc())
+        .offset((page - 1) * per_page)
+        .limit(per_page)
+        .all()
     )
 
     stmt = select(func.count(Subscription.id)).where(
         Subscription.subscriber_id == coerce_uuid(account_id_str),
-        Subscription.status == SubscriptionStatus.active,
+        Subscription.status.in_(_PORTAL_VISIBLE_SERVICE_STATUSES),
     )
+    if status:
+        stmt = stmt.where(
+            Subscription.status == _validate_enum(status, SubscriptionStatus, "status")
+        )
     total = db.scalar(stmt) or 0
 
     return {
         "services": services,
-        "status": SubscriptionStatus.active.value,
+        "status": status,
         "page": page,
         "per_page": per_page,
         "total": total,
@@ -352,11 +539,16 @@ def get_service_detail(
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
 
+    fup_status = _get_fup_status(db, str(current_offer.id) if current_offer else None, subscription_id)
+    pppoe_creds = _get_pppoe_credentials(db, str(subscription.subscriber_id) if subscription else None)
+
     return {
         "subscription": subscription,
         "current_offer": current_offer,
         "current_offer_summary": get_offer_price_summary(current_offer),
         "next_billing_date": next_billing_date,
+        "fup_status": fup_status,
+        "pppoe_credentials": pppoe_creds,
         **copy,
     }
 

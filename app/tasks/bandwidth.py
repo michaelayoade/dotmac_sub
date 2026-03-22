@@ -17,7 +17,7 @@ from sqlalchemy import delete, func
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import Subscription
+from app.models.catalog import NasDevice, Subscription
 from app.models.domain_settings import SettingDomain
 from app.services.metrics_store import get_metrics_store
 from app.services.settings_spec import resolve_value
@@ -136,6 +136,8 @@ def process_bandwidth_stream():
         if not all_messages:
             return {"processed": 0}
 
+        nas_device_ids: set[UUID] = set()
+
         # Parse and insert samples
         samples = []
         message_ids = []
@@ -145,10 +147,9 @@ def process_bandwidth_stream():
 
             try:
                 sample_at = datetime.fromisoformat(data[b"sample_at"].decode())
-                # NOTE:
-                # Stream payload currently carries NAS device IDs (`nas_device_id`), while
-                # bandwidth_samples.device_id references network_devices.id. To avoid FK
-                # violations and data loss, persist samples without device linkage here.
+                nas_device_id_raw = data.get(b"nas_device_id")
+                if nas_device_id_raw:
+                    nas_device_ids.add(UUID(nas_device_id_raw.decode()))
                 samples.append(BandwidthSample(
                     subscription_id=UUID(data[b"subscription_id"].decode()),
                     device_id=None,
@@ -158,6 +159,27 @@ def process_bandwidth_stream():
                 ))
             except Exception as e:
                 logger.error("Failed to parse sample %s: %s", msg_id, e)
+
+        network_device_by_nas: dict[UUID, UUID | None] = {}
+        if nas_device_ids:
+            network_device_by_nas = {
+                row.id: row.network_device_id
+                for row in (
+                    db.query(NasDevice)
+                    .filter(NasDevice.id.in_(nas_device_ids))
+                    .all()
+                )
+            }
+
+        for sample, (_msg_id, data) in zip(samples, all_messages, strict=False):
+            nas_device_id_raw = data.get(b"nas_device_id")
+            if not nas_device_id_raw:
+                continue
+            try:
+                nas_device_id = UUID(nas_device_id_raw.decode())
+            except Exception:
+                continue
+            sample.device_id = network_device_by_nas.get(nas_device_id)
 
         # Bulk insert samples — filter out orphaned subscription IDs first
         # to prevent a single bad FK from failing the entire batch.
@@ -268,13 +290,30 @@ def aggregate_to_metrics():
         if not aggregates:
             return {"pushed": 0}
 
+        nas_device_by_network_device: dict[UUID, UUID] = {}
+        device_ids = {agg.device_id for agg in aggregates if agg.device_id}
+        if device_ids:
+            nas_device_by_network_device = {
+                row.network_device_id: row.id
+                for row in (
+                    db.query(NasDevice)
+                    .filter(NasDevice.network_device_id.in_(device_ids))
+                    .all()
+                )
+                if row.network_device_id
+            }
+
         # Push to VictoriaMetrics
         async def push_aggregates():
             metrics_store = get_metrics_store()
             for agg in aggregates:
                 await metrics_store.write_aggregates(
                     subscription_id=str(agg.subscription_id),
-                    nas_device_id=str(agg.device_id) if agg.device_id else None,
+                    nas_device_id=(
+                        str(nas_device_by_network_device.get(agg.device_id))
+                        if agg.device_id and nas_device_by_network_device.get(agg.device_id)
+                        else None
+                    ),
                     timestamp=minute_start - timedelta(minutes=1),
                     rx_avg=float(agg.rx_avg or 0),
                     tx_avg=float(agg.tx_avg or 0),

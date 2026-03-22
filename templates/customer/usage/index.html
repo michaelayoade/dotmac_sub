@@ -156,6 +156,48 @@
         </div>
     </div>
 
+    {% if fup_status and fup_status.allowance_gb %}
+    <!-- FUP Data Allowance -->
+    <div class="group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm dark:border-stone-700/60 dark:bg-stone-800/80">
+        <div class="flex items-center justify-between mb-3">
+            <div class="flex items-center gap-3">
+                <div class="flex h-12 w-12 items-center justify-center rounded-xl
+                    {% if fup_status.status_level == 'exceeded' %}bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400
+                    {% elif fup_status.status_level == 'warning' %}bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-400
+                    {% else %}bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400{% endif %}">
+                    <svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                </div>
+                <div>
+                    <p class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Fair Usage Policy</p>
+                    <p class="mt-1 text-lg font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
+                        {{ fup_status.usage_gb }} / {{ fup_status.allowance_gb }} GB
+                    </p>
+                </div>
+            </div>
+            <span class="text-2xl font-bold
+                {% if fup_status.status_level == 'exceeded' %}text-rose-600 dark:text-rose-400
+                {% elif fup_status.status_level == 'warning' %}text-amber-600 dark:text-amber-400
+                {% else %}text-emerald-600 dark:text-emerald-400{% endif %}">
+                {{ fup_status.usage_pct }}%
+            </span>
+        </div>
+        <div class="h-3 w-full overflow-hidden rounded-full bg-stone-100 dark:bg-stone-700">
+            <div class="h-full rounded-full transition-all duration-500
+                {% if fup_status.status_level == 'exceeded' %}bg-gradient-to-r from-rose-500 to-rose-600
+                {% elif fup_status.status_level == 'warning' %}bg-gradient-to-r from-amber-500 to-amber-600
+                {% else %}bg-gradient-to-r from-emerald-500 to-teal-500{% endif %}"
+                 style="width: {{ fup_status.usage_pct }}%"></div>
+        </div>
+        {% if fup_status.status_level == 'exceeded' %}
+        <p class="mt-2 text-sm font-medium text-rose-600 dark:text-rose-400">Data allowance exceeded — speed may be reduced until next billing cycle</p>
+        {% elif fup_status.status_level == 'warning' %}
+        <p class="mt-2 text-sm font-medium text-amber-600 dark:text-amber-400">Approaching your data allowance — {{ fup_status.allowance_gb - fup_status.usage_gb }} GB remaining</p>
+        {% else %}
+        <p class="mt-2 text-sm text-stone-500 dark:text-stone-400">{{ fup_status.allowance_gb - fup_status.usage_gb }} GB remaining in this billing period</p>
+        {% endif %}
+    </div>
+    {% endif %}
+
     <!-- Average Usage Card -->
     <div class="group relative overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm transition-all duration-300 hover:shadow-lg dark:border-stone-700/60 dark:bg-stone-800/80">
         <div class="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>

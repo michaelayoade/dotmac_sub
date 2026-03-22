@@ -11,7 +11,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
 from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin, list_response
@@ -553,17 +553,17 @@ class BandwidthSamples(ListResponseMixin):
 
     @staticmethod
     def get_user_active_subscription(db: Session, user: dict) -> Subscription:
-        """Get the active subscription for a user.
+        """Get the portal-visible subscription for a user.
 
         Args:
             db: Database session
             user: Current user dict with account_id
 
         Returns:
-            The user's active subscription
+            The user's current portal-visible subscription
 
         Raises:
-            HTTPException: If no account or active subscription found
+            HTTPException: If no account or portal-visible subscription found
         """
         subscriber_id = (
             user.get("account_id")
@@ -577,13 +577,25 @@ class BandwidthSamples(ListResponseMixin):
             db.query(Subscription)
             .filter(
                 Subscription.subscriber_id == UUID(str(subscriber_id)),
-                Subscription.status.in_(["active", "pending"]),
+                Subscription.status.in_(
+                    [
+                        SubscriptionStatus.active,
+                        SubscriptionStatus.pending,
+                        SubscriptionStatus.blocked,
+                        SubscriptionStatus.suspended,
+                        SubscriptionStatus.stopped,
+                        SubscriptionStatus.disabled,
+                        SubscriptionStatus.expired,
+                        SubscriptionStatus.canceled,
+                    ]
+                ),
             )
+            .order_by(Subscription.created_at.desc())
             .first()
         )
 
         if not subscription:
-            raise HTTPException(status_code=404, detail="No active subscription found")
+            raise HTTPException(status_code=404, detail="No portal-visible subscription found")
 
         return subscription
 

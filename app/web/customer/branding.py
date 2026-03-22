@@ -10,7 +10,7 @@ from app.db import SessionLocal
 logger = logging.getLogger(__name__)
 
 
-def customer_branding_context(_request: Request) -> dict[str, object]:
+def customer_branding_context(request: Request) -> dict[str, object]:
     """Build branding context (favicon, sidebar stats, portal name) for customer portal templates."""
     db = SessionLocal()
     try:
@@ -29,6 +29,20 @@ def customer_branding_context(_request: Request) -> dict[str, object]:
         portal_name = info.get("company_name") or ""
     except Exception:
         logger.debug("Failed to load company name for portal branding")
+
+    # Check restricted status for global banner
+    restricted = False
+    try:
+        from app.services.customer_portal_context import is_subscriber_restricted
+        from app.web.customer.auth import get_current_customer_from_request
+
+        customer = get_current_customer_from_request(request, db)
+        if customer:
+            subscriber_id = customer.get("subscriber_id")
+            if subscriber_id and is_subscriber_restricted(db, subscriber_id):
+                restricted = True
+    except Exception:
+        logger.debug("Failed to check restricted status for branding context")
     finally:
         db.close()
 
@@ -37,6 +51,7 @@ def customer_branding_context(_request: Request) -> dict[str, object]:
         "sidebar_stats": stats,
         "branding_favicon_url": favicon,
         "portal_name": portal_name,
+        "restricted": restricted,
     }
 
 

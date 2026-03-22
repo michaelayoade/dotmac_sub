@@ -365,8 +365,19 @@ def apply_interface_snapshot(
             iface.status = snapshot.status
             iface.speed_mbps = snapshot.speed_mbps
             iface.mac_address = snapshot.mac_address
+            if snapshot.index:
+                try:
+                    iface.snmp_index = int(snapshot.index)
+                except (ValueError, TypeError):
+                    pass
             updated += 1
         elif create_missing:
+            snmp_idx = None
+            if snapshot.index:
+                try:
+                    snmp_idx = int(snapshot.index)
+                except (ValueError, TypeError):
+                    pass
             iface = DeviceInterface(
                 device_id=device.id,
                 name=snapshot.name,
@@ -374,6 +385,7 @@ def apply_interface_snapshot(
                 status=snapshot.status,
                 speed_mbps=snapshot.speed_mbps,
                 mac_address=snapshot.mac_address,
+                snmp_index=snmp_idx,
             )
             db.add(iface)
             created += 1

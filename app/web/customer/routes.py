@@ -45,6 +45,14 @@ def _emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
         logger.warning("Failed to emit customer event %s: %s", event_name, e)
 
 
+def _restricted_flag(db: Session, customer: dict) -> dict:
+    """Return dict with restricted=True if subscriber is restricted, for template context."""
+    subscriber_id = customer.get("subscriber_id")
+    if subscriber_id and is_subscriber_restricted(db, subscriber_id):
+        return {"restricted": True}
+    return {}
+
+
 def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription | None:
     account_id, session_subscription_id = customer_portal.resolve_customer_account(customer, db)
     account_id_str = str(account_id) if account_id else None
@@ -1003,8 +1011,19 @@ def customer_verify_payment(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     try:
+        # Check if subscriber was restricted before payment
+        subscriber_id = customer.get("subscriber_id")
+        was_restricted = bool(
+            subscriber_id and is_subscriber_restricted(db, subscriber_id)
+        )
+
         result = customer_portal.verify_and_record_payment(
             db, customer, reference, provider=provider
+        )
+        service_restored = bool(
+            was_restricted
+            and subscriber_id
+            and not is_subscriber_restricted(db, subscriber_id)
         )
         return templates.TemplateResponse(
             "customer/billing/pay_success.html",
@@ -1015,6 +1034,8 @@ def customer_verify_payment(
                 "invoice": result["invoice"],
                 "amount": result["amount"],
                 "reference": result["reference"],
+                "was_restricted": was_restricted,
+                "service_restored": service_restored,
                 "active_page": "billing",
             },
         )

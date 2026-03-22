@@ -287,6 +287,12 @@ class DeviceInterface(Base):
     )
     speed_mbps: Mapped[int | None] = mapped_column(Integer)
     mac_address: Mapped[str | None] = mapped_column(String(64))
+    snmp_index: Mapped[int | None] = mapped_column(Integer)
+
+    # Counter state for bps delta calculation (updated by SNMP polling)
+    last_in_octets: Mapped[float | None] = mapped_column(Float)
+    last_out_octets: Mapped[float | None] = mapped_column(Float)
+    last_counter_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

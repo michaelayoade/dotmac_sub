@@ -5,6 +5,8 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from app.models.catalog import NasDevice
+from app.tasks import bandwidth as bandwidth_tasks
 
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
 from app.services import bandwidth as bandwidth_service
@@ -232,3 +234,80 @@ def test_get_user_active_subscription_uses_principal_id(db_session, subscription
     )
 
     assert current.id == subscription.id
+
+
+def test_get_user_active_subscription_allows_blocked_subscription(db_session, subscription):
+    from app.models.catalog import SubscriptionStatus
+
+    subscription.status = SubscriptionStatus.blocked
+    db_session.commit()
+
+    current = bandwidth_service.bandwidth_samples.get_user_active_subscription(
+        db_session,
+        {"account_id": str(subscription.subscriber_id)},
+    )
+
+    assert current.id == subscription.id
+
+
+def test_process_bandwidth_stream_resolves_network_device_from_nas(
+    db_session, subscription, network_device
+):
+    nas = NasDevice(
+        name="NAS-1",
+        network_device_id=network_device.id,
+    )
+    db_session.add(nas)
+    db_session.commit()
+
+    class _FakeRedis:
+        def xgroup_create(self, *_args, **_kwargs):
+            return None
+
+        def xreadgroup(self, *, streams, **_kwargs):
+            if list(streams.values())[0] == "0":
+                return []
+            return [
+                (
+                    "bandwidth:samples",
+                    [
+                        (
+                            b"1-0",
+                            {
+                                b"subscription_id": str(subscription.id).encode(),
+                                b"nas_device_id": str(nas.id).encode(),
+                                b"rx_bps": b"1000",
+                                b"tx_bps": b"2000",
+                                b"sample_at": datetime.now(UTC).isoformat().encode(),
+                            },
+                        )
+                    ],
+                )
+            ]
+
+        def xack(self, *_args, **_kwargs):
+            return 1
+
+        def close(self):
+            return None
+
+    from unittest.mock import patch
+
+    with (
+        patch("app.tasks.bandwidth._get_redis_client", return_value=_FakeRedis()),
+        patch("app.tasks.bandwidth.SessionLocal", return_value=db_session),
+    ):
+        result = bandwidth_tasks.process_bandwidth_stream()
+
+    assert result["processed"] == 1
+    sample = bandwidth_service.bandwidth_samples.list(
+        db_session,
+        subscription_id=str(subscription.id),
+        device_id=None,
+        interface_id=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=1,
+        offset=0,
+    )[0]
+    assert sample.device_id == network_device.id

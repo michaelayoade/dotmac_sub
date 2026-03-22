@@ -895,7 +895,7 @@ def seed_radius_settings(db: Session) -> None:
         db,
         key="pppoe_username_prefix",
         value_type=SettingValueType.string,
-        value_text=os.getenv("PPPOE_USERNAME_PREFIX", "1000"),
+        value_text=os.getenv("PPPOE_USERNAME_PREFIX", "1050"),
     )
     radius_settings.ensure_by_key(
         db,
@@ -1022,6 +1022,66 @@ def seed_billing_settings(db: Session) -> None:
             "BILLING_PAYMENT_DUE_DAYS",
             os.getenv("BILLING_INVOICE_DUE_DAYS", "14"),
         ),
+    )
+    auto_suspend_raw = os.getenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "true")
+    billing_settings.ensure_by_key(
+        db,
+        key="auto_suspend_on_overdue",
+        value_type=SettingValueType.boolean,
+        value_text=auto_suspend_raw,
+        value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="refund_policy",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PLAN_CHANGE_REFUND_POLICY", "none"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="upgrade_fee",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PLAN_CHANGE_UPGRADE_FEE", "0.00"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="downgrade_fee",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PLAN_CHANGE_DOWNGRADE_FEE", "0.00"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="fee_tax_rate",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PLAN_CHANGE_FEE_TAX_RATE", "0.00"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="invoice_timing",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PLAN_CHANGE_INVOICE_TIMING", "immediate"),
+    )
+    prepaid_rollover_raw = os.getenv("PLAN_CHANGE_PREPAID_ROLLOVER", "false")
+    billing_settings.ensure_by_key(
+        db,
+        key="prepaid_rollover",
+        value_type=SettingValueType.boolean,
+        value_text=prepaid_rollover_raw,
+        value_json=prepaid_rollover_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    discount_transfer_raw = os.getenv("PLAN_CHANGE_DISCOUNT_TRANSFER", "false")
+    billing_settings.ensure_by_key(
+        db,
+        key="discount_transfer",
+        value_type=SettingValueType.boolean,
+        value_text=discount_transfer_raw,
+        value_json=discount_transfer_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="minimum_invoice_amount",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("PLAN_CHANGE_MINIMUM_INVOICE_AMOUNT", "0.00"),
     )
     invoice_enabled_raw = os.getenv("BILLING_INVOICE_NUMBER_ENABLED", "true")
     billing_settings.ensure_by_key(
