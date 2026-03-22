@@ -24,10 +24,11 @@ def login_for_token(api_context, username: str, password: str) -> str:
     last_error: Exception | None = None
     for attempt in range(3):
         try:
-            response = api_post_json(
-                api_context,
+            response = api_context.post(
                 "/api/v1/auth/login",
-                {"username": username, "password": password},
+                data='{"username": "%s", "password": "%s"}' % (username, password),
+                headers={"Content-Type": "application/json"},
+                timeout=60_000,
             )
             if response.status == 404:
                 return _login_for_token_via_web(api_context, username, password)
@@ -42,6 +43,11 @@ def login_for_token(api_context, username: str, password: str) -> str:
             return token_obj
         except (PlaywrightError, AuthError) as exc:
             last_error = exc
+            if isinstance(exc, PlaywrightError):
+                try:
+                    return _login_for_token_via_web(api_context, username, password)
+                except AuthError as web_exc:
+                    last_error = web_exc
             if attempt == 2:
                 break
             time.sleep(2)
@@ -49,11 +55,11 @@ def login_for_token(api_context, username: str, password: str) -> str:
 
 
 def _login_for_token_via_web(api_context, username: str, password: str) -> str:
-    response = api_post_form(
-        api_context,
+    response = api_context.post(
         "/auth/login",
-        {"username": username, "password": password, "remember": False},
-        follow_redirects=False,
+        form={"username": username, "password": password, "remember": False},
+        max_redirects=0,
+        timeout=60_000,
     )
     if response.status not in {200, 302, 303}:
         raise AuthError(f"Web login failed for {username}: {response.status}")
@@ -62,6 +68,10 @@ def _login_for_token_via_web(api_context, username: str, password: str) -> str:
     if not token:
         raise AuthError("Web login response missing session_token cookie")
     return token
+
+
+def web_login_session_token(api_context, username: str, password: str) -> str:
+    return _login_for_token_via_web(api_context, username, password)
 
 
 def _session_token_from_headers(headers: dict[str, str]) -> str | None:

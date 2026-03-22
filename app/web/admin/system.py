@@ -3334,3 +3334,173 @@ def config_ipv6_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_ipv6_config(db, form)
     return RedirectResponse(url="/admin/system/config/ipv6", status_code=303)
+
+
+# ── Secrets Management (OpenBao) ─────────────────────────────────────
+
+
+@router.get("/secrets", response_class=HTMLResponse)
+def secrets_management(
+    request: Request,
+    status: str | None = None,
+    message: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """OpenBao secrets management dashboard."""
+    from app.services.secrets import (
+        is_openbao_available,
+        list_secret_paths,
+        read_secret_fields,
+        read_secret_metadata,
+    )
+
+    available = is_openbao_available()
+    paths = list_secret_paths() if available else []
+    secrets_list = []
+    for path in paths:
+        path_clean = path.rstrip("/")
+        meta = read_secret_metadata(path_clean) if available else {}
+        fields = read_secret_fields(path_clean) if available else {}
+        secrets_list.append({
+            "path": path_clean,
+            "fields": list(fields.keys()),
+            "field_count": len(fields),
+            "version": meta.get("current_version", "?"),
+            "created_time": meta.get("created_time", ""),
+            "updated_time": meta.get("updated_time", ""),
+        })
+
+    ctx = _placeholder_context(request, db, "Secrets", "secrets")
+    ctx.update({
+        "openbao_available": available,
+        "secrets_list": secrets_list,
+        "status": status,
+        "message": message,
+    })
+    return templates.TemplateResponse("admin/system/secrets.html", ctx)
+
+
+@router.get("/secrets/{path:path}/edit", response_class=HTMLResponse)
+def secrets_edit(request: Request, path: str, db: Session = Depends(get_db)):
+    """Edit a secret's fields."""
+    from app.services.secrets import (
+        is_openbao_available,
+        read_secret_fields,
+        read_secret_metadata,
+    )
+
+    if not is_openbao_available():
+        return RedirectResponse("/admin/system/secrets?status=error&message=OpenBao+not+available", status_code=303)
+
+    fields = read_secret_fields(path)
+    meta = read_secret_metadata(path)
+    ctx = _placeholder_context(request, db, "Secrets", "secrets")
+    ctx.update({
+        "secret_path": path,
+        "fields": fields,
+        "metadata": meta,
+        "error": None,
+    })
+    return templates.TemplateResponse("admin/system/secrets_edit.html", ctx)
+
+
+@router.post("/secrets/{path:path}/save", response_class=HTMLResponse)
+def secrets_save(request: Request, path: str, db: Session = Depends(get_db)):
+    """Save updated secret fields."""
+    from app.services.secrets import read_secret_fields, write_secret
+
+    form = parse_form_data_sync(request)
+    existing = read_secret_fields(path)
+
+    # Build updated data: keep existing values where form sends "***" (masked)
+    updated: dict[str, str] = {}
+    for key in existing:
+        form_val = str(form.get(f"field_{key}") or "").strip()
+        if form_val and form_val != "••••••••":
+            updated[key] = form_val
+        else:
+            updated[key] = existing[key]
+
+    # Handle new fields
+    new_keys = str(form.get("new_field_names") or "").strip()
+    new_vals = str(form.get("new_field_values") or "").strip()
+    if new_keys:
+        for nk, nv in zip(new_keys.split(","), new_vals.split(","), strict=False):
+            nk = nk.strip()
+            nv = nv.strip()
+            if nk:
+                updated[nk] = nv
+
+    success = write_secret(path, updated)
+    if success:
+        return RedirectResponse(
+            f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+updated",
+            status_code=303,
+        )
+    ctx = _placeholder_context(request, db, "Secrets", "secrets")
+    ctx.update({
+        "secret_path": path,
+        "fields": updated,
+        "metadata": {},
+        "error": "Failed to save secret to OpenBao",
+    })
+    return templates.TemplateResponse("admin/system/secrets_edit.html", ctx)
+
+
+@router.get("/secrets/new", response_class=HTMLResponse)
+def secrets_new(request: Request, db: Session = Depends(get_db)):
+    """Create a new secret."""
+    ctx = _placeholder_context(request, db, "Secrets", "secrets")
+    ctx.update({"error": None})
+    return templates.TemplateResponse("admin/system/secrets_new.html", ctx)
+
+
+@router.post("/secrets/create", response_class=HTMLResponse)
+def secrets_create(request: Request, db: Session = Depends(get_db)):
+    """Create a new secret path with fields."""
+    from app.services.secrets import write_secret
+
+    form = parse_form_data_sync(request)
+    path = str(form.get("path") or "").strip()
+    if not path:
+        ctx = _placeholder_context(request, db, "Secrets", "secrets")
+        ctx["error"] = "Secret path is required"
+        return templates.TemplateResponse("admin/system/secrets_new.html", ctx)
+
+    # Parse field pairs
+    data: dict[str, str] = {}
+    idx = 0
+    while True:
+        key = str(form.get(f"key_{idx}") or "").strip()
+        val = str(form.get(f"val_{idx}") or "").strip()
+        if not key:
+            break
+        data[key] = val
+        idx += 1
+
+    if not data:
+        ctx = _placeholder_context(request, db, "Secrets", "secrets")
+        ctx["error"] = "At least one field is required"
+        return templates.TemplateResponse("admin/system/secrets_new.html", ctx)
+
+    success = write_secret(path, data)
+    if success:
+        return RedirectResponse(
+            f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+created",
+            status_code=303,
+        )
+    ctx = _placeholder_context(request, db, "Secrets", "secrets")
+    ctx["error"] = "Failed to create secret in OpenBao"
+    return templates.TemplateResponse("admin/system/secrets_new.html", ctx)
+
+
+@router.post("/secrets/{path:path}/delete", response_class=HTMLResponse)
+def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
+    """Delete a secret."""
+    from app.services.secrets import delete_secret
+
+    delete_secret(path)
+    return RedirectResponse(
+        f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+deleted",
+        status_code=303,
+    )

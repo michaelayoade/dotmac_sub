@@ -1,4 +1,5 @@
 import uuid
+import warnings
 from datetime import UTC, datetime
 
 import pyotp
@@ -171,6 +172,20 @@ def test_issue_and_decode_tokens(monkeypatch):
 
     with pytest.raises(HTTPException):
         auth_flow_service._decode_jwt(None, "bad-token", "access")
+
+
+def test_decode_jwt_suppresses_python_jose_utcnow_deprecation(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    token = auth_flow_service._issue_access_token(None, "person", "session")
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        payload = auth_flow_service._decode_jwt(None, token, "access")
+    assert payload["principal_id"] == "person"
+    assert not any(
+        isinstance(item.message, DeprecationWarning)
+        and "datetime.datetime.utcnow()" in str(item.message)
+        for item in captured
+    )
 
 
 def test_access_and_refresh_ttl_defaults(db_session, monkeypatch):

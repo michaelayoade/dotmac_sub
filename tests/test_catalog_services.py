@@ -1,4 +1,4 @@
-from app.models.catalog import AccessType, NasVendor, PriceBasis, ServiceType
+from app.models.catalog import AccessType, BillingCycle, NasVendor, PriceBasis, ServiceType
 from app.schemas.catalog import (
     CatalogOfferCreate,
     CatalogOfferUpdate,
@@ -211,3 +211,12 @@ def test_ensure_offer_radius_profile_updates_existing_generated_profile(db_sessi
     assert profile.download_speed == 7000
     assert profile.upload_speed == 5000
     assert profile.mikrotik_rate_limit == "7000k/5000k"
+
+
+def test_offer_form_context_exposes_full_billing_cycle_set(db_session):
+    context = web_catalog_offers_service.offer_form_context(
+        db_session,
+        web_catalog_offers_service.default_offer_form(),
+    )
+
+    assert context["billing_cycles"] == [item.value for item in BillingCycle]

@@ -4,6 +4,7 @@ Covers: ticket creation, password change, event types, route registration.
 """
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from app.services.events.types import EventType
 
@@ -314,6 +315,221 @@ class TestPlanChangeUiHelpers:
 
         assert "prorated invoice or credit note" in copy["billing_message"]
 
+    def test_get_fup_status_uses_highest_active_rule_threshold_for_allowance(self) -> None:
+        from app.services.customer_portal_flow_services import _get_fup_status
+        from app.models.fup import FupDataUnit
+
+        db = MagicMock()
+        subscription_id = "00000000-0000-0000-0000-000000000123"
+        db.get.return_value = SimpleNamespace(next_billing_at=datetime(2026, 3, 30, tzinfo=UTC))
+
+        query = MagicMock()
+        db.query.return_value = query
+        query.filter.return_value = query
+        query.first.return_value = SimpleNamespace(rx=None, tx=None)
+
+        policy = SimpleNamespace(
+            is_active=True,
+            rules=[
+                SimpleNamespace(is_active=True, sort_order=1, threshold_amount=80, threshold_unit=FupDataUnit.gb),
+                SimpleNamespace(is_active=True, sort_order=2, threshold_amount=120, threshold_unit=FupDataUnit.gb),
+            ],
+            offer=None,
+        )
+
+        from unittest.mock import patch
+
+        with patch("app.services.fup.FupPolicies.get_by_offer", return_value=policy):
+            status = _get_fup_status(db, "offer-1", subscription_id)
+
+        assert status is not None
+        assert status["allowance_gb"] == 120.0
+
+    def test_get_fup_status_prefers_usage_records_over_bandwidth_estimate(
+        self, db_session, subscription, catalog_offer
+    ) -> None:
+        from app.models.fup import FupDataUnit
+        from app.models.usage import UsageRecord, UsageSource
+        from app.services.customer_portal_flow_services import _get_fup_status
+
+        subscription.offer_id = catalog_offer.id
+        subscription.next_billing_at = datetime(2026, 3, 30, tzinfo=UTC)
+        db_session.add(
+            UsageRecord(
+                subscription_id=subscription.id,
+                source=UsageSource.radius,
+                recorded_at=datetime(2026, 3, 20, 12, 0, tzinfo=UTC),
+                input_gb=2,
+                output_gb=1,
+                total_gb=3,
+            )
+        )
+        db_session.commit()
+
+        policy = SimpleNamespace(
+            is_active=True,
+            rules=[
+                SimpleNamespace(is_active=True, sort_order=1, threshold_amount=10, threshold_unit=FupDataUnit.gb),
+            ],
+            offer=None,
+        )
+
+        from unittest.mock import patch
+
+        with patch("app.services.fup.FupPolicies.get_by_offer", return_value=policy):
+            status = _get_fup_status(db_session, str(catalog_offer.id), str(subscription.id))
+
+        assert status is not None
+        assert status["usage_gb"] == 3.0
+
+
+class TestPortalServiceVisibility:
+    def test_services_page_includes_blocked_subscription(self, db_session, subscription, subscriber) -> None:
+        from app.models.catalog import SubscriptionStatus
+        from app.services.customer_portal_flow_services import get_services_page
+
+        subscription.status = SubscriptionStatus.blocked
+        db_session.commit()
+
+        page = get_services_page(
+            db_session,
+            {"account_id": subscriber.id},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 1
+        assert len(page["services"]) == 1
+        assert page["services"][0].status == SubscriptionStatus.blocked
+
+
+class TestPortalNotificationsPage:
+    def test_notifications_page_merges_event_queue_and_customer_notification_events(
+        self, db_session, subscriber
+    ) -> None:
+        from app.models.comms import (
+            CustomerNotificationEvent,
+            CustomerNotificationStatus,
+        )
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+            NotificationTemplate,
+        )
+        from app.services.customer_portal_notifications import get_notifications_page
+
+        subscriber.phone = "+2348000000000"
+        template = NotificationTemplate(
+            name="Invoice Created",
+            code="invoice_created",
+            channel=NotificationChannel.email,
+            body="Invoice body",
+            is_active=True,
+        )
+        db_session.add(template)
+        db_session.flush()
+
+        queued = Notification(
+            template_id=template.id,
+            channel=NotificationChannel.email,
+            recipient=subscriber.email,
+            body="Invoice ready",
+            status=NotificationStatus.delivered,
+        )
+        direct = CustomerNotificationEvent(
+            entity_type="service_order",
+            entity_id=subscriber.id,
+            channel="sms",
+            recipient=subscriber.phone,
+            message="Technician dispatched",
+            status=CustomerNotificationStatus.sent,
+        )
+        db_session.add_all([queued, direct])
+        db_session.commit()
+
+        page = get_notifications_page(
+            db_session,
+            {"subscriber_id": str(subscriber.id)},
+            page=1,
+            per_page=10,
+        )
+
+        assert page["total"] == 2
+        entity_types = {item.entity_type for item in page["notifications"]}
+        assert "invoice_created" in entity_types
+        assert "service_order" in entity_types
+
+
+class TestPaymentSuccessBanner:
+    def test_payment_success_only_marks_service_restored_after_post_payment_check(self) -> None:
+        from unittest.mock import patch
+
+        from app.web.customer.routes import customer_verify_payment
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        result = {
+            "payment": SimpleNamespace(receipt_number="RCT-1"),
+            "invoice": SimpleNamespace(id="inv-1", invoice_number="INV-1"),
+            "amount": 5000,
+            "reference": "ref-1",
+        }
+
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch("app.web.customer.routes.get_current_customer_from_request", return_value=customer),
+            patch("app.web.customer.routes.customer_portal.verify_and_record_payment", return_value=result),
+            patch("app.web.customer.routes.is_subscriber_restricted", side_effect=[True, False]),
+            patch("app.web.customer.routes.templates.TemplateResponse", return_value=template_response) as render,
+        ):
+            response = customer_verify_payment(
+                request=request,
+                reference="ref-1",
+                provider="paystack",
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        context = render.call_args.args[1]
+        assert context["was_restricted"] is True
+        assert context["service_restored"] is True
+
+    def test_payment_success_does_not_claim_restoration_after_partial_payment(self) -> None:
+        from unittest.mock import patch
+
+        from app.web.customer.routes import customer_verify_payment
+
+        request = MagicMock()
+        customer = {"subscriber_id": "sub-1", "account_id": "acct-1"}
+        result = {
+            "payment": SimpleNamespace(receipt_number="RCT-2"),
+            "invoice": SimpleNamespace(id="inv-2", invoice_number="INV-2"),
+            "amount": 1000,
+            "reference": "ref-2",
+        }
+
+        template_response = MagicMock(name="template_response")
+
+        with (
+            patch("app.web.customer.routes.get_current_customer_from_request", return_value=customer),
+            patch("app.web.customer.routes.customer_portal.verify_and_record_payment", return_value=result),
+            patch("app.web.customer.routes.is_subscriber_restricted", side_effect=[True, True]),
+            patch("app.web.customer.routes.templates.TemplateResponse", return_value=template_response) as render,
+        ):
+            response = customer_verify_payment(
+                request=request,
+                reference="ref-2",
+                provider="paystack",
+                db=MagicMock(),
+            )
+
+        assert response is template_response
+        context = render.call_args.args[1]
+        assert context["was_restricted"] is True
+        assert context["service_restored"] is False
+
 
 class TestPlanChangeSettingsValidation:
     def test_save_plan_change_rejects_invalid_refund_policy(self) -> None:
@@ -404,3 +620,12 @@ class TestRestrictedStatusMetadata:
         assert subscriber.metadata_ is not None
         assert subscriber.metadata_["last_restricted_status"] == "suspended"
         assert "last_restricted_ended_at" in subscriber.metadata_
+
+
+class TestPlaywrightPortalRoutes:
+    def test_usage_page_object_uses_canonical_portal_route(self) -> None:
+        from tests.playwright.pages.customer.usage_page import CustomerUsagePage
+
+        defaults = CustomerUsagePage.goto.__defaults__
+        assert defaults is not None
+        assert defaults[0] == "/portal/usage"

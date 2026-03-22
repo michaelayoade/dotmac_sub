@@ -13,13 +13,17 @@ class CustomerDashboardPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/customer/dashboard") -> None:
+    def goto(self, path: str = "/portal/dashboard") -> None:
         """Navigate to the customer dashboard."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
-        expect(self.page.get_by_role("heading", name="Dashboard", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Welcome back", exact=False).or_(
+                self.page.get_by_text("Current Balance", exact=False)
+            ).first
+        ).to_be_visible()
 
     def expect_account_summary_visible(self) -> None:
         """Assert account summary section is visible."""

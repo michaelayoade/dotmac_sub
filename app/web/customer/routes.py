@@ -45,13 +45,6 @@ def _emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
         logger.warning("Failed to emit customer event %s: %s", event_name, e)
 
 
-def _restricted_flag(db: Session, customer: dict) -> dict:
-    """Return dict with restricted=True if subscriber is restricted, for template context."""
-    subscriber_id = customer.get("subscriber_id")
-    if subscriber_id and is_subscriber_restricted(db, subscriber_id):
-        return {"restricted": True}
-    return {}
-
 
 def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription | None:
     account_id, session_subscription_id = customer_portal.resolve_customer_account(customer, db)

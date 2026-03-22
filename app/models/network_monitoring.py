@@ -4,12 +4,14 @@ from datetime import UTC, datetime
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
     DateTime,
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -614,3 +616,123 @@ class AlertEvent(Base):
     )
 
     alert = relationship("Alert", back_populates="events")
+
+
+# ── Topology ─────────────────────────────────────────────────────────
+
+
+class TopologyLinkRole(enum.Enum):
+    uplink = "uplink"
+    backhaul = "backhaul"
+    peering = "peering"
+    lag_member = "lag_member"
+    crossconnect = "crossconnect"
+    access = "access"
+    distribution = "distribution"
+    core = "core"
+    unknown = "unknown"
+
+
+class TopologyLinkMedium(enum.Enum):
+    fiber = "fiber"
+    wireless = "wireless"
+    ethernet = "ethernet"
+    virtual = "virtual"
+    unknown = "unknown"
+
+
+class TopologyLinkAdminStatus(enum.Enum):
+    enabled = "enabled"
+    disabled = "disabled"
+    maintenance = "maintenance"
+
+
+class NetworkTopologyLink(Base):
+    """Explicit link between two device interfaces.
+
+    This is the graph-topology truth for the network — not the
+    parent_device_id inventory hierarchy.
+    """
+
+    __tablename__ = "network_topology_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_device_id", "source_interface_id",
+            "target_device_id", "target_interface_id",
+            name="uq_topology_link_endpoints",
+        ),
+        Index("ix_topology_link_source_device", "source_device_id"),
+        Index("ix_topology_link_target_device", "target_device_id"),
+        Index("ix_topology_link_source_iface", "source_interface_id"),
+        Index("ix_topology_link_target_iface", "target_interface_id"),
+        Index("ix_topology_link_bundle", "bundle_key"),
+        Index("ix_topology_link_group", "topology_group"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    # Endpoints
+    source_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id"), nullable=False
+    )
+    source_interface_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("device_interfaces.id")
+    )
+    target_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("network_devices.id"), nullable=False
+    )
+    target_interface_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("device_interfaces.id")
+    )
+
+    # Classification
+    link_role: Mapped[TopologyLinkRole] = mapped_column(
+        Enum(TopologyLinkRole), default=TopologyLinkRole.unknown
+    )
+    medium: Mapped[TopologyLinkMedium] = mapped_column(
+        Enum(TopologyLinkMedium), default=TopologyLinkMedium.unknown
+    )
+    capacity_bps: Mapped[int | None] = mapped_column(BigInteger)
+
+    # Grouping
+    bundle_key: Mapped[str | None] = mapped_column(String(80))
+    topology_group: Mapped[str | None] = mapped_column(String(80))
+
+    # Status
+    admin_status: Mapped[TopologyLinkAdminStatus] = mapped_column(
+        Enum(TopologyLinkAdminStatus), default=TopologyLinkAdminStatus.enabled
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # Discovery / reconciliation
+    discovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    confirmed_by: Mapped[str | None] = mapped_column(String(120))
+
+    # Metadata
+    notes: Mapped[str | None] = mapped_column(Text)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    # Relationships
+    source_device = relationship(
+        "NetworkDevice", foreign_keys=[source_device_id], lazy="joined"
+    )
+    source_interface = relationship(
+        "DeviceInterface", foreign_keys=[source_interface_id], lazy="joined"
+    )
+    target_device = relationship(
+        "NetworkDevice", foreign_keys=[target_device_id], lazy="joined"
+    )
+    target_interface = relationship(
+        "DeviceInterface", foreign_keys=[target_interface_id], lazy="joined"
+    )

@@ -878,7 +878,7 @@ def _addon_form_context(request: Request, db: Session, addon: dict, error: str |
         "addon": addon,
         "addon_types": [item.value for item in AddOnType],
         "price_types": [item.value for item in PriceType],
-        "billing_cycles": [BillingCycle.monthly.value, BillingCycle.annual.value],
+        "billing_cycles": [item.value for item in BillingCycle],
         "price_units": [item.value for item in PriceUnit],
     })
     if error:

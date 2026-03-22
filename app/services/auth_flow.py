@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import secrets
+import warnings
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
@@ -211,6 +212,28 @@ def _hash_token(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _jwt_encode_token(payload: dict[str, Any], secret: str, algorithm: str) -> str:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"datetime\.datetime\.utcnow\(\) is deprecated.*",
+            category=DeprecationWarning,
+            module=r"jose\.jwt",
+        )
+        return cast(str, jwt.encode(payload, secret, algorithm=algorithm))
+
+
+def _jwt_decode_token(token: str, secret: str, algorithm: str) -> dict[Any, Any]:
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"datetime\.datetime\.utcnow\(\) is deprecated.*",
+            category=DeprecationWarning,
+            module=r"jose\.jwt",
+        )
+        return cast(dict[Any, Any], jwt.decode(token, secret, algorithms=[algorithm]))
+
+
 def hash_session_token(token: str) -> str:
     return _hash_token(token)
 
@@ -246,7 +269,22 @@ def _issue_access_token(
         payload["roles"] = roles
     if permissions:
         payload["scopes"] = permissions
-    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
+
+
+def issue_web_session_token(db: Session | None, access_token: str) -> str:
+    """Issue a compact web session JWT for cookie transport.
+
+    Web routes only need principal/session identity. Roles and scopes can be
+    resolved server-side when required, which keeps the session cookie small.
+    """
+    payload = decode_access_token(db, access_token)
+    principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
+    principal_type = str(payload.get("principal_type") or "subscriber")
+    session_id = str(payload.get("session_id") or "")
+    if not principal_id or not session_id:
+        raise HTTPException(status_code=401, detail="Invalid access token")
+    return _issue_access_token(db, principal_id, principal_type, session_id)
 
 
 def _issue_mfa_token(
@@ -263,7 +301,7 @@ def _issue_mfa_token(
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=5)).timestamp()),
     }
-    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
 
 def _password_reset_ttl_minutes(db: Session | None) -> int:
@@ -304,7 +342,7 @@ def _issue_password_reset_token(
         "iat": int(now.timestamp()),
         "exp": int((now + timedelta(minutes=_password_reset_ttl_minutes(db))).timestamp()),
     }
-    return cast(str, jwt.encode(payload, _jwt_secret(db), algorithm=_jwt_algorithm(db)))
+    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
 
 def _decode_password_reset_token(db: Session | None, token: str) -> dict:
@@ -313,10 +351,7 @@ def _decode_password_reset_token(db: Session | None, token: str) -> dict:
 
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
     try:
-        payload = cast(
-            dict[Any, Any],
-            jwt.decode(token, _jwt_secret(db), algorithms=[_jwt_algorithm(db)]),
-        )
+        payload = _jwt_decode_token(token, _jwt_secret(db), _jwt_algorithm(db))
     except JWTError as exc:
         raise HTTPException(status_code=401, detail="Invalid token") from exc
     if payload.get("typ") != expected_type:
@@ -764,9 +799,8 @@ class AuthFlow(ListResponseMixin):
 
         principal_type = "system_user" if session.system_user_id else "subscriber"
         principal_id = str(session.system_user_id or session.subscriber_id)
-        roles, permissions = _load_rbac_claims(db, principal_type, principal_id)
         access_token = _issue_access_token(
-            db, principal_id, principal_type, str(session.id), roles, permissions
+            db, principal_id, principal_type, str(session.id)
         )
         return {"access_token": access_token, "refresh_token": new_refresh}
 
@@ -870,9 +904,8 @@ class AuthFlow(ListResponseMixin):
         db.add(session)
         db.commit()
         db.refresh(session)
-        roles, permissions = _load_rbac_claims(db, principal_type, str(principal_uuid))
         access_token = _issue_access_token(
-            db, str(principal_uuid), principal_type, str(session.id), roles, permissions
+            db, str(principal_uuid), principal_type, str(session.id)
         )
         return {"access_token": access_token, "refresh_token": refresh_token}
 

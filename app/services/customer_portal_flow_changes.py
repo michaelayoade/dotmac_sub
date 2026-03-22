@@ -308,13 +308,53 @@ def apply_instant_plan_change(
         request_id=str(change_request.id),
     )
 
+    # Generate proration invoice/credit for prepaid subscribers
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    proration_info = None
+    try:
+        from app.services.catalog.subscriptions import (
+            _calculate_proration,
+            _generate_proration_invoice,
+        )
+
+        proration = _calculate_proration(db, subscription, offer_id)
+        if proration and abs(proration.get("net_amount", 0)) >= 1:
+            _generate_proration_invoice(
+                db, subscription, proration, old_name, new_name,
+            )
+            proration_info = {
+                "net_amount": float(proration["net_amount"]),
+                "days_remaining": proration["days_remaining"],
+                "days_in_cycle": proration["days_in_cycle"],
+            }
+    except Exception as exc:
+        logger.warning("Proration failed for subscription %s: %s", subscription_id, exc)
+
+    event_type = (
+        EventType.subscription_upgraded
+        if new_price > old_price
+        else EventType.subscription_downgraded
+    )
+    emit_event(
+        db,
+        event_type,
+        {
+            "subscription_id": subscription_id,
+            "old_offer": old_name,
+            "new_offer": new_name,
+            "price_difference": str(new_price - old_price),
+        },
+    )
+
     return {
         "old_offer_name": old_name,
         "new_offer_name": new_name,
         "old_price": old_price,
         "new_price": new_price,
         "price_difference": new_price - old_price,
-        "proration": None,
+        "proration": proration_info,
     }
 
 

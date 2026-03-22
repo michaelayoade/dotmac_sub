@@ -65,6 +65,48 @@
         </div>
     </div>
 
+    <!-- Revenue Chart -->
+    {% if summary.monthly %}
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 p-6 shadow-premium backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+        <h2 class="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-900 dark:text-white" style="font-family: var(--font-display);">
+            <svg class="h-5 w-5 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+            Revenue Trend
+        </h2>
+        <div style="height: 280px;">
+            <canvas id="revenueChart"></canvas>
+        </div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const ctx = document.getElementById('revenueChart').getContext('2d');
+        new Chart(ctx, {
+            type: 'bar',
+            data: {
+                labels: [{% for row in summary.monthly %}"{{ row.year }}/{{ "%02d"|format(row.month) }}"{% if not loop.last %},{% endif %}{% endfor %}],
+                datasets: [{
+                    label: 'Revenue',
+                    data: [{% for row in summary.monthly %}{{ row.total }}{% if not loop.last %},{% endif %}{% endfor %}],
+                    backgroundColor: 'rgba(16, 185, 129, 0.7)',
+                    borderColor: 'rgb(16, 185, 129)',
+                    borderWidth: 1,
+                    borderRadius: 6,
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: {
+                    y: { beginAtZero: true, ticks: { callback: function(v) { return v.toLocaleString(); } } },
+                    x: { grid: { display: false } }
+                }
+            }
+        });
+    });
+    </script>
+    {% endif %}
+
     <!-- Monthly Revenue Table -->
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-premium backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80">
         <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">

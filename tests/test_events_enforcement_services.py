@@ -14,12 +14,14 @@ Covers:
 """
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import NasDevice, NasVendor, SubscriptionStatus
+from app.models.notification import Notification, NotificationChannel, NotificationTemplate
 from app.models.provisioning import ProvisioningVendor
 from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.services.events.dispatcher import EventDispatcher
@@ -864,6 +866,133 @@ class TestNotificationHandler:
         context = {"amount": "100", "subscriber_name": "Test"}
         result = handler._render_body(template, event, context)
         assert "invoice.created" in result
+
+    def test_resolve_recipient_uses_phone_for_sms_channel(self, db_session, subscriber):
+        subscriber.phone = "+2348000000001"
+        db_session.commit()
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.subscription_created,
+            payload={},
+            account_id=subscriber.id,
+        )
+
+        recipient = handler._resolve_recipient(
+            db_session,
+            event,
+            NotificationChannel.sms,
+        )
+
+        assert recipient == "+2348000000001"
+
+    def test_handle_queues_base_and_sms_templates(self, db_session, subscriber):
+        subscriber.phone = "+2348000000002"
+        db_session.add_all(
+            [
+                NotificationTemplate(
+                    code="invoice_overdue",
+                    name="Invoice Overdue",
+                    channel=NotificationChannel.email,
+                    subject="Email overdue",
+                    body="Email body for {invoice_number}",
+                    is_active=True,
+                ),
+                NotificationTemplate(
+                    code="invoice_overdue",
+                    name="Invoice Overdue SMS",
+                    channel=NotificationChannel.sms,
+                    subject=None,
+                    body="SMS body for {invoice_number}",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        handler = NotificationHandler()
+        event = Event(
+            event_type=EventType.invoice_overdue,
+            payload={"invoice_number": "INV-100", "amount": "5000"},
+            account_id=subscriber.id,
+        )
+
+        handler.handle(db_session, event)
+        db_session.commit()
+
+        notifications = db_session.query(Notification).all()
+        assert len(notifications) == 2
+        channels = {row.channel for row in notifications}
+        recipients = {row.channel: row.recipient for row in notifications}
+        assert channels == {NotificationChannel.email, NotificationChannel.sms}
+        assert recipients[NotificationChannel.email] == subscriber.email
+        assert recipients[NotificationChannel.sms] == subscriber.phone
+
+    def test_handle_invoice_overdue_sends_warning_once_within_grace_period(
+        self,
+        db_session,
+        subscriber,
+        monkeypatch,
+    ):
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        subscriber.status = AccountStatus.active
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-GRACE-1",
+            status=InvoiceStatus.overdue,
+            total=100,
+            balance_due=100,
+            due_at=datetime.now(UTC) - timedelta(hours=6),
+            metadata_={},
+        )
+        db_session.add(invoice)
+        db_session.add_all(
+            [
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="auto_suspend_on_overdue",
+                    value_type=SettingValueType.boolean,
+                    value_text="true",
+                    value_json=True,
+                    is_active=True,
+                ),
+                DomainSetting(
+                    domain=SettingDomain.billing,
+                    key="suspension_grace_hours",
+                    value_type=SettingValueType.integer,
+                    value_text="48",
+                    is_active=True,
+                ),
+            ]
+        )
+        db_session.commit()
+
+        handler = EnforcementHandler()
+        event = Event(
+            event_type=EventType.invoice_overdue,
+            payload={"invoice_id": str(invoice.id)},
+            invoice_id=invoice.id,
+            account_id=subscriber.id,
+        )
+
+        emit_calls: list[EventType] = []
+
+        def _capture_emit(*args, **kwargs):
+            emit_calls.append(args[1])
+
+        monkeypatch.setattr(
+            "app.services.events.handlers.enforcement.emit_event",
+            _capture_emit,
+        )
+
+        handler.handle(db_session, event)
+        handler.handle(db_session, event)
+        db_session.refresh(invoice)
+
+        assert emit_calls == [EventType.subscription_suspension_warning]
+        assert (invoice.metadata_ or {}).get("suspension_warning_sent_at")
 
 
 # ---------------------------------------------------------------------------

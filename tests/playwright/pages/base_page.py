@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from playwright.sync_api import Page, expect
@@ -17,7 +18,7 @@ class BasePage:
     def goto(self, path: str = "") -> None:
         """Navigate to a path relative to base URL."""
         url = f"{self.base_url}{path}" if path else self.base_url
-        self.page.goto(url)
+        self.page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
     def wait_for_load(self) -> None:
         """Wait for page to finish loading."""
@@ -29,7 +30,7 @@ class BasePage:
 
     def expect_url_contains(self, path: str) -> None:
         """Assert URL contains the given path."""
-        expect(self.page).to_have_url(f"**{path}**")
+        expect(self.page).to_have_url(re.compile(rf".*{re.escape(path)}.*"))
 
     def expect_heading(self, text: str) -> None:
         """Assert a heading with the given text is visible."""

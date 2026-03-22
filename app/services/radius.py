@@ -716,7 +716,12 @@ def _bundled_external_db_config() -> dict | None:
         host = (os.getenv("RADIUS_DB_HOST") or "radius-db").strip()
         database = (os.getenv("RADIUS_DB_NAME") or "radius").strip()
         username = (os.getenv("RADIUS_DB_USER") or "radius").strip()
-        password = (os.getenv("RADIUS_DB_PASS") or "l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-").strip()
+        from app.services.secrets import get_env_or_secret
+
+        password = get_env_or_secret(
+            "RADIUS_DB_PASS", "radius", "db_password",
+            default="l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-",
+        ).strip()
         if host and database and username and password:
             db_url = f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
     if not db_url:

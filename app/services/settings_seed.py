@@ -370,7 +370,7 @@ def seed_notification_settings(db: Session) -> None:
 def seed_notification_templates(db: Session) -> None:
     """Seed default notification templates for key ISP events.
 
-    Uses upsert-by-code: creates if missing, skips if already exists
+    Uses upsert-by-code-and-channel: creates if missing, skips if already exists
     (admin may have customized the content).
     """
     from app.models.notification import NotificationChannel, NotificationTemplate
@@ -390,6 +390,16 @@ def seed_notification_templates(db: Session) -> None:
             ),
         },
         {
+            "code": "subscription_created",
+            "name": "Subscription Created SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your {offer_name} subscription has been created. "
+                "We will contact you shortly with the next steps."
+            ),
+        },
+        {
             "code": "subscription_activated",
             "name": "Subscription Activated",
             "channel": NotificationChannel.email,
@@ -403,6 +413,16 @@ def seed_notification_templates(db: Session) -> None:
             ),
         },
         {
+            "code": "subscription_activated",
+            "name": "Subscription Activated SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your {offer_name} service is now active. "
+                "If you need help, contact support."
+            ),
+        },
+        {
             "code": "subscription_suspended",
             "name": "Subscription Suspended",
             "channel": NotificationChannel.email,
@@ -413,6 +433,40 @@ def seed_notification_templates(db: Session) -> None:
                 "This may be due to an outstanding balance or a policy violation.\n\n"
                 "Please contact our support team or make a payment to restore your service.\n\n"
                 "Thank you."
+            ),
+        },
+        {
+            "code": "subscription_suspended",
+            "name": "Subscription Suspended SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your {offer_name} service is suspended. "
+                "Please pay outstanding invoices or contact support."
+            ),
+        },
+        {
+            "code": "suspension_warning",
+            "name": "Suspension Warning",
+            "channel": NotificationChannel.email,
+            "subject": "Payment reminder — suspension in {grace_hours} hours",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Invoice #{invoice_number} for {amount} is overdue. "
+                "Your service may be suspended if payment is not received within "
+                "{grace_hours} hours.\n\n"
+                "Pay now: {portal_url}/billing\n\n"
+                "If you have already paid, please disregard this message."
+            ),
+        },
+        {
+            "code": "suspension_warning",
+            "name": "Suspension Warning SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Reminder: invoice #{invoice_number} for {amount} is overdue. "
+                "Pay within {grace_hours} hours to avoid suspension. {portal_url}/billing"
             ),
         },
         {
@@ -439,6 +493,16 @@ def seed_notification_templates(db: Session) -> None:
                 "You can renew by making a payment through our customer portal "
                 "or by contacting our support team.\n\n"
                 "Thank you."
+            ),
+        },
+        {
+            "code": "subscription_expiring",
+            "name": "Subscription Expiring SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your {offer_name} subscription expires soon. "
+                "Please renew to avoid interruption."
             ),
         },
         {
@@ -470,6 +534,16 @@ def seed_notification_templates(db: Session) -> None:
             ),
         },
         {
+            "code": "invoice_sent",
+            "name": "Invoice Sent SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Invoice #{invoice_number} for {amount} is due on {due_date}. "
+                "Pay online: {portal_url}/billing"
+            ),
+        },
+        {
             "code": "invoice_overdue",
             "name": "Invoice Overdue",
             "channel": NotificationChannel.email,
@@ -484,6 +558,16 @@ def seed_notification_templates(db: Session) -> None:
             ),
         },
         {
+            "code": "invoice_overdue",
+            "name": "Invoice Overdue SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Invoice #{invoice_number} for {amount} is overdue. "
+                "Pay now to avoid service disruption: {portal_url}/billing"
+            ),
+        },
+        {
             "code": "payment_received",
             "name": "Payment Received",
             "channel": NotificationChannel.email,
@@ -493,6 +577,15 @@ def seed_notification_templates(db: Session) -> None:
                 "We have received your payment of {amount}. Thank you!\n\n"
                 "Your account balance has been updated accordingly.\n\n"
                 "If you have questions about your billing, please contact support."
+            ),
+        },
+        {
+            "code": "payment_received",
+            "name": "Payment Received SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "We received your payment of {amount}. Thank you."
             ),
         },
         {
@@ -545,6 +638,15 @@ def seed_notification_templates(db: Session) -> None:
                 "Your {offer_name} subscription is now ready to use.\n\n"
                 "If you experience any issues, please contact our support team.\n\n"
                 "Enjoy your service!"
+            ),
+        },
+        {
+            "code": "provisioning_completed",
+            "name": "Provisioning Completed SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Your {offer_name} installation is complete and the service is ready."
             ),
         },
         {
@@ -614,7 +716,8 @@ def seed_notification_templates(db: Session) -> None:
 
         existing = db.scalars(
             sa_select(NotificationTemplate).where(
-                NotificationTemplate.code == tmpl_data["code"]
+                NotificationTemplate.code == tmpl_data["code"],
+                NotificationTemplate.channel == tmpl_data["channel"],
             )
         ).first()
         if not existing:
@@ -1030,6 +1133,30 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.boolean,
         value_text=auto_suspend_raw,
         value_json=auto_suspend_raw.lower() in {"1", "true", "yes", "on"},
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="suspension_grace_hours",
+        value_type=SettingValueType.integer,
+        value_text=os.getenv("BILLING_SUSPENSION_GRACE_HOURS", "48"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="expiry_reminder_days",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_EXPIRY_REMINDER_DAYS", "7"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="invoice_reminder_days",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_INVOICE_REMINDER_DAYS", "7,1"),
+    )
+    billing_settings.ensure_by_key(
+        db,
+        key="dunning_escalation_days",
+        value_type=SettingValueType.string,
+        value_text=os.getenv("BILLING_DUNNING_ESCALATION_DAYS", "3,7,14,30"),
     )
     billing_settings.ensure_by_key(
         db,

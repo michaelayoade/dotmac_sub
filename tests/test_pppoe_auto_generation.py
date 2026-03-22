@@ -17,7 +17,7 @@ def _seed_pppoe_settings(
     db,
     *,
     enabled: bool = True,
-    prefix: str = "1000",
+    prefix: str = "1050",
     padding: int = 5,
     start: int = 1,
     password_length: int = 12,
@@ -64,7 +64,7 @@ class TestAutoGeneratePppoeCredential:
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
 
         assert result is not None
-        assert result.username == "100025915"
+        assert result.username == "105025915"
         assert str(result.subscriber_id) == str(subscriber.id)
         assert result.is_active is True
         assert result.secret_hash is not None
@@ -101,7 +101,7 @@ class TestAutoGeneratePppoeCredential:
 
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
         assert result is not None
-        assert result.username == "100005000"
+        assert result.username == "105005000"
 
     def test_sequential_usernames(self, db_session):
         """Two consecutive calls produce sequential usernames."""
@@ -127,8 +127,8 @@ class TestAutoGeneratePppoeCredential:
 
         assert cred1 is not None
         assert cred2 is not None
-        assert cred1.username == "100000100"
-        assert cred2.username == "100000101"
+        assert cred1.username == "105000100"
+        assert cred2.username == "105000101"
 
     def test_custom_prefix_and_padding(self, db_session, subscriber):
         """Respects custom prefix and padding settings."""
@@ -214,7 +214,7 @@ class TestSeedPppoeSequence:
 
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
         assert result is not None
-        assert result.username == "100025915"
+        assert result.username == "105025915"
 
         # Verify sequence incremented
         db_session.refresh(seq)

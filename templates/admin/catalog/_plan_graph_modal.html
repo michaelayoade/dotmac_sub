@@ -54,7 +54,7 @@
 
         {# Period Toggle #}
         <div class="flex items-center gap-2 px-6 pt-4">
-            {% for p in ["daily", "weekly", "monthly"] %}
+            {% for p in ["daily", "weekly", "monthly", "quarterly", "annual"] %}
             <button type="button"
                     hx-get="/admin/catalog/offers/{{ offer_id }}/usage-graph?period={{ p }}"
                     hx-target="#graph-modal-container"

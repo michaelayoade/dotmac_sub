@@ -13,12 +13,12 @@ class CustomerTicketPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/customer/support/new") -> None:
+    def goto(self, path: str = "/portal/support/new") -> None:
         super().goto(path)
 
     def expect_form_loaded(self) -> None:
         expect(
-            self.page.get_by_role("heading", name="New Ticket", exact=True).or_(
+            self.page.get_by_role("heading", name="Create Support Ticket", exact=True).or_(
                 self.page.get_by_role("heading", name="Create Ticket", exact=True)
             ).or_(
                 self.page.get_by_text("New Ticket", exact=False)
@@ -43,4 +43,3 @@ class CustomerTicketPage(BasePage):
         ).or_(
             self.page.get_by_role("button", name="Send")
         ).first.click()
-

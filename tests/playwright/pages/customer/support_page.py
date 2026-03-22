@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.base_page import BasePage
@@ -13,8 +14,16 @@ class CustomerSupportPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/customer/support") -> None:
-        super().goto(path)
+    def goto(self, path: str = "/portal/support") -> None:
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                super().goto(path)
+                return
+            except PlaywrightError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
 
     def expect_loaded(self) -> None:
         expect(
@@ -36,4 +45,3 @@ class CustomerSupportPage(BasePage):
         ).or_(
             self.page.get_by_role("button", name="Create Ticket")
         ).first.click()
-

@@ -1,0 +1,179 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ "Edit Link" if link and link.id else "New Topology Link" }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/network/topology" class="hover:text-slate-700 dark:hover:text-slate-300">Topology</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ "Edit Link" if link and link.id else "New Link" }}</span>
+        </nav>
+        <h1 class="text-2xl font-display font-bold text-slate-900 dark:text-white">{{ "Edit Topology Link" if link and link.id else "Create Topology Link" }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        <!-- Endpoints -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <h2 class="mb-4 text-lg font-display font-semibold text-slate-900 dark:text-white">Endpoints</h2>
+            <div class="grid gap-4 lg:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Source Device</label>
+                    <select name="source_device_id" id="sourceDevice" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select device...</option>
+                        {% for d in devices %}
+                        <option value="{{ d.id }}" {% if link and ((link.source_device_id | string) == d.id or (link.get('source_device_id', '') | string) == d.id) %}selected{% endif %}>{{ d.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Source Interface (optional)</label>
+                    <input type="hidden" id="sourceInterfaceSelected" value="{% if link and link.source_interface_id %}{{ link.source_interface_id }}{% elif link and link.get %}{{ link.get('source_interface_id', '') }}{% endif %}">
+                    <select name="source_interface_id" id="sourceInterface" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select interface...</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Target Device</label>
+                    <select name="target_device_id" id="targetDevice" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select device...</option>
+                        {% for d in devices %}
+                        <option value="{{ d.id }}" {% if link and ((link.target_device_id | string) == d.id or (link.get('target_device_id', '') | string) == d.id) %}selected{% endif %}>{{ d.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Target Interface (optional)</label>
+                    <input type="hidden" id="targetInterfaceSelected" value="{% if link and link.target_interface_id %}{{ link.target_interface_id }}{% elif link and link.get %}{{ link.get('target_interface_id', '') }}{% endif %}">
+                    <select name="target_interface_id" id="targetInterface" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select interface...</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Classification -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <h2 class="mb-4 text-lg font-display font-semibold text-slate-900 dark:text-white">Classification</h2>
+            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Link Role</label>
+                    <select name="link_role" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for r in link_roles %}
+                        <option value="{{ r }}" {% if link and ((link.link_role is string and link.link_role == r) or (link.link_role is not string and link.link_role and link.link_role.value == r)) %}selected{% endif %}>{{ r | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Medium</label>
+                    <select name="medium" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for m in mediums %}
+                        <option value="{{ m }}" {% if link and ((link.medium is string and link.medium == m) or (link.medium is not string and link.medium and link.medium.value == m)) %}selected{% endif %}>{{ m | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Capacity (bps)</label>
+                    <input type="number" name="capacity_bps" value="{{ link.capacity_bps if link and link.capacity_bps else '' }}" placeholder="e.g. 1000000000 for 1 Gbps"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Admin Status</label>
+                    <select name="admin_status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for s in admin_statuses %}
+                        <option value="{{ s }}" {% if link and ((link.admin_status is string and link.admin_status == s) or (link.admin_status is not string and link.admin_status and link.admin_status.value == s)) %}selected{% endif %}>{{ s | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Bundle Key</label>
+                    <input type="text" name="bundle_key" value="{{ link.bundle_key if link and link.bundle_key else '' }}" placeholder="e.g. lag-garki-core"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Topology Group</label>
+                    <input type="text" name="topology_group" value="{{ link.topology_group if link and link.topology_group else '' }}" placeholder="e.g. abuja-ring"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+            <div class="mt-4">
+                <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Notes</label>
+                <textarea name="notes" rows="2" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ link.notes if link and link.notes else '' }}</textarea>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+            <div>
+                {% if link and link.id %}
+                <form method="POST" action="/admin/network/topology/links/{{ link.id }}/delete" onsubmit="return confirm('Delete this link?');">
+                    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300">Delete</button>
+                </form>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="/admin/network/topology" class="inline-flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg hover:shadow-xl">
+                    {{ "Update Link" if link and link.id else "Create Link" }}
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- Dynamic interface loading -->
+<script>
+function loadInterfaces(deviceSelectId, interfaceSelectId, selectedValueId) {
+    var deviceSelect = document.getElementById(deviceSelectId);
+    var ifaceSelect = document.getElementById(interfaceSelectId);
+    var selectedValueInput = document.getElementById(selectedValueId);
+
+    function populateInterfaces() {
+        ifaceSelect.textContent = '';
+        var opt = document.createElement('option');
+        opt.value = '';
+        opt.textContent = 'Loading...';
+        ifaceSelect.appendChild(opt);
+        if (!deviceSelect.value) { opt.textContent = 'Select interface...'; return; }
+        fetch('/admin/network/topology/api/interfaces/' + deviceSelect.value)
+            .then(function(r) { return r.json(); })
+            .then(function(ifaces) {
+                ifaceSelect.textContent = '';
+                var empty = document.createElement('option');
+                empty.value = '';
+                empty.textContent = 'Select interface...';
+                ifaceSelect.appendChild(empty);
+                ifaces.forEach(function(i) {
+                    var o = document.createElement('option');
+                    o.value = i.id;
+                    o.textContent = i.name + (i.status ? ' (' + i.status + ')' : '');
+                    if (selectedValueInput && selectedValueInput.value && selectedValueInput.value === i.id) {
+                        o.selected = true;
+                    }
+                    ifaceSelect.appendChild(o);
+                });
+            });
+    }
+
+    deviceSelect.addEventListener('change', function() {
+        if (selectedValueInput) {
+            selectedValueInput.value = '';
+        }
+        populateInterfaces();
+    });
+
+    if (deviceSelect.value) {
+        populateInterfaces();
+    }
+}
+loadInterfaces('sourceDevice', 'sourceInterface', 'sourceInterfaceSelected');
+loadInterfaces('targetDevice', 'targetInterface', 'targetInterfaceSelected');
+</script>
+{% endblock %}

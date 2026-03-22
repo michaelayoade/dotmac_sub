@@ -165,6 +165,50 @@ def test_update_geo_layer(db_session):
     assert updated.name == "Renamed Layer"
 
 
+def test_layer_feature_collection_respects_location_type_filters(db_session):
+    gis_service.geo_locations.create(
+        db_session,
+        GeoLocationCreate(
+            name="POP A",
+            location_type=GeoLocationType.pop,
+            latitude=9.0,
+            longitude=7.0,
+        ),
+    )
+    gis_service.geo_locations.create(
+        db_session,
+        GeoLocationCreate(
+            name="Customer A",
+            location_type=GeoLocationType.customer,
+            latitude=9.1,
+            longitude=7.1,
+        ),
+    )
+    gis_service.geo_layers.create(
+        db_session,
+        GeoLayerCreate(
+            name="POP Layer",
+            layer_key="pop-layer",
+            layer_type=GeoLayerType.points,
+            filters={"location_type": "pop"},
+        ),
+    )
+
+    feature_collection = gis_service.geo_features.feature_collection(
+        db_session,
+        "pop-layer",
+        None,
+        None,
+        None,
+        None,
+        100,
+        0,
+    )
+
+    assert len(feature_collection.features) == 1
+    assert feature_collection.features[0].properties["location_type"] == "pop"
+
+
 def test_create_geo_area(db_session):
     """Test creating a geo area."""
     area = gis_service.geo_areas.create(
@@ -226,6 +270,55 @@ def test_update_geo_area(db_session):
         GeoAreaUpdate(name="Updated Area"),
     )
     assert updated.name == "Updated Area"
+
+
+def test_layer_feature_collection_respects_area_type_filters(db_session):
+    gis_service.geo_areas.create(
+        db_session,
+        GeoAreaCreate(
+            name="Coverage A",
+            area_type=GeoAreaType.coverage,
+            geometry_geojson={
+                "type": "Polygon",
+                "coordinates": [[[7.0, 9.0], [7.0, 9.2], [7.2, 9.2], [7.2, 9.0], [7.0, 9.0]]],
+            },
+        ),
+    )
+    gis_service.geo_areas.create(
+        db_session,
+        GeoAreaCreate(
+            name="Region A",
+            area_type=GeoAreaType.region,
+            geometry_geojson={
+                "type": "Polygon",
+                "coordinates": [[[7.3, 9.0], [7.3, 9.2], [7.5, 9.2], [7.5, 9.0], [7.3, 9.0]]],
+            },
+        ),
+    )
+    gis_service.geo_layers.create(
+        db_session,
+        GeoLayerCreate(
+            name="Coverage Layer",
+            layer_key="coverage-layer",
+            layer_type=GeoLayerType.polygons,
+            source_type="areas",
+            filters={"area_type": "coverage"},
+        ),
+    )
+
+    feature_collection = gis_service.geo_features.feature_collection(
+        db_session,
+        "coverage-layer",
+        None,
+        None,
+        None,
+        None,
+        100,
+        0,
+    )
+
+    assert len(feature_collection.features) == 1
+    assert feature_collection.features[0].properties["area_type"] == "coverage"
 
 
 def test_delete_geo_area(db_session):

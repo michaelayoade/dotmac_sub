@@ -5,6 +5,7 @@ auto-link ONTs, parameter map resolution, and session cleanup.
 """
 
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from app.models.tr069 import (
@@ -290,6 +291,87 @@ class TestAutoLinkOnts:
         assert result["auto_linked"] == 1
         db_session.refresh(ont)
         assert ont.tr069_acs_server_id == server.id
+
+
+class TestCreateOntFromTr069Device:
+    def test_create_ont_from_tr069_device_creates_inactive_ont(self, db_session) -> None:
+        from app.services.web_network_tr069 import create_ont_from_tr069_device
+
+        server = Tr069AcsServer(
+            name="Create ONT ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.commit()
+        db_session.refresh(server)
+
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number="485754432B526E9A",
+            oui="48575443",
+            product_class="HG8546M",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+        db_session.refresh(device)
+
+        ont, created = create_ont_from_tr069_device(
+            db_session,
+            tr069_device_id=str(device.id),
+        )
+
+        assert created is True
+        assert ont.serial_number == "HWTC2B526E9A"
+        assert ont.model == "HG8546M"
+        assert ont.is_active is False
+        assert ont.tr069_acs_server_id == server.id
+
+    def test_create_ont_from_tr069_device_reuses_existing_normalized_serial(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.web_network_tr069 import create_ont_from_tr069_device
+
+        server = Tr069AcsServer(
+            name="Reuse ONT ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        existing = OntUnit(serial_number="HWTC-2B52-6E9A", is_active=False)
+        db_session.add(existing)
+        db_session.flush()
+
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number="HWTC2B526E9A",
+            oui="48575443",
+            product_class="HG8546M",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+        db_session.refresh(existing)
+        db_session.refresh(device)
+
+        ont, created = create_ont_from_tr069_device(
+            db_session,
+            tr069_device_id=str(device.id),
+        )
+
+        assert created is False
+        assert ont.id == existing.id
+        assert ont.tr069_acs_server_id == server.id
+
+
+class TestTr069DashboardUi:
+    def test_unconfigured_devices_offer_create_ont_action(self) -> None:
+        template = Path("templates/admin/network/tr069/index.html").read_text()
+
+        assert "/create-ont" in template
+        assert "Create ONT" in template
 
 
 # ---------------------------------------------------------------------------

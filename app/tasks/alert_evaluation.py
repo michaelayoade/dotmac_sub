@@ -90,6 +90,100 @@ def evaluate_alert_rules() -> dict[str, int]:
     return stats
 
 
+def _notify_alert(
+    db: Session,
+    alert: Alert,
+    rule: AlertRule,
+    metric: DeviceMetric,
+    *,
+    action: str,
+) -> None:
+    """Queue alert notifications via policy routing, with admin fallback."""
+    try:
+        from app.models.network_monitoring import NetworkDevice
+        from app.models.notification import (
+            Notification,
+            NotificationChannel,
+            NotificationStatus,
+        )
+        from app.services import notification as notification_service
+
+        device = db.get(NetworkDevice, metric.device_id) if metric.device_id else None
+        device_name = device.name if device else str(metric.device_id or "Unknown")
+
+        status = AlertStatus.open if action == "triggered" else AlertStatus.resolved
+        emitted = notification_service.alert_notification_policies.emit_for_alert(
+            db,
+            alert,
+            status,
+        )
+        if emitted:
+            logger.info(
+                "Queued %d policy-based alert notification(s) for %s",
+                emitted,
+                rule.name,
+            )
+            return
+
+        severity_label = rule.severity.value if rule.severity else "info"
+        if action == "triggered":
+            subject = f"[{severity_label.upper()}] Alert: {rule.name} on {device_name}"
+            body = (
+                f"<h2>Alert Triggered</h2>"
+                f"<p><strong>Rule:</strong> {rule.name}</p>"
+                f"<p><strong>Device:</strong> {device_name}</p>"
+                f"<p><strong>Metric:</strong> {rule.metric_type.value if rule.metric_type else 'N/A'}</p>"
+                f"<p><strong>Value:</strong> {metric.value:.2f} (threshold: {rule.operator.value} {rule.threshold:.2f})</p>"
+                f"<p><strong>Severity:</strong> {severity_label}</p>"
+                f"<p><strong>Time:</strong> {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>"
+            )
+        else:
+            subject = f"[RESOLVED] {rule.name} on {device_name}"
+            body = (
+                f"<h2>Alert Resolved</h2>"
+                f"<p><strong>Rule:</strong> {rule.name}</p>"
+                f"<p><strong>Device:</strong> {device_name}</p>"
+                f"<p><strong>Current value:</strong> {metric.value:.2f}</p>"
+                f"<p><strong>Time:</strong> {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>"
+            )
+
+        # Get alert recipients from policy or fallback to admin emails
+        recipients = _get_alert_recipients(db, rule)
+        for recipient in recipients:
+            notification = Notification(
+                channel=NotificationChannel.email,
+                recipient=recipient,
+                subject=subject,
+                body=body,
+                status=NotificationStatus.queued,
+            )
+            db.add(notification)
+
+        if recipients:
+            logger.info("Queued alert notification to %d recipients for %s", len(recipients), rule.name)
+    except Exception as exc:
+        logger.warning("Failed to queue alert notification for rule %s: %s", rule.id, exc)
+
+
+def _get_alert_recipients(db: Session, rule: AlertRule) -> list[str]:
+    """Resolve fallback alert recipients from active admin emails only."""
+    try:
+        from app.models.system_user import SystemUser
+
+        admins = list(
+            db.scalars(
+                select(SystemUser.email).where(
+                    SystemUser.is_active.is_(True),
+                    SystemUser.email.isnot(None),
+                ).limit(10)
+            ).all()
+        )
+        return [email for email in admins if email]
+    except Exception as exc:
+        logger.warning("Failed to resolve alert recipients: %s", exc)
+        return []
+
+
 def _evaluate_rule(db: Session, rule: AlertRule) -> tuple[int, int]:
     """Evaluate a single alert rule. Returns (created, resolved)."""
     created = 0
@@ -180,6 +274,8 @@ def _evaluate_rule(db: Session, rule: AlertRule) -> tuple[int, int]:
                 metric.value,
                 rule.threshold,
             )
+            # Dispatch alert notification
+            _notify_alert(db, alert, rule, metric, action="triggered")
     else:
         # Condition no longer breached — auto-resolve
         if existing_alert:
@@ -198,5 +294,6 @@ def _evaluate_rule(db: Session, rule: AlertRule) -> tuple[int, int]:
                 metric.device_id,
                 metric.value,
             )
+            _notify_alert(db, existing_alert, rule, metric, action="resolved")
 
     return created, resolved

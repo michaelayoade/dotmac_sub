@@ -12,7 +12,7 @@ from typing import Any
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.network import CPEDevice
 from app.models.network_monitoring import (
@@ -1397,37 +1397,43 @@ def onts_list_page_data(
         else:
             serial_display_by_ont_id[str(ont.id)] = "-"
     if ont_ids:
-        assign_rows = db.execute(
-            select(
-                OntAssignment.ont_unit_id,
-                OLTDevice.name.label("olt_name"),
-                OLTDevice.id.label("olt_id"),
-                PonPort.name.label("pon_port_name"),
-                PonPort.notes.label("pon_port_notes"),
-                PonPort.port_number.label("pon_port_number"),
+        assign_rows = db.scalars(
+            select(OntAssignment)
+            .options(
+                joinedload(OntAssignment.subscriber),
+                joinedload(OntAssignment.pon_port).joinedload(PonPort.olt),
             )
-            .join(PonPort, PonPort.id == OntAssignment.pon_port_id)
-            .join(OLTDevice, OLTDevice.id == PonPort.olt_id)
             .where(OntAssignment.active.is_(True))
             .where(OntAssignment.ont_unit_id.in_(ont_ids))
         ).all()
-        for row in assign_rows:
+        for assignment in assign_rows:
+            pon_port = assignment.pon_port
+            olt = pon_port.olt if pon_port else None
             pon_number = (
-                str(row.pon_port_number)
-                if row.pon_port_number is not None
-                else _pon_port_table_label(row.pon_port_name)
+                str(pon_port.port_number)
+                if pon_port and pon_port.port_number is not None
+                else _pon_port_table_label(getattr(pon_port, "name", None))
             )
-            pon_description = str(row.pon_port_notes or "").strip()
+            pon_description = str(getattr(pon_port, "notes", None) or "").strip()
             pon_display = (
                 f"{pon_number} - {pon_description}"
                 if pon_description
-                else str(pon_number or row.pon_port_name or "-")
+                else str(pon_number or getattr(pon_port, "name", None) or "-")
             )
-            assignment_info[str(row.ont_unit_id)] = {
-                "olt_name": row.olt_name,
-                "olt_id": str(row.olt_id),
-                "pon_port_name": row.pon_port_name,
+            subscriber = assignment.subscriber
+            assignment_info[str(assignment.ont_unit_id)] = {
+                "olt_name": getattr(olt, "name", None),
+                "olt_id": str(olt.id) if olt else "",
+                "pon_port_name": getattr(pon_port, "name", None),
                 "pon_port_display": pon_display,
+                "subscriber_name": _subscriber_display_name(subscriber) if subscriber else "",
+                "subscriber_customer_url": (
+                    f"/admin/customers/organization/{subscriber.organization_id}"
+                    if subscriber and getattr(subscriber, "organization_id", None)
+                    else f"/admin/customers/person/{subscriber.id}"
+                    if subscriber
+                    else ""
+                ),
             }
 
     # Pagination metadata

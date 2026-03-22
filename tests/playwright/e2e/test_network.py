@@ -34,7 +34,7 @@ class TestOLTs:
         page = OLTsPage(admin_page, settings.base_url)
         page.goto()
         page.click_new_olt()
-        admin_page.wait_for_url("**/olts/new**")
+        admin_page.wait_for_url("**/olts/new**", wait_until="domcontentloaded")
 
 
 class TestONTs:
@@ -58,7 +58,7 @@ class TestONTs:
         page = ONTsPage(admin_page, settings.base_url)
         page.goto()
         page.click_new_ont()
-        admin_page.wait_for_url("**/onts/new**")
+        admin_page.wait_for_url("**/onts/new**", wait_until="domcontentloaded")
 
 
 class TestVLANs:

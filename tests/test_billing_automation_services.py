@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.catalog import BillingCycle
+from app.services.events.types import EventType
 from app.services import billing_automation
 
 # =============================================================================
@@ -647,3 +648,97 @@ class TestRunInvoiceCycle:
 
         db_session.refresh(subscription)
         assert subscription.next_billing_at > original_billing
+
+    def test_run_invoice_cycle_emits_invoice_reminder_for_configured_day(
+        self,
+        db_session,
+        subscriber,
+        monkeypatch,
+    ):
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        run_at = datetime.now(UTC).replace(tzinfo=None)
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-REM-1",
+            status=InvoiceStatus.issued,
+            total=Decimal("150.00"),
+            balance_due=Decimal("150.00"),
+            due_at=run_at + timedelta(days=7),
+            metadata_={},
+        )
+        db_session.add(invoice)
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="invoice_reminder_days",
+                value_type=SettingValueType.string,
+                value_text="7,1",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        calls: list[tuple[object, dict[str, object]]] = []
+
+        def _capture_emit(*args, **kwargs):
+            calls.append((args[1], args[2]))
+
+        monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        db_session.refresh(invoice)
+
+        assert summary["invoice_reminders_sent"] == 1
+        assert calls[-1][0] == EventType.invoice_sent
+        assert calls[-1][1]["invoice_number"] == "INV-REM-1"
+        assert (invoice.metadata_ or {}).get("invoice_reminder_sent_7")
+
+    def test_run_invoice_cycle_emits_dunning_escalation_for_configured_day(
+        self,
+        db_session,
+        subscriber,
+        monkeypatch,
+    ):
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        run_at = datetime.now(UTC).replace(tzinfo=None)
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-DUN-1",
+            status=InvoiceStatus.overdue,
+            total=Decimal("200.00"),
+            balance_due=Decimal("200.00"),
+            due_at=run_at - timedelta(days=3),
+            metadata_={},
+        )
+        db_session.add(invoice)
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="dunning_escalation_days",
+                value_type=SettingValueType.string,
+                value_text="3,7,14",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+
+        calls: list[tuple[object, dict[str, object]]] = []
+
+        def _capture_emit(*args, **kwargs):
+            calls.append((args[1], args[2]))
+
+        monkeypatch.setattr("app.services.billing_automation.emit_event", _capture_emit)
+
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+        db_session.refresh(invoice)
+
+        assert summary["dunning_escalations_sent"] == 1
+        assert calls[-1][0] == EventType.invoice_overdue
+        assert calls[-1][1]["invoice_number"] == "INV-DUN-1"
+        assert (invoice.metadata_ or {}).get("dunning_escalation_sent_3")

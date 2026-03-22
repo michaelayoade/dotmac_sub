@@ -10,12 +10,17 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services.auth_dependencies import require_method_permission
 from app.services import web_network_tr069 as web_network_tr069_service
 from app.services.audit_helpers import log_audit_event
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
-router = APIRouter(prefix="/network", tags=["web-admin-network"])
+router = APIRouter(
+    prefix="/network",
+    tags=["web-admin-network"],
+    dependencies=[Depends(require_method_permission("network:tr069:read", "network:tr069:write"))],
+)
 
 
 def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
@@ -223,6 +228,44 @@ def tr069_link_device(device_id: str, request: Request, db: Session = Depends(ge
         message = quote_plus("Device link updated")
         return RedirectResponse(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
+@router.post("/tr069/devices/{device_id}/create-ont")
+def tr069_create_ont(device_id: str, request: Request, db: Session = Depends(get_db)) -> RedirectResponse:
+    form = parse_form_data_sync(request)
+    acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
+    try:
+        ont, created = web_network_tr069_service.create_ont_from_tr069_device(
+            db,
+            tr069_device_id=device_id,
+        )
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="create",
+            entity_type="ont",
+            entity_id=str(ont.id),
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "source": "tr069_device",
+                "tr069_device_id": device_id,
+                "created_new": created,
+                "serial_number": ont.serial_number,
+            },
+        )
+        return RedirectResponse(
+            f"/admin/network/onts/{ont.id}?notice={quote_plus('ONT created from TR-069 device' if created else 'Existing ONT opened from TR-069 match')}",
             status_code=303,
         )
     except Exception as exc:

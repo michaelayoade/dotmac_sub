@@ -42,3 +42,12 @@ def test_billing_config_context_backfills_payment_due_days_from_legacy_key(db_se
     context = get_billing_config_context(db_session)
 
     assert context["billing"]["payment_due_days"] == "9"
+
+
+def test_billing_config_context_backfills_notification_defaults(db_session):
+    context = get_billing_config_context(db_session)
+
+    assert context["billing"]["suspension_grace_hours"] == "48"
+    assert context["billing"]["expiry_reminder_days"] == "7"
+    assert context["billing"]["invoice_reminder_days"] == "7,1"
+    assert context["billing"]["dunning_escalation_days"] == "3,7,14,30"

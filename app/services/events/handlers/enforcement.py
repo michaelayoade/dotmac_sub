@@ -338,7 +338,7 @@ class EnforcementHandler:
             )
 
     def _handle_invoice_overdue(self, db: Session, event: Event) -> None:
-        """Auto-suspend subscriber when an invoice becomes overdue."""
+        """Auto-suspend subscriber when invoice is overdue, with grace period warning."""
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
             return
@@ -354,7 +354,54 @@ class EnforcementHandler:
             if not subscriber or subscriber.status != AccountStatus.active:
                 return
 
-            # Suspend all active subscriptions
+            # Grace period: send warning first, suspend after N hours
+            grace_hours = int(
+                settings_spec.resolve_value(
+                    db, SettingDomain.billing, "suspension_grace_hours"
+                ) or 48
+            )
+
+            # Check if invoice just became overdue (within grace period)
+            invoice_id = event.invoice_id or event.payload.get("invoice_id")
+            if invoice_id and grace_hours > 0:
+                from app.models.billing import Invoice
+
+                invoice = db.get(Invoice, invoice_id)
+                if invoice and invoice.due_at:
+                    from datetime import UTC, datetime
+
+                    due_aware = invoice.due_at
+                    if due_aware.tzinfo is None:
+                        due_aware = due_aware.replace(tzinfo=UTC)
+                    hours_overdue = (datetime.now(UTC) - due_aware).total_seconds() / 3600
+
+                    if hours_overdue < grace_hours:
+                        metadata = dict(invoice.metadata_ or {})
+                        if metadata.get("suspension_warning_sent_at"):
+                            return
+                        # Within grace period — emit warning, don't suspend yet
+                        emit_event(
+                            db,
+                            EventType.subscription_suspension_warning,
+                            {
+                                "invoice_id": str(invoice.id),
+                                "invoice_number": invoice.invoice_number or "",
+                                "amount": str(invoice.total or 0),
+                                "grace_hours": str(grace_hours),
+                                "reason": "invoice_overdue",
+                            },
+                            account_id=subscriber.id,
+                        )
+                        metadata["suspension_warning_sent_at"] = datetime.now(UTC).isoformat()
+                        invoice.metadata_ = metadata
+                        db.flush()
+                        logger.info(
+                            "Sent suspension warning for account %s (%.1f hrs overdue, grace=%d hrs)",
+                            account_id, hours_overdue, grace_hours,
+                        )
+                        return
+
+            # Past grace period — proceed with suspension
             subscriptions = (
                 db.query(Subscription)
                 .filter(

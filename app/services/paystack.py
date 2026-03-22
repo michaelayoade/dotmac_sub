@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import os
 import uuid
 from decimal import Decimal
 from typing import Any
@@ -14,6 +13,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.services.secrets import get_env_or_secret, resolve_secret
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -22,21 +22,25 @@ PAYSTACK_API_BASE = "https://api.paystack.co"
 
 
 def _get_secret_key(db: Session | None = None) -> str:
-    """Resolve the Paystack secret key from settings or env."""
+    """Resolve the Paystack secret key: DB setting → OpenBao → env."""
     if db:
         val = resolve_value(db, SettingDomain.billing, "paystack_secret_key")
         if val:
-            return str(val)
-    return os.getenv("PAYSTACK_SECRET_KEY", "")
+            resolved = resolve_secret(str(val))
+            if resolved:
+                return resolved
+    return get_env_or_secret("PAYSTACK_SECRET_KEY", "paystack", "secret_key")
 
 
 def _get_public_key(db: Session | None = None) -> str:
-    """Resolve the Paystack public key from settings or env."""
+    """Resolve the Paystack public key: DB setting → OpenBao → env."""
     if db:
         val = resolve_value(db, SettingDomain.billing, "paystack_public_key")
         if val:
-            return str(val)
-    return os.getenv("PAYSTACK_PUBLIC_KEY", "")
+            resolved = resolve_secret(str(val))
+            if resolved:
+                return resolved
+    return get_env_or_secret("PAYSTACK_PUBLIC_KEY", "paystack", "public_key")
 
 
 def amount_to_kobo(amount: Decimal | float | int) -> int:

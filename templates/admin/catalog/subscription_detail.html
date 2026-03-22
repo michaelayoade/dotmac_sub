@@ -435,6 +435,7 @@
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ event.label }}</p>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">{{ event.created_at.strftime('%b %d, %Y %H:%M') if event.created_at else '—' }}</p>
                                 </div>
+                                <p class="mt-1 font-mono text-xs text-slate-500 dark:text-slate-400">{{ event.event_type }}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ event.status }}{% if event.processed_at %} · processed{% endif %}</p>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ event.detail }}</p>
                                 {% if event.failed_handler_text %}
@@ -455,7 +456,7 @@
                             </span>
                         </div>
                         <div class="mt-3 space-y-3">
-                            {% for notification in notification_evidence.items %}
+                            {% for notification in notification_evidence["items"] %}
                             <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
                                 <div class="flex items-center justify-between gap-3">
                                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ notification.subject }}</p>

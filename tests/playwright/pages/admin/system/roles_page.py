@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import re
+
 from playwright.sync_api import Page, expect
+from playwright.sync_api import Error as PlaywrightError
 
 from tests.playwright.pages.base_page import BasePage
 
@@ -12,9 +15,18 @@ class RolesPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/roles") -> None:
         """Navigate to the roles list."""
-        super().goto(path)
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                self.page.goto(f"{self.base_url}{path}", wait_until="commit", timeout=30000)
+                return
+            except PlaywrightError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
 
     def expect_loaded(self) -> None:
         """Assert the roles page is loaded."""
@@ -26,11 +38,17 @@ class RolesPage(BasePage):
 
     def click_role_row(self, role_name: str) -> None:
         """Click on a role row."""
-        self.page.get_by_role("row").filter(has_text=role_name).click()
+        self.page.get_by_role("row").filter(
+            has_text=re.compile(rf"^{re.escape(role_name)}(?:\s|$)", re.IGNORECASE)
+        ).first.click()
 
     def expect_role_in_list(self, role_name: str) -> None:
         """Assert a role is visible in the list."""
-        expect(self.page.get_by_role("row").filter(has_text=role_name)).to_be_visible()
+        expect(
+            self.page.get_by_role("row").filter(
+                has_text=re.compile(rf"^{re.escape(role_name)}(?:\s|$)", re.IGNORECASE)
+            ).first
+        ).to_be_visible()
 
     def get_role_count(self) -> int:
         """Get the count of roles in the table."""

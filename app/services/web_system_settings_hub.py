@@ -27,6 +27,7 @@ SETTINGS_CATEGORIES: list[dict] = [
             {"name": "Email / SMTP", "url": "/admin/system/email", "description": "Outbound email transport settings"},
             {"name": "Users & Roles", "url": "/admin/system/users", "description": "Admin accounts, roles, permissions"},
             {"name": "API Keys", "url": "/admin/system/api-keys", "description": "Manage API access tokens"},
+            {"name": "Secrets (OpenBao)", "url": "/admin/system/secrets", "description": "Encrypted secrets vault — API keys, passwords, tokens"},
             {"name": "Webhooks", "url": "/admin/system/webhooks", "description": "Event delivery endpoints"},
             {"name": "System Information", "url": "/admin/system/about", "description": "Version, environment, diagnostics"},
         ],

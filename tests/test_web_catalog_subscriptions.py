@@ -15,7 +15,9 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.network import IPAssignment
 from app.models.notification import Notification, NotificationChannel, NotificationStatus, NotificationTemplate
 from app.models.radius import RadiusClient, RadiusServer, RadiusSyncJob, RadiusSyncRun, RadiusSyncStatus, RadiusUser
+from app.models.sequence import DocumentSequence
 from app.models.subscriber import Address, ChannelType, SubscriberChannel
+from app.models.subscription_engine import SettingValueType
 from app.schemas.catalog import SubscriptionCreate
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
@@ -28,6 +30,23 @@ def _billing_setting(key: str, value: str) -> DomainSetting:
         domain=SettingDomain.billing,
         key=key,
         value_text=value,
+        is_active=True,
+    )
+
+
+def _radius_setting(
+    key: str,
+    value_type: SettingValueType,
+    *,
+    value_text: str | None = None,
+    value_json: object | None = None,
+) -> DomainSetting:
+    return DomainSetting(
+        domain=SettingDomain.radius,
+        key=key,
+        value_type=value_type,
+        value_text=value_text,
+        value_json=value_json,
         is_active=True,
     )
 
@@ -52,6 +71,37 @@ def test_apply_generated_service_credentials_keeps_custom_password_on_edit(
 
     assert form_data["login"] == "10004167"
     assert form_data["service_password"] == "CustomPass123"
+
+
+def test_apply_generated_service_credentials_skips_legacy_defaults_when_pppoe_auto_generation_enabled(
+    db_session,
+    subscriber,
+):
+    subscriber.subscriber_number = "SUB-004167"
+    db_session.add(
+        _radius_setting(
+            "pppoe_auto_generate_enabled",
+            SettingValueType.boolean,
+            value_text="true",
+            value_json=True,
+        )
+    )
+    db_session.commit()
+
+    form_data = {
+        "subscriber_id": str(subscriber.id),
+        "account_id": str(subscriber.id),
+        "login": "",
+        "service_password": "",
+    }
+
+    web_catalog_subscriptions_service.apply_generated_service_credentials(
+        db_session,
+        form_data,
+    )
+
+    assert form_data["login"] == ""
+    assert form_data["service_password"] == ""
 
 
 def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
@@ -806,6 +856,67 @@ def test_create_subscription_with_audit_reconciles_active_subscription_after_cre
         db_session,
         str(created.id),
     )
+
+
+def test_create_subscription_with_audit_prefers_generated_pppoe_credential_when_enabled(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    db_session.add_all(
+        [
+            _radius_setting(
+                "pppoe_auto_generate_enabled",
+                SettingValueType.boolean,
+                value_text="true",
+                value_json=True,
+            ),
+            _radius_setting(
+                "pppoe_username_prefix",
+                SettingValueType.string,
+                value_text="1050",
+            ),
+            _radius_setting(
+                "pppoe_username_padding",
+                SettingValueType.integer,
+                value_text="5",
+            ),
+            _radius_setting(
+                "pppoe_username_start",
+                SettingValueType.integer,
+                value_text="1",
+            ),
+        ]
+    )
+    db_session.add(DocumentSequence(key="pppoe_username", next_value=1))
+    db_session.commit()
+
+    payload = {
+        "account_id": subscriber.id,
+        "offer_id": catalog_offer.id,
+        "status": "active",
+    }
+    form = FormData([])
+
+    created = web_catalog_subscriptions_service.create_subscription_with_audit(
+        db_session,
+        payload,
+        form,
+        None,
+        None,
+    )
+
+    db_session.refresh(created)
+    credential = (
+        db_session.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscriber.id)
+        .filter(AccessCredential.is_active.is_(True))
+        .one()
+    )
+
+    assert credential.username == "105000001"
+    assert created.login == "105000001"
+    assert created.login != web_catalog_subscriptions_service._generated_service_login(subscriber)
 
 
 def test_ensure_ipv4_blocks_allocatable_rejects_duplicate_manual_ipv4_selection(

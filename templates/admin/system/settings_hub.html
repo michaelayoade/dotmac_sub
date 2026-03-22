@@ -6,7 +6,7 @@
 {% block content %}
 {{ ambient_background("slate", "gray") }}
 
-<div class="relative space-y-8" x-data="settingsHub({{ (selected_category or '') | tojson }})">
+<div class="relative space-y-8">
     {% call page_header(
         title="Settings Hub",
         subtitle="All configuration sections in one place",
@@ -19,28 +19,31 @@
     <div class="animate-fade-in-up" style="animation-delay: 50ms;">
         <div class="relative">
             <svg class="absolute left-3 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
-            <input type="text" x-model="search" placeholder="Search settings (e.g., billing, email, RADIUS)..." class="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-slate-500">
+            <input id="settings-hub-search" type="text" placeholder="Search settings (e.g., billing, email, RADIUS)..." class="w-full rounded-xl border border-slate-200 bg-white py-3 pl-10 pr-4 text-sm shadow-sm focus:border-slate-400 focus:ring-slate-400 dark:border-slate-700 dark:bg-slate-800 dark:text-white dark:focus:border-slate-500">
         </div>
     </div>
 
     {# Category Pills #}
     <div class="flex flex-wrap gap-2 animate-fade-in-up" style="animation-delay: 75ms;">
-        <button type="button" @click.prevent="setCategory('')" :class="activeCategory === '' ? 'bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900' : 'bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-300'" class="rounded-full border border-slate-200 px-4 py-1.5 text-xs font-medium transition dark:border-slate-700">All</button>
+        <a href="/admin/system/settings-hub"
+           class="{% if not selected_category %}bg-slate-800 text-white dark:bg-slate-200 dark:text-slate-900{% else %}bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-300{% endif %} rounded-full border border-slate-200 px-4 py-1.5 text-xs font-medium transition dark:border-slate-700">All</a>
         {% for cat in categories %}
-        <button type="button" @click.prevent="setCategory('{{ cat.id }}')" :class="activeCategory === '{{ cat.id }}' ? 'bg-{{ cat.color }}-600 text-white' : 'bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-300'" class="rounded-full border border-slate-200 px-4 py-1.5 text-xs font-medium transition dark:border-slate-700">{{ cat.name }}</button>
+        <a href="/admin/system/settings-hub?category={{ cat.id }}"
+           class="{% if selected_category == cat.id %}bg-{{ cat.color }}-600 text-white{% else %}bg-white text-slate-700 dark:bg-slate-800 dark:text-slate-300{% endif %} rounded-full border border-slate-200 px-4 py-1.5 text-xs font-medium transition dark:border-slate-700">{{ cat.name }}</a>
         {% endfor %}
     </div>
 
     {# Category Cards #}
     {% for cat in categories %}
     {% set cat_search_blob = cat.name ~ ' ' ~ cat.description ~ ' ' ~ (cat.links | map(attribute='name') | join(' ')) ~ ' ' ~ (cat.links | map(attribute='description') | join(' ')) %}
-    <div x-show='(activeCategory === "" || activeCategory === "{{ cat.id }}") && matchesSearch({{ cat_search_blob | tojson }})' x-transition class="animate-fade-in-up" style="animation-delay: {{ 100 + loop.index * 50 }}ms;">
+    {% if not selected_category or selected_category == cat.id %}
+    <div class="animate-fade-in-up settings-hub-category" data-settings-search="{{ cat_search_blob | lower | e }}" style="animation-delay: {{ 100 + loop.index * 50 }}ms;">
         {% call card(cat.name, color=cat.color) %}
         <p class="mb-4 text-sm text-slate-500 dark:text-slate-400">{{ cat.description }}</p>
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {% for link in cat.links %}
             {% set link_search_blob = link.name ~ ' ' ~ link.description %}
-            <a href="{{ link.url }}" x-show='matchesSearch({{ link_search_blob | tojson }})' class="group flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-{{ cat.color }}-200 hover:bg-{{ cat.color }}-50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-{{ cat.color }}-700 dark:hover:bg-{{ cat.color }}-900/20">
+            <a href="{{ link.url }}" data-settings-search="{{ link_search_blob | lower | e }}" class="group settings-hub-link flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-{{ cat.color }}-200 hover:bg-{{ cat.color }}-50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-{{ cat.color }}-700 dark:hover:bg-{{ cat.color }}-900/20">
                 <div class="min-w-0">
                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ link.name }}</p>
                     <p class="mt-0.5 text-xs text-slate-500 dark:text-slate-400">{{ link.description }}</p>
@@ -51,24 +54,38 @@
         </div>
         {% endcall %}
     </div>
+    {% endif %}
     {% endfor %}
 </div>
 
 <script>
-function settingsHub(defaultCategory) {
-    return {
-        search: '',
-        activeCategory: defaultCategory || '',
-        setCategory(categoryId) {
-            this.activeCategory = categoryId || '';
-        },
-        matchesSearch(searchableText) {
-            if (!this.search) return true;
-            const q = this.search.toLowerCase();
-            return String(searchableText || '').toLowerCase().includes(q);
-        }
+document.addEventListener('DOMContentLoaded', () => {
+    const searchInput = document.getElementById('settings-hub-search');
+    if (!searchInput) return;
+
+    const groups = Array.from(document.querySelectorAll('.settings-hub-category'));
+
+    const applyFilter = () => {
+        const query = searchInput.value.trim().toLowerCase();
+
+        groups.forEach((group) => {
+            const groupText = group.dataset.settingsSearch || '';
+            const links = Array.from(group.querySelectorAll('.settings-hub-link'));
+            let visibleLinks = 0;
+
+            links.forEach((link) => {
+                const linkText = link.dataset.settingsSearch || '';
+                const visible = !query || linkText.includes(query) || groupText.includes(query);
+                link.style.display = visible ? '' : 'none';
+                if (visible) visibleLinks += 1;
+            });
+
+            group.style.display = visibleLinks > 0 || !query || groupText.includes(query) ? '' : 'none';
+        });
     };
-}
+
+    searchInput.addEventListener('input', applyFilter);
+});
 </script>
 {{ animation_styles() }}
 {% endblock %}

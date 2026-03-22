@@ -673,6 +673,11 @@ def build_addon_links_map(offer_addon_links: list | None) -> dict[str, dict[str,
     return addon_links_map
 
 
+def supported_billing_cycles() -> list[str]:
+    """Return the full billing-cycle set exposed by the admin offer UI."""
+    return [item.value for item in BillingCycle]
+
+
 def offer_form_context(
     db: Session,
     offer: dict[str, object],
@@ -728,7 +733,7 @@ def offer_form_context(
         "service_types": [item.value for item in ServiceType],
         "access_types": [item.value for item in AccessType],
         "price_bases": [item.value for item in PriceBasis],
-        "billing_cycles": [BillingCycle.monthly.value, BillingCycle.annual.value],
+        "billing_cycles": supported_billing_cycles(),
         "billing_modes": [item.value for item in BillingMode],
         "contract_terms": [item.value for item in ContractTerm],
         "offer_statuses": [item.value for item in OfferStatus],
@@ -844,7 +849,7 @@ def overview_page_data(
         "service_types": [item.value for item in ServiceType],
         "access_types": [item.value for item in AccessType],
         "price_bases": [item.value for item in PriceBasis],
-        "billing_cycles": [BillingCycle.monthly.value, BillingCycle.annual.value],
+        "billing_cycles": supported_billing_cycles(),
         "contract_terms": [item.value for item in ContractTerm],
         "offer_statuses": [item.value for item in OfferStatus],
         "offer_plan_metadata": offer_plan_metadata,
@@ -989,7 +994,7 @@ def plan_usage_graph_data(
     Args:
         db: Database session.
         offer_id: The catalog offer UUID.
-        period: Grouping period — "daily", "weekly", or "monthly".
+        period: Grouping period — "daily", "weekly", "monthly", "quarterly", or "annual".
         months: How many months of history to include.
 
     Returns:
@@ -1003,6 +1008,10 @@ def plan_usage_graph_data(
         date_trunc = func.date_trunc("day", Subscription.created_at)
     elif period == "weekly":
         date_trunc = func.date_trunc("week", Subscription.created_at)
+    elif period == "quarterly":
+        date_trunc = func.date_trunc("quarter", Subscription.created_at)
+    elif period == "annual":
+        date_trunc = func.date_trunc("year", Subscription.created_at)
     else:
         date_trunc = func.date_trunc("month", Subscription.created_at)
 
@@ -1034,6 +1043,11 @@ def plan_usage_graph_data(
             labels.append(period_date.strftime("%b %d"))
         elif period == "weekly":
             labels.append(f"W{period_date.strftime('%U')} {period_date.strftime('%b')}")
+        elif period == "quarterly":
+            quarter = ((period_date.month - 1) // 3) + 1
+            labels.append(f"Q{quarter} {period_date.year}")
+        elif period == "annual":
+            labels.append(period_date.strftime("%Y"))
         else:
             labels.append(period_date.strftime("%b %Y"))
         total_counts.append(row.total)

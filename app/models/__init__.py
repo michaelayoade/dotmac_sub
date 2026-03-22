@@ -264,10 +264,14 @@ from app.models.network_monitoring import (  # noqa: F401
     NetworkDeviceBandwidthGraph,
     NetworkDeviceBandwidthGraphSource,
     NetworkDeviceSnmpOid,
+    NetworkTopologyLink,
     PopSite,
     PopSiteContact,
     SpeedTestResult,
     SpeedTestSource,
+    TopologyLinkAdminStatus,
+    TopologyLinkMedium,
+    TopologyLinkRole,
 )
 from app.models.network_monitoring import (  # noqa: F401
     DeviceStatus as MonitoringDeviceStatus,

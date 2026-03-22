@@ -41,6 +41,7 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
         payment_due_days="5",
         grace_period_days="2",
         min_balance="125.50",
+        captive_redirect_enabled="false",
         tax_rate_id=str(tax_rate.id),
         payment_method="transfer",
         metadata_json=None,
@@ -82,6 +83,7 @@ def test_update_organization_customer_applies_billing_overrides_to_linked_subscr
         payment_due_days="9",
         grace_period_days="4",
         min_balance="75.00",
+        captive_redirect_enabled="false",
         tax_rate_id=str(tax_rate.id),
         payment_method="cash",
     )

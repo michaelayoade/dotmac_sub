@@ -392,8 +392,8 @@ def list_radius_settings(
     limit: int,
     offset: int,
 ):
-    return settings_service.radius_settings.list(
-        db, None, is_active, order_by, order_dir, limit, offset
+    return _list_domain_settings(
+        db, SettingDomain.radius, is_active, order_by, order_dir, limit, offset
     )
 
 
@@ -405,8 +405,9 @@ def list_radius_settings_response(
     limit: int,
     offset: int,
 ):
-    items = list_radius_settings(db, is_active, order_by, order_dir, limit, offset)
-    return list_response(items, limit, offset)
+    return _list_domain_settings_response(
+        db, SettingDomain.radius, is_active, order_by, order_dir, limit, offset
+    )
 
 
 def _normalize_radius_setting(key: str, payload: DomainSettingUpdate) -> DomainSettingUpdate:
@@ -468,17 +469,11 @@ def _normalize_radius_setting(key: str, payload: DomainSettingUpdate) -> DomainS
 
 
 def upsert_radius_setting(db: Session, key: str, payload: DomainSettingUpdate):
-    normalized_payload = _normalize_radius_setting(key, payload)
-    return settings_service.radius_settings.upsert_by_key(db, key, normalized_payload)
+    return _upsert_domain_setting(db, SettingDomain.radius, key, payload)
 
 
 def get_radius_setting(db: Session, key: str):
-    if key not in _RADIUS_SETTING_KEYS:
-        allowed = ", ".join(sorted(_RADIUS_SETTING_KEYS))
-        raise HTTPException(
-            status_code=400, detail=f"Invalid setting key. Allowed: {allowed}"
-        )
-    return settings_service.radius_settings.get_by_key(db, key)
+    return _get_domain_setting(db, SettingDomain.radius, key)
 
 
 def list_auth_settings(
@@ -880,4 +875,3 @@ def get_scheduler_setting(db: Session, key: str):
             status_code=400, detail=f"Invalid setting key. Allowed: {allowed}"
         )
     return settings_service.scheduler_settings.get_by_key(db, key)
-

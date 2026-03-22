@@ -56,6 +56,27 @@ def _coerce_int_setting(value: object) -> int | None:
     return None
 
 
+def _parse_day_offsets(value: object) -> list[int]:
+    if value is None:
+        return []
+    if isinstance(value, int):
+        return [value] if value >= 0 else []
+    if isinstance(value, str):
+        offsets: set[int] = set()
+        for raw_part in value.split(","):
+            part = raw_part.strip()
+            if not part:
+                continue
+            try:
+                parsed = int(part)
+            except ValueError:
+                continue
+            if parsed >= 0:
+                offsets.add(parsed)
+        return sorted(offsets, reverse=True)
+    return []
+
+
 def _add_months(value: datetime, months: int) -> datetime:
     total = value.month - 1 + months
     year = value.year + total // 12
@@ -206,6 +227,108 @@ def _emit_invoice_created_event(
     )
 
 
+def _mark_invoice_metadata_flag(invoice: Invoice, key: str) -> None:
+    metadata = dict(invoice.metadata_ or {})
+    metadata[key] = datetime.now(UTC).isoformat()
+    invoice.metadata_ = metadata
+
+
+def _emit_invoice_reminders(
+    db: Session,
+    run_at: datetime,
+) -> int:
+    reminder_days = _parse_day_offsets(
+        settings_spec.resolve_value(db, SettingDomain.billing, "invoice_reminder_days")
+    )
+    if not reminder_days:
+        return 0
+
+    sent = 0
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_([InvoiceStatus.issued, InvoiceStatus.partially_paid]))
+        .all()
+    )
+    for invoice in invoices:
+        if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal("0.00"):
+            continue
+        due_at = _as_utc(invoice.due_at)
+        if due_at is None:
+            continue
+        days_until_due = (due_at.date() - run_at.date()).days
+        if days_until_due not in reminder_days:
+            continue
+        metadata = dict(invoice.metadata_ or {})
+        marker = f"invoice_reminder_sent_{days_until_due}"
+        if metadata.get(marker):
+            continue
+        emit_event(
+            db,
+            EventType.invoice_sent,
+            {
+                "invoice_id": str(invoice.id),
+                "invoice_number": invoice.invoice_number or "",
+                "amount": str(invoice.balance_due or invoice.total or Decimal("0.00")),
+                "due_date": due_at.date().isoformat(),
+                "days_until_due": str(days_until_due),
+            },
+            invoice_id=invoice.id,
+            account_id=invoice.account_id,
+        )
+        _mark_invoice_metadata_flag(invoice, marker)
+        sent += 1
+    return sent
+
+
+def _emit_dunning_escalations(
+    db: Session,
+    run_at: datetime,
+) -> int:
+    escalation_days = _parse_day_offsets(
+        settings_spec.resolve_value(db, SettingDomain.billing, "dunning_escalation_days")
+    )
+    if not escalation_days:
+        return 0
+
+    sent = 0
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.is_active.is_(True))
+        .filter(Invoice.status.in_([InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue]))
+        .all()
+    )
+    for invoice in invoices:
+        if not invoice.due_at or (invoice.balance_due or Decimal("0.00")) <= Decimal("0.00"):
+            continue
+        due_at = _as_utc(invoice.due_at)
+        if due_at is None:
+            continue
+        days_overdue = (run_at.date() - due_at.date()).days
+        if days_overdue not in escalation_days:
+            continue
+        metadata = dict(invoice.metadata_ or {})
+        marker = f"dunning_escalation_sent_{days_overdue}"
+        if metadata.get(marker):
+            continue
+        emit_event(
+            db,
+            EventType.invoice_overdue,
+            {
+                "invoice_id": str(invoice.id),
+                "invoice_number": invoice.invoice_number or "",
+                "amount": str(invoice.balance_due or invoice.total or Decimal("0.00")),
+                "due_date": due_at.date().isoformat(),
+                "days_overdue": str(days_overdue),
+            },
+            invoice_id=invoice.id,
+            account_id=invoice.account_id,
+        )
+        _mark_invoice_metadata_flag(invoice, marker)
+        sent += 1
+    return sent
+
+
 def _log_billing_run_audit(
     db: Session,
     run: BillingRun | None,
@@ -234,6 +357,8 @@ def _log_billing_run_audit(
         "lines_created": summary.get("lines_created", 0),
         "skipped": summary.get("skipped", 0),
         "pending_activated": summary.get("pending_activated", 0),
+        "invoice_reminders_sent": summary.get("invoice_reminders_sent", 0),
+        "dunning_escalations_sent": summary.get("dunning_escalations_sent", 0),
         "status": status,
     }
     if error:
@@ -325,6 +450,8 @@ def run_invoice_cycle(
         "lines_created": 0,
         "skipped": 0,
         "pending_activated": 0,
+        "invoice_reminders_sent": 0,
+        "dunning_escalations_sent": 0,
     }
 
     for subscription in subscriptions:
@@ -478,6 +605,10 @@ def run_invoice_cycle(
                     invoice.id,
                     event_exc,
                 )
+
+        summary["invoice_reminders_sent"] = _emit_invoice_reminders(db, run_at)
+        summary["dunning_escalations_sent"] = _emit_dunning_escalations(db, run_at)
+        db.commit()
 
         summary["run_id"] = run_id_str
         run_db = db.get(BillingRun, run_uuid) if run_uuid else None

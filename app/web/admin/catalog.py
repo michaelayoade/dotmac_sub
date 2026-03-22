@@ -439,7 +439,7 @@ def offer_usage_graph_modal(
 ) -> HTMLResponse:
     """Render the usage graph modal partial for HTMX."""
     period = request.query_params.get("period", "monthly")
-    if period not in {"daily", "weekly", "monthly"}:
+    if period not in {"daily", "weekly", "monthly", "quarterly", "annual"}:
         period = "monthly"
     graph_data = web_catalog_offers_service.plan_usage_graph_data(
         db, offer_id, period=period
@@ -470,7 +470,7 @@ def offer_usage_graph_data(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Return JSON data for the plan usage graph."""
-    if period not in {"daily", "weekly", "monthly"}:
+    if period not in {"daily", "weekly", "monthly", "quarterly", "annual"}:
         period = "monthly"
     data = web_catalog_offers_service.plan_usage_graph_data(
         db, offer_id, period=period, months=months

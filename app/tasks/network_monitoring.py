@@ -94,6 +94,15 @@ def refresh_core_device_snmp() -> dict[str, int]:
                             update_device_subscriber_count(session, device)
                         except Exception as exc:
                             logger.warning("Subscriber count update failed for %s: %s", device.id, exc)
+                        # Poll CPU/memory/temperature
+                        try:
+                            from app.services.monitoring_metrics import (
+                                poll_device_system_metrics,
+                            )
+
+                            poll_device_system_metrics(session, device)
+                        except Exception as exc:
+                            logger.warning("System metrics poll failed for %s: %s", device.id, exc)
                         updated += 1
                     else:
                         failed += 1
@@ -115,6 +124,30 @@ def refresh_core_device_snmp() -> dict[str, int]:
     except Exception:
         session.rollback()
         logger.exception("Periodic SNMP refresh failed")
+        raise
+    finally:
+        session.close()
+
+
+@celery_app.task(name="app.tasks.network_monitoring.poll_onu_signals")
+def poll_onu_signals() -> dict[str, int]:
+    """Poll ONT/ONU optical signal strength from all active OLT inventory."""
+    from app.services.network import olt_polling as olt_polling_service
+
+    session = SessionLocal()
+    try:
+        result = olt_polling_service.poll_all_olts(session)
+        olt_polling_service.push_signal_metrics_to_victoriametrics(session)
+        session.commit()
+        return {
+            "olts_checked": int(result.get("olts_polled", 0)),
+            "onus_polled": int(result.get("total_polled", 0)),
+            "stored": int(result.get("total_updated", 0)),
+            "errors": int(result.get("total_errors", 0)),
+        }
+    except Exception:
+        session.rollback()
+        logger.exception("ONU signal polling failed")
         raise
     finally:
         session.close()

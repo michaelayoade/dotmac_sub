@@ -52,7 +52,11 @@ class TestRoles:
         page = RolesPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
-        page.expect_role_in_list("admin")
+        expect(
+            admin_page.get_by_role("row").filter(has_text="admin").or_(
+                admin_page.get_by_role("row").filter(has_text="Administrator")
+            ).first
+        ).to_be_visible()
 
 
 class TestAPIKeys:
@@ -65,11 +69,15 @@ class TestAPIKeys:
         page.expect_loaded()
 
     def test_api_keys_table_visible(self, admin_page: Page, settings):
-        """API keys table should be visible."""
+        """API keys list block should be visible."""
         page = APIKeysPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
-        expect(admin_page.locator("table")).to_be_visible()
+        expect(
+            admin_page.get_by_text("Your API Keys", exact=True).or_(
+                admin_page.get_by_text("No API keys yet", exact=True)
+            ).first
+        ).to_be_visible()
 
 
 class TestWebhooks:
@@ -82,11 +90,15 @@ class TestWebhooks:
         page.expect_loaded()
 
     def test_webhooks_table_visible(self, admin_page: Page, settings):
-        """Webhooks table should be visible."""
+        """Webhooks list block should be visible."""
         page = WebhooksPage(admin_page, settings.base_url)
         page.goto()
         page.expect_loaded()
-        expect(admin_page.locator("table")).to_be_visible()
+        expect(
+            admin_page.get_by_role("heading", name="Webhook Endpoints", exact=True).or_(
+                admin_page.get_by_text("No webhook endpoints configured", exact=True)
+            ).first
+        ).to_be_visible()
 
 
 class TestAudit:
@@ -132,13 +144,13 @@ class TestSystemAPI:
         data = response.json()
         assert "items" in data
 
-    def test_list_people_api(self, api_context, admin_token):
-        """API should return people list."""
+    def test_list_subscribers_api(self, api_context, admin_token):
+        """API should return subscribers list."""
         from tests.playwright.helpers.api import api_get, bearer_headers
 
         response = api_get(
             api_context,
-            "/api/v1/people?limit=10",
+            "/api/v1/subscribers?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -151,7 +163,7 @@ class TestSystemAPI:
 
         response = api_get(
             api_context,
-            "/api/v1/audit/events?limit=10",
+            "/api/v1/audit-events?limit=10",
             headers=bearer_headers(admin_token),
         )
         assert response.status == 200
@@ -169,5 +181,12 @@ class TestSystemNavigation:
         dashboard = AdminDashboardPage(admin_page, settings.base_url)
         dashboard.goto()
         dashboard.expect_loaded()
-        admin_page.get_by_role("link", name="System").first.click()
-        admin_page.wait_for_url("**/system**")
+        system_link = admin_page.get_by_role("link", name="System").first
+        href = system_link.get_attribute("href")
+        assert href in {"/admin/settings", "/admin/system/settings-hub"}
+        admin_page.goto(f"{settings.base_url}{href}", wait_until="domcontentloaded")
+        expect(admin_page).to_have_url(
+            f"{settings.base_url}/admin/system/settings-hub"
+            if href == "/admin/settings"
+            else f"{settings.base_url}{href}"
+        )

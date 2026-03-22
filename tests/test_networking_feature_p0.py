@@ -32,9 +32,12 @@ from app.models.network_monitoring import (
     NetworkDeviceBandwidthGraph,
     NetworkDeviceBandwidthGraphSource,
     NetworkDeviceSnmpOid,
+    NetworkTopologyLink,
     PopSite,
     SpeedTestResult,
     SpeedTestSource,
+    TopologyLinkMedium,
+    TopologyLinkRole,
 )
 from app.models.notification import (
     Notification,
@@ -70,7 +73,7 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.services import web_network_weathermap as web_network_weathermap_service
+from app.services import network_topology as network_topology_service
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.ont_tr069 import OntTR069
@@ -1253,49 +1256,65 @@ def test_dns_threat_list_page_data_handles_missing_table(db_session, monkeypatch
     assert data["schema_missing"] is True
 
 
-def test_weathermap_data_builds_link_states_from_metrics(db_session, pop_site):
+def test_topology_graph_builds_link_states_from_interface_metrics(db_session, pop_site):
     parent = NetworkDevice(
-        name="WM Parent",
+        name="Topo Parent",
         pop_site_id=pop_site.id,
         role=DeviceRole.core,
         status=DeviceStatus.online,
         is_active=True,
     )
     child = NetworkDevice(
-        name="WM Child",
+        name="Topo Child",
         pop_site_id=pop_site.id,
         role=DeviceRole.edge,
         status=DeviceStatus.online,
-        parent_device=parent,
         is_active=True,
     )
     db_session.add_all([parent, child])
     db_session.flush()
 
+    parent_if = DeviceInterface(device_id=parent.id, name="xe-0/0/0", monitored=True)
+    child_if = DeviceInterface(device_id=child.id, name="xe-0/0/1", monitored=True)
+    db_session.add_all([parent_if, child_if])
+    db_session.flush()
+
+    link = NetworkTopologyLink(
+        source_device_id=parent.id,
+        source_interface_id=parent_if.id,
+        target_device_id=child.id,
+        target_interface_id=child_if.id,
+        link_role=TopologyLinkRole.uplink,
+        medium=TopologyLinkMedium.fiber,
+        capacity_bps=1_000_000_000,
+        is_active=True,
+    )
     now = datetime.now(UTC)
+    db_session.add(link)
     db_session.add_all(
         [
             DeviceMetric(
-                device_id=child.id,
+                device_id=parent.id,
+                interface_id=parent_if.id,
                 metric_type=MetricType.rx_bps,
-                value=600_000_000,  # 600 Mbps (high)
+                value=600_000_000,
                 recorded_at=now,
             ),
             DeviceMetric(
-                device_id=child.id,
+                device_id=parent.id,
+                interface_id=parent_if.id,
                 metric_type=MetricType.tx_bps,
-                value=120_000_000,  # 120 Mbps
+                value=120_000_000,
                 recorded_at=now,
             ),
         ]
     )
     db_session.commit()
 
-    data = web_network_weathermap_service.build_weathermap_data(db_session)
-    assert data["stats"]["nodes"] >= 2
-    assert data["stats"]["links"] >= 1
-    assert data["stats"]["high_links"] >= 1
-    assert any(link["state"] == "high" for link in data["links"])
+    data = network_topology_service.list_nodes_and_edges(db_session)
+    assert data["stats"]["node_count"] >= 2
+    assert data["stats"]["edge_count"] >= 1
+    assert any(edge["util_state"] == "warning" for edge in data["edges"])
 
 
 def test_core_device_validate_values_rejects_parent_cycle(db_session):

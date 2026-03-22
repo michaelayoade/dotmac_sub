@@ -50,11 +50,12 @@ REPORT_HUB_SECTIONS: list[dict] = [
         "color": "indigo",
         "links": [
             {"name": "Subscriber Growth (Trend)", "url": "/admin/reports/subscriber-growth", "description": "Time-series subscriber growth trend"},
-            {"name": "Referrals", "url": "/admin/reports/referrals", "description": "Referral performance and conversion"},
-            {"name": "Voucher Statistics", "url": "/admin/reports/vouchers", "description": "Voucher inventory and redemptions"},
-            {"name": "DNS Threat Archive", "url": "/admin/reports/dns-threats", "description": "Security-related DNS events"},
+            {"name": "Referrals", "url": "/admin/reports/referrals", "description": "Referral performance and conversion", "coming_soon": True},
+            {"name": "Voucher Statistics", "url": "/admin/reports/vouchers", "description": "Voucher inventory and redemptions", "coming_soon": True},
+            {"name": "DNS Threat Archive", "url": "/admin/reports/dns-threats", "description": "Security-related DNS events", "coming_soon": True},
             {"name": "Custom Pricing & Discounts", "url": "/admin/reports/custom-pricing", "description": "Custom pricing overrides"},
             {"name": "Revenue by Category", "url": "/admin/reports/revenue-categories", "description": "Revenue segmented by category"},
+            {"name": "Bandwidth & Usage", "url": "/admin/reports/bandwidth", "description": "Network usage analytics and top consumers"},
         ],
     },
 ]
@@ -404,3 +405,11 @@ def reports_revenue_categories(request: Request, db: Session = Depends(get_db)):
     ctx = _base_context(request, db, "reports-revenue-categories", "Revenue by Category", "Income breakdown by service type")
     ctx.update(data)
     return templates.TemplateResponse("admin/reports/revenue_categories.html", ctx)
+
+
+@router.get("/bandwidth", response_class=HTMLResponse)
+def reports_bandwidth(request: Request, days: int = 30, db: Session = Depends(get_db)):
+    data = web_reports_ext_service.get_bandwidth_report_data(db, days=days)
+    ctx = _base_context(request, db, "reports-bandwidth", "Bandwidth & Usage", "Network usage analytics and top consumers")
+    ctx.update(data)
+    return templates.TemplateResponse("admin/reports/bandwidth.html", ctx)

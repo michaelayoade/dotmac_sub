@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from playwright.sync_api import Page, expect
+from playwright.sync_api import Error as PlaywrightError
 
+from tests.playwright.pages.admin.dashboard_page import AdminDashboardPage
 from tests.playwright.pages.base_page import BasePage
 
 
@@ -12,9 +14,34 @@ class WebhooksPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/webhooks") -> None:
         """Navigate to the webhooks list."""
-        super().goto(path)
+        dashboard = AdminDashboardPage(self.page, self.base_url)
+        try:
+            dashboard.goto()
+            dashboard.expect_loaded()
+            system_link = self.page.get_by_role("link", name="System").first
+            if system_link.is_visible():
+                system_link.click()
+                self.page.wait_for_load_state("domcontentloaded")
+            webhooks_link = self.page.get_by_role("link", name="Webhooks").first
+            if webhooks_link.is_visible():
+                webhooks_link.click()
+                self.page.wait_for_load_state("domcontentloaded")
+                return
+        except PlaywrightError:
+            pass
+
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                self.page.goto(f"{self.base_url}{path}", wait_until="domcontentloaded", timeout=30000)
+                return
+            except PlaywrightError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
 
     def expect_loaded(self) -> None:
         """Assert the webhooks page is loaded."""

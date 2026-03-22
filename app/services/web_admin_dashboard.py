@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntUnit
+from app.models.network_monitoring import DeviceInterface, InterfaceStatus, NetworkDevice
 from app.models.subscriber import Subscriber
 from app.services import (
     audit as audit_service,
@@ -55,6 +56,33 @@ def _float_setting(value) -> float | None:
 
 def _is_user_actor(actor_type) -> bool:
     return actor_type in {AuditActorType.user, AuditActorType.user.value, "user"}
+
+
+def _build_pon_interface_summary(db: Session) -> dict[str, int]:
+    """Return dashboard-friendly counts for PON-related monitoring interfaces."""
+    tokens = ("pon", "gpon", "epon", "xgpon", "xgs")
+    summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
+
+    rows = (
+        db.query(DeviceInterface.name, DeviceInterface.description, DeviceInterface.status)
+        .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
+        .filter(NetworkDevice.is_active.is_(True))
+        .all()
+    )
+
+    for name, description, status in rows:
+        text = f"{name or ''} {description or ''}".lower()
+        if not any(token in text for token in tokens):
+            continue
+        summary["total"] += 1
+        if status == InterfaceStatus.up:
+            summary["up"] += 1
+        elif status == InterfaceStatus.down:
+            summary["down"] += 1
+        else:
+            summary["unknown"] += 1
+
+    return summary
 
 
 def _build_health_thresholds(db: Session) -> dict:
@@ -404,6 +432,13 @@ def dashboard(request: Request, db: Session):
         logger.debug("Failed to load ONU summary for dashboard", exc_info=True)
         onu_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
 
+    # --- PON interface status summary ---
+    try:
+        pon_interface_summary = _build_pon_interface_summary(db)
+    except Exception:
+        logger.debug("Failed to load PON interface summary for dashboard", exc_info=True)
+        pon_interface_summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
+
     # --- VPN tunnel status ---
     vpn_tunnels = []
     try:
@@ -507,6 +542,7 @@ def dashboard(request: Request, db: Session):
             "show_subscribers": show_subscribers,
             "monitoring_summary": monitoring_summary,
             "onu_summary": onu_summary,
+            "pon_interface_summary": pon_interface_summary,
             "vpn_tunnels": vpn_tunnels,
         },
     )
@@ -528,6 +564,7 @@ def dashboard_server_health_partial(request: Request, db: Session):
 
 def dashboard_stats_partial(request: Request, db: Session):
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
+    pon_interface_summary = _build_pon_interface_summary(db)
 
     # Monthly revenue from billing stats
     monthly_revenue = 0
@@ -556,6 +593,10 @@ def dashboard_stats_partial(request: Request, db: Session):
         "monthly_revenue": monthly_revenue,
         "revenue_change": 0,
         "system_uptime": system_uptime,
+        "pon_interfaces_up": pon_interface_summary["up"],
+        "pon_interfaces_down": pon_interface_summary["down"],
+        "pon_interfaces_unknown": pon_interface_summary["unknown"],
+        "pon_interfaces_total": pon_interface_summary["total"],
     }
 
     return templates.TemplateResponse(

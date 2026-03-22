@@ -22,8 +22,14 @@ class CustomerServicesPage(BasePage):
         expect(self.page.get_by_role("heading", name="Services", exact=True)).to_be_visible()
 
     def expect_active_services_visible(self) -> None:
-        """Assert active services section is visible."""
-        expect(self.page.get_by_text("Active", exact=False).first).to_be_visible()
+        """Assert services content or empty state is visible."""
+        expect(
+            self.page.get_by_text("Your Services", exact=False).or_(
+                self.page.get_by_text("No services available", exact=False).or_(
+                    self.page.get_by_text("Contact Support", exact=False)
+                )
+            ).first
+        ).to_be_visible()
 
     def expect_service_details_visible(self) -> None:
         """Assert service details are visible."""

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
+    InterfaceStatus,
     MetricType,
     NetworkDevice,
     NetworkDeviceSnmpOid,
@@ -86,7 +87,7 @@ def poll_custom_snmp_oids(db: Session, device: NetworkDevice) -> dict[str, int]:
                 # Update OID tracking
                 oid_config.last_polled_at = now
                 oid_config.last_poll_status = "ok"
-                oid_config.last_value = str(value)
+                oid_config.last_poll_status = "ok"
                 oid_config.last_error = None
                 updated += 1
             else:
@@ -147,7 +148,7 @@ def poll_interface_traffic(db: Session, device: NetworkDevice) -> dict[str, int]
         db.scalars(
             select(DeviceInterface).where(
                 DeviceInterface.device_id == device.id,
-                DeviceInterface.status == "up",
+                DeviceInterface.status == InterfaceStatus.up,
                 DeviceInterface.monitored.is_(True),
                 DeviceInterface.snmp_index.is_not(None),
             )

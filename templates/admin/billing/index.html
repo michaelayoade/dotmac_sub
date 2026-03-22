@@ -72,12 +72,12 @@
                     <p class="text-[10px] text-slate-500 dark:text-slate-400">Collection</p>
                 </div>
                 <div class="text-center">
-                    <p class="text-base font-bold tabular-nums {% if (mrr_growth_rate|default(0)) >= 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-rose-600 dark:text-rose-400{% endif %}">{{ "{:+.1f}".format(mrr_growth_rate|default(0)) }}%</p>
-                    <p class="text-[10px] text-slate-500 dark:text-slate-400">MRR</p>
+                    <p class="text-base font-bold tabular-nums text-teal-600 dark:text-teal-400">{{ stats.payments_count|default(0) }}</p>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400">Payments</p>
                 </div>
                 <div class="text-center">
-                    <p class="text-base font-bold tabular-nums {% if (net_revenue_retention|default(0)) >= 100 %}text-emerald-600 dark:text-emerald-400{% else %}text-amber-600 dark:text-amber-400{% endif %}">{{ "{:.0f}".format(net_revenue_retention|default(0)) }}%</p>
-                    <p class="text-[10px] text-slate-500 dark:text-slate-400">NRR</p>
+                    <p class="text-base font-bold tabular-nums text-amber-600 dark:text-amber-400">{{ stats.credit_notes_count|default(0) }}</p>
+                    <p class="text-[10px] text-slate-500 dark:text-slate-400">Credits</p>
                 </div>
             </div>
         </div>

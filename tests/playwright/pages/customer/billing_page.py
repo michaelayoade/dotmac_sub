@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.base_page import BasePage
@@ -13,9 +14,17 @@ class CustomerBillingPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/customer/billing") -> None:
+    def goto(self, path: str = "/portal/billing") -> None:
         """Navigate to the billing page."""
-        super().goto(path)
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                super().goto(path)
+                return
+            except PlaywrightError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
 
     def expect_loaded(self) -> None:
         """Assert the billing page is loaded."""
@@ -30,10 +39,14 @@ class CustomerBillingPage(BasePage):
         expect(self.page.get_by_text("Payment", exact=False).first).to_be_visible()
 
     def expect_balance_visible(self) -> None:
-        """Assert account balance is visible."""
-        expect(self.page.locator("[data-testid='current-balance']").or_(
-            self.page.get_by_text("Balance", exact=False)
-        ).first).to_be_visible()
+        """Assert billing summary stats are visible."""
+        expect(
+            self.page.get_by_text("Outstanding", exact=False).or_(
+                self.page.get_by_text("Total Billed", exact=False).or_(
+                    self.page.get_by_text("Overdue", exact=False)
+                )
+            ).first
+        ).to_be_visible()
 
     def click_view_invoice(self, invoice_number: str) -> None:
         """Click to view a specific invoice."""

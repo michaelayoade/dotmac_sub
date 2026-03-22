@@ -148,6 +148,11 @@
                             </td>
                             <td class="px-4 py-3 text-sm">
                                 <div class="flex flex-wrap gap-2">
+                                    <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/create-ont">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+                                        <button type="submit" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Create ONT</button>
+                                    </form>
                                     {% for key, action in job_actions.items() %}
                                     <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action">
                                         {% include "components/forms/csrf_input.html" %}

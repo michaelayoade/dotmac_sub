@@ -6,6 +6,7 @@ Provides services for Subscriptions and SubscriptionAddOns.
 import logging
 from calendar import monthrange
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, selectinload
@@ -374,6 +375,79 @@ def _billing_cycle_days(db: Session, offer_id) -> int:
     )
     cycle = price.billing_cycle.value if price and price.billing_cycle else "monthly"
     return {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90, "annual": 365}.get(cycle, 30)
+
+
+def _offer_recurring_price_amount(db: Session, offer_id) -> Decimal:
+    """Return the active recurring amount for an offer, or zero."""
+    price = (
+        db.query(OfferPrice.amount)
+        .filter(
+            OfferPrice.offer_id == offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
+        .first()
+    )
+    return Decimal(str(price[0])) if price else Decimal("0")
+
+
+def _plan_change_text_setting(db: Session, key: str, default: str) -> str:
+    value = settings_spec.resolve_value(db, SettingDomain.billing, key)
+    text = str(value or "").strip()
+    return text if text else default
+
+
+def _plan_change_decimal_setting(db: Session, key: str, default: str = "0.00") -> Decimal:
+    try:
+        return Decimal(_plan_change_text_setting(db, key, default))
+    except Exception:
+        return Decimal(default)
+
+
+def _apply_plan_change_policy(
+    db: Session,
+    proration: dict,
+    *,
+    old_price: Decimal,
+    new_price: Decimal,
+) -> dict:
+    """Apply billing-domain plan-change policy settings to proration output."""
+    result = dict(proration)
+    refund_policy = _plan_change_text_setting(db, "refund_policy", "none").lower()
+    invoice_timing = _plan_change_text_setting(db, "invoice_timing", "immediate").lower()
+    minimum_invoice_amount = _plan_change_decimal_setting(db, "minimum_invoice_amount")
+    fee_tax_rate = _plan_change_decimal_setting(db, "fee_tax_rate")
+
+    net_amount = Decimal(str(result.get("net_amount", "0")))
+    credit_amount = Decimal(str(result.get("credit_amount", "0")))
+
+    if net_amount < 0 and refund_policy == "none":
+        result["credit_amount"] = Decimal("0.00")
+        result["net_amount"] = Decimal("0.00")
+        net_amount = Decimal("0.00")
+        credit_amount = Decimal("0.00")
+
+    fee_amount = Decimal("0.00")
+    if new_price > old_price:
+        fee_amount = _plan_change_decimal_setting(db, "upgrade_fee")
+    elif new_price < old_price:
+        fee_amount = _plan_change_decimal_setting(db, "downgrade_fee")
+
+    if fee_amount > 0:
+        tax_multiplier = Decimal("1.00") + (fee_tax_rate / Decimal("100"))
+        fee_total = (fee_amount * tax_multiplier).quantize(Decimal("0.01"))
+        result["fee_amount"] = fee_total
+        net_amount = (Decimal(str(result.get("net_amount", "0"))) + fee_total).quantize(Decimal("0.01"))
+        result["net_amount"] = net_amount
+
+    result["invoice_timing"] = invoice_timing
+    result["minimum_invoice_amount"] = minimum_invoice_amount
+    result["generate_now"] = (
+        invoice_timing == "immediate"
+        and abs(Decimal(str(result.get("net_amount", "0")))) >= minimum_invoice_amount
+    )
+    result["credit_amount"] = credit_amount
+    return result
 
 
 def _calculate_proration(
@@ -882,6 +956,12 @@ class Subscriptions(ListResponseMixin):
             proration_result = _calculate_proration(
                 db, subscription, str(data["offer_id"])
             )
+            proration_result = _apply_plan_change_policy(
+                db,
+                proration_result,
+                old_price=_offer_recurring_price_amount(db, subscription.offer_id),
+                new_price=_offer_recurring_price_amount(db, str(data["offer_id"])),
+            )
 
         status = data.get("status", subscription.status)
         start_at = _ensure_utc(data.get("start_at", subscription.start_at))
@@ -978,7 +1058,7 @@ class Subscriptions(ListResponseMixin):
             _emit_offer_change_event(db, subscription, str(previous_offer_id))
 
             # Generate proration invoice/credit for the plan change
-            if proration_result and proration_result.get("net_amount"):
+            if proration_result and proration_result.get("net_amount") and proration_result.get("generate_now"):
                 old_offer = db.get(CatalogOffer, previous_offer_id)
                 new_offer = db.get(CatalogOffer, subscription.offer_id)
                 _generate_proration_invoice(

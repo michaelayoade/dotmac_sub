@@ -15,7 +15,11 @@ from app.services import auth_dependencies as auth_dep
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_audit_auth, require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
-from app.web.auth.dependencies import validate_session_token
+from app.web.auth.dependencies import (
+    AuthenticationRequired,
+    require_web_auth,
+    validate_session_token,
+)
 
 
 def _make_access_token(person_id: str, session_id: str, scopes: list[str] | None = None, roles: list[str] | None = None):
@@ -40,6 +44,25 @@ def _make_request():
         "method": "POST",
         "path": "/auth",
         "headers": [(b"user-agent", b"pytest")],
+        "client": ("127.0.0.1", 12345),
+    }
+    return Request(scope)
+
+
+def _make_web_request(
+    *,
+    method: str = "GET",
+    path: str = "/admin/network/cpes",
+    query_string: bytes = b"",
+    headers: list[tuple[bytes, bytes]] | None = None,
+):
+    scope = {
+        "type": "http",
+        "method": method,
+        "scheme": "https",
+        "path": path,
+        "query_string": query_string,
+        "headers": headers or [(b"host", b"oss.dotmac.ng")],
         "client": ("127.0.0.1", 12345),
     }
     return Request(scope)
@@ -154,6 +177,122 @@ def test_validate_session_token_accepts_system_user_cookie(db_session, monkeypat
     assert auth is not None
     assert auth["principal_type"] == "system_user"
     assert auth["principal_id"] == str(user.id)
+
+
+def test_require_web_auth_redirects_unsafe_requests_to_referer(monkeypatch, db_session):
+    monkeypatch.setattr(
+        "app.web.auth.dependencies.validate_session_token",
+        lambda request, db: None,
+    )
+    request = _make_web_request(
+        method="POST",
+        path="/admin/network/cpes",
+        headers=[
+            (b"host", b"oss.dotmac.ng"),
+            (b"referer", b"https://oss.dotmac.ng/admin/network/cpes/new?subscriber_id=123"),
+        ],
+    )
+
+    with pytest.raises(AuthenticationRequired) as exc:
+        require_web_auth(request=request, db=db_session)
+
+    assert exc.value.redirect_url == "/auth/refresh?next=/admin/network/cpes/new%3Fsubscriber_id%3D123"
+
+
+def test_require_web_auth_redirects_get_requests_to_current_path(monkeypatch, db_session):
+    monkeypatch.setattr(
+        "app.web.auth.dependencies.validate_session_token",
+        lambda request, db: None,
+    )
+    request = _make_web_request(
+        method="GET",
+        path="/admin/network/cpes",
+        query_string=b"status=active",
+        headers=[
+            (b"host", b"oss.dotmac.ng"),
+            (b"referer", b"https://oss.dotmac.ng/admin/network/cpes/new"),
+        ],
+    )
+
+    with pytest.raises(AuthenticationRequired) as exc:
+        require_web_auth(request=request, db=db_session)
+
+    assert exc.value.redirect_url == "/auth/refresh?next=/admin/network/cpes%3Fstatus%3Dactive"
+
+
+def test_require_user_auth_loads_roles_and_scopes_from_db_when_missing(db_session, person, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    role = Role(name="operator", is_active=True)
+    permission = Permission(key="tickets:read", is_active=True)
+    db_session.add_all([role, permission])
+    db_session.flush()
+    db_session.add(SubscriberRole(subscriber_id=person.id, role_id=role.id))
+    db_session.add(RolePermission(role_id=role.id, permission_id=permission.id))
+    db_session.commit()
+
+    session = AuthSession(
+        subscriber_id=person.id,
+        status=SessionStatus.active,
+        token_hash="hash",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    token = _make_access_token(str(person.id), str(session.id))
+    auth = require_user_auth(authorization=f"Bearer {token}", db=db_session)
+
+    assert "operator" in auth["roles"]
+    assert "tickets:read" in auth["scopes"]
+
+
+def test_require_audit_auth_loads_admin_role_from_db_when_jwt_has_no_claims(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    user = SystemUser(
+        first_name="Audit",
+        last_name="Admin",
+        display_name="Audit Admin",
+        email="audit-admin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = Role(name="admin", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+
+    session = AuthSession(
+        system_user_id=user.id,
+        status=SessionStatus.active,
+        token_hash="hash",
+        expires_at=datetime.now(UTC) + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    now = datetime.now(UTC)
+    token = jwt.encode(
+        {
+            "sub": str(user.id),
+            "principal_id": str(user.id),
+            "principal_type": "system_user",
+            "session_id": str(session.id),
+            "typ": "access",
+            "iat": int(now.timestamp()),
+            "exp": int((now + timedelta(minutes=15)).timestamp()),
+        },
+        "test-secret",
+        algorithm="HS256",
+    )
+
+    auth = require_audit_auth(authorization=f"Bearer {token}", db=db_session)
+    assert auth["actor_type"] == "user"
+    assert auth["actor_id"] == str(user.id)
 
 
 def test_require_audit_auth_accepts_api_key(db_session, person):

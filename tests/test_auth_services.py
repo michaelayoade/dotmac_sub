@@ -1,5 +1,6 @@
 import hashlib
 import uuid
+from unittest.mock import Mock
 
 import pytest
 from fastapi import HTTPException
@@ -320,3 +321,93 @@ def test_web_login_submit_supports_system_user(db_session, monkeypatch):
     assert response.status_code == 303
     assert response.headers.get("location") == "/admin/dashboard"
     assert "session_token=" in response.headers.get("set-cookie", "")
+
+
+def test_web_login_submit_issues_lean_session_cookie_for_system_user(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    user = SystemUser(
+        first_name="Large",
+        last_name="Admin",
+        display_name="Large Admin",
+        email="large-admin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = Role(name="admin", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+
+    credential = UserCredential(
+        system_user_id=user.id,
+        provider=AuthProvider.local,
+        username="large-admin@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    response = web_auth_service.login_submit(
+        _make_request(),
+        db_session,
+        "large-admin@example.com",
+        "secret",
+        False,
+        "",
+    )
+
+    cookie_header = response.headers.get("set-cookie", "")
+    assert "session_token=" in cookie_header
+    assert "roles" not in cookie_header
+    assert "scopes" not in cookie_header
+
+
+def test_web_refresh_issues_session_cookie_via_module_helper(monkeypatch, db_session):
+    request = Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/auth/refresh",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+        }
+    )
+
+    monkeypatch.setattr(
+        web_auth_service.AuthFlow,
+        "resolve_refresh_token",
+        lambda _request, _authorization, _db: "refresh-token",
+    )
+    monkeypatch.setattr(
+        web_auth_service.auth_flow_service.auth_flow,
+        "refresh",
+        lambda _db, _refresh_token, _request: {
+            "access_token": "access-token",
+            "refresh_token": "rotated-refresh-token",
+        },
+    )
+    issue_session = Mock(return_value="web-session-token")
+    monkeypatch.setattr(
+        web_auth_service.auth_flow_service,
+        "issue_web_session_token",
+        issue_session,
+    )
+
+    response = web_auth_service.refresh(request, db_session, next_url="/admin/dashboard")
+
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/admin/dashboard"
+    issue_session.assert_called_once_with(db_session, "access-token")
+    cookie_headers = [
+        value.decode("latin-1")
+        for key, value in response.raw_headers
+        if key.lower() == b"set-cookie"
+    ]
+    assert any("session_token=web-session-token" in header for header in cookie_headers)
+    assert any("rotated-refresh-token" in header for header in cookie_headers)

@@ -22,6 +22,18 @@ from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
+
+def _bao_secret(path: str, field: str) -> str | None:
+    """Resolve a secret from OpenBao, returning None on failure."""
+    try:
+        from app.services.secrets import get_secret
+
+        val = get_secret(path, field)
+        return val if val else None
+    except Exception:
+        return None
+
+
 SMTP_DEFAULT_SENDER_KEY_SETTING = "smtp_default_sender_key"
 SMTP_SENDER_KEY_PREFIX = "smtp_sender."
 SMTP_ACTIVITY_KEY_PREFIX = "smtp_activity_sender."
@@ -104,7 +116,7 @@ def _legacy_smtp_config(db: Session | None) -> dict:
         "host": _env_value("SMTP_HOST") or _setting_value(db, "smtp_host") or "localhost",
         "port": _env_int("SMTP_PORT", 587),
         "username": username,
-        "password": _env_value("SMTP_PASSWORD") or _setting_value(db, "smtp_password"),
+        "password": _env_value("SMTP_PASSWORD") or _setting_value(db, "smtp_password") or _bao_secret("notifications", "smtp_password"),
         "use_tls": use_tls,
         "use_ssl": use_ssl,
         "from_email": from_email,

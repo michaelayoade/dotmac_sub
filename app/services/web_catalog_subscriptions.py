@@ -498,6 +498,10 @@ def _generated_service_password(subscriber: Subscriber) -> str:
     return str(subscriber.id)
 
 
+def _pppoe_auto_generate_enabled(db: Session) -> bool:
+    return settings_spec.resolve_value(db, SettingDomain.radius, "pppoe_auto_generate_enabled") is True
+
+
 def _pool_allows_network_broadcast(pool: IpPool | None) -> bool:
     notes = str(getattr(pool, "notes", "") or "")
     for raw_line in notes.splitlines():
@@ -640,6 +644,8 @@ def apply_generated_service_credentials(db: Session, subscription: dict[str, obj
             subscriber_id,
             exc_info=True,
         )
+        return
+    if _pppoe_auto_generate_enabled(db):
         return
     if not str(subscription.get("login") or "").strip():
         subscription["login"] = _generated_service_login(subscriber)
@@ -1858,20 +1864,47 @@ def create_subscription_with_audit(
 
     subscriber = db.get(Subscriber, created.subscriber_id)
     if subscriber:
+        pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
+        existing_credential = _current_access_credential(db, created.subscriber_id)
+        if not existing_credential and str(getattr(created, "status", "") or "").strip().lower() == "active":
+            try:
+                from app.services.pppoe_credentials import auto_generate_pppoe_credential
+
+                auto_generate_pppoe_credential(
+                    db,
+                    str(created.subscriber_id),
+                    radius_profile_id=str(created.radius_profile_id) if created.radius_profile_id else None,
+                )
+                existing_credential = _current_access_credential(db, created.subscriber_id)
+            except Exception:
+                logger.warning(
+                    "PPPoE credential auto-generation failed during web subscription create for %s",
+                    created.id,
+                    exc_info=True,
+                )
         generated_login = _generated_service_login(subscriber)
         generated_password = _generated_service_password(subscriber)
-        selected_login = str(form.get("login") or "").strip() or str(created.login or "").strip() or generated_login
-        selected_password = str(form.get("service_password") or "").strip() or generated_password
-        created = update_subscription(
-            db,
-            str(created.id),
-            {
-                "login": selected_login,
-                "service_status_raw": "permanent_static"
-                if str(form.get("ipv4_method") or "").strip().lower() == "permanent_static"
-                else "dynamic",
-            },
+        explicit_login = str(form.get("login") or "").strip()
+        selected_login = (
+            explicit_login
+            or str(getattr(existing_credential, "username", "") or "").strip()
+            or str(created.login or "").strip()
+            or ("" if pppoe_auto_generate else generated_login)
         )
+        explicit_password = str(form.get("service_password") or "").strip()
+        selected_password = explicit_password or (
+            None
+            if pppoe_auto_generate or (existing_credential and getattr(existing_credential, "secret_hash", None))
+            else generated_password
+        )
+        update_payload = {
+            "service_status_raw": "permanent_static"
+            if str(form.get("ipv4_method") or "").strip().lower() == "permanent_static"
+            else "dynamic",
+        }
+        if selected_login:
+            update_payload["login"] = selected_login
+        created = update_subscription(db, str(created.id), update_payload)
 
     selected_block_ids = [
         str(value).strip()

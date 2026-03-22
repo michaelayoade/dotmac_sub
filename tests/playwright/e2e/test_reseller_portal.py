@@ -26,7 +26,7 @@ class TestResellerLogin:
         page.goto()
         page.expect_loaded()
         # Should stay on login page without credentials
-        expect(anon_page).to_have_url("**/reseller/auth/login**")
+        page.expect_url_contains("/reseller/auth/login")
 
 
 class TestResellerDashboard:

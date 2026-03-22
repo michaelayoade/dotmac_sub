@@ -1,3 +1,5 @@
+from uuid import UUID
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
 from sqlalchemy.orm import Session
 
@@ -35,11 +37,30 @@ def create_geo_location(payload: GeoLocationCreate, db: Session = Depends(get_db
 
 
 @router.get(
+    "/locations/nearby",
+    response_model=list[GeoLocationRead],
+    tags=["gis-spatial"],
+)
+def find_nearby_locations(
+    latitude: float = Query(..., ge=-90, le=90, description="Center point latitude"),
+    longitude: float = Query(..., ge=-180, le=180, description="Center point longitude"),
+    radius: float = Query(..., gt=0, le=100000, description="Search radius in meters"),
+    location_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    """Find locations within a radius of a point using PostGIS spatial query."""
+    return gis_service.geo_locations.find_nearby(
+        db, latitude, longitude, radius, location_type, limit
+    )
+
+
+@router.get(
     "/locations/{location_id}",
     response_model=GeoLocationRead,
     tags=["gis-locations"],
 )
-def get_geo_location(location_id: str, db: Session = Depends(get_db)):
+def get_geo_location(location_id: UUID, db: Session = Depends(get_db)):
     return gis_service.geo_locations.get(db, location_id)
 
 
@@ -86,7 +107,7 @@ def list_geo_locations(
     tags=["gis-locations"],
 )
 def update_geo_location(
-    location_id: str, payload: GeoLocationUpdate, db: Session = Depends(get_db)
+    location_id: UUID, payload: GeoLocationUpdate, db: Session = Depends(get_db)
 ):
     return gis_service.geo_locations.update(db, location_id, payload)
 
@@ -96,42 +117,8 @@ def update_geo_location(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["gis-locations"],
 )
-def delete_geo_location(location_id: str, db: Session = Depends(get_db)):
+def delete_geo_location(location_id: UUID, db: Session = Depends(get_db)):
     gis_service.geo_locations.delete(db, location_id)
-
-
-@router.get(
-    "/locations/nearby",
-    response_model=list[GeoLocationRead],
-    tags=["gis-spatial"],
-)
-def find_nearby_locations(
-    latitude: float = Query(..., ge=-90, le=90, description="Center point latitude"),
-    longitude: float = Query(..., ge=-180, le=180, description="Center point longitude"),
-    radius: float = Query(..., gt=0, le=100000, description="Search radius in meters"),
-    location_type: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
-    db: Session = Depends(get_db),
-):
-    """Find locations within a radius of a point using PostGIS spatial query."""
-    return gis_service.geo_locations.find_nearby(
-        db, latitude, longitude, radius, location_type, limit
-    )
-
-
-@router.get(
-    "/locations/in-area/{area_id}",
-    response_model=list[GeoLocationRead],
-    tags=["gis-spatial"],
-)
-def find_locations_in_area(
-    area_id: str,
-    location_type: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
-    db: Session = Depends(get_db),
-):
-    """Find all locations within a GeoArea polygon."""
-    return gis_service.geo_locations.find_in_area(db, area_id, location_type, limit)
 
 
 @router.post(
@@ -145,11 +132,26 @@ def create_geo_area(payload: GeoAreaCreate, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/areas/containing-point",
+    response_model=list[GeoAreaRead],
+    tags=["gis-spatial"],
+)
+def find_areas_containing_point(
+    latitude: float = Query(..., ge=-90, le=90, description="Point latitude"),
+    longitude: float = Query(..., ge=-180, le=180, description="Point longitude"),
+    area_type: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Find all areas that contain a given point."""
+    return gis_service.geo_areas.find_containing(db, latitude, longitude, area_type)
+
+
+@router.get(
     "/areas/{area_id}",
     response_model=GeoAreaRead,
     tags=["gis-areas"],
 )
-def get_geo_area(area_id: str, db: Session = Depends(get_db)):
+def get_geo_area(area_id: UUID, db: Session = Depends(get_db)):
     return gis_service.geo_areas.get(db, area_id)
 
 
@@ -191,7 +193,7 @@ def list_geo_areas(
     response_model=GeoAreaRead,
     tags=["gis-areas"],
 )
-def update_geo_area(area_id: str, payload: GeoAreaUpdate, db: Session = Depends(get_db)):
+def update_geo_area(area_id: UUID, payload: GeoAreaUpdate, db: Session = Depends(get_db)):
     return gis_service.geo_areas.update(db, area_id, payload)
 
 
@@ -200,7 +202,7 @@ def update_geo_area(area_id: str, payload: GeoAreaUpdate, db: Session = Depends(
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["gis-areas"],
 )
-def delete_geo_area(area_id: str, db: Session = Depends(get_db)):
+def delete_geo_area(area_id: UUID, db: Session = Depends(get_db)):
     gis_service.geo_areas.delete(db, area_id)
 
 
@@ -210,7 +212,7 @@ def delete_geo_area(area_id: str, db: Session = Depends(get_db)):
     tags=["gis-spatial"],
 )
 def check_area_contains_point(
-    area_id: str,
+    area_id: UUID,
     latitude: float = Query(..., ge=-90, le=90, description="Point latitude"),
     longitude: float = Query(..., ge=-180, le=180, description="Point longitude"),
     db: Session = Depends(get_db),
@@ -221,18 +223,18 @@ def check_area_contains_point(
 
 
 @router.get(
-    "/areas/containing-point",
-    response_model=list[GeoAreaRead],
+    "/locations/in-area/{area_id}",
+    response_model=list[GeoLocationRead],
     tags=["gis-spatial"],
 )
-def find_areas_containing_point(
-    latitude: float = Query(..., ge=-90, le=90, description="Point latitude"),
-    longitude: float = Query(..., ge=-180, le=180, description="Point longitude"),
-    area_type: str | None = None,
+def find_locations_in_area(
+    area_id: str,
+    location_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
 ):
-    """Find all areas that contain a given point."""
-    return gis_service.geo_areas.find_containing(db, latitude, longitude, area_type)
+    """Find all locations within a GeoArea polygon."""
+    return gis_service.geo_locations.find_in_area(db, area_id, location_type, limit)
 
 
 @router.get(
@@ -262,7 +264,7 @@ def create_geo_layer(payload: GeoLayerCreate, db: Session = Depends(get_db)):
     response_model=GeoLayerRead,
     tags=["gis-layers"],
 )
-def get_geo_layer(layer_id: str, db: Session = Depends(get_db)):
+def get_geo_layer(layer_id: UUID, db: Session = Depends(get_db)):
     return gis_service.geo_layers.get(db, layer_id)
 
 
@@ -298,7 +300,7 @@ def list_geo_layers(
     response_model=GeoLayerRead,
     tags=["gis-layers"],
 )
-def update_geo_layer(layer_id: str, payload: GeoLayerUpdate, db: Session = Depends(get_db)):
+def update_geo_layer(layer_id: UUID, payload: GeoLayerUpdate, db: Session = Depends(get_db)):
     return gis_service.geo_layers.update(db, layer_id, payload)
 
 
@@ -307,7 +309,7 @@ def update_geo_layer(layer_id: str, payload: GeoLayerUpdate, db: Session = Depen
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["gis-layers"],
 )
-def delete_geo_layer(layer_id: str, db: Session = Depends(get_db)):
+def delete_geo_layer(layer_id: UUID, db: Session = Depends(get_db)):
     gis_service.geo_layers.delete(db, layer_id)
 
 
@@ -386,3 +388,103 @@ def sync_gis_sources(
         deactivate_missing,
         background,
     )
+
+
+@router.get(
+    "/coverage-check",
+    status_code=status.HTTP_200_OK,
+    tags=["gis-coverage"],
+)
+def coverage_check(
+    latitude: float = Query(...),
+    longitude: float = Query(...),
+    area_type: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    """Check if a point is within any active service/coverage area.
+
+    Returns matching areas and a boolean `covered` flag.
+    Useful for verifying subscriber address is serviceable before signup.
+    """
+    areas = gis_service.geo_areas.find_containing(
+        db=db,
+        latitude=latitude,
+        longitude=longitude,
+        area_type=area_type,
+    )
+    if area_type is None:
+        areas = [
+            area
+            for area in areas
+            if area.area_type in {gis_service.GeoAreaType.coverage, gis_service.GeoAreaType.service_area}
+        ]
+    return {
+        "covered": len(areas) > 0,
+        "latitude": latitude,
+        "longitude": longitude,
+        "matching_areas": [
+            {
+                "id": str(a.id),
+                "name": a.name,
+                "area_type": a.area_type.value if hasattr(a.area_type, "value") else str(a.area_type),
+            }
+            for a in areas
+        ],
+        "count": len(areas),
+    }
+
+
+@router.get(
+    "/subscriber-locations",
+    status_code=status.HTTP_200_OK,
+    tags=["gis-coverage"],
+)
+def subscriber_locations(
+    limit: int = Query(default=500, le=2000),
+    db: Session = Depends(get_db),
+):
+    """Get subscriber locations with coordinates for map display.
+
+    Returns GeoJSON-compatible list of subscriber address points.
+    """
+    from sqlalchemy import select
+
+    from app.models.subscriber import Address, Subscriber
+
+    stmt = (
+        select(
+            Subscriber.id,
+            (Subscriber.first_name + " " + Subscriber.last_name).label("name"),
+            Subscriber.status,
+            Address.latitude,
+            Address.longitude,
+            Address.city,
+        )
+        .join(Address, Address.subscriber_id == Subscriber.id, isouter=True)
+        .where(
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+        )
+        .order_by(Subscriber.created_at.desc())
+        .limit(limit)
+    )
+    rows = db.execute(stmt).all()
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(r.longitude), float(r.latitude)],
+                },
+                "properties": {
+                    "id": str(r.id),
+                    "name": r.name or "",
+                    "status": r.status.value if hasattr(r.status, "value") else str(r.status or ""),
+                    "city": r.city or "",
+                },
+            }
+            for r in rows
+        ],
+    }

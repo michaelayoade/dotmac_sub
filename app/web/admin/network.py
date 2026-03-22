@@ -6,6 +6,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services.auth_dependencies import require_permission
 from app.services import web_network_core_devices as web_network_core_devices_service
 
 templates = Jinja2Templates(directory="templates")
@@ -24,7 +25,7 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
     }
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:hub:read"))])
 def network_hub(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """Network hub landing page."""
     return templates.TemplateResponse(
@@ -33,7 +34,7 @@ def network_hub(request: Request, db: Session = Depends(get_db)) -> HTMLResponse
     )
 
 
-@router.get("/devices", response_class=HTMLResponse)
+@router.get("/devices", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:read"))])
 def devices_list(
     request: Request,
     device_type: str | None = None,
@@ -51,7 +52,7 @@ def devices_list(
     return templates.TemplateResponse("admin/network/devices/index.html", context)
 
 
-@router.get("/devices/search", response_class=HTMLResponse)
+@router.get("/devices/search", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:read"))])
 def devices_search(request: Request, search: str = "", db: Session = Depends(get_db)) -> HTMLResponse:
     devices = web_network_core_devices_service.devices_search_data(db, search)
     return templates.TemplateResponse(
@@ -60,7 +61,7 @@ def devices_search(request: Request, search: str = "", db: Session = Depends(get
     )
 
 
-@router.get("/devices/filter", response_class=HTMLResponse)
+@router.get("/devices/filter", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:read"))])
 def devices_filter(
     request: Request,
     search: str | None = None,
@@ -77,7 +78,7 @@ def devices_filter(
     )
 
 
-@router.post("/devices/discover", response_class=HTMLResponse)
+@router.post("/devices/discover", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:write"))])
 def devices_discover(request: Request, db: Session = Depends(get_db)):
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
@@ -86,13 +87,13 @@ def devices_discover(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/devices/create", response_class=HTMLResponse)
+@router.get("/devices/create", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:read"))])
 def device_create(request: Request, db: Session = Depends(get_db)):
     # Redirect to the more specific device creation pages.
     return RedirectResponse(url="/admin/network/core-devices/new", status_code=302)
 
 
-@router.get("/devices/{device_id}", response_class=HTMLResponse)
+@router.get("/devices/{device_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:read"))])
 def device_detail(request: Request, device_id: str, db: Session = Depends(get_db)) -> Response:
     redirect_url = web_network_core_devices_service.resolve_device_redirect(db, device_id)
     if redirect_url:
@@ -105,7 +106,7 @@ def device_detail(request: Request, device_id: str, db: Session = Depends(get_db
     )
 
 
-@router.post("/devices/{device_id}/ping", response_class=HTMLResponse)
+@router.post("/devices/{device_id}/ping", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:write"))])
 def device_ping(request: Request, device_id: str, db: Session = Depends(get_db)):
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
@@ -114,7 +115,7 @@ def device_ping(request: Request, device_id: str, db: Session = Depends(get_db))
     )
 
 
-@router.post("/devices/{device_id}/reboot", response_class=HTMLResponse)
+@router.post("/devices/{device_id}/reboot", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:device:write"))])
 def device_reboot(request: Request, device_id: str, db: Session = Depends(get_db)):
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
@@ -123,7 +124,7 @@ def device_reboot(request: Request, device_id: str, db: Session = Depends(get_db
     )
 
 
-@router.get("/map", response_class=HTMLResponse)
+@router.get("/map", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:map:read"))])
 def comprehensive_network_map(request: Request, db: Session = Depends(get_db)):
     """Comprehensive network map showing all infrastructure and customers."""
     from app.services import network_map as network_map_service

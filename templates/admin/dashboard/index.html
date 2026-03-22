@@ -17,6 +17,10 @@
 {% set ont_on = onu_summary.online if onu_summary else 0 %}
 {% set ont_total = onu_summary.total if onu_summary else 0 %}
 {% set ont_low_signal = onu_summary.low_signal if onu_summary else 0 %}
+{% set pon_up = pon_interface_summary.up if pon_interface_summary else 0 %}
+{% set pon_down = pon_interface_summary.down if pon_interface_summary else 0 %}
+{% set pon_unknown = pon_interface_summary.unknown if pon_interface_summary else 0 %}
+{% set pon_total = pon_interface_summary.total if pon_interface_summary else 0 %}
 {% set total_alarms_count = stats.alarms_critical + stats.alarms_major + stats.alarms_minor + stats.alarms_warning %}
 {% set overdue_receivables = (stats.ar_30|default(0)) + (stats.ar_60|default(0)) + (stats.ar_90|default(0)) %}
 
@@ -128,11 +132,11 @@
         ) }}
         {% endif %}
         {{ kpi_tile(
-            "Orders",
-            pending_orders,
-            "/admin/provisioning",
-            "amber",
-            "Provisioning queue"
+            "PON Interfaces",
+            "%d / %d" | format(pon_up, pon_total),
+            "/admin/network/olts",
+            "cyan",
+            "%d down, %d unknown" % (pon_down, pon_unknown) if pon_total else "No monitored PON interfaces"
         ) }}
     </section>
 

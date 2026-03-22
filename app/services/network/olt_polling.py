@@ -1198,6 +1198,11 @@ def _push_signal_metrics(db: Session) -> int:
     return len(lines)
 
 
+def push_signal_metrics_to_victoriametrics(db: Session) -> int:
+    """Public wrapper for pushing current ONT signal metrics to VictoriaMetrics."""
+    return _push_signal_metrics(db)
+
+
 def _push_olt_health_metrics(health_map: dict[str, OltHealthReading]) -> int:
     """Push OLT health metrics to VictoriaMetrics.
 

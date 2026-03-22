@@ -565,9 +565,16 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
 
 
 def get_technician_report_data(db: Session) -> dict:
-    from app.models.provisioning import ServiceOrderStatus
+    from sqlalchemy import func, select
 
-    total_technicians = 0
+    from app.models.provisioning import (
+        AppointmentStatus,
+        InstallAppointment,
+        ProvisioningTask,
+        ServiceOrderStatus,
+        TaskStatus,
+    )
+
     all_orders = operations_service.service_orders.list(
         db=db,
         subscriber_id=None,
@@ -585,17 +592,96 @@ def get_technician_report_data(db: Session) -> dict:
         key=lambda x: x.updated_at or datetime.min,
         reverse=True,
     )[:10]
+
+    # Real technician count from appointments + provisioning tasks
+    tech_names: set[str] = set()
+    appt_techs = db.scalars(
+        select(InstallAppointment.technician)
+        .where(InstallAppointment.technician.isnot(None))
+        .distinct()
+    ).all()
+    tech_names.update(t for t in appt_techs if t)
+    task_assignees = db.scalars(
+        select(ProvisioningTask.assigned_to)
+        .where(ProvisioningTask.assigned_to.isnot(None))
+        .distinct()
+    ).all()
+    tech_names.update(t for t in task_assignees if t)
+    total_technicians = len(tech_names)
+
+    # Average completion hours from provisioning tasks with start/end times
+    completed_tasks = db.execute(
+        select(
+            ProvisioningTask.started_at,
+            ProvisioningTask.completed_at,
+        ).where(
+            ProvisioningTask.status == TaskStatus.completed,
+            ProvisioningTask.started_at.isnot(None),
+            ProvisioningTask.completed_at.isnot(None),
+        )
+    ).all()
+    if completed_tasks:
+        total_hours = 0.0
+        counted = 0
+        for t in completed_tasks:
+            t_start = _ensure_aware_datetime(t.started_at)
+            t_end = _ensure_aware_datetime(t.completed_at)
+            if t_start and t_end:
+                total_hours += max(0.0, (t_end - t_start).total_seconds() / 3600)
+                counted += 1
+        avg_completion_hours = round(total_hours / max(1, counted), 1)
+    else:
+        avg_completion_hours = 0.0
+
+    # First visit rate from appointments (completed vs no-show/canceled)
+    total_appointments = db.scalar(
+        select(func.count(InstallAppointment.id))
+    ) or 0
+    completed_appointments = db.scalar(
+        select(func.count(InstallAppointment.id))
+        .where(InstallAppointment.status == AppointmentStatus.completed)
+    ) or 0
+    no_show_count = db.scalar(
+        select(func.count(InstallAppointment.id))
+        .where(InstallAppointment.status == AppointmentStatus.no_show)
+    ) or 0
+    if total_appointments > 0:
+        first_visit_rate = round((completed_appointments / total_appointments) * 100, 1)
+    else:
+        first_visit_rate = 0.0
+
+    # Per-technician stats
     technician_stats: list[dict[str, object]] = []
-    technician_stats.sort(key=lambda x: str(x.get("name", "")))
+    for tech_name in sorted(tech_names):
+        tech_total = db.scalar(
+            select(func.count(InstallAppointment.id))
+            .where(InstallAppointment.technician == tech_name)
+        ) or 0
+        tech_completed = db.scalar(
+            select(func.count(InstallAppointment.id))
+            .where(
+                InstallAppointment.technician == tech_name,
+                InstallAppointment.status == AppointmentStatus.completed,
+            )
+        ) or 0
+        technician_stats.append({
+            "name": tech_name,
+            "total_jobs": tech_total,
+            "completed_jobs": tech_completed,
+            "avg_hours": avg_completion_hours,
+            "rating": round((tech_completed / tech_total * 5) if tech_total > 0 else 0, 1),
+        })
+
     job_type_breakdown: dict[str, int] = {}
     for order in all_orders:
         status_name = order.status.value if order.status else "unknown"
         job_type_breakdown[status_name] = job_type_breakdown.get(status_name, 0) + 1
+
     return {
         "total_technicians": total_technicians,
         "jobs_completed": jobs_completed,
-        "avg_completion_hours": 2.5,
-        "first_visit_rate": 85.0,
+        "avg_completion_hours": avg_completion_hours,
+        "first_visit_rate": first_visit_rate,
         "technician_stats": technician_stats[:10],
         "job_type_breakdown": job_type_breakdown,
         "recent_completions": recent_completions,

@@ -92,6 +92,24 @@ def _period_bounds(period: str, now: datetime) -> tuple[datetime | None, datetim
     return None, None
 
 
+def _daily_chart_window(
+    period_start: datetime | None,
+    period_end: datetime | None,
+    now: datetime,
+) -> tuple[datetime, datetime, str]:
+    """Return chart bounds and grouping granularity for the dashboard payment chart."""
+    if period_start is None or period_end is None:
+        chart_end = datetime(now.year, now.month, now.day, tzinfo=UTC) + timedelta(days=1)
+        chart_start = chart_end - timedelta(days=30)
+    else:
+        chart_start = period_start
+        chart_end = period_end
+
+    total_days = max((chart_end - chart_start).days, 1)
+    granularity = "month" if total_days > 92 else "day"
+    return chart_start, chart_end, granularity
+
+
 def _subscriber_location_expr():
     return func.lower(
         func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city, "")
@@ -546,26 +564,63 @@ class BillingReporting:
             "values": list(method_totals.values()),
         }
 
-        # --- Daily payments (current month, SQL GROUP BY day) ---
-        days_in_month = calendar.monthrange(now.year, now.month)[1]
-        month_start = datetime(now.year, now.month, 1, tzinfo=UTC)
-        month_end = _next_month_start(month_start)
+        # --- Daily/monthly payments (period-scoped, adaptive aggregation) ---
+        chart_start, chart_end, chart_granularity = _daily_chart_window(period_start, period_end, now)
+        payment_ts = func.coalesce(Payment.paid_at, Payment.created_at)
+        if chart_granularity == "month":
+            dp_stmt = (
+                select(
+                    func.extract("year", payment_ts).label("yr"),
+                    func.extract("month", payment_ts).label("mo"),
+                    func.sum(Payment.amount).label("total"),
+                )
+                .where(
+                    Payment.status == PaymentStatus.succeeded,
+                    payment_ts >= chart_start,
+                    payment_ts < chart_end,
+                )
+                .group_by("yr", "mo")
+            )
+            dp_stmt = _scope_payment_stmt(dp_stmt)
+            dp_rows = {
+                (int(r.yr), int(r.mo)): float(r.total or 0)
+                for r in db.execute(dp_stmt).all()
+            }
 
-        dp_stmt = select(
-            func.extract("day", func.coalesce(Payment.paid_at, Payment.created_at)).label("day"),
-            func.sum(Payment.amount).label("total"),
-        ).where(
-            Payment.status == PaymentStatus.succeeded,
-            func.coalesce(Payment.paid_at, Payment.created_at) >= month_start,
-            func.coalesce(Payment.paid_at, Payment.created_at) < month_end,
-        ).group_by("day")
-        dp_stmt = _scope_payment_stmt(dp_stmt)
-        dp_rows = {int(r.day): float(r.total) for r in db.execute(dp_stmt).all()}
+            labels: list[str] = []
+            values: list[float] = []
+            cursor = datetime(chart_start.year, chart_start.month, 1, tzinfo=UTC)
+            end_cursor = datetime(chart_end.year, chart_end.month, 1, tzinfo=UTC)
+            while cursor < end_cursor:
+                labels.append(cursor.strftime("%b %Y"))
+                values.append(dp_rows.get((cursor.year, cursor.month), 0.0))
+                cursor = _next_month_start(cursor)
+            daily_payments = {"labels": labels, "values": values}
+        else:
+            dp_stmt = (
+                select(
+                    cast(func.date(payment_ts), String).label("day_key"),
+                    func.sum(Payment.amount).label("total"),
+                )
+                .where(
+                    Payment.status == PaymentStatus.succeeded,
+                    payment_ts >= chart_start,
+                    payment_ts < chart_end,
+                )
+                .group_by("day_key")
+            )
+            dp_stmt = _scope_payment_stmt(dp_stmt)
+            dp_rows = {str(r.day_key): float(r.total or 0) for r in db.execute(dp_stmt).all()}
 
-        daily_payments = {
-            "labels": [str(day) for day in range(1, days_in_month + 1)],
-            "values": [dp_rows.get(day, 0.0) for day in range(1, days_in_month + 1)],
-        }
+            labels = []
+            values = []
+            cursor = chart_start
+            while cursor < chart_end:
+                day_key = cursor.date().isoformat()
+                labels.append(cursor.strftime("%b %d"))
+                values.append(dp_rows.get(day_key, 0.0))
+                cursor += timedelta(days=1)
+            daily_payments = {"labels": labels, "values": values}
 
         # --- Invoicing period overlay (last 6 months, SQL) ---
         inv_overlay_stmt = select(
@@ -767,12 +822,13 @@ class BillingReporting:
         }
 
         # --- Recent invoices (last 10) ---
-        recent_stmt = (
-            select(Invoice)
-            .options(
-                joinedload(Invoice.account).joinedload(Subscriber.organization),
-            )
+        recent_stmt = select(Invoice).options(
+            joinedload(Invoice.account).joinedload(Subscriber.organization),
         )
+        if period_start is not None:
+            recent_stmt = recent_stmt.where(Invoice.created_at >= period_start)
+        if period_end is not None:
+            recent_stmt = recent_stmt.where(Invoice.created_at < period_end)
         recent_stmt = _scope_invoice_stmt(recent_stmt)
         recent_stmt = recent_stmt.order_by(Invoice.created_at.desc()).limit(10)
         recent_invoices = db.scalars(recent_stmt).all()

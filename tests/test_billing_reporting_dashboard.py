@@ -216,3 +216,60 @@ def test_dashboard_stats_include_payment_method_and_daily_payments(db_session, s
     assert len(daily["labels"]) >= 28
     assert len(daily["labels"]) == len(daily["values"])
     assert sum(daily["values"]) >= 70.0
+
+
+def test_dashboard_stats_daily_payments_follow_selected_period(db_session, subscriber):
+    now = datetime.now(UTC)
+    cash_method = _create_payment_method(
+        db_session,
+        account_id=subscriber.id,
+        method_type=PaymentMethodType.cash,
+    )
+    _create_payment(
+        db_session,
+        account_id=subscriber.id,
+        status=PaymentStatus.succeeded,
+        amount="40.00",
+        created_at=now,
+        payment_method_id=cash_method.id,
+    )
+    _create_payment(
+        db_session,
+        account_id=subscriber.id,
+        status=PaymentStatus.succeeded,
+        amount="30.00",
+        created_at=now - timedelta(days=31),
+        payment_method_id=cash_method.id,
+    )
+
+    this_month = billing_reporting.get_dashboard_stats(db_session, period="this_month")
+    last_month = billing_reporting.get_dashboard_stats(db_session, period="last_month")
+
+    assert sum(this_month["daily_payments"]["values"]) == 40.0
+    assert sum(last_month["daily_payments"]["values"]) == 30.0
+
+
+def test_dashboard_stats_recent_invoices_follow_selected_period(db_session, subscriber):
+    now = datetime.now(UTC)
+    current_invoice = _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        status=InvoiceStatus.paid,
+        total="120.00",
+        balance_due="0.00",
+        created_at=now,
+    )
+    previous_invoice = _create_invoice(
+        db_session,
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        total="80.00",
+        balance_due="80.00",
+        created_at=now - timedelta(days=31),
+    )
+
+    this_month = billing_reporting.get_dashboard_stats(db_session, period="this_month")
+    last_month = billing_reporting.get_dashboard_stats(db_session, period="last_month")
+
+    assert [invoice.id for invoice in this_month["invoices"]] == [current_invoice.id]
+    assert [invoice.id for invoice in last_month["invoices"]] == [previous_invoice.id]

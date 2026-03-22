@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from playwright.sync_api import Page, expect
+from playwright.sync_api import Error as PlaywrightError
 
 from tests.playwright.pages.base_page import BasePage
 
@@ -12,9 +13,18 @@ class AuditPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/system/audit") -> None:
         """Navigate to the audit log."""
-        super().goto(path)
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                self.page.goto(f"{self.base_url}{path}", wait_until="commit", timeout=30000)
+                return
+            except PlaywrightError as exc:
+                last_error = exc
+        if last_error:
+            raise last_error
 
     def expect_loaded(self) -> None:
         """Assert the audit page is loaded."""

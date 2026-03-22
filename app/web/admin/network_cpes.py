@@ -1,5 +1,6 @@
 """Admin network CPE management routes."""
 
+import json
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -326,11 +327,17 @@ def _cpe_action_response(result: object) -> JSONResponse:
     assert isinstance(result, ActionResult)  # noqa: S101
     status_code = 200 if result.success else 502
     headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
+        # HTTP header values must be latin-1 encodable; ensure_ascii keeps the
+        # JSON payload header-safe while preserving the original response body.
+        "HX-Trigger": json.dumps(
+            {
+                "showToast": {
+                    "message": result.message,
+                    "type": "success" if result.success else "error",
+                }
+            },
+            ensure_ascii=True,
+        )
     }
     return JSONResponse(
         {"success": result.success, "message": result.message},

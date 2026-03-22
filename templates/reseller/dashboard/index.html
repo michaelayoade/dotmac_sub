@@ -15,6 +15,36 @@
 
 {% block content %}
 <div class="mt-6 space-y-6 lg:space-y-8 stagger-children">
+    {% if summary.alerts %}
+    <!-- Alert Notifications -->
+    <div class="space-y-3">
+        {% for alert in summary.alerts %}
+        <a href="{{ alert.action_url }}" class="flex items-center gap-3 rounded-xl border p-4 transition-all hover:shadow-md
+            {% if alert.level == 'danger' %}border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-900/20
+            {% elif alert.level == 'warning' %}border-amber-200 bg-amber-50 dark:border-amber-800 dark:bg-amber-900/20
+            {% else %}border-blue-200 bg-blue-50 dark:border-blue-800 dark:bg-blue-900/20{% endif %}">
+            {% if alert.level == 'danger' %}
+            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/40">
+                <svg class="h-5 w-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 16.5c-.77.833.192 2.5 1.732 2.5z"/></svg>
+            </div>
+            <p class="text-sm font-medium text-rose-800 dark:text-rose-300">{{ alert.message }}</p>
+            {% elif alert.level == 'warning' %}
+            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/40">
+                <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            </div>
+            <p class="text-sm font-medium text-amber-800 dark:text-amber-300">{{ alert.message }}</p>
+            {% else %}
+            <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/40">
+                <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/></svg>
+            </div>
+            <p class="text-sm font-medium text-blue-800 dark:text-blue-300">{{ alert.message }}</p>
+            {% endif %}
+            <svg class="ml-auto h-4 w-4 flex-shrink-0 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     <!-- Stats Grid -->
     <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4 xl:gap-6">
         <!-- Accounts Card -->

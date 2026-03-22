@@ -253,9 +253,11 @@ def test_get_user_active_subscription_allows_blocked_subscription(db_session, su
 def test_process_bandwidth_stream_resolves_network_device_from_nas(
     db_session, subscription, network_device
 ):
+    subscription_id = subscription.id
+    network_device_id = network_device.id
     nas = NasDevice(
         name="NAS-1",
-        network_device_id=network_device.id,
+        network_device_id=network_device_id,
     )
     db_session.add(nas)
     db_session.commit()
@@ -273,11 +275,11 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
                     [
                         (
                             b"1-0",
-                            {
-                                b"subscription_id": str(subscription.id).encode(),
-                                b"nas_device_id": str(nas.id).encode(),
-                                b"rx_bps": b"1000",
-                                b"tx_bps": b"2000",
+                                {
+                                    b"subscription_id": str(subscription_id).encode(),
+                                    b"nas_device_id": str(nas.id).encode(),
+                                    b"rx_bps": b"1000",
+                                    b"tx_bps": b"2000",
                                 b"sample_at": datetime.now(UTC).isoformat().encode(),
                             },
                         )
@@ -302,7 +304,7 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
     assert result["processed"] == 1
     sample = bandwidth_service.bandwidth_samples.list(
         db_session,
-        subscription_id=str(subscription.id),
+        subscription_id=str(subscription_id),
         device_id=None,
         interface_id=None,
         order_by="created_at",
@@ -310,4 +312,4 @@ def test_process_bandwidth_stream_resolves_network_device_from_nas(
         limit=1,
         offset=0,
     )[0]
-    assert sample.device_id == network_device.id
+    assert sample.device_id == network_device_id

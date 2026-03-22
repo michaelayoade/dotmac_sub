@@ -1,642 +1,544 @@
-# DotMac Sub User Guide
+# DotMac Sub — User Guide
 
-A comprehensive guide for using the DotMac Subscription Management platform.
+**Version:** 1.1 | **Date:** March 2026 | **For:** ISP Administrators & Technical Staff
+
+This guide is optimized for daily operators. Start with the quick-start checklist and the common task paths, then jump to the detailed feature sections when you need exact screens or terminology.
 
 ---
 
 ## Table of Contents
 
-1. [Getting Started](#getting-started)
-2. [Admin Portal](#admin-portal)
-3. [Customer Portal](#customer-portal)
-4. [Reseller Portal](#reseller-portal)
-5. [Common Tasks & Workflows](#common-tasks--workflows)
-6. [Tips & Shortcuts](#tips--shortcuts)
+1. [System Overview](#1-system-overview)
+2. [Getting Started](#2-getting-started)
+3. [Admin Dashboard](#3-admin-dashboard)
+4. [Customer Management](#4-customer-management)
+5. [Catalog & Subscriptions](#5-catalog--subscriptions)
+6. [Billing & Payments](#6-billing--payments)
+7. [Network Management](#7-network-management)
+8. [Provisioning](#8-provisioning)
+9. [Monitoring & Alerts](#9-monitoring--alerts)
+10. [Network Topology](#10-network-topology)
+11. [GIS & Coverage](#11-gis--coverage)
+12. [Reports & Analytics](#12-reports--analytics)
+13. [Notifications](#13-notifications)
+14. [Customer Portal](#14-customer-portal)
+15. [Reseller Portal](#15-reseller-portal)
+16. [System Administration](#16-system-administration)
+17. [Secrets Management](#17-secrets-management)
+18. [Technical Setup](#18-technical-setup)
+19. [Troubleshooting](#19-troubleshooting)
 
 ---
 
-## Getting Started
+## 1. System Overview
 
-### System Requirements
+DotMac Sub is a multi-tenant subscription management system for ISPs and fiber network operators. It handles the complete customer lifecycle from signup through billing, provisioning, and monitoring.
 
-- Modern web browser (Chrome, Firefox, Safari, Edge)
-- Stable internet connection
-- Screen resolution: 1280x720 minimum (1920x1080 recommended)
+**Core Flow:** Customer → Subscription → PPPoE → RADIUS → Billing → Provisioning → Monitoring
 
-### Accessing the System
+| Layer | Technology |
+|-------|-----------|
+| Backend | FastAPI (Python 3.12) |
+| Database | PostgreSQL 16 + PostGIS |
+| Frontend | Jinja2 + HTMX + Alpine.js + Tailwind CSS v4 |
+| Task Queue | Celery + Redis |
+| Metrics | VictoriaMetrics |
+| Secrets | OpenBao (Vault-compatible) |
+| TR-069 | GenieACS |
 
-| Portal | URL | Who Uses It |
-|--------|-----|-------------|
-| Admin Portal | `https://your-domain.com/admin` | Staff & Administrators |
-| Customer Portal | `https://your-domain.com/portal` | End Customers |
-| Reseller Portal | `https://your-domain.com/reseller` | Partner Resellers |
+### Portal URLs
 
-### Logging In
+| Portal | URL | Purpose |
+|--------|-----|---------|
+| Admin | `/admin` | Full system management |
+| Customer | `/portal` | Subscriber self-service |
+| Reseller | `/reseller` | Partner management |
+| API | `/api/v1` | REST API (JWT auth) |
 
-1. Navigate to your portal URL
-2. Enter your **username** or **email address**
-3. Enter your **password**
-4. Click **Sign In**
-5. If MFA is enabled, enter the verification code from your authenticator app
+![Login Page](guide_screenshots/01_login.png)
 
-### Navigation Basics
+### Who This Guide Is For
 
-- **Sidebar** (Admin): Click menu items to navigate; click section headers to expand/collapse
-- **Top Navigation** (Other Portals): Click menu items in the horizontal navbar
-- **Dark Mode**: Click the moon/sun icon in the header to toggle
-- **User Menu**: Click your avatar/initials in the top-right corner for profile options
+- Front-desk and back-office operators who create customers, subscriptions, and invoices
+- Billing teams who monitor overdue balances and payment recovery
+- Technical teams who assign ONTs, manage PPPoE, and verify live services
+- Supervisors who need dashboard, reporting, and operational health visibility
+
+### Common Task Paths
+
+| I need to... | Go to | Jump to |
+|--------------|-------|---------|
+| Create a customer and activate service | Customers → Subscription → Provisioning | Sections 4, 5, and 8 |
+| Issue or review invoices and payments | Billing | Section 6 |
+| Assign or troubleshoot ONTs / PPPoE | Network | Section 7 |
+| Check alarms, usage, and device health | Monitoring / Reports | Sections 9 and 12 |
+| Help a subscriber use the portal | Customer Portal | Section 14 |
 
 ---
 
-## Admin Portal
+## 2. Getting Started
 
-The Admin Portal is the central hub for managing all aspects of your subscriber management system.
+### First Login
 
-### Dashboard Overview
+1. Navigate to your domain's `/auth/login` page
+2. Enter your admin credentials (username + password)
+3. You'll land on the **Admin Dashboard**
 
-The dashboard provides a real-time snapshot of your business:
+The sidebar navigation has three groups:
+- **Core** — Dashboard, Customers, Billing, Catalog
+- **Operations** — Network, Provisioning, GIS, VPN
+- **Insights** — Reports, Notifications, System
 
-![Dashboard Layout]
+### First 15 Minutes Checklist
 
-| Section | Description |
-|---------|-------------|
-| **Network Health** | OLT/ONT status, active alarms, and connectivity metrics |
-| **Revenue Trends** | Monthly recurring revenue (MRR) charts and growth |
-| **Service Orders** | Pipeline view of pending, in-progress, and completed orders |
-| **Key Metrics** | MRR, ARPU, Active Subscribers |
-| **Billing Health** | AR aging breakdown (Current, 30, 60, 90+ days) |
-| **Recent Activity** | Live feed of system events |
-| **Today's Dispatch** | Field technician assignments and status |
+1. Confirm company branding and email settings under **System**
+2. Check the dashboard for open invoices, tickets, and recent system activity
+3. Verify offers exist before creating live subscriptions
+4. Confirm PPPoE / RADIUS defaults before activating internet services
+5. Check that payment providers are configured before sending customers to the portal
 
-### Sidebar Navigation
+### Before You Make a Live Change
 
-The sidebar is organized into logical sections:
+> Treat billing, PPPoE, and provisioning changes as production operations. Confirm the subscriber, service, effective date, and rollback path before saving.
 
-#### Customers Section
-
-**Customers**
-- View all customer accounts (individuals and organizations)
-- Search and filter by name, account number, status
-- Create new customer accounts
-- View customer details and history
-
-**Subscribers**
-- Manage individual service subscribers
-- Link subscribers to accounts
-- View subscription details and status
-- Manage subscriber lifecycle
-
-#### Services & Catalog
-
-**Products**
-- Define service products (Internet, Voice, TV, etc.)
-- Set pricing and billing cycles
-- Configure product attributes
-
-**Speed Tiers**
-- Create bandwidth tiers (e.g., 100 Mbps, 500 Mbps, 1 Gbps)
-- Set download/upload speeds
-- Link to products
-
-**Offers & Promos**
-- Create promotional offers
-- Set discount percentages or fixed amounts
-- Define validity periods
-- Apply to specific products or plans
-
-**Inventory**
-- Track physical equipment (modems, routers, ONTs)
-- Manage stock levels
-- Assign equipment to subscribers
-
-#### Network Section
-
-**Network Map**
-- Interactive GIS map showing network infrastructure
-- View POP sites, fiber routes, and customer locations
-- Click markers for details
-
-**POP Sites**
-- Manage Point of Presence locations
-- View site details and equipment
-- Track site status
-
-**Core Network**
-
-| Feature | Description |
-|---------|-------------|
-| All Core Devices | Complete list of core infrastructure |
-| Core Routers | Border and core routing equipment |
-| Distribution Switches | Distribution layer switches |
-| Access Switches | Access layer equipment |
-| Aggregation Devices | Traffic aggregation equipment |
-
-**GPON Infrastructure**
-
-| Feature | Description |
-|---------|-------------|
-| OLTs | Optical Line Terminals - manage head-end equipment |
-| ONTs / CPE | Customer premise equipment management |
-| All PON Devices | Complete PON device inventory |
-
-**Fiber Plant / ODN**
-
-| Feature | Description |
-|---------|-------------|
-| Fiber Map | Visual fiber route mapping |
-| FDH Cabinets | Fiber Distribution Hub management |
-| Splitters | Optical splitter tracking |
-| Fiber Strands | Individual strand management |
-| Splice Closures | Splice point documentation |
-| Fiber Reports | Fiber plant analytics |
-
-**IP / VLAN Management**
-
-| Feature | Description |
-|---------|-------------|
-| IP Pools & Blocks | Manage IP address allocation |
-| VLANs | Virtual LAN configuration |
-
-**RADIUS / AAA**
-- Configure authentication servers
-- Manage RADIUS profiles
-- Set bandwidth policies
-
-**Network Monitoring**
-- Real-time alarm dashboard
-- Device status monitoring
-- Performance metrics
-
-#### Operations Section
-
-**Service Orders**
-- Track subscriber provisioning requests (new installs, upgrades, disconnects)
-- Review order progress and status history
-- Monitor open and completed installation-related tasks
-
-#### Billing Section
-
-**Overview**
-- Billing dashboard with key metrics
-- Revenue summary
-- Payment trends
-
-**Accounts**
-- View billing accounts
-- Account balance and history
-- Payment methods on file
-
-**Invoices**
-- Generate individual or batch invoices
-- View invoice details
-- Send invoice notifications
-- Download PDF invoices
-
-**Payments**
-- Record payments (cash, check, card, bank transfer)
-- Process refunds
-- Payment reconciliation
-
-**AR Aging**
-- Accounts receivable aging report
-- Filter by aging bucket (Current, 30, 60, 90+ days)
-- Collection priority list
-
-**Dunning**
-- Automated collection workflows
-- Configure dunning schedules
-- Track dunning actions
-
-**General Ledger**
-- Financial transaction journal
-- Account balances
-- Transaction history
-
-**Tax Rates**
-- Configure tax rates by region
-- Set tax categories
-- Manage tax exemptions
-
-#### Reports Section
-
-**Revenue Reports**
-- Monthly/quarterly revenue analysis
-- Revenue by product/service
-- Growth trends and forecasts
-
-**Subscriber Reports**
-- Subscriber growth metrics
-- Acquisition and churn rates
-- Subscriber demographics
-
-**Churn Analysis**
-- Churn rate tracking
-- Churn reasons analysis
-- At-risk subscriber identification
-
-**Network Reports**
-- Bandwidth utilization
-- Device uptime statistics
-- Capacity planning data
-
-**Technician Reports**
-- Work order completion rates
-- Average resolution time
-- Technician performance metrics
-
-#### Integrations Section
-
-**Connectors**
-- Configure external system connections
-- API credentials management
-- Connection status monitoring
-
-**Integration Targets**
-- Define integration endpoints
-- Map data fields
-- Configure sync schedules
-
-**Jobs**
-- View scheduled integration jobs
-- Manual job execution
-- Job history and logs
-
-**Webhooks**
-- Configure outbound webhooks
-- Event triggers
-- Delivery monitoring
-
-**Payment Providers**
-- Configure payment gateways
-- Test connections
-- Transaction settings
-
-#### System Section
-
-**Users**
-- Create and manage user accounts
-- Assign roles and permissions
-- Reset passwords
-- Enable/disable accounts
-
-**Roles & Permissions**
-- Define user roles
-- Configure granular permissions
-- Role-based access control
-
-**API Keys**
-- Generate API keys for integrations
-- Set key permissions
-- Track API usage
-
-**Audit Log**
-- View system activity history
-- Filter by user, action, date
-- Export audit data
-
-**Tasks & Scheduler**
-- View scheduled system tasks
-- Configure task schedules
-- Monitor task execution
-
-**Legal Documents**
-- Manage terms of service
-- Privacy policy management
-- Document versioning
-
-**Settings**
-- System configuration
-- Company information
-- Default values and preferences
+| Change Type | Verify First | Typical Risk |
+|-------------|--------------|--------------|
+| Plan change | Billing mode, proration, effective date | Unexpected invoice or credit |
+| Suspension / reactivation | Outstanding balance and communication history | Service restored or blocked incorrectly |
+| PPPoE credential reset | Subscriber identity and active session status | Session collision or support call spike |
+| ONT re-assignment | Correct serial number and target port | Wrong customer mapped to hardware |
 
 ---
 
-## Customer Portal
+## 3. Admin Dashboard
 
-The Customer Portal allows subscribers to manage their accounts, services, and billing.
+The dashboard displays key business metrics at a glance.
 
-### Dashboard
+![Admin Dashboard](guide_screenshots/03_dashboard.png)
 
-The customer dashboard shows:
+**KPI Cards:**
+- Active Subscribers — total with active status
+- Monthly Revenue — payments received this month
+- Open Invoices — unpaid invoices
+- Open Tickets — support tickets pending
 
-| Widget | Description |
+**Recent Events Table** shows the latest system activity.
+
+---
+
+## 4. Customer Management
+
+### Subscriber List
+
+Navigate to **Customers** in the sidebar.
+
+![Customers](guide_screenshots/05_customers.png)
+
+- Search by name, email, phone, account number
+- Filter by status (Active, Suspended, Blocked)
+- Click any row for subscriber details
+
+### Creating a Subscriber
+
+1. Click **+ New Subscriber**
+2. Fill in: First Name, Last Name, Email, Phone
+3. Select a **POP Site** (determines NAS assignment)
+4. Click **Create**
+
+The system generates a unique subscriber number and associates the customer with their POP site for provisioning.
+
+### Recommended Customer Creation Order
+
+1. Create the customer record with correct contact information
+2. Confirm service address and POP site
+3. Add the subscription only after selecting the correct offer
+4. Review generated PPPoE credentials before sharing them
+5. Trigger invoice or activation only after verifying billing mode
+
+---
+
+## 5. Catalog & Subscriptions
+
+### Managing Offers
+
+Navigate to **Catalog > Offers**.
+
+![Catalog Offers](guide_screenshots/08_catalog_offers.png)
+
+Each offer defines: name, service type, speed, pricing (recurring), billing mode (prepaid/postpaid), and FUP policy.
+
+### Creating a Subscription
+
+1. Go to customer detail → **+ Add Subscription**
+2. Select an **Offer** from the catalog
+3. Set billing mode and start date
+4. Click **Create**
+
+The system automatically generates PPPoE credentials, syncs to RADIUS, and emits a welcome notification.
+
+### Subscription Sanity Checks
+
+Use this quick review before saving a subscription:
+
+| Item | What good looks like |
+|------|----------------------|
+| Offer | Correct speed, billing cycle, and tax mode |
+| Billing mode | Matches how the customer is expected to pay |
+| Start date | Aligned with install date or service handover |
+| Portal visibility | Enabled only for plans you want customers to self-manage |
+| RADIUS profile | Present when access control or speed policy is required |
+
+### Fair Usage Policy (FUP)
+
+![FUP Configuration](guide_screenshots/10_fup_rules.png)
+
+Configure per-plan data limits with threshold rules, time windows, day filters, and rule chaining. Use the **Simulate & Test** tab to preview behavior.
+
+---
+
+## 6. Billing & Payments
+
+### Billing Overview
+
+![Billing](guide_screenshots/06_billing_overview.png)
+
+Metrics: total billed, outstanding, overdue. Monthly revenue trend chart.
+
+### Invoices
+
+![Invoices](guide_screenshots/07_invoices.png)
+
+**Lifecycle:** Draft → Issued → Overdue → Paid
+
+Invoices are auto-generated on subscription activation, billing cycle completion, and plan changes (proration).
+
+### Dunning & Auto-Suspension
+
+1. Invoice becomes overdue → warning email sent
+2. Grace period (configurable, default 48 hours)
+3. After grace → subscriber suspended, RADIUS credentials removed
+4. Payment received → auto-reactivation
+
+### Daily Billing Checks
+
+- Review draft and overdue invoices at the start of each workday
+- Confirm payments are allocated before manually reactivating service
+- Use notes or communication history before overriding an automatic suspension
+- Validate proration outcomes after upgrades or downgrades on active subscriptions
+
+---
+
+## 7. Network Management
+
+### OLTs
+
+![OLTs](guide_screenshots/11_network_olts.png)
+
+Manage fiber OLT infrastructure with SSH credentials, connected ONTs, and port utilization.
+
+### ONTs
+
+![ONTs](guide_screenshots/12_network_onts.png)
+
+ONT lifecycle: Import from TR-069 → Assign to subscriber → Pre-flight check (9 points) → Provision.
+
+### TR-069
+
+![TR-069](guide_screenshots/15_network_tr069.png)
+
+Manage CPE devices via GenieACS: sync, link, reboot, factory reset, parameter refresh.
+
+### NAS Devices
+
+![NAS](guide_screenshots/16_network_nas.png)
+
+Configure RADIUS clients with shared secrets (encrypted via OpenBao).
+
+### Quick Troubleshooting Flow
+
+1. Confirm the subscriber has an active subscription
+2. Check PPPoE username and password on the subscriber record
+3. Verify the RADIUS client / NAS exists and is active
+4. Review recent network or session errors
+5. Confirm the assigned ONT or CPE is mapped to the correct subscriber
+
+---
+
+## 8. Provisioning
+
+![Provisioning](guide_screenshots/17_provisioning.png)
+
+Service order workflow: Created → Scheduled → Provisioning → Active.
+
+The 13-step ONT provisioning orchestrator generates Huawei OLT CLI commands for T-CONT, GEM port, service profile, VLAN, WAN, and PPPoE configuration.
+
+### Safe Provisioning Sequence
+
+1. Validate subscriber, offer, and access technology
+2. Confirm OLT, port, VLAN, and ONT serial assignment
+3. Run pre-flight checks before pushing commands
+4. Save generated commands or evidence for rollback
+5. Verify service activation from both provisioning and subscriber views
+
+---
+
+## 9. Monitoring & Alerts
+
+![Monitoring Dashboard](guide_screenshots/13_network_monitoring.png)
+
+### Dashboard Components
+- Device Status KPIs (online/offline/degraded)
+- Device Health Table (CPU, memory, temperature, uptime)
+- Bandwidth Overview with top consumers
+- ONU Status Charts
+- VPN Tunnel Status
+- Active Alarms
+
+### Alert Rules
+
+Create threshold-based alerts with metric type, operator, threshold, duration, and severity. When alerts trigger, notifications are sent via the escalation chain: Policy → On-call → Admin fallback.
+
+### What Needs Immediate Attention
+
+| Signal | Why it matters | First response |
+|--------|----------------|----------------|
+| Many subscribers drop at once | Likely shared infrastructure issue | Check POP, NAS, OLT, and topology alarms |
+| Single ONT offline after install | Provisioning or physical issue | Review provisioning job and optical levels |
+| Repeated high CPU / memory on a device | Risk of service degradation | Inspect device metrics and recent config changes |
+| Notification queue backlog | Customer comms are delayed | Check Celery worker health and SMTP/SMS settings |
+
+---
+
+## 10. Network Topology
+
+![Network Topology](guide_screenshots/14_network_topology.png)
+
+D3.js force-directed graph replacing the legacy weathermap:
+
+- **Nodes** = devices (color-coded by status)
+- **Edges** = links (color-coded by utilization)
+- Parallel links rendered as curved arcs
+- Click nodes for drilldown panel
+- Filter by POP site and topology group
+
+### Creating Links
+
+1. Click **Add Link**
+2. Select source/target device and interface
+3. Set role, medium, capacity
+4. Optional: bundle key, topology group
+
+---
+
+## 11. GIS & Coverage
+
+![GIS Map](guide_screenshots/18_gis_map.png)
+
+Interactive Leaflet.js map with:
+- Color-coded markers (POP, Address, Customer, Asset)
+- Coverage area polygon editor
+- Batch geocoding tool
+- Coverage check API: `GET /api/v1/gis/coverage-check?latitude=&longitude=`
+
+---
+
+## 12. Reports & Analytics
+
+![Reports Hub](guide_screenshots/19_reports_hub.png)
+
+### Available Reports
+
+| Report | Description |
 |--------|-------------|
-| **Account Balance** | Current balance (green = credit, red = amount due) |
-| **Next Bill** | Upcoming bill amount and due date |
-| **Service Status** | Active or Suspended indicator |
-| **Active Services** | List of subscribed services with speeds and costs |
-| **Quick Actions** | Shortcuts to common tasks |
-| **Recent Activity** | Timeline of recent account events |
+| Revenue | Collection rate, payment trends |
+| Subscribers | Growth, churn analysis |
+| Bandwidth & Usage | Per-plan usage, top consumers |
+| MRR Net Change | Monthly recurring revenue |
+| Technician | Job completion, first-visit rate |
 
-### Quick Actions
+![Revenue Report](guide_screenshots/20_reports_revenue.png)
 
-- **Make a Payment** - Pay your bill online
-- **View Invoices** - Access billing history
-- **Update Profile** - Change contact information
-
-### Services
-
-View your active services:
-
-- Service name and type
-- Speed tier (download/upload)
-- Service address
-- Monthly cost
-- Service status
-
-### Billing
-
-**View Invoices**
-1. Navigate to **Billing**
-2. See list of all invoices with status (Paid, Unpaid, Overdue)
-3. Click an invoice to view details
-4. Download PDF for your records
-
-**Billing Arrangements**
-1. Navigate to **Billing** > **Arrangements**
-2. Create a new arrangement request if your account is eligible
-3. Track arrangement status and upcoming due dates
-
-### Installations
-
-- View scheduled installation appointments
-- Check installation status
-- Reschedule if needed
-- View installation history
-
-### Service Orders
-
-- Track new service requests
-- View order progress
-- Estimated completion dates
-
-### Profile Settings
-
-**Update Contact Information**
-1. Click your avatar > **Profile**
-2. Update name, email, phone
-3. Save changes
-
-**Change Password**
-1. Click your avatar > **Security**
-2. Enter current password
-3. Enter new password (twice)
-4. Save changes
+![Bandwidth Report](guide_screenshots/21_reports_bandwidth.png)
 
 ---
 
-## Reseller Portal
+## 13. Notifications
 
-The Reseller Portal allows partners to manage their customer accounts.
+![Notification Templates](guide_screenshots/23_notifications_templates.png)
 
-### Dashboard
+39 pre-configured templates covering subscription lifecycle, billing, provisioning, and network events. Channels: Email (SMTP), SMS (Twilio/Africa's Talking), WhatsApp.
 
-| Metric | Description |
-|--------|-------------|
-| **Total Accounts** | Number of customer accounts under management |
-| **Open Balance** | Total outstanding balance across all accounts |
-| **Open Invoices** | Number of unpaid invoices |
+### Delivery Pipeline
 
-**Recent Accounts Table**
-- Customer Name
-- Account Number
-- Status (Active, Suspended, etc.)
-- Open Balance
-- Last Payment Date
-- Actions
+Event → Handler → Template Lookup → Queue → Celery Worker → SMTP/SMS → Retry (max 3)
 
-### Accounts Management
+![Notification Queue](guide_screenshots/24_notifications_queue.png)
 
-**View All Accounts**
-1. Navigate to **Accounts**
-2. See complete list of your customer accounts
-3. Search by name or account number
-4. Filter by status
+### Operator Tip
 
-**Account Details**
-- Click an account to view full details
-- Account information
-- Service subscriptions
-- Billing history
-
-### View as Customer
-
-This feature allows you to see exactly what your customer sees:
-
-1. Find the customer account
-2. Click **View as Customer**
-3. You'll be logged into the Customer Portal as that customer
-4. A yellow banner shows you're in impersonation mode
-5. Click **Stop Impersonation** to return to Reseller Portal
-
-> **Note**: All actions taken while impersonating are logged for audit purposes.
+Use templates and queue history together. If a subscriber says they were not notified, check the template state, the queue entry, and the final delivery status before resending.
 
 ---
 
-## Common Tasks & Workflows
+## 14. Customer Portal
 
-### Onboarding a New Customer (Admin)
+![Portal Login](guide_screenshots/40_portal_login.png)
 
-```
-1. Create Customer Account
-   Admin > Customers > New Customer
-   ↓
-2. Add Subscriber
-   Admin > Subscribers > New Subscriber
-   Link to customer account
-   ↓
-3. Create Subscription
-   Select subscriber > Add Subscription
-   Choose product/plan
-   ↓
-4. Create Service Order
-   Subscriber Detail > Add Subscription
-   Set subscription status to Pending to trigger service order workflow
-   ↓
-5. Track Installation
-   Use the subscriber and customer detail views to monitor service order progress
-   ↓
-6. Complete Installation
-   Mark provisioning complete and update service status
-   ↓
-7. Activate Service
-   Provision network (RADIUS, VLAN)
-   Generate first invoice
-```
+![Portal Dashboard](guide_screenshots/41_portal_dashboard.png)
 
-### Running Monthly Billing (Admin)
+### Features
 
-```
-1. Review Unbilled Subscriptions
-   Admin > Billing > Overview
-   Check billing queue
-   ↓
-2. Generate Invoices
-   Admin > Billing > Invoices > Generate Batch
-   Select billing period
-   Preview invoices
-   ↓
-3. Review Generated Invoices
-   Check for errors
-   Adjust if needed
-   ↓
-4. Send Invoices
-   Approve batch
-   Invoices sent via email
-   ↓
-5. Monitor Payments
-   Admin > Billing > Payments
-   Record incoming payments
-   ↓
-6. Review AR Aging
-   Admin > Billing > AR Aging
-   Identify overdue accounts
-   ↓
-7. Run Dunning (if configured)
-   Automated reminders sent
-   Follow up on delinquent accounts
-```
+| Feature | Description |
+|---------|-------------|
+| Dashboard | Balance, next bill, service status |
+| Services | Plans, FUP usage, PPPoE credentials |
+| Billing | Invoices, PDF download, online payment (Paystack) |
+| Usage | Real-time bandwidth, daily usage table |
+| Speed Test | Browser-based with history |
+| Support | Ticket creation and tracking |
 
-### Adding Network Equipment (Admin)
+![Portal Services](guide_screenshots/42_portal_services.png)
 
-```
-1. Create POP Site (if new location)
-   Admin > Network > POP Sites > New
-   Enter location details
-   ↓
-2. Add OLT
-   Admin > Network > GPON > OLTs > New
-   Configure OLT settings
-   Assign to POP site
-   ↓
-3. Add ONT/CPE
-   Admin > Network > GPON > ONTs > New
-   Enter serial number
-   Assign to subscriber
-   ↓
-4. Configure VLAN
-   Admin > Network > IP/VLAN > VLANs
-   Create or assign VLAN
-   ↓
-5. Create RADIUS Profile
-   Admin > Network > RADIUS
-   Set authentication parameters
-   Configure bandwidth limits
-   ↓
-6. Test Connectivity
-   Verify ONT registration
-   Test customer connection
-```
+![Portal Billing](guide_screenshots/43_portal_billing.png)
+
+For suspended subscribers: restricted dashboard with outstanding balance, warning banner on all pages, pay online → auto-reactivation.
+
+### Portal Support Checklist
+
+- Confirm the subscriber can log in with the correct identifier and password
+- Verify invoices are issued before troubleshooting online payment
+- Check that the plan is marked visible if self-service change is expected
+- Confirm portal warnings match the subscriber's actual balance and status
 
 ---
 
-## Tips & Shortcuts
+## 15. Reseller Portal
 
-### Keyboard Shortcuts
+![Reseller Dashboard](guide_screenshots/51_reseller_dashboard.png)
 
-| Shortcut | Action |
-|----------|--------|
-| `/` | Focus search box |
-| `Esc` | Close modal/dropdown |
-| `?` | Show keyboard shortcuts (if enabled) |
+- Dashboard with alert notifications (overdue, suspended, new accounts)
+- Account management with search
+- Invoice history per account
+- Revenue report with Chart.js bar chart
+- Customer impersonation ("View as Customer")
 
-### Search Tips
-
-- Use quotes for exact phrases: `"John Smith"`
-- Search by account number: `ACC-12345`
-- Filter by status: `status:active`
-
-### Dashboard Customization
-
-- Drag widgets to rearrange (if enabled)
-- Click refresh icon to update data
-- Use date pickers to change time ranges
-
-### Bulk Operations
-
-Many list views support bulk operations:
-
-1. Check the checkbox in the header to select all
-2. Or check individual items
-3. Use the bulk action dropdown
-4. Common bulk actions:
-   - Export to CSV
-   - Send notifications
-   - Update status
-   - Delete
-
-### Export Data
-
-Most tables support data export:
-
-1. Navigate to the list view
-2. Apply desired filters
-3. Click **Export** button
-4. Choose format (CSV, Excel, PDF)
-5. Download file
-
-### Dark Mode
-
-Toggle dark mode for comfortable viewing:
-
-1. Click the sun/moon icon in the header
-2. Or: User menu > Settings > Appearance
-3. Preference is saved automatically
-
-### Mobile Access
-
-The portals are mobile-responsive:
-
-- Sidebar collapses to hamburger menu
-- Tables become scrollable cards
-- Forms adapt to screen size
-- Touch-friendly buttons and controls
+![Reseller Revenue](guide_screenshots/53_reseller_revenue.png)
 
 ---
 
-## Getting Help
+## 16. System Administration
 
-### In-App Help
+![Settings Hub](guide_screenshots/25_system_settings.png)
 
-- Look for `?` icons next to features for tooltips
-- Check the Help section in your user menu
+| Area | Purpose |
+|------|---------|
+| Users & Roles | RBAC admin accounts |
+| Branding | Logos, favicon, colors |
+| Email/SMTP | Mail transport configuration |
+| API Keys | API access tokens |
+| Secrets | OpenBao vault management |
+| Legal | Terms, privacy policy |
+| Scheduler | Celery task management |
 
-### Support Contacts
-
-- **Technical Support**: support@your-domain.com
-- **Billing Questions**: billing@your-domain.com
-- **Phone**: +1 (XXX) XXX-XXXX
-
-### Training Resources
-
-- Video tutorials (if available)
-- Knowledge base articles
-- Release notes for new features
+![System Users](guide_screenshots/26_system_users.png)
 
 ---
 
-## Glossary
+## 17. Secrets Management
 
-| Term | Definition |
-|------|------------|
-| **Account** | A billing entity (person or organization) |
-| **Subscriber** | An individual service user linked to an account |
-| **Subscription** | A service plan assigned to a subscriber |
-| **OLT** | Optical Line Terminal - head-end fiber equipment |
-| **ONT** | Optical Network Terminal - customer fiber modem |
-| **CPE** | Customer Premise Equipment |
-| **GPON** | Gigabit Passive Optical Network |
-| **VLAN** | Virtual Local Area Network |
-| **RADIUS** | Remote Authentication Dial-In User Service |
-| **MRR** | Monthly Recurring Revenue |
-| **ARPU** | Average Revenue Per User |
-| **AR** | Accounts Receivable |
-| **Dunning** | Collection process for overdue payments |
-| **POP** | Point of Presence - network location |
-| **FDH** | Fiber Distribution Hub |
-| **Service Order** | Request for new service or changes |
+![Secrets](guide_screenshots/27_system_secrets.png)
+
+All credentials stored in OpenBao KV v2:
+
+| Path | Contents |
+|------|----------|
+| `secret/auth` | JWT, TOTP, credential encryption keys |
+| `secret/paystack` | Payment gateway keys |
+| `secret/database` | Connection URL, password |
+| `secret/redis` | Broker credentials |
+| `secret/radius` | RADIUS DB password |
+| `secret/genieacs` | MongoDB, CWMP auth |
+| `secret/s3` | MinIO access keys |
+
+Reference format: `bao://secret/<path>#<field>`
 
 ---
 
-*Last Updated: February 16, 2026*
-*Version: 1.0*
+## 18. Technical Setup
+
+### Docker Services
+
+| Service | Port | Purpose |
+|---------|------|---------|
+| App | 8001 | FastAPI web server |
+| PostgreSQL | 5434 | Main database |
+| Redis | 6379 | Cache + broker |
+| OpenBao | 8200 | Secrets vault |
+| Mailhog | 8025 | Email testing |
+| FreeRADIUS | 1812/1813 | RADIUS auth |
+| GenieACS | 7547/3000 | TR-069 ACS |
+| VictoriaMetrics | 8428 | Time-series |
+| MinIO | 9000/9001 | S3 storage |
+
+### Quick Start
+
+```bash
+docker compose up -d
+poetry install
+poetry run alembic upgrade heads
+./scripts/openbao_init.sh
+make dev
+```
+
+### Quality Commands
+
+```bash
+make lint          # Ruff linting
+make type-check    # Mypy
+make test          # pytest
+make check         # All quality checks
+```
+
+### Environment Health Checklist
+
+- App responds on `http://localhost:8001`
+- Mailhog responds on `http://localhost:8025`
+- Database migrations are current
+- OpenBao secrets are populated
+- Background workers are running before testing billing, notifications, or provisioning
+
+---
+
+## 19. Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Login 500 error | Check `issue_web_session_token` is module-level call |
+| Email not sending | Check SMTP at `/admin/system/email` — host not `disabled.invalid` |
+| RADIUS DNS error | Use `localhost:5437` not Docker hostname |
+| PPPoE collision | Prefix is `1050` — check sequence in settings |
+| OpenBao unavailable | `docker compose up -d openbao` |
+| Paystack not configured | Set keys in OpenBao at `secret/paystack` |
+
+### Checking Logs
+
+```bash
+docker logs dotmac_sub_app -f --tail 100
+docker logs dotmac_sub_celery_worker -f --tail 50
+```
+
+### Email Testing
+
+Visit Mailhog at `http://localhost:8025`:
+
+![Mailhog](guide_screenshots/60_mailhog.png)
+
+### System Health
+
+Navigate to `/admin/system/health`:
+
+![System Health](guide_screenshots/28_system_health.png)
+
+---
+
+*Generated from DotMac Sub v1.1 — March 2026*

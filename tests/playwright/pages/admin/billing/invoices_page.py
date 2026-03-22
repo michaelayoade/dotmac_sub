@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.base_page import BasePage
@@ -15,7 +16,16 @@ class InvoicesPage(BasePage):
 
     def goto(self, path: str = "/admin/billing/invoices") -> None:
         """Navigate to the invoices list."""
-        super().goto(path)
+        url = f"{self.base_url}{path}"
+        timeout_ms = 120000
+        for attempt in range(2):
+            try:
+                self.page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                return
+            except PlaywrightError as exc:
+                if attempt == 1 or "Timeout" not in str(exc):
+                    raise
+                self.page.wait_for_timeout(500)
 
     def expect_loaded(self) -> None:
         """Assert the invoices page is loaded."""

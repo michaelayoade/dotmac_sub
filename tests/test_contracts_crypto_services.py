@@ -988,6 +988,25 @@ class TestSubscriptionChanges:
         db_session.refresh(subscription)
         assert subscription.offer_id == new_offer.id
 
+    def test_apply_change_request_routes_through_shared_subscription_update(
+        self, db_session, subscription
+    ):
+        from unittest.mock import patch
+        from app.services import catalog as catalog_service
+
+        new_offer = self._create_second_offer(db_session)
+        cr = _create_change_request_directly(db_session, subscription, new_offer)
+        subscription_change_requests.approve(db_session, str(cr.id))
+
+        with patch.object(catalog_service.subscriptions, "update") as update_mock:
+            update_mock.return_value = subscription
+            applied = subscription_change_requests.apply(db_session, str(cr.id))
+
+        assert applied.status == SubscriptionChangeStatus.applied
+        update_mock.assert_called_once()
+        assert update_mock.call_args.args[1] == str(subscription.id)
+        assert str(update_mock.call_args.args[2].offer_id) == str(new_offer.id)
+
     def test_apply_non_approved_raises(self, db_session, subscription):
         new_offer = self._create_second_offer(db_session)
         cr = _create_change_request_directly(db_session, subscription, new_offer)

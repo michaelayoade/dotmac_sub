@@ -18,9 +18,25 @@ from app.models.rbac import (
     SystemUserRole,
 )
 from app.services.auth import hash_api_key
-from app.services.auth_flow import decode_access_token, hash_session_token
+from app.services.auth_flow import _load_rbac_claims, decode_access_token, hash_session_token
 
 logger = logging.getLogger(__name__)
+
+
+def _claims_from_payload_or_db(
+    db: Session,
+    principal_id: str,
+    principal_type: str,
+    payload: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    roles_value = payload.get("roles")
+    scopes_value = payload.get("scopes")
+    roles = [str(role) for role in roles_value] if isinstance(roles_value, list) else []
+    scopes = [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
+    if roles or scopes:
+        return roles, scopes
+    resolved_roles, resolved_scopes = _load_rbac_claims(db, principal_type, principal_id)
+    return list(resolved_roles), list(resolved_scopes)
 
 
 def _extract_bearer_token(authorization: str | None) -> str | None:
@@ -79,7 +95,11 @@ def require_audit_auth(
     if token:
         if _is_jwt(token):
             payload = decode_access_token(db, token)
-            if not _has_audit_scope(payload):
+            principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
+            principal_type = str(payload.get("principal_type") or "subscriber")
+            roles, scopes = _claims_from_payload_or_db(db, principal_id, principal_type, payload)
+            effective_payload = {**payload, "roles": roles, "scopes": scopes}
+            if not _has_audit_scope(effective_payload):
                 raise HTTPException(status_code=403, detail="Insufficient scope")
             session_id = payload.get("session_id")
             if session_id:
@@ -159,10 +179,7 @@ def require_user_auth(
     session = query.first()
     if not session:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    roles_value = payload.get("roles")
-    scopes_value = payload.get("scopes")
-    roles = [str(role) for role in roles_value] if isinstance(roles_value, list) else []
-    scopes = [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
+    roles, scopes = _claims_from_payload_or_db(db, str(principal_id), str(principal_type), payload)
     actor_id = str(principal_id)
     if request is not None:
         request.state.actor_id = actor_id

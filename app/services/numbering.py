@@ -37,6 +37,19 @@ def _resolve_setting(db: Session, domain: SettingDomain, key: str):
     return settings_spec.resolve_value(db, domain, key)
 
 
+def generate_number_with_config(
+    db: Session,
+    sequence_key: str,
+    *,
+    prefix: str | None,
+    padding: int | None,
+    start_value: int | None,
+) -> str:
+    start_value_int = max(int(start_value or 1), 1)
+    value = _next_sequence_value(db, sequence_key, start_value_int)
+    return _format_number(prefix, padding, value)
+
+
 def generate_number(
     db: Session,
     domain: SettingDomain,
@@ -56,5 +69,10 @@ def generate_number(
         start_value_int = int(start_value) if start_value is not None else 1
     except (TypeError, ValueError):
         start_value_int = 1
-    value = _next_sequence_value(db, sequence_key, start_value_int)
-    return _format_number(prefix, padding, value)
+    return generate_number_with_config(
+        db,
+        sequence_key,
+        prefix=prefix if isinstance(prefix, str) else None,
+        padding=padding if isinstance(padding, int) else None,
+        start_value=start_value_int,
+    )

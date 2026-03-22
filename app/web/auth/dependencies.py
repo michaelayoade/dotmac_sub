@@ -1,12 +1,12 @@
 """Web authentication dependencies for cookie-based auth with redirects."""
 
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
-from app.services.auth_flow import decode_access_token, validate_active_session
+from app.services.auth_flow import _load_rbac_claims, decode_access_token, validate_active_session
 
 
 class AuthenticationRequired(Exception):
@@ -15,6 +15,33 @@ class AuthenticationRequired(Exception):
     def __init__(self, redirect_url: str = "/auth/login"):
         self.redirect_url = redirect_url
         super().__init__("Authentication required")
+
+
+def _next_url_for_refresh(request: Request) -> str:
+    next_url = str(request.url.path)
+    if request.url.query:
+        next_url += f"?{request.url.query}"
+
+    if request.method.upper() in {"GET", "HEAD", "OPTIONS"}:
+        return next_url
+
+    referer = str(request.headers.get("referer") or "").strip()
+    if not referer:
+        return next_url
+
+    parsed = urlparse(referer)
+    same_host = not parsed.netloc or parsed.netloc == request.url.netloc
+    same_scheme = not parsed.scheme or parsed.scheme == request.url.scheme
+    if not same_host or not same_scheme:
+        return next_url
+
+    referer_path = str(parsed.path or "").strip()
+    if not referer_path.startswith("/"):
+        return next_url
+
+    if parsed.query:
+        return f"{referer_path}?{parsed.query}"
+    return referer_path
 
 
 def get_session_token(request: Request) -> str | None:
@@ -64,6 +91,10 @@ def validate_session_token(
 
     roles = payload.get("roles", [])
     scopes = payload.get("scopes", [])
+    if not isinstance(roles, list) or not isinstance(scopes, list) or (not roles and not scopes):
+        resolved_roles, resolved_scopes = _load_rbac_claims(db, resolved_type or principal_type, str(principal_id))
+        roles = list(resolved_roles)
+        scopes = list(resolved_scopes)
 
     return {
         "subscriber_id": str(principal_id),
@@ -87,10 +118,9 @@ def require_web_auth(
     """
     auth_info = validate_session_token(request, db)
     if not auth_info:
-        # Build redirect URL with next parameter
-        next_url = str(request.url.path)
-        if request.url.query:
-            next_url += f"?{request.url.query}"
+        # For expired POST-backed form submits, bounce the user back to the form
+        # they came from instead of the collection endpoint that handled the POST.
+        next_url = _next_url_for_refresh(request)
         redirect_url = f"/auth/refresh?next={quote(next_url)}"
         raise AuthenticationRequired(redirect_url)
 

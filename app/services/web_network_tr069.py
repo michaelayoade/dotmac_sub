@@ -6,10 +6,12 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.network import CPEDevice
+from app.models.network import CPEDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice, Tr069JobStatus
+from app.schemas.network import OntUnitCreate
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
     Tr069AcsServerUpdate,
@@ -17,11 +19,19 @@ from app.schemas.tr069 import (
     Tr069JobCreate,
 )
 from app.services import tr069 as tr069_service
+from app.services import network as network_service
 from app.services.common import coerce_uuid
-from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
 from app.services.network._common import decode_huawei_hex_serial
 
 logger = logging.getLogger(__name__)
+
+
+def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
+    expr = func.upper(column)
+    for token in ("-", " ", ":", ".", "_", "/"):
+        expr = func.replace(expr, token, "")
+    return expr
 
 
 @dataclass
@@ -322,3 +332,44 @@ def tr069_dashboard_data(
 
 def sync_server(db: Session, *, acs_server_id: str) -> dict[str, int]:
     return tr069_service.cpe_devices.sync_from_genieacs(db=db, acs_server_id=acs_server_id)
+
+
+def create_ont_from_tr069_device(db: Session, *, tr069_device_id: str) -> tuple[OntUnit, bool]:
+    """Create or resolve an ONT inventory record from a synced TR-069 device.
+
+    Returns (ont, created_new).
+    """
+    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
+    if not device:
+        raise ValueError("TR-069 device not found")
+
+    display_serial = _display_serial_number(device.serial_number) or str(device.serial_number or "").strip()
+    if not display_serial:
+        raise ValueError("TR-069 device has no usable serial number")
+
+    normalized_serial = normalize_tr069_serial(display_serial)
+    existing = (
+        db.query(OntUnit)
+        .filter(_normalized_serial_expr(OntUnit.serial_number) == normalized_serial)
+        .first()
+    )
+    if existing:
+        if not existing.tr069_acs_server_id:
+            existing.tr069_acs_server_id = device.acs_server_id
+            db.commit()
+            db.refresh(existing)
+        return existing, False
+
+    payload = OntUnitCreate(
+        serial_number=display_serial,
+        vendor="Huawei" if str(device.oui or "").upper().startswith(("48575443", "HWTC", "HWTT")) else None,
+        model=device.product_class or None,
+        is_active=False,
+        name=display_serial,
+        notes=f"Imported from TR-069 device {device.id}",
+    )
+    ont = network_service.ont_units.create(db=db, payload=payload)
+    ont.tr069_acs_server_id = device.acs_server_id
+    db.commit()
+    db.refresh(ont)
+    return ont, True

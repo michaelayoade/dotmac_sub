@@ -96,9 +96,13 @@ def login_submit(
         max_age = 30 * 24 * 60 * 60 if remember else None
         cookie_cfg = _session_cookie_settings(db)
         secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
+        session_token = auth_flow_service.issue_web_session_token(
+            db,
+            str(result.get("access_token", "")),
+        )
         response.set_cookie(
             key="session_token",
-            value=result.get("access_token", ""),
+            value=session_token,
             httponly=True,
             secure=secure_cookie,
             samesite=cookie_cfg["samesite"],
@@ -160,9 +164,13 @@ def mfa_submit(
         response.delete_cookie("mfa_pending")
         cookie_cfg = _session_cookie_settings(db)
         secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
+        session_token = auth_flow_service.issue_web_session_token(
+            db,
+            str(result.get("access_token", "")),
+        )
         response.set_cookie(
             key="session_token",
-            value=result.get("access_token", ""),
+            value=session_token,
             httponly=True,
             secure=secure_cookie,
             samesite=cookie_cfg["samesite"],
@@ -271,9 +279,13 @@ def refresh(request: Request, db: Session, next_url: str | None = None):
     response = RedirectResponse(url=redirect_url, status_code=303)
     cookie_cfg = _session_cookie_settings(db)
     secure_cookie = cookie_cfg["secure"] and _is_https_request(request)
+    session_token = auth_flow_service.issue_web_session_token(
+        db,
+        str(result.get("access_token", "")),
+    )
     response.set_cookie(
         key="session_token",
-        value=result.get("access_token", ""),
+        value=session_token,
         httponly=True,
         secure=secure_cookie,
         samesite=cookie_cfg["samesite"],

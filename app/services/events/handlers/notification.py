@@ -4,6 +4,7 @@ Queues customer notifications based on configured notification templates.
 """
 
 import logging
+from collections.abc import Iterable
 
 from sqlalchemy.orm import Session
 
@@ -17,6 +18,14 @@ from app.services.events.types import Event, EventType
 
 logger = logging.getLogger(__name__)
 
+CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
+    NotificationChannel.email: "email",
+    NotificationChannel.sms: "sms",
+    NotificationChannel.whatsapp: "whatsapp",
+    NotificationChannel.push: "push",
+    NotificationChannel.webhook: "webhook",
+}
+
 
 # Mapping from EventType to notification template codes
 # These codes are used to look up templates in the notification_templates table
@@ -27,6 +36,7 @@ EVENT_TYPE_TO_TEMPLATE = {
     EventType.subscription_suspended: "subscription_suspended",
     EventType.subscription_canceled: "subscription_canceled",
     EventType.subscription_expiring: "subscription_expiring",
+    EventType.subscription_suspension_warning: "suspension_warning",
     # Billing events
     EventType.invoice_created: "invoice_created",
     EventType.invoice_sent: "invoice_sent",
@@ -65,60 +75,114 @@ class NotificationHandler:
         if template_code is None:
             return
 
-        # Look up template
-        template = (
-            db.query(NotificationTemplate)
-            .filter(NotificationTemplate.code == template_code)
-            .filter(NotificationTemplate.is_active.is_(True))
-            .first()
-        )
-
-        if not template:
+        templates = self._load_templates(db, template_code)
+        if not templates:
             logger.warning(
                 "No active notification template for code %s", template_code
-            )
-            return
-
-        # Get recipient from event context
-        recipient = self._resolve_recipient(db, event)
-        if not recipient:
-            logger.debug(
-                f"Cannot determine recipient for event {event.event_type.value}"
             )
             return
 
         # Build enriched context and render
         context = self._build_render_context(db, event)
 
-        notification = Notification(
-            template_id=template.id,
-            channel=template.channel or NotificationChannel.email,
-            recipient=recipient,
-            subject=self._render_subject(template, event, context),
-            body=self._render_body(template, event, context),
-            status=NotificationStatus.queued,
-        )
-        db.add(notification)
+        for template in templates:
+            channel = template.channel or NotificationChannel.email
+            recipient = self._resolve_recipient(db, event, channel)
+            if not recipient:
+                logger.debug(
+                    "Cannot determine recipient for event %s on channel %s",
+                    event.event_type.value,
+                    channel.value,
+                )
+                continue
 
-        logger.info(
-            f"Queued notification for event {event.event_type.value} "
-            f"to {recipient}"
-        )
+            notification = Notification(
+                template_id=template.id,
+                channel=channel,
+                recipient=recipient,
+                subject=self._render_subject(template, event, context),
+                body=self._render_body(template, event, context),
+                status=NotificationStatus.queued,
+            )
+            db.add(notification)
 
-    def _resolve_recipient(self, db: Session, event: Event) -> str | None:
+            logger.info(
+                "Queued notification for event %s on %s to %s",
+                event.event_type.value,
+                channel.value,
+                recipient,
+            )
+
+    def _load_templates(
+        self,
+        db: Session,
+        template_code: str,
+    ) -> list[NotificationTemplate]:
+        """Load active templates for the event's base code and channel variants."""
+        candidate_codes = {
+            template_code,
+            *(f"{template_code}_{suffix}" for suffix in CHANNEL_TEMPLATE_SUFFIXES.values()),
+        }
+        templates = (
+            db.query(NotificationTemplate)
+            .filter(NotificationTemplate.code.in_(candidate_codes))
+            .filter(NotificationTemplate.is_active.is_(True))
+            .all()
+        )
+        return self._order_templates(templates, template_code)
+
+    def _order_templates(
+        self,
+        templates: Iterable[NotificationTemplate],
+        template_code: str,
+    ) -> list[NotificationTemplate]:
+        suffix_to_channel = {suffix: channel for channel, suffix in CHANNEL_TEMPLATE_SUFFIXES.items()}
+        ordered: dict[str, NotificationTemplate] = {}
+
+        for template in templates:
+            channel = template.channel or NotificationChannel.email
+            expected_code = f"{template_code}_{CHANNEL_TEMPLATE_SUFFIXES[channel]}"
+            if template.code == template_code:
+                ordered[channel.value] = template
+                continue
+            if template.code == expected_code:
+                ordered[channel.value] = template
+                continue
+            suffix = template.code.removeprefix(f"{template_code}_")
+            mapped_channel = suffix_to_channel.get(suffix)
+            if mapped_channel and mapped_channel.value not in ordered:
+                ordered[mapped_channel.value] = template
+
+        return list(ordered.values())
+
+    def _resolve_recipient(
+        self,
+        db: Session,
+        event: Event,
+        channel: NotificationChannel,
+    ) -> str | None:
         """Resolve the notification recipient from event context."""
-        # Try to get email from account
+        email = event.payload.get("email")
+        phone = event.payload.get("phone") or event.payload.get("phone_number")
+
         if event.account_id:
             from app.models.subscriber import Subscriber
 
             account = db.get(Subscriber, event.account_id)
-            if account and account.email:
+            if channel == NotificationChannel.email and account and account.email:
                 return account.email
+            if channel in {NotificationChannel.sms, NotificationChannel.whatsapp} and account and account.phone:
+                return account.phone
 
-        # Check if email is in payload
-        email = event.payload.get("email")
+        if channel == NotificationChannel.email and isinstance(email, str) and email:
+            return email
+        if channel in {NotificationChannel.sms, NotificationChannel.whatsapp} and isinstance(phone, str) and phone:
+            return phone
+
         if isinstance(email, str) and email:
             return email
+        if isinstance(phone, str) and phone:
+            return phone
 
         return None
 

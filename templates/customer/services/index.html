@@ -1,3 +1,4 @@
+{% from "components/ui/macros.html" import status_badge %}
 {% extends "layouts/customer.html" %}
 
 {% block title %}Services - My Account{% endblock %}
@@ -8,7 +9,7 @@
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <h1 class="text-3xl font-display font-bold text-stone-900 dark:text-white">Services</h1>
-            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Review your active subscriptions</p>
+            <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Review your services and manage billing or plan changes.</p>
         </div>
         <div class="flex flex-wrap items-center gap-3">
             <a href="/portal/change-requests" class="inline-flex items-center gap-2 rounded-xl border-2 border-stone-200 bg-white px-5 py-2.5 text-sm font-semibold text-stone-700 shadow-sm transition-all hover:border-stone-300 hover:shadow-md dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 dark:hover:border-stone-600">
@@ -26,8 +27,8 @@
         </div>
     </div>
 
-    <div class="rounded-2xl border border-emerald-200 bg-emerald-50/80 p-4 text-sm text-emerald-800 shadow-premium dark:border-emerald-900/40 dark:bg-emerald-900/10 dark:text-emerald-300">
-        Showing active subscriptions only.
+    <div class="rounded-2xl border border-blue-200 bg-blue-50/80 p-4 text-sm text-blue-800 shadow-premium dark:border-blue-900/40 dark:bg-blue-900/10 dark:text-blue-300">
+        Showing current and recent services, including restricted or recently ended subscriptions, so you can still manage billing and support.
     </div>
 
     <!-- Services Grid -->
@@ -36,8 +37,30 @@
         {% for service in services %}
         <div class="group relative overflow-hidden rounded-2xl border border-stone-200 bg-white p-6 shadow-premium card-hover dark:border-stone-700 dark:bg-stone-800">
             <!-- Background gradient based on status -->
-            {% set svc_status_bg = service.status.value if service.status is not string and service.status else (service.status | default('active')) %}
-            <div class="absolute top-0 right-0 w-48 h-48 -mr-16 -mt-16 rounded-full {% if svc_status_bg == 'active' %}bg-emerald-500/5{% else %}bg-amber-500/5{% endif %} blur-3xl transition-all group-hover:scale-150"></div>
+            {% set svc_status = service.status.value if service.status is not string and service.status else (service.status | default('active')) %}
+            {% set svc_status_variant = {
+                'active': 'active',
+                'pending': 'pending',
+                'blocked': 'blocked',
+                'suspended': 'suspended',
+                'stopped': 'warning',
+                'disabled': 'disabled',
+                'canceled': 'canceled',
+                'expired': 'warning',
+                'hidden': 'inactive',
+                'archived': 'inactive',
+            }.get(svc_status, 'default') %}
+            {% set svc_glow = {
+                'active': 'bg-emerald-500/5',
+                'pending': 'bg-blue-500/5',
+                'blocked': 'bg-rose-500/5',
+                'suspended': 'bg-amber-500/5',
+                'stopped': 'bg-orange-500/5',
+                'disabled': 'bg-slate-500/5',
+                'canceled': 'bg-rose-500/5',
+                'expired': 'bg-amber-500/5',
+            }.get(svc_status, 'bg-stone-500/5') %}
+            <div class="absolute top-0 right-0 w-48 h-48 -mr-16 -mt-16 rounded-full {{ svc_glow }} blur-3xl transition-all group-hover:scale-150"></div>
 
             <div class="relative">
                 <div class="flex items-start justify-between">
@@ -56,19 +79,7 @@
                         <p class="text-sm text-stone-500 dark:text-stone-400">{{ service.offer_version.name if service.offer_version else 'Standard Plan' }}</p>
                     </div>
                 </div>
-                    {% set svc_status = service.status.value if service.status is not string and service.status else (service.status | default('active')) %}
-                    <span class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold
-                        {% if svc_status == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400
-                        {% elif svc_status == 'suspended' %}bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400
-                        {% else %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400{% endif %}">
-                        {% if svc_status == 'active' %}
-                        <span class="relative flex h-2 w-2">
-                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                            <span class="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                        </span>
-                        {% endif %}
-                        {{ svc_status | capitalize }}
-                    </span>
+                    {{ status_badge(svc_status | replace('_', ' ') | title, svc_status_variant, pulse=(svc_status == 'active'), size="md") }}
                 </div>
 
                 <div class="mt-6 grid gap-4 sm:grid-cols-2">
@@ -104,8 +115,8 @@
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/>
                 </svg>
             </div>
-            <h3 class="text-lg font-display font-semibold text-stone-900 dark:text-white">No active services</h3>
-            <p class="mt-2 text-sm text-stone-500 dark:text-stone-400 max-w-md mx-auto">Contact support to activate a service plan and start enjoying high-speed internet.</p>
+            <h3 class="text-lg font-display font-semibold text-stone-900 dark:text-white">No services available</h3>
+            <p class="mt-2 text-sm text-stone-500 dark:text-stone-400 max-w-md mx-auto">You do not have any visible services in the portal yet. Contact support if you need help activating or restoring service.</p>
             <a href="/portal/support" class="mt-6 inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-[var(--color-brand-500)] to-[var(--color-brand-600)] px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-[var(--color-brand-500)]/20 transition-all hover:shadow-xl hover:shadow-[var(--color-brand-500)]/30 hover:-translate-y-0.5">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>

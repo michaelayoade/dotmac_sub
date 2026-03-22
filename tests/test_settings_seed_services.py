@@ -3,6 +3,7 @@
 
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.notification import NotificationChannel, NotificationTemplate
 from app.services import settings_seed
 
 # =============================================================================
@@ -223,6 +224,32 @@ class TestSeedNotificationSettings:
         assert setting is not None
 
 
+class TestSeedNotificationTemplates:
+    def test_seeds_suspension_warning_template(self, db_session):
+        settings_seed.seed_notification_templates(db_session)
+
+        template = db_session.query(NotificationTemplate).filter(
+            NotificationTemplate.code == "suspension_warning"
+        ).first()
+
+        assert template is not None
+        assert template.channel == NotificationChannel.email
+
+    def test_seeds_sms_notification_templates(self, db_session):
+        settings_seed.seed_notification_templates(db_session)
+
+        codes = {
+            (row.code, row.channel)
+            for row in db_session.query(NotificationTemplate).filter(
+                NotificationTemplate.channel == NotificationChannel.sms
+            ).all()
+        }
+
+        assert ("invoice_overdue", NotificationChannel.sms) in codes
+        assert ("suspension_warning", NotificationChannel.sms) in codes
+        assert ("subscription_suspended", NotificationChannel.sms) in codes
+
+
 # =============================================================================
 # Collections Settings Tests
 # =============================================================================
@@ -256,6 +283,31 @@ class TestSeedCollectionsSettings:
         ).first()
         assert setting is not None
         assert setting.value_json == ["2026-01-01"]
+
+
+class TestSeedBillingSettings:
+    def test_seeds_phase7_notification_keys(self, db_session):
+        settings_seed.seed_billing_settings(db_session)
+
+        settings = {
+            row.key: row.value_text
+            for row in db_session.query(DomainSetting).filter(
+                DomainSetting.domain == SettingDomain.billing,
+                DomainSetting.key.in_(
+                    [
+                        "suspension_grace_hours",
+                        "expiry_reminder_days",
+                        "invoice_reminder_days",
+                        "dunning_escalation_days",
+                    ]
+                ),
+            ).all()
+        }
+
+        assert settings["suspension_grace_hours"] == "48"
+        assert settings["expiry_reminder_days"] == "7"
+        assert settings["invoice_reminder_days"] == "7,1"
+        assert settings["dunning_escalation_days"] == "3,7,14,30"
 
 
 # =============================================================================
@@ -395,6 +447,39 @@ class TestSeedBillingSettings:
         ).first()
         assert setting is not None
         assert setting.value_text == "INVOICE-"
+
+    def test_seeds_auto_suspend_on_overdue(self, db_session, monkeypatch):
+        """Test overdue auto-suspension setting is seeded."""
+        monkeypatch.setenv("BILLING_AUTO_SUSPEND_ON_OVERDUE", "false")
+
+        settings_seed.seed_billing_settings(db_session)
+
+        setting = db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.billing,
+            DomainSetting.key == "auto_suspend_on_overdue",
+        ).first()
+        assert setting is not None
+        assert setting.value_text == "false"
+
+    def test_seeds_plan_change_runtime_settings(self, db_session, monkeypatch):
+        """Test runtime plan-change settings are seeded in billing domain."""
+        monkeypatch.setenv("PLAN_CHANGE_REFUND_POLICY", "prorated")
+        monkeypatch.setenv("PLAN_CHANGE_INVOICE_TIMING", "next_invoice")
+
+        settings_seed.seed_billing_settings(db_session)
+
+        refund = db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.billing,
+            DomainSetting.key == "refund_policy",
+        ).first()
+        invoice_timing = db_session.query(DomainSetting).filter(
+            DomainSetting.domain == SettingDomain.billing,
+            DomainSetting.key == "invoice_timing",
+        ).first()
+        assert refund is not None
+        assert refund.value_text == "prorated"
+        assert invoice_timing is not None
+        assert invoice_timing.value_text == "next_invoice"
 
 
 # =============================================================================

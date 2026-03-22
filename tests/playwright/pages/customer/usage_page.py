@@ -13,7 +13,7 @@ class CustomerUsagePage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/customer/usage") -> None:
+    def goto(self, path: str = "/portal/usage") -> None:
         """Navigate to the usage page."""
         super().goto(path)
 

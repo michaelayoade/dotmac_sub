@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 import os
+import json
+from uuid import UUID
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import pytest
+from starlette.requests import Request
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect, sync_playwright
 
+from app.db import SessionLocal
+from app.models.catalog import CatalogOffer, OfferStatus, Subscription, SubscriptionStatus
+from app.schemas.catalog import SubscriptionCreate
+from app.models.subscriber import Reseller, Subscriber, UserType
+from app.services import customer_portal, reseller_portal
+from app.services import catalog as catalog_service
+from app.services.auth_flow import AuthFlow, issue_web_session_token
 from tests.playwright.helpers.api import api_post_form, bearer_headers
 from tests.playwright.helpers.auth import (
     ensure_person,
@@ -19,8 +29,98 @@ from tests.playwright.helpers.auth import (
 )
 from tests.playwright.helpers.config import E2ESettings
 from tests.playwright.helpers.data import ensure_person_subscriber_account
+from tests.playwright.pages.admin.login_page import AdminLoginPage
+
+CUSTOMER_PORTAL_PASSWORD = "CustomerPass123!"
+RESELLER_PORTAL_USERNAME = "e2e.reseller@example.com"
+RESELLER_PORTAL_PASSWORD = "ResellerPass123!"
 
 
+def _latest_subscription_id(db, subscriber_id: str) -> str | None:
+    subscription = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber_id)
+        .order_by(Subscription.created_at.desc())
+        .first()
+    )
+    if not subscription:
+        return None
+    return str(subscription.id)
+
+
+def _ensure_active_customer_subscription(subscriber_id: str) -> str | None:
+    db = SessionLocal()
+    try:
+        existing = (
+            db.query(Subscription)
+            .filter(
+                Subscription.subscriber_id == subscriber_id,
+                Subscription.status == SubscriptionStatus.active,
+            )
+            .order_by(Subscription.created_at.desc())
+            .first()
+        )
+        if existing is not None:
+            return str(existing.id)
+
+        offer = (
+            db.query(CatalogOffer)
+            .filter(
+                CatalogOffer.status == OfferStatus.active,
+                CatalogOffer.is_active.is_(True),
+            )
+            .order_by(CatalogOffer.created_at.asc())
+            .first()
+        )
+        if offer is None:
+            return None
+
+        subscription = catalog_service.subscriptions.create(
+            db,
+            SubscriptionCreate(
+                subscriber_id=UUID(subscriber_id),
+                offer_id=offer.id,
+                status=SubscriptionStatus.active,
+                billing_mode=offer.billing_mode,
+                contract_term=offer.contract_term,
+            ),
+        )
+        return str(subscription.id)
+    finally:
+        db.close()
+
+
+def _ensure_reseller_setup(reseller_subscriber_id: str, customer_subscriber_id: str) -> dict[str, str]:
+    db = SessionLocal()
+    try:
+        reseller_subscriber = db.get(Subscriber, reseller_subscriber_id)
+        customer_subscriber = db.get(Subscriber, customer_subscriber_id)
+        assert reseller_subscriber is not None
+        assert customer_subscriber is not None
+
+        reseller = (
+            db.query(Reseller)
+            .filter(Reseller.contact_email == reseller_subscriber.email)
+            .first()
+        )
+        if reseller is None:
+            reseller = Reseller(
+                name="E2E Reseller",
+                code="E2E-RESELLER",
+                contact_email=reseller_subscriber.email,
+                is_active=True,
+            )
+            db.add(reseller)
+            db.flush()
+
+        reseller_subscriber.user_type = UserType.reseller
+        reseller_subscriber.reseller_id = reseller.id
+        customer_subscriber.reseller_id = reseller.id
+
+        db.commit()
+        return {"reseller_id": str(reseller.id), "subscriber_id": str(reseller_subscriber.id)}
+    finally:
+        db.close()
 @pytest.fixture(scope="session")
 def settings() -> E2ESettings:
     if os.getenv("PLAYWRIGHT_BASE_URL") is None:
@@ -38,7 +138,6 @@ def playwright_instance():
 
 @pytest.fixture(scope="session")
 def browser(playwright_instance, settings: E2ESettings):
-    print(f"[e2e] browser setup name={settings.browser}", flush=True)
     browser_name = settings.browser
     browser_type = getattr(playwright_instance, browser_name, None)
     if browser_type is None:
@@ -61,7 +160,6 @@ def browser(playwright_instance, settings: E2ESettings):
 
     browser = browser_type.launch(**launch_kwargs)
     yield browser
-    print("[e2e] browser teardown", flush=True)
     browser.close()
 
 
@@ -78,17 +176,61 @@ def _require_admin_credentials(settings: E2ESettings) -> tuple[str, str]:
     return settings.admin_username, settings.admin_password
 
 
+def _login_for_token_via_browser(
+    browser,
+    settings: E2ESettings,
+    username: str,
+    password: str,
+) -> str:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        context = browser.new_context()
+        context.set_default_timeout(settings.action_timeout_ms)
+        context.set_default_navigation_timeout(settings.navigation_timeout_ms)
+        page = context.new_page()
+        try:
+            page.goto(f"{settings.base_url}/auth/login", wait_until="domcontentloaded")
+            result = page.evaluate(
+                """async ({ username, password }) => {
+                    const response = await fetch('/api/v1/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password }),
+                        credentials: 'same-origin',
+                    });
+                    let payload = null;
+                    try {
+                        payload = await response.json();
+                    } catch (error) {
+                        payload = null;
+                    }
+                    return { status: response.status, payload };
+                }""",
+                {"username": username, "password": password},
+            )
+            if result["status"] != 200:
+                raise RuntimeError(f"Browser API login failed: {result['status']}")
+            payload = result.get("payload") or {}
+            token = payload.get("access_token")
+            if not isinstance(token, str) or not token:
+                raise RuntimeError("Browser API login missing access_token")
+            return token
+        except Exception as exc:
+            last_error = exc
+            if attempt < 2:
+                continue
+        finally:
+            context.close()
+    raise RuntimeError(f"Browser API login failed after retries: {last_error}")
+
+
 @pytest.fixture(scope="session")
-def admin_token(settings: E2ESettings, api_context) -> str:
-    print("[e2e] admin_token setup", flush=True)
+def admin_token(settings: E2ESettings, api_context, browser) -> str:
     username, password = _require_admin_credentials(settings)
     try:
-        token = login_for_token(api_context, username, password)
-        print("[e2e] admin_token acquired", flush=True)
-        return token
-    except Exception as exc:
-        print(f"[e2e] admin_token failed: {type(exc).__name__}: {exc}", flush=True)
-        raise
+        return login_for_token(api_context, username, password)
+    except Exception:
+        return _login_for_token_via_browser(browser, settings, username, password)
 
 
 @pytest.fixture(scope="session")
@@ -124,11 +266,41 @@ def test_identities(settings: E2ESettings, api_context, admin_token: str) -> dic
         "Tester",
         "e2e.customer@example.com",
     )
+    ensure_user_credential(
+        api_context,
+        admin_token,
+        customer_profile["person"]["id"],
+        customer_profile["person"]["email"],
+        CUSTOMER_PORTAL_PASSWORD,
+    )
+    customer_profile["subscription_id"] = _ensure_active_customer_subscription(
+        customer_profile["account"]["id"]
+    )
+
+    reseller_person = ensure_person(
+        api_context,
+        admin_token,
+        "Reseller",
+        "Tester",
+        RESELLER_PORTAL_USERNAME,
+    )
+    ensure_user_credential(
+        api_context,
+        admin_token,
+        reseller_person["id"],
+        RESELLER_PORTAL_USERNAME,
+        RESELLER_PORTAL_PASSWORD,
+    )
+    reseller_profile = {
+        "person": reseller_person,
+        **_ensure_reseller_setup(reseller_person["id"], customer_profile["person"]["id"]),
+    }
 
     return {
         "agent": agent_person,
         "user": user_person,
         "customer": customer_profile,
+        "reseller": reseller_profile,
     }
 
 
@@ -146,32 +318,53 @@ def _storage_state_path(role: str) -> Path:
     return Path(__file__).parent / ".auth" / f"{role}.json"
 
 
-def _write_storage_state(browser, settings: E2ESettings, token: str, role: str) -> Path:
+def _write_storage_state(_browser, settings: E2ESettings, token: str, role: str) -> Path:
     path = _storage_state_path(role)
     path.parent.mkdir(parents=True, exist_ok=True)
-    context = browser.new_context()
     parsed = urlparse(settings.base_url)
-    context.add_cookies(
-        [
+    cookie = {
+        "name": "session_token",
+        "value": token,
+        "domain": parsed.hostname or "127.0.0.1",
+        "path": "/",
+        "httpOnly": True,
+        "secure": parsed.scheme == "https",
+        "sameSite": "Lax",
+    }
+    if parsed.port:
+        cookie["domain"] = parsed.hostname or "127.0.0.1"
+    path.write_text(
+        json.dumps(
             {
-                "name": "session_token",
-                "value": token,
-                "url": settings.base_url,
-                "httpOnly": True,
-                "secure": parsed.scheme == "https",
-                "sameSite": "Lax",
+                "cookies": [cookie],
+                "origins": [],
             }
-        ]
+        )
     )
-    context.storage_state(path=path)
-    context.close()
     return path
 
 
 @pytest.fixture(scope="session")
-def admin_storage_state(browser, settings: E2ESettings, admin_token: str) -> Path:
-    print("[e2e] admin_storage_state setup", flush=True)
-    return _write_storage_state(browser, settings, admin_token, "admin")
+def admin_storage_state(playwright_instance, settings: E2ESettings) -> Path:
+    username, password = _require_admin_credentials(settings)
+    db = SessionLocal()
+    try:
+        request = Request(
+            {
+                "type": "http",
+                "method": "POST",
+                "path": "/auth/login",
+                "headers": [(b"user-agent", b"playwright-local-auth")],
+                "client": ("127.0.0.1", 0),
+                "scheme": "http",
+                "server": ("127.0.0.1", 8001),
+            }
+        )
+        result = AuthFlow.login(db, username, password, request, provider=None)
+        token = issue_web_session_token(db, str(result.get("access_token", "")))
+        return _write_storage_state(None, settings, token, "admin")
+    finally:
+        db.close()
 
 
 @pytest.fixture(scope="session")
@@ -185,17 +378,24 @@ def user_storage_state(browser, settings: E2ESettings, user_token: str) -> Path:
 
 
 @pytest.fixture()
+def admin_auth_api_context(playwright_instance, settings: E2ESettings, admin_storage_state: Path):
+    context = playwright_instance.request.new_context(
+        base_url=settings.base_url,
+        storage_state=str(admin_storage_state),
+    )
+    yield context
+    context.dispose()
+
+
+@pytest.fixture()
 def admin_context(browser, settings: E2ESettings, admin_storage_state: Path):
-    print(f"[e2e] admin_context setup storage_state={admin_storage_state}", flush=True)
     context = browser.new_context(storage_state=admin_storage_state)
     context.set_default_timeout(settings.action_timeout_ms)
     context.set_default_navigation_timeout(settings.navigation_timeout_ms)
     yield context
     try:
-        print("[e2e] admin_context teardown", flush=True)
         context.close()
     except PlaywrightError:
-        print("[e2e] admin_context teardown ignored PlaywrightError", flush=True)
         pass
 
 
@@ -225,15 +425,12 @@ def user_context(browser, settings: E2ESettings, user_storage_state: Path):
 
 @pytest.fixture()
 def admin_page(admin_context):
-    print("[e2e] admin_page setup", flush=True)
     page = admin_context.new_page()
     yield page
     try:
-        print("[e2e] admin_page teardown", flush=True)
         if not page.is_closed():
             page.close()
     except PlaywrightError:
-        print("[e2e] admin_page teardown ignored PlaywrightError", flush=True)
         pass
 
 
@@ -298,35 +495,22 @@ def _email_for_username(username: str) -> str:
 
 
 @pytest.fixture()
-def customer_context(browser, settings: E2ESettings, api_context, admin_token: str, test_identities: dict):
-    """Browser context with customer portal session via impersonation."""
+def customer_context(browser, settings: E2ESettings, test_identities: dict):
+    """Browser context with a direct customer portal session cookie."""
     customer = test_identities["customer"]
-    person_id = customer["person"]["id"]
     account_id = customer["account"]["id"]
-
-    # Impersonate customer through admin endpoint
-    response = api_post_form(
-        api_context,
-        f"/admin/customers/person/{person_id}/impersonate",
-        {"account_id": account_id},
-        headers=bearer_headers(admin_token),
-    )
-
-    if not response.ok:
-        pytest.skip(f"Failed to impersonate customer: {response.status}")
-
-    # Extract customer_session cookie from response
-    customer_session = None
-    for header in response.headers_array:
-        if header["name"].lower() != "set-cookie":
-            continue
-        cookie = header["value"]
-        if "customer_session=" in cookie:
-            customer_session = cookie.split("customer_session=")[1].split(";", 1)[0]
-            break
-
-    if not customer_session:
-        pytest.skip("Impersonation did not return customer_session cookie")
+    username = customer["person"]["email"]
+    db = SessionLocal()
+    try:
+        customer_session = customer_portal.create_customer_session(
+            username=username,
+            account_id=account_id,
+            subscriber_id=account_id,
+            subscription_id=_latest_subscription_id(db, account_id),
+            db=db,
+        )
+    finally:
+        db.close()
 
     context = browser.new_context()
     context.set_default_timeout(settings.action_timeout_ms)
@@ -358,34 +542,40 @@ def customer_page(customer_context):
 
 
 @pytest.fixture()
-def customer_token(api_context, admin_token: str, test_identities: dict):
-    """Get a token for customer API access via impersonation.
-
-    Note: Customer portal may use cookie-based auth rather than tokens.
-    This fixture attempts to get a customer token or skips if unavailable.
-    """
+def customer_api_context(playwright_instance, settings: E2ESettings, test_identities: dict):
+    """Request context with a real customer portal session cookie."""
     customer = test_identities["customer"]
-    person_id = customer["person"]["id"]
     account_id = customer["account"]["id"]
+    username = customer["person"]["email"]
+    db = SessionLocal()
+    try:
+        customer_session = customer_portal.create_customer_session(
+            username=username,
+            account_id=account_id,
+            subscriber_id=account_id,
+            subscription_id=_latest_subscription_id(db, account_id),
+            db=db,
+        )
+    finally:
+        db.close()
 
-    # Try to get a customer API token via impersonation
-    response = api_post_form(
-        api_context,
-        f"/admin/customers/person/{person_id}/impersonate",
-        {"account_id": account_id, "api_token": "true"},
-        headers=bearer_headers(admin_token),
+    context = playwright_instance.request.new_context(
+        base_url=settings.base_url,
+        extra_http_headers={"Cookie": f"{customer_portal.SESSION_COOKIE_NAME}={customer_session}"},
     )
+    yield context
+    context.dispose()
 
-    if not response.ok:
-        pytest.skip(f"Customer API token not available: {response.status}")
 
-    data = response.json() if response.headers.get("content-type", "").startswith("application/json") else {}
-    if "token" in data:
-        return data["token"]
-
-    # If no token, use admin token for customer-scoped API calls
-    # or skip if customer API requires specific customer auth
-    pytest.skip("Customer portal uses cookie-based auth, not API tokens")
+@pytest.fixture()
+def customer_token(api_context, admin_token: str, test_identities: dict):
+    """Get a subscriber access token for the seeded customer credential."""
+    customer = test_identities["customer"]
+    return login_for_token(
+        api_context,
+        customer["person"]["email"],
+        CUSTOMER_PORTAL_PASSWORD,
+    )
 
 
 # Anonymous/unauthenticated context for testing login flows
@@ -436,15 +626,39 @@ def vendor_page(vendor_context):
 
 
 @pytest.fixture()
-def reseller_context(browser, settings: E2ESettings, api_context, admin_token: str):
-    """Browser context with reseller portal session.
+def reseller_context(browser, settings: E2ESettings, test_identities: dict):
+    """Browser context with a direct reseller portal session cookie."""
+    reseller = test_identities["reseller"]
+    db = SessionLocal()
+    try:
+        reseller_session = reseller_portal._create_session(
+            username=RESELLER_PORTAL_USERNAME,
+            reseller_id=reseller["reseller_id"],
+            subscriber_id=reseller["subscriber_id"],
+            remember=False,
+            db=db,
+        )
+    finally:
+        db.close()
 
-    Note: Reseller portal may require specific reseller credentials.
-    This fixture skips if reseller auth is not available.
-    """
-    # Try to authenticate as a reseller
-    # For now, skip as reseller auth setup is required
-    pytest.skip("Reseller portal fixtures require reseller auth setup")
+    context = browser.new_context()
+    context.set_default_timeout(settings.action_timeout_ms)
+    context.set_default_navigation_timeout(settings.navigation_timeout_ms)
+    parsed = urlparse(settings.base_url)
+    context.add_cookies(
+        [
+            {
+                "name": reseller_portal.SESSION_COOKIE_NAME,
+                "value": reseller_session,
+                "url": settings.base_url,
+                "httpOnly": True,
+                "secure": parsed.scheme == "https",
+                "sameSite": "Lax",
+            }
+        ]
+    )
+    yield context
+    context.close()
 
 
 @pytest.fixture()

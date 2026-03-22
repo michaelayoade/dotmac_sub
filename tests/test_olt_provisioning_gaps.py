@@ -1889,6 +1889,12 @@ class TestProvisioningUiTemplates:
         assert "TR-069-only onboarding" in template
         assert 'name="pon_port_id" id="pon_port_id" required' not in template
 
+    def test_ont_list_offers_tr069_import_shortcut(self) -> None:
+        template = Path("templates/admin/network/onts/index.html").read_text()
+
+        assert "/admin/network/tr069?only_unlinked=true" in template
+        assert "Import From TR-069" in template
+
 
 class TestOntAssignmentValidation:
     def test_validate_form_values_allows_blank_pon_port(self) -> None:

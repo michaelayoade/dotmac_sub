@@ -176,38 +176,25 @@ class TestCustomerProfile:
 
 
 class TestCustomerPortalAPI:
-    """API-level tests for customer portal."""
+    """Cookie-backed endpoint checks for customer portal."""
 
-    def test_customer_billing_api(self, api_context, customer_token):
-        """API should return customer billing info."""
-        from tests.playwright.helpers.api import api_get, bearer_headers
+    def test_customer_session_endpoint(self, customer_api_context):
+        """Session endpoint should resolve for an authenticated customer."""
+        from tests.playwright.helpers.api import api_get
 
-        response = api_get(
-            api_context,
-            "/api/v1/customer/billing",
-            headers=bearer_headers(customer_token),
-        )
-        # May return 200 or 403 depending on token permissions
-        assert response.status in [200, 403]
+        response = api_get(customer_api_context, "/portal/auth/session")
+        assert response.status == 200
 
-    def test_customer_services_api(self, api_context, customer_token):
-        """API should return customer services."""
-        from tests.playwright.helpers.api import api_get, bearer_headers
+    def test_customer_services_endpoint(self, customer_api_context):
+        """Services page should render for an authenticated customer."""
+        from tests.playwright.helpers.api import api_get
 
-        response = api_get(
-            api_context,
-            "/api/v1/customer/services",
-            headers=bearer_headers(customer_token),
-        )
-        assert response.status in [200, 403]
+        response = api_get(customer_api_context, "/portal/services")
+        assert response.status == 200
 
-    def test_customer_usage_api(self, api_context, customer_token):
-        """API should return customer usage data."""
-        from tests.playwright.helpers.api import api_get, bearer_headers
+    def test_customer_usage_endpoint(self, customer_api_context):
+        """Usage page should render for an authenticated customer."""
+        from tests.playwright.helpers.api import api_get
 
-        response = api_get(
-            api_context,
-            "/api/v1/customer/usage",
-            headers=bearer_headers(customer_token),
-        )
-        assert response.status in [200, 403]
+        response = api_get(customer_api_context, "/portal/usage")
+        assert response.status == 200

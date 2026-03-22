@@ -1,0 +1,162 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, card %}
+
+{% block title %}Bandwidth & Usage - Admin{% endblock %}
+
+{% block charts_js %}
+<script src="/static/js/vendor/chart.min.js"></script>
+<script src="/static/js/charts.js"></script>
+{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "indigo") }}
+
+<div class="relative space-y-8">
+    {% call page_header(
+        title="Bandwidth & Usage",
+        subtitle="Network usage analytics and top consumers",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>',
+        color="blue",
+        color2="indigo"
+    ) %}
+        <div class="flex items-center gap-2">
+            {% for d in [7, 30, 90] %}
+            <a href="/admin/reports/bandwidth?days={{ d }}"
+               class="rounded-lg px-3 py-2 text-sm font-semibold transition-all
+               {% if days == d %}bg-blue-600 text-white shadow-sm{% else %}border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300{% endif %}">
+                {{ d }}d
+            </a>
+            {% endfor %}
+        </div>
+    {% endcall %}
+
+    <!-- KPI Cards -->
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {{ stats_card("Total Usage", total_gb ~ " GB",
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>',
+            color="blue", color2="indigo") }}
+        {{ stats_card("Avg Download", avg_rx_mbps ~ " Mbps",
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 14l-7 7m0 0l-7-7m7 7V3"/></svg>',
+            color="cyan", color2="blue") }}
+        {{ stats_card("Avg Upload", avg_tx_mbps ~ " Mbps",
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18"/></svg>',
+            color="purple", color2="indigo") }}
+        {{ stats_card("Active Subscribers", active_subscribers,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>',
+            color="emerald", color2="teal") }}
+    </div>
+
+    <!-- Daily Bandwidth Chart -->
+    {% if chart_labels %}
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <h2 class="mb-4 text-lg font-display font-bold text-slate-900 dark:text-white">Daily Average Bandwidth (Mbps)</h2>
+        <div style="height: 300px;">
+            <canvas id="bandwidthChart"></canvas>
+        </div>
+    </div>
+    {% endif %}
+
+    <div class="grid gap-6 lg:grid-cols-2">
+        <!-- Usage by Plan -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <h2 class="mb-4 text-lg font-display font-bold text-slate-900 dark:text-white">Usage by Plan</h2>
+            {% if usage_by_plan %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Plan</th>
+                            <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Avg Mbps</th>
+                            <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscribers</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for plan in usage_by_plan %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ plan.name }}</td>
+                            <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ plan.avg_mbps }}</td>
+                            <td class="px-4 py-3 text-right text-sm text-slate-600 dark:text-slate-400">{{ plan.subscribers }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No bandwidth data available for this period.</p>
+            {% endif %}
+        </div>
+
+        <!-- Top Consumers -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <h2 class="mb-4 text-lg font-display font-bold text-slate-900 dark:text-white">Top Consumers</h2>
+            {% if top_consumers %}
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead>
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
+                            <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Plan</th>
+                            <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Avg Mbps</th>
+                            <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Usage GB</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for consumer in top_consumers %}
+                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                            <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ consumer.subscriber }}</td>
+                            <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-400">{{ consumer.plan }}</td>
+                            <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ consumer.avg_mbps }}</td>
+                            <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ consumer.usage_gb }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No consumer data available for this period.</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% if chart_labels %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('bandwidthChart').getContext('2d');
+    new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: {{ chart_labels | tojson }},
+            datasets: [
+                {
+                    label: 'Download (Mbps)',
+                    data: {{ chart_rx | tojson }},
+                    borderColor: 'rgb(59, 130, 246)',
+                    backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                },
+                {
+                    label: 'Upload (Mbps)',
+                    data: {{ chart_tx | tojson }},
+                    borderColor: 'rgb(147, 51, 234)',
+                    backgroundColor: 'rgba(147, 51, 234, 0.1)',
+                    fill: true,
+                    tension: 0.3,
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: {
+                y: { beginAtZero: true, title: { display: true, text: 'Mbps' } },
+                x: { title: { display: true, text: 'Date' } }
+            }
+        }
+    });
+});
+</script>
+{% endif %}
+{% endblock %}

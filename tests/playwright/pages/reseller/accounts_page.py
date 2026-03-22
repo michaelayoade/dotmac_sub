@@ -19,7 +19,7 @@ class ResellerAccountsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the accounts page is loaded."""
-        expect(self.page.get_by_role("heading", name="Account", exact=True)).to_be_visible()
+        expect(self.page.get_by_role("heading", name="Accounts", exact=True)).to_be_visible()
 
     def get_account_count(self) -> int:
         """Get count of accounts displayed."""

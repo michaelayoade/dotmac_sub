@@ -434,6 +434,58 @@ def get_dashboard_summary(
     open_balance = balance_row.open_balance if balance_row else 0
     open_invoices = balance_row.open_invoices if balance_row else 0
 
+    # Alert data: overdue invoices, new accounts this week, suspended accounts
+    overdue_count = (
+        db.query(func.count(Invoice.id))
+        .join(Subscriber, Invoice.account_id == Subscriber.id)
+        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        .filter(Invoice.status == InvoiceStatus.overdue)
+        .scalar()
+        or 0
+    )
+
+    week_ago = datetime.now(UTC) - timedelta(days=7)
+    new_this_week = (
+        db.query(func.count(Subscriber.id))
+        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        .filter(Subscriber.created_at >= week_ago)
+        .scalar()
+        or 0
+    )
+
+    from app.models.subscriber import SubscriberStatus
+
+    suspended_count = (
+        db.query(func.count(Subscriber.id))
+        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+        .filter(Subscriber.status.in_([SubscriberStatus.suspended, SubscriberStatus.blocked]))
+        .scalar()
+        or 0
+    )
+
+    alerts = []
+    if overdue_count > 0:
+        alerts.append({
+            "level": "warning",
+            "icon": "clock",
+            "message": f"{overdue_count} overdue invoice{'s' if overdue_count != 1 else ''} require attention",
+            "action_url": "/reseller/accounts",
+        })
+    if suspended_count > 0:
+        alerts.append({
+            "level": "danger",
+            "icon": "pause",
+            "message": f"{suspended_count} account{'s' if suspended_count != 1 else ''} suspended",
+            "action_url": "/reseller/accounts",
+        })
+    if new_this_week > 0:
+        alerts.append({
+            "level": "info",
+            "icon": "user-plus",
+            "message": f"{new_this_week} new account{'s' if new_this_week != 1 else ''} this week",
+            "action_url": "/reseller/accounts",
+        })
+
     return {
         "accounts": accounts,
         "totals": {
@@ -441,6 +493,7 @@ def get_dashboard_summary(
             "open_balance": open_balance,
             "open_invoices": open_invoices,
         },
+        "alerts": alerts,
     }
 
 

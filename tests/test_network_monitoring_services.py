@@ -3,13 +3,19 @@
 import json
 from datetime import UTC, datetime, timedelta
 
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network import OLTDevice
 from app.models.network import OntUnit
 from app.models.network_monitoring import (
+    Alert,
     AlertOperator,
     AlertSeverity,
     AlertStatus,
     MetricType,
+    DeviceMetric,
 )
+from app.models.subscription_engine import SettingValueType
+from app.models.system_user import SystemUser
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
     AlertResolveRequest,
@@ -20,7 +26,9 @@ from app.schemas.network_monitoring import (
     PopSiteCreate,
     PopSiteUpdate,
 )
+from app.tasks import alert_evaluation as alert_evaluation_task
 from app.services import network_monitoring as monitoring_service
+from app.services import monitoring_metrics as monitoring_metrics_service
 from app.services import web_network_monitoring as web_network_monitoring_service
 
 
@@ -581,3 +589,177 @@ def test_list_alert_rules(db_session, network_device):
         offset=0,
     )
     assert len(rules) >= 2
+
+
+def test_get_device_health_table_uses_latest_metrics(db_session, network_device):
+    now = datetime.now(UTC)
+    db_session.add_all(
+        [
+            DeviceMetric(
+                device_id=network_device.id,
+                metric_type=MetricType.cpu,
+                value=55,
+                recorded_at=now - timedelta(minutes=5),
+            ),
+            DeviceMetric(
+                device_id=network_device.id,
+                metric_type=MetricType.cpu,
+                value=71,
+                recorded_at=now,
+            ),
+            DeviceMetric(
+                device_id=network_device.id,
+                metric_type=MetricType.memory,
+                value=84,
+                recorded_at=now,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    rows = web_network_monitoring_service._get_device_health_table(db_session)
+
+    row = next(item for item in rows if item["id"] == str(network_device.id))
+    assert row["ip"] == str(network_device.mgmt_ip or "")
+    assert row["cpu"] == 71.0
+    assert row["memory"] == 84.0
+
+
+def test_poll_device_system_metrics_uses_mgmt_ip_backed_device(db_session, network_device, monkeypatch):
+    network_device.mgmt_ip = "10.0.0.9"
+    network_device.vendor = "mikrotik"
+    network_device.snmp_community = "encrypted-community"
+    db_session.commit()
+
+    oid_values = {
+        ".1.3.6.1.2.1.25.3.3.1.2.1": 63.0,
+        ".1.3.6.1.2.1.25.2.3.1.6.65536": 400.0,
+        ".1.3.6.1.2.1.25.2.3.1.5.65536": 800.0,
+        ".1.3.6.1.2.1.1.3.0": 12345.0,
+        ".1.3.6.1.4.1.14988.1.1.3.10.0": 48.0,
+    }
+
+    monkeypatch.setattr(
+        monitoring_metrics_service,
+        "_snmp_get_single",
+        lambda device, oid: oid_values.get(oid),
+    )
+    pushed: dict[str, float] = {}
+    monkeypatch.setattr(
+        monitoring_metrics_service,
+        "push_device_health_metrics",
+        lambda device, metrics: pushed.update(metrics),
+    )
+
+    result = monitoring_metrics_service.poll_device_system_metrics(db_session, network_device)
+    db_session.commit()
+
+    assert result["stored"] == 4
+    assert pushed["cpu"] == 63.0
+    assert pushed["memory"] == 50.0
+    assert pushed["temperature"] == 48.0
+
+
+def test_poll_onu_signal_strength_delegates_to_olt_inventory(db_session, network_device, monkeypatch):
+    network_device.mgmt_ip = "10.20.30.40"
+    network_device.vendor = "huawei"
+    db_session.add(
+        OLTDevice(
+            name="OLT-1",
+            mgmt_ip="10.20.30.40",
+            vendor="huawei",
+            is_active=True,
+            snmp_ro_community="enc-ro",
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.monitoring_metrics.decrypt_credential",
+        lambda value: "public",
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_polling.poll_olt_ont_signals",
+        lambda db, olt, community=None: {"polled": 12, "updated": 9, "errors": 1},
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_polling.push_signal_metrics_to_victoriametrics",
+        lambda db: 5,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_polling.get_signal_thresholds",
+        lambda db: (-25.0, -28.0),
+    )
+
+    result = monitoring_metrics_service.poll_onu_signal_strength(db_session, network_device)
+
+    assert result["polled"] == 12
+    assert result["stored"] == 9
+    assert result["errors"] == 1
+
+
+def test_monitoring_config_context_includes_runtime_settings(db_session):
+    from app.services.web_system_config import get_monitoring_config_context
+
+    context = get_monitoring_config_context(db_session)
+
+    assert context["monitoring"]["device_metrics_retention_days"] == "90"
+    assert context["monitoring"]["alert_evaluation_interval_seconds"] == "60"
+    assert context["monitoring"]["interface_walk_interval_seconds"] == "300"
+    assert context["monitoring"]["hot_retention_hours"] == "24"
+
+
+def test_notify_alert_uses_policy_engine_before_admin_fallback(
+    db_session,
+    network_device,
+    monkeypatch,
+):
+    rule = monitoring_service.alert_rules.create(
+        db_session,
+        AlertRuleCreate(
+            name="CPU Alert",
+            metric_type=MetricType.cpu,
+            threshold=80.0,
+            severity=AlertSeverity.critical,
+            device_id=network_device.id,
+        ),
+    )
+    alert = Alert(
+        rule_id=rule.id,
+        device_id=network_device.id,
+        metric_type=MetricType.cpu,
+        measured_value=95.0,
+        status=AlertStatus.open,
+        severity=AlertSeverity.critical,
+    )
+    db_session.add(alert)
+    metric = DeviceMetric(
+        device_id=network_device.id,
+        metric_type=MetricType.cpu,
+        value=95,
+        recorded_at=datetime.now(UTC),
+    )
+    db_session.add(metric)
+    db_session.add(
+        SystemUser(
+            first_name="Admin",
+            last_name="User",
+            email="admin-monitor@example.com",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.notification.alert_notification_policies.emit_for_alert",
+        lambda db, alert, status: 2,
+    )
+
+    alert_evaluation_task._notify_alert(db_session, alert, rule, metric, action="triggered")
+    db_session.commit()
+
+    from app.models.notification import Notification
+
+    queued = db_session.query(Notification).all()
+    assert queued == []

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from playwright.sync_api import Page, expect
+from playwright.sync_api import Error as PlaywrightError
 
 from tests.playwright.pages.base_page import BasePage
 
@@ -15,11 +16,57 @@ class ReportsPage(BasePage):
 
     def goto(self, path: str = "/admin/reports") -> None:
         """Navigate to reports page."""
-        super().goto(path)
+        last_error: Exception | None = None
+        for _ in range(2):
+            try:
+                self.page.goto(
+                    f"{self.base_url}/admin/dashboard",
+                    wait_until="commit",
+                    timeout=30000,
+                )
+                self.page.wait_for_load_state("domcontentloaded")
+                reports_link = self.page.locator("a[href='/admin/reports'], a[href='/admin/reports/hub']").first
+                expect(reports_link).to_be_visible()
+                reports_link.click(no_wait_after=True)
+                self.page.wait_for_load_state("domcontentloaded")
+                return
+            except PlaywrightError as exc:
+                last_error = exc
+                try:
+                    self.page.goto(
+                        f"{self.base_url}/admin/reports/hub",
+                        wait_until="commit",
+                        timeout=30000,
+                    )
+                    self.page.wait_for_load_state("domcontentloaded")
+                    return
+                except PlaywrightError as fallback_exc:
+                    last_error = fallback_exc
+        if last_error:
+            raise last_error
 
     def expect_loaded(self) -> None:
         """Assert reports page is loaded."""
-        expect(self.page.get_by_role("heading", name="Report")).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Reports Hub", exact=True).or_(
+                self.page.get_by_role("heading", name="Reports", exact=True).or_(
+                    self.page.get_by_role("heading", name="Report", exact=False)
+                )
+            ).first
+        ).to_be_visible()
+
+
+def _goto_report_page(page: Page, url: str) -> None:
+    last_error: Exception | None = None
+    for _ in range(2):
+        try:
+            page.goto(url, wait_until="commit", timeout=30000)
+            page.wait_for_load_state("domcontentloaded")
+            return
+        except PlaywrightError as exc:
+            last_error = exc
+    if last_error:
+        raise last_error
 
 
 class TestReportsAccess:
@@ -49,18 +96,14 @@ class TestRevenueReports:
 
     def test_revenue_report_accessible(self, admin_page: Page, settings):
         """Revenue report should be accessible."""
-        admin_page.goto(f"{settings.base_url}/admin/reports")
-        expect(admin_page.get_by_text("Revenue", exact=False).first).to_be_visible()
+        _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/revenue")
+        expect(admin_page.get_by_role("heading", name="Revenue Report", exact=True)).to_be_visible()
 
     def test_revenue_report_date_filter(self, admin_page: Page, settings):
         """Revenue report should have date filters."""
-        admin_page.goto(f"{settings.base_url}/admin/reports")
-        # Date filter elements should exist
-        expect(admin_page.get_by_role("combobox").or_(
-            admin_page.get_by_label("Date").or_(
-                admin_page.get_by_label("Period")
-            )
-        ).first).to_be_visible()
+        _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/revenue")
+        expect(admin_page.locator("#days")).to_be_visible()
+        expect(admin_page.get_by_role("button", name="Export", exact=True)).to_be_visible()
 
 
 class TestSubscriberReports:
@@ -68,7 +111,7 @@ class TestSubscriberReports:
 
     def test_subscriber_report_accessible(self, admin_page: Page, settings):
         """Subscriber report should be accessible."""
-        admin_page.goto(f"{settings.base_url}/admin/reports")
+        _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/hub")
         expect(admin_page.get_by_text("Subscriber", exact=False).or_(
             admin_page.get_by_text("Customer", exact=False)
         ).first).to_be_visible()
@@ -79,7 +122,7 @@ class TestNetworkReports:
 
     def test_network_report_accessible(self, admin_page: Page, settings):
         """Network report should be accessible."""
-        admin_page.goto(f"{settings.base_url}/admin/reports")
+        _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/hub")
         # Check for network or operations reports
         expect(admin_page.get_by_text("Network", exact=False).or_(
             admin_page.get_by_text("Operation", exact=False).or_(

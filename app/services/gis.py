@@ -41,6 +41,24 @@ from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
 
+
+def _coerce_filter_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "off"}:
+            return False
+    return None
+
+
+def _layer_filter_value(filters: dict | None, key: str) -> object | None:
+    if not isinstance(filters, dict):
+        return None
+    return filters.get(key)
+
 class GeoLocations(CRUDManager[GeoLocation]):
     model = GeoLocation
     not_found_detail = "Geo location not found"
@@ -448,12 +466,13 @@ def _build_layer_features(
     layer = GeoLayers.get_by_key(db, layer_key)
     features: list[GeoFeatureRead] = []
     if layer.source_type.value == "locations":
+        is_active_filter = _coerce_filter_bool(_layer_filter_value(layer.filters, "is_active"))
         locations = GeoLocations.list(
             db,
-            location_type=None,
-            address_id=None,
-            pop_site_id=None,
-            is_active=True,
+            location_type=_layer_filter_value(layer.filters, "location_type"),
+            address_id=_layer_filter_value(layer.filters, "address_id"),
+            pop_site_id=_layer_filter_value(layer.filters, "pop_site_id"),
+            is_active=True if is_active_filter is None else is_active_filter,
             min_latitude=min_latitude,
             min_longitude=min_longitude,
             max_latitude=max_latitude,
@@ -486,10 +505,11 @@ def _build_layer_features(
                 )
             )
     elif layer.source_type.value == "areas":
+        is_active_filter = _coerce_filter_bool(_layer_filter_value(layer.filters, "is_active"))
         areas = GeoAreas.list(
             db,
-            area_type=None,
-            is_active=True,
+            area_type=_layer_filter_value(layer.filters, "area_type"),
+            is_active=True if is_active_filter is None else is_active_filter,
             min_latitude=min_latitude,
             min_longitude=min_longitude,
             max_latitude=max_latitude,

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.csrf import get_csrf_token
 from app.db import get_db
+from app.services.auth_dependencies import require_method_permission
 from app.services import web_vpn_management as web_vpn_management_service
 from app.services import web_vpn_peers as web_vpn_peers_service
 from app.services import web_vpn_servers as web_vpn_servers_service
@@ -16,8 +17,16 @@ from app.services import wireguard as wg_service
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 
 templates = Jinja2Templates(directory="templates")
-router = APIRouter(prefix="/vpn", tags=["web-admin-vpn"])
-legacy_router = APIRouter(prefix="/wireguard", tags=["web-admin-vpn-legacy"])
+router = APIRouter(
+    prefix="/vpn",
+    tags=["web-admin-vpn"],
+    dependencies=[Depends(require_method_permission("network:vpn:read", "network:vpn:write"))],
+)
+legacy_router = APIRouter(
+    prefix="/wireguard",
+    tags=["web-admin-vpn-legacy"],
+    dependencies=[Depends(require_method_permission("network:vpn:read", "network:vpn:write"))],
+)
 
 
 def _base_context(

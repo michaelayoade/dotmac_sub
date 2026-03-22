@@ -68,6 +68,10 @@ def monitoring_page_data(
     data["query"] = (query or "").strip()
     data["last_refreshed_at"] = datetime.now(UTC)
 
+    # Device health metrics table (CPU, memory, temperature per device)
+    data["device_health"] = _get_device_health_table(db, query=query)
+    data["device_health_total"] = len(data["device_health"])
+
     return data
 
 
@@ -513,3 +517,67 @@ def _get_network_activity_feed(
         })
 
     return items
+
+
+def _get_device_health_table(db: Session, query: str | None = None) -> list[dict]:
+    """Build a device health summary with CPU, memory, temperature, uptime.
+
+    Queries the latest DeviceMetric for each active device.
+    Returns a list of dicts suitable for the monitoring dashboard table.
+    """
+    from sqlalchemy import select
+
+    from app.models.network_monitoring import (
+        DeviceMetric,
+        MetricType,
+        NetworkDevice,
+    )
+
+    devices_query = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True))
+    term = (query or "").strip()
+    if term:
+        like = f"%{term}%"
+        devices_query = devices_query.filter(
+            (NetworkDevice.name.ilike(like))
+            | (NetworkDevice.hostname.ilike(like))
+            | (NetworkDevice.mgmt_ip.ilike(like))
+            | (NetworkDevice.vendor.ilike(like))
+        )
+    devices = devices_query.order_by(NetworkDevice.name.asc()).limit(100).all()
+
+    if not devices:
+        return []
+
+    results = []
+    for device in devices:
+        row: dict = {
+            "id": str(device.id),
+            "name": device.name or str(device.id)[:8],
+            "ip": str(device.mgmt_ip or ""),
+            "status": device.status.value if device.status else "unknown",
+            "vendor": str(device.vendor or ""),
+            "cpu": None,
+            "memory": None,
+            "temperature": None,
+            "uptime": None,
+        }
+
+        # Get latest metrics for this device
+        for mt, field in [
+            (MetricType.cpu, "cpu"),
+            (MetricType.memory, "memory"),
+            (MetricType.temperature, "temperature"),
+            (MetricType.uptime, "uptime"),
+        ]:
+            val = db.scalars(
+                select(DeviceMetric.value)
+                .where(DeviceMetric.device_id == device.id, DeviceMetric.metric_type == mt)
+                .order_by(DeviceMetric.recorded_at.desc())
+                .limit(1)
+            ).first()
+            if val is not None:
+                row[field] = round(float(val), 1)
+
+        results.append(row)
+
+    return results

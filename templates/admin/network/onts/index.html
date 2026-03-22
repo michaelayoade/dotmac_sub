@@ -37,6 +37,11 @@
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 </button>
             </div>
+            <a href="/admin/network/tr069?only_unlinked=true"
+               class="inline-flex items-center gap-2 rounded-xl border border-sky-300 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 6h14M5 18h14"/></svg>
+                Import From TR-069
+            </a>
             {{ action_button("Add ONT", "/admin/network/onts/new", icon_plus(), "primary", "blue", "indigo") }}
         </div>
     {% endcall %}
@@ -248,6 +253,7 @@
                             </th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Subscriber / Customer</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Signal</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Last Seen</th>
@@ -280,6 +286,17 @@
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ ai.pon_port_display or ai.pon_port_name or '-' }}</p>
                                 {% else %}
                                 <span class="text-xs text-slate-400">Unassigned</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-6 py-4 whitespace-nowrap">
+                                {% if ai.get("subscriber_name") %}
+                                    {% if ai.get("subscriber_customer_url") %}
+                                    <a href="{{ ai.subscriber_customer_url }}" class="text-sm font-medium text-slate-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ ai.subscriber_name }}</a>
+                                    {% else %}
+                                    <span class="text-sm text-slate-900 dark:text-white">{{ ai.subscriber_name }}</span>
+                                    {% endif %}
+                                {% else %}
+                                <span class="text-xs text-slate-400"></span>
                                 {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
@@ -336,7 +353,7 @@
                             color2="indigo",
                             action_label="Add ONT",
                             action_href="/admin/network/onts/new",
-                            colspan=7
+                            colspan=8
                         ) }}
                         {% endfor %}
                     </tbody>

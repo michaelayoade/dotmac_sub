@@ -257,29 +257,17 @@ class SubscriptionChangeRequests(ListResponseMixin):
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
 
-        # Update subscription to new offer
-        previous_offer_id = subscription.offer_id
-        subscription.offer_id = request.requested_offer_id
-        from app.services.catalog.subscriptions import apply_offer_radius_profile
-        apply_offer_radius_profile(
+        # Route all plan changes through the shared subscription update path so
+        # validation, RADIUS refresh, events, and proration stay consistent.
+        from app.schemas.catalog import SubscriptionUpdate
+        from app.services import catalog as catalog_service
+
+        catalog_service.subscriptions.update(
             db,
-            subscription,
-            previous_offer_id=previous_offer_id,
+            str(subscription.id),
+            SubscriptionUpdate(offer_id=request.requested_offer_id),
         )
-
-        # Get new offer for pricing info
-        from app.models.catalog import CatalogOffer, PriceType
-
-        new_offer = db.get(CatalogOffer, request.requested_offer_id)
-        if new_offer:
-            # Best-effort: update unit price from the offer's active recurring price, if present.
-            recurring_prices = [
-                price
-                for price in (new_offer.prices or [])
-                if price.is_active and price.price_type == PriceType.recurring
-            ]
-            if recurring_prices:
-                subscription.unit_price = recurring_prices[0].amount
+        subscription = db.get(Subscription, request.subscription_id)
 
         now = datetime.now(UTC)
         request.status = SubscriptionChangeStatus.applied

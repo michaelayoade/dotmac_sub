@@ -1,0 +1,201 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ "Edit Area" if area else "New Coverage Area" }} - GIS{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/gis?tab=areas" class="hover:text-slate-700 dark:hover:text-slate-300">GIS</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ "Edit Area" if area else "New Area" }}</span>
+        </nav>
+        <h1 class="text-2xl font-display font-bold text-slate-900 dark:text-white">{{ "Edit Area" if area else "Create Coverage Area" }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Name</label>
+                    <input type="text" name="name" value="{{ area.name if area else '' }}" required
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Area Type</label>
+                    <select name="area_type" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for t in area_types %}
+                        <option value="{{ t }}" {% if area and area.area_type and area.area_type.value == t %}selected{% endif %}>{{ t | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">GeoJSON Polygon</label>
+                <textarea id="geometry_geojson" name="geometry_geojson" rows="6" placeholder='{"type": "Polygon", "coordinates": [[[lon, lat], ...]]}'
+                          class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ area.geometry_geojson if area and area.geometry_geojson else '' }}</textarea>
+                <p class="mt-1 text-xs text-slate-400">Draw or edit the polygon below. The GeoJSON field stays synced and can still be pasted manually.</p>
+            </div>
+
+            <div class="mt-4">
+                <div class="mb-2 flex items-center justify-between">
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300">Polygon Editor</label>
+                    <div class="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+                        <button type="button" id="clearGeometryButton" class="rounded border border-slate-300 px-2 py-1 hover:bg-slate-50 dark:border-slate-600 dark:hover:bg-slate-700">Clear</button>
+                        <a href="https://geojson.io" target="_blank" class="text-blue-500 hover:underline">Open geojson.io</a>
+                    </div>
+                </div>
+                <div id="areaEditorMap" class="h-80 rounded-xl border border-slate-300 dark:border-slate-600"></div>
+            </div>
+
+            <div class="mt-4">
+                <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Notes</label>
+                <textarea name="notes" rows="2" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ area.notes if area else '' }}</textarea>
+            </div>
+
+            <div class="mt-4 flex items-center gap-2">
+                <input type="checkbox" name="is_active" value="true" {% if not area or area.is_active %}checked{% endif %}
+                       class="rounded border-slate-300 text-green-600 dark:border-slate-600">
+                <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</label>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+            <div>
+                {% if area %}
+                <form method="POST" action="/admin/gis/areas/{{ area.id }}/delete" onsubmit="return confirm('Delete this area?');">
+                    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300">
+                        Delete
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="/admin/gis?tab=areas" class="inline-flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-green-600 to-emerald-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg hover:shadow-xl">
+                    {{ "Update Area" if area else "Create Area" }}
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<link rel="stylesheet" href="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet-draw@1.0.4/dist/leaflet.draw.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    var textarea = document.getElementById('geometry_geojson');
+    var clearButton = document.getElementById('clearGeometryButton');
+    var map = L.map('areaEditorMap').setView([9.06, 7.49], 6);
+    var drawnItems = new L.FeatureGroup().addTo(map);
+    var loadedLayer = null;
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap',
+        maxZoom: 19
+    }).addTo(map);
+
+    var drawControl = new L.Control.Draw({
+        edit: { featureGroup: drawnItems, remove: true },
+        draw: {
+            polygon: true,
+            rectangle: true,
+            polyline: false,
+            circle: false,
+            circlemarker: false,
+            marker: false
+        }
+    });
+    map.addControl(drawControl);
+
+    function syncTextarea() {
+        var data = drawnItems.toGeoJSON();
+        if (!data.features.length) {
+            textarea.value = '';
+            return;
+        }
+        var geometry;
+        if (data.features.length === 1) {
+            geometry = data.features[0].geometry;
+        } else {
+            geometry = {
+                type: 'MultiPolygon',
+                coordinates: data.features
+                    .map(function(feature) { return feature.geometry; })
+                    .filter(function(featureGeometry) { return featureGeometry && featureGeometry.type === 'Polygon'; })
+                    .map(function(featureGeometry) { return featureGeometry.coordinates; })
+            };
+        }
+        textarea.value = JSON.stringify(geometry);
+    }
+
+    function addGeometryToMap(geometry) {
+        if (!geometry || !geometry.type) {
+            return;
+        }
+        if (geometry.type === 'MultiPolygon') {
+            geometry.coordinates.forEach(function(polygonCoordinates) {
+                var feature = {
+                    type: 'Feature',
+                    geometry: {type: 'Polygon', coordinates: polygonCoordinates},
+                    properties: {}
+                };
+                var polygonLayer = L.geoJSON(feature).getLayers()[0];
+                if (polygonLayer) {
+                    drawnItems.addLayer(polygonLayer);
+                }
+            });
+            return;
+        }
+        var feature = {type: 'Feature', geometry: geometry, properties: {}};
+        loadedLayer = L.geoJSON(feature).getLayers()[0];
+        if (loadedLayer) {
+            drawnItems.addLayer(loadedLayer);
+        }
+    }
+
+    function loadFromTextarea() {
+        if (!textarea.value.trim()) {
+            return;
+        }
+        try {
+            var geometry = JSON.parse(textarea.value);
+            addGeometryToMap(geometry);
+            if (drawnItems.getLayers().length) {
+                map.fitBounds(drawnItems.getBounds().pad(0.1));
+            }
+        } catch (err) {
+            // Leave invalid JSON for server-side validation feedback.
+        }
+    }
+
+    map.on(L.Draw.Event.CREATED, function(event) {
+        drawnItems.clearLayers();
+        drawnItems.addLayer(event.layer);
+        syncTextarea();
+    });
+    map.on(L.Draw.Event.EDITED, syncTextarea);
+    map.on(L.Draw.Event.DELETED, syncTextarea);
+
+    textarea.addEventListener('change', function() {
+        drawnItems.clearLayers();
+        loadFromTextarea();
+    });
+    clearButton.addEventListener('click', function() {
+        drawnItems.clearLayers();
+        textarea.value = '';
+    });
+
+    loadFromTextarea();
+});
+</script>
+{% endblock %}

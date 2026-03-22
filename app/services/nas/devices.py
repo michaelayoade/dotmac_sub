@@ -78,16 +78,15 @@ class NasDevices(ListResponseMixin):
     @staticmethod
     def list(
         db: Session,
-        *,
-        limit: int = 50,
-        offset: int = 0,
+        vendor: NasVendor | None = None,
+        is_active: bool | None = None,
         order_by: str = "name",
         order_dir: str = "asc",
-        vendor: NasVendor | None = None,
+        limit: int = 50,
+        offset: int = 0,
         status: NasDeviceStatus | None = None,
         connection_type: ConnectionType | None = None,
         pop_site_id: UUID | None = None,
-        is_active: bool | None = None,
         search: str | None = None,
     ) -> list[NasDevice]:
         """List NAS devices with filtering and pagination."""

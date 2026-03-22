@@ -1,0 +1,93 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ "Edit Layer" if layer else "New Map Layer" }} - GIS{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/gis?tab=layers" class="hover:text-slate-700 dark:hover:text-slate-300">GIS</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">{{ "Edit Layer" if layer else "New Layer" }}</span>
+        </nav>
+        <h1 class="text-2xl font-display font-bold text-slate-900 dark:text-white">{{ "Edit Layer" if layer else "Create Map Layer" }}</h1>
+    </div>
+
+    {% if error %}
+    <div class="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm font-medium text-rose-800 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-300">{{ error }}</div>
+    {% endif %}
+
+    <form method="POST" action="{{ action_url }}" class="space-y-6">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Layer Name</label>
+                    <input type="text" name="name" value="{{ layer.name if layer else '' }}" required
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Layer Key</label>
+                    <input type="text" name="layer_key" value="{{ layer.layer_key if layer else '' }}" required placeholder="e.g. pop_sites"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Layer Type</label>
+                    <select name="layer_type" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for t in layer_types %}
+                        <option value="{{ t }}" {% if layer and layer.layer_type and layer.layer_type.value == t %}selected{% endif %}>{{ t | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Source Type</label>
+                    <select name="source_type" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for t in source_types %}
+                        <option value="{{ t }}" {% if layer and layer.source_type and layer.source_type.value == t %}selected{% endif %}>{{ t | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Style (JSON)</label>
+                <textarea name="style" rows="4" placeholder='{"color": "#3b82f6", "weight": 2, "fillOpacity": 0.3}'
+                          class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ layer.style | tojson if layer and layer.style else '{}' }}</textarea>
+            </div>
+
+            <div class="mt-4">
+                <label class="block text-sm font-semibold text-slate-700 dark:text-slate-300 mb-1">Filters (JSON)</label>
+                <textarea name="filters" rows="3" placeholder='{"location_type": "pop"}'
+                          class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ layer.filters | tojson if layer and layer.filters else '{}' }}</textarea>
+                <p class="mt-1 text-xs text-slate-400">Supported keys depend on source: `location_type`, `address_id`, `pop_site_id`, `is_active` for locations; `area_type`, `is_active` for areas.</p>
+            </div>
+
+            <div class="mt-4 flex items-center gap-2">
+                <input type="checkbox" name="is_active" value="true" {% if not layer or layer.is_active %}checked{% endif %}
+                       class="rounded border-slate-300 text-green-600 dark:border-slate-600">
+                <label class="text-sm font-medium text-slate-700 dark:text-slate-300">Active</label>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between">
+            <div>
+                {% if layer %}
+                <form method="POST" action="/admin/gis/layers/{{ layer.id }}/delete" onsubmit="return confirm('Delete this layer?');">
+                    <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+                    <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-white px-5 py-2.5 text-sm font-semibold text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:bg-slate-800 dark:text-rose-300">
+                        Delete
+                    </button>
+                </form>
+                {% endif %}
+            </div>
+            <div class="flex items-center gap-3">
+                <a href="/admin/gis?tab=layers" class="inline-flex items-center gap-2 rounded-xl border-2 border-slate-200 bg-white px-5 py-2.5 text-sm font-semibold text-slate-700 hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg hover:shadow-xl">
+                    {{ "Update Layer" if layer else "Create Layer" }}
+                </button>
+            </div>
+        </div>
+    </form>
+</div>
+{% endblock %}

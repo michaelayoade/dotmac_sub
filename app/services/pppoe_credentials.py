@@ -13,8 +13,10 @@ import secrets
 import string
 from typing import TYPE_CHECKING
 
+from app.models.domain_settings import DomainSetting
 from app.models.catalog import AccessCredential, ConnectionType
 from app.models.domain_settings import SettingDomain
+from app.models.subscription_engine import SettingValueType
 from app.services import numbering, settings_spec
 from app.services.credential_crypto import encrypt_credential
 
@@ -48,6 +50,51 @@ def _resolve_int_setting(value: object, fallback: int) -> int:
     return fallback
 
 
+def _resolve_radius_setting(db: Session, key: str) -> object | None:
+    """Resolve a radius setting directly from the database for activation-time consistency."""
+    spec = settings_spec.get_spec(SettingDomain.radius, key)
+    if not spec:
+        return None
+
+    setting = (
+        db.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.radius)
+        .filter(DomainSetting.key == key)
+        .filter(DomainSetting.is_active.is_(True))
+        .first()
+    )
+    raw = settings_spec.extract_db_value(setting)
+    if raw is None:
+        raw = spec.default
+
+    value, error = settings_spec.coerce_value(spec, raw)
+    if error:
+        value = spec.default
+    if spec.allowed and value is not None and value not in spec.allowed:
+        value = spec.default
+    if spec.value_type == SettingValueType.integer and value is not None:
+        parsed = _resolve_int_setting(value, spec.default if isinstance(spec.default, int) else 1)
+        if spec.min_value is not None and parsed < spec.min_value:
+            parsed = spec.default if isinstance(spec.default, int) else parsed
+        if spec.max_value is not None and parsed > spec.max_value:
+            parsed = spec.default if isinstance(spec.default, int) else parsed
+        value = parsed
+    return value
+
+
+def _generate_pppoe_username(db: Session) -> str | None:
+    prefix_value = _resolve_radius_setting(db, "pppoe_username_prefix")
+    padding_value = _resolve_radius_setting(db, "pppoe_username_padding")
+    start_value = _resolve_radius_setting(db, "pppoe_username_start")
+    return numbering.generate_number_with_config(
+        db,
+        SEQUENCE_KEY,
+        prefix=prefix_value if isinstance(prefix_value, str) else None,
+        padding=_resolve_int_setting(padding_value, 5),
+        start_value=_resolve_int_setting(start_value, 1),
+    )
+
+
 def auto_generate_pppoe_credential(
     db: Session,
     subscriber_id: str,
@@ -58,7 +105,7 @@ def auto_generate_pppoe_credential(
 
     Checks the ``pppoe_auto_generate_enabled`` setting.  If enabled and the
     subscriber has no active AccessCredential, generates one with a
-    sequential username (``1000`` prefix + zero-padded sequence) and a
+    sequential username (``1050`` prefix + zero-padded sequence) and a
     random encrypted password.
 
     Args:
@@ -69,9 +116,7 @@ def auto_generate_pppoe_credential(
     Returns:
         The newly created AccessCredential, or None if skipped.
     """
-    enabled = settings_spec.resolve_value(
-        db, SettingDomain.radius, "pppoe_auto_generate_enabled",
-    )
+    enabled = _resolve_radius_setting(db, "pppoe_auto_generate_enabled")
     if enabled is not True:
         return None
 
@@ -93,15 +138,7 @@ def auto_generate_pppoe_credential(
         return None
 
     # Generate username via DocumentSequence
-    username = numbering.generate_number(
-        db,
-        SettingDomain.radius,
-        SEQUENCE_KEY,
-        "pppoe_auto_generate_enabled",
-        "pppoe_username_prefix",
-        "pppoe_username_padding",
-        "pppoe_username_start",
-    )
+    username = _generate_pppoe_username(db)
     if not username:
         logger.warning(
             "PPPoE username generation returned None for subscriber %s",
@@ -110,9 +147,7 @@ def auto_generate_pppoe_credential(
         return None
 
     # Generate and encrypt password
-    password_length_raw = settings_spec.resolve_value(
-        db, SettingDomain.radius, "pppoe_default_password_length",
-    )
+    password_length_raw = _resolve_radius_setting(db, "pppoe_default_password_length")
     password_length = _resolve_int_setting(password_length_raw, 12)
     password_length = max(8, min(64, password_length))
 
@@ -150,15 +185,7 @@ def auto_generate_pppoe_credential(
                 max_retries,
             )
             # Generate a new username for the next attempt
-            username = numbering.generate_number(
-                db,
-                SettingDomain.radius,
-                SEQUENCE_KEY,
-                "pppoe_auto_generate_enabled",
-                "pppoe_username_prefix",
-                "pppoe_username_padding",
-                "pppoe_username_start",
-            )
+            username = _generate_pppoe_username(db)
             if not username:
                 logger.error("PPPoE username generation exhausted for subscriber %s", subscriber_id)
                 return None

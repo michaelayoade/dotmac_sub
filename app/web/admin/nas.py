@@ -15,6 +15,7 @@ from app.schemas.catalog import (
     ProvisioningTemplateUpdate,
 )
 from app.services import nas as nas_service
+from app.services.auth_dependencies import require_method_permission
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -24,7 +25,11 @@ from app.services.audit_helpers import (
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
-router = APIRouter(prefix="/nas", tags=["web-admin-nas"])
+router = APIRouter(
+    prefix="/nas",
+    tags=["web-admin-nas"],
+    dependencies=[Depends(require_method_permission("network:nas:read", "network:nas:write"))],
+)
 
 DEVICE_AUDIT_EXCLUDE_FIELDS = {
     "ssh_password",

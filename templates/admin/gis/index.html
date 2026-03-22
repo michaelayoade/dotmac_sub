@@ -42,29 +42,189 @@
         </div>
     </div>
 
-    <!-- Map Placeholder -->
+    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-center gap-4 text-sm text-slate-600 dark:text-slate-300">
+            <span class="font-semibold text-slate-900 dark:text-white">Legend</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-amber-500"></span> POP</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-blue-500"></span> Address</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Customer</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-violet-500"></span> Asset</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded-full bg-red-500"></span> Site</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded border-2 border-emerald-500 bg-emerald-500/15"></span> Coverage Area</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded border-2 border-sky-500 bg-sky-500/15"></span> Service Area</span>
+            <span class="inline-flex items-center gap-2"><span class="h-3 w-3 rounded border-2 border-violet-500 bg-violet-500/15"></span> Region</span>
+        </div>
+    </div>
+
+    <div id="gisOverlayAlerts" class="hidden rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
+        <p class="font-semibold">Some overlays could not be loaded.</p>
+        <ul id="gisOverlayAlertList" class="mt-2 list-disc pl-5"></ul>
+    </div>
+
+    <!-- Interactive Map -->
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 flex items-center justify-between">
             <h2 class="font-semibold text-slate-900 dark:text-white">Map View</h2>
             <div class="flex items-center gap-2">
-                <select class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All Layers</option>
-                    {% for layer in layers %}
-                    <option value="{{ layer.layer_key }}">{{ layer.name }}</option>
-                    {% endfor %}
+                <select id="mapLayerFilter" onchange="filterMapMarkers(this.value)" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Types</option>
+                    <option value="pop">POP Sites</option>
+                    <option value="address">Addresses</option>
+                    <option value="customer">Customers</option>
+                    <option value="asset">Assets</option>
                 </select>
+                <button onclick="fitAllMapData()" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700" title="Fit all markers">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4"/></svg>
+                </button>
             </div>
         </div>
-        <div class="p-6">
-            <div class="flex h-96 items-center justify-center rounded-lg bg-slate-100 dark:bg-slate-900/50">
-                <div class="text-center">
-                    <svg class="mx-auto h-16 w-16 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
-                    <p class="mt-4 text-slate-500 dark:text-slate-400">Interactive map visualization</p>
-                    <p class="text-sm text-slate-400 dark:text-slate-500">Requires Leaflet.js or Mapbox integration</p>
-                </div>
-            </div>
-        </div>
+        <div id="gisMap" style="height: 450px; z-index: 1;" class="rounded-b-xl"></div>
     </div>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+    var gisMap, markerGroup, areaGroup, overlayControl, overlayMaps = {}, allMarkers = [];
+    var overlayAlertBox, overlayAlertList;
+    var MARKER_COLORS = {pop: '#f59e0b', address: '#3b82f6', customer: '#10b981', asset: '#8b5cf6', site: '#ef4444', custom: '#6b7280'};
+    var AREA_COLORS = {coverage: '#10b981', service_area: '#0ea5e9', region: '#8b5cf6', custom: '#64748b'};
+    document.addEventListener('DOMContentLoaded', function() {
+        gisMap = L.map('gisMap').setView([9.06, 7.49], 6);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap',
+            maxZoom: 19
+        }).addTo(gisMap);
+        markerGroup = L.featureGroup().addTo(gisMap);
+        areaGroup = L.featureGroup().addTo(gisMap);
+        overlayAlertBox = document.getElementById('gisOverlayAlerts');
+        overlayAlertList = document.getElementById('gisOverlayAlertList');
+        var markers = {{ map_markers | tojson }};
+        var areaFeatures = {{ area_features | tojson }};
+        var layerOverlays = {{ layer_overlays | tojson }};
+        markers.forEach(function(m) {
+            var color = MARKER_COLORS[m.type] || '#6b7280';
+            var icon = L.divIcon({
+                className: 'custom-marker',
+                html: '<div style="background:' + color + ';width:12px;height:12px;border-radius:50%;border:2px solid white;box-shadow:0 1px 3px rgba(0,0,0,0.3)"></div>',
+                iconSize: [16, 16],
+                iconAnchor: [8, 8]
+            });
+            var marker = L.marker([m.lat, m.lon], {icon: icon})
+                .bindPopup('<strong>' + (m.name || 'Unnamed') + '</strong><br><span style="color:' + color + '">' + m.type + '</span><br><a href="/admin/gis/locations/' + m.id + '/edit" style="color:#3b82f6">Edit</a>');
+            marker._gisType = m.type;
+            allMarkers.push(marker);
+            markerGroup.addLayer(marker);
+        });
+        areaFeatures.forEach(function(feature) {
+            var areaType = ((feature.properties || {}).area_type) || 'custom';
+            var color = AREA_COLORS[areaType] || AREA_COLORS.custom;
+            L.geoJSON(feature, {
+                style: function() {
+                    return {color: color, weight: 2, fillColor: color, fillOpacity: 0.12};
+                },
+                onEachFeature: function(f, layer) {
+                    var props = f.properties || {};
+                    layer.bindPopup(
+                        '<strong>' + (props.name || 'Unnamed area') + '</strong><br>' +
+                        '<span style="color:' + color + '">' + areaType.replace('_', ' ') + '</span><br>' +
+                        '<a href="/admin/gis/areas/' + props.id + '/edit" style="color:#3b82f6">Edit</a>'
+                    );
+                }
+            }).addTo(areaGroup);
+        });
+        overlayMaps["Areas"] = areaGroup;
+        layerOverlays.forEach(function(layerMeta) {
+            loadLayerOverlay(layerMeta);
+        });
+        overlayControl = L.control.layers({}, overlayMaps, {collapsed: false}).addTo(gisMap);
+        fitAllMapData();
+    });
+    function filterMapMarkers(type) {
+        markerGroup.clearLayers();
+        allMarkers.forEach(function(m) {
+            if (!type || m._gisType === type) markerGroup.addLayer(m);
+        });
+        fitAllMapData();
+    }
+    function fitAllMapData() {
+        gisMap.invalidateSize();
+        var groups = [markerGroup, areaGroup];
+        Object.values(overlayMaps).forEach(function(group) {
+            groups.push(group);
+        });
+        var bounds = null;
+        groups.forEach(function(group) {
+            if (group && group.getLayers && group.getLayers().length > 0) {
+                var groupBounds = group.getBounds();
+                if (groupBounds && groupBounds.isValid && groupBounds.isValid()) {
+                    bounds = bounds ? bounds.extend(groupBounds) : groupBounds;
+                }
+            }
+        });
+        if (bounds && bounds.isValid && bounds.isValid()) {
+            gisMap.fitBounds(bounds.pad(0.1));
+        }
+    }
+    function loadLayerOverlay(layerMeta) {
+        fetch('/api/v1/gis/layers/' + encodeURIComponent(layerMeta.layer_key) + '/feature-collection?limit=1000')
+            .then(function(response) {
+                if (!response.ok) {
+                    throw new Error('Failed to load layer ' + layerMeta.layer_key);
+                }
+                return response.json();
+            })
+            .then(function(collection) {
+                var style = layerMeta.style || {};
+                var overlay = L.geoJSON(collection, {
+                    pointToLayer: function(feature, latlng) {
+                        var color = style.color || '#2563eb';
+                        return L.circleMarker(latlng, {
+                            radius: style.radius || 6,
+                            color: color,
+                            fillColor: style.fillColor || color,
+                            fillOpacity: style.fillOpacity == null ? 0.85 : style.fillOpacity,
+                            weight: style.weight == null ? 2 : style.weight
+                        });
+                    },
+                    style: function() {
+                        return {
+                            color: style.color || '#2563eb',
+                            weight: style.weight == null ? 2 : style.weight,
+                            fillColor: style.fillColor || style.color || '#2563eb',
+                            fillOpacity: style.fillOpacity == null ? 0.15 : style.fillOpacity
+                        };
+                    },
+                    onEachFeature: function(feature, layer) {
+                        var props = feature.properties || {};
+                        var lines = ['<strong>' + (props.name || layerMeta.name) + '</strong>'];
+                        if (props.location_type) lines.push('Type: ' + props.location_type);
+                        if (props.area_type) lines.push('Area: ' + props.area_type.replace('_', ' '));
+                        layer.bindPopup(lines.join('<br>'));
+                    }
+                });
+                overlayMaps[layerMeta.name] = overlay;
+                overlay.addTo(gisMap);
+                if (overlayControl) {
+                    overlayControl.addOverlay(overlay, layerMeta.name);
+                }
+                fitAllMapData();
+            })
+            .catch(function() {
+                reportOverlayFailure(layerMeta.name);
+            });
+    }
+    function reportOverlayFailure(layerName) {
+        if (!overlayAlertBox || !overlayAlertList) return;
+        overlayAlertBox.classList.remove('hidden');
+        var existing = Array.from(overlayAlertList.querySelectorAll('li')).find(function(item) {
+            return item.textContent === layerName;
+        });
+        if (!existing) {
+            var item = document.createElement('li');
+            item.textContent = layerName;
+            overlayAlertList.appendChild(item);
+        }
+    }
+    </script>
 
     <!-- Tabs -->
     <div class="border-b border-slate-200 dark:border-slate-700">
@@ -125,7 +285,13 @@
                                 {% endif %}
                             </td>
                             <td class="px-4 py-3 text-right">
-                                <a href="/admin/gis/locations/{{ loc.id }}/edit" class="text-sm text-primary-600 hover:text-primary-700">Edit</a>
+                                <div class="flex items-center justify-end gap-3">
+                                    <a href="/admin/gis/locations/{{ loc.id }}/edit" class="text-sm text-primary-600 hover:text-primary-700">Edit</a>
+                                    <form method="POST" action="/admin/gis/locations/{{ loc.id }}/delete" onsubmit="return confirm('Delete this location?');">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <button type="submit" class="text-sm text-rose-600 hover:text-rose-700">Delete</button>
+                                    </form>
+                                </div>
                             </td>
                         </tr>
                         {% endfor %}
@@ -165,6 +331,18 @@
                         {% else %}
                         {{ status_badge("Inactive", "inactive", size="sm") }}
                         {% endif %}
+                    </div>
+                    <div class="mt-3 flex items-center justify-between">
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            {{ area.notes or "No notes" }}
+                        </p>
+                        <div class="flex items-center gap-3">
+                            <a href="/admin/gis/areas/{{ area.id }}/edit" class="text-sm text-primary-600 hover:text-primary-700">Edit</a>
+                            <form method="POST" action="/admin/gis/areas/{{ area.id }}/delete" onsubmit="return confirm('Delete this area?');">
+                                {% include "components/forms/csrf_input.html" %}
+                                <button type="submit" class="text-sm text-rose-600 hover:text-rose-700">Delete</button>
+                            </form>
+                        </div>
                     </div>
                 </div>
                 {% endfor %}
@@ -209,6 +387,10 @@
                         {{ status_badge("Inactive", "inactive", size="sm") }}
                         {% endif %}
                         <a href="/admin/gis/layers/{{ layer.id }}/edit" class="text-sm text-primary-600 hover:text-primary-700">Edit</a>
+                        <form method="POST" action="/admin/gis/layers/{{ layer.id }}/delete" onsubmit="return confirm('Delete this layer?');">
+                            {% include "components/forms/csrf_input.html" %}
+                            <button type="submit" class="text-sm text-rose-600 hover:text-rose-700">Delete</button>
+                        </form>
                     </div>
                 </div>
                 {% endfor %}

@@ -31,21 +31,31 @@ def get_encryption_key() -> bytes | None:
 
     key_str: str | bytes | None = None
 
-    # Try to get from settings system first
+    # Try OpenBao first, then settings DB, then env var
     try:
-        from app.db import SessionLocal
-        from app.models.domain_settings import SettingDomain
-        from app.services.settings_spec import resolve_value
+        from app.services.secrets import get_secret
 
-        session = SessionLocal()
-        try:
-            raw = resolve_value(session, SettingDomain.auth, "credential_encryption_key")
-            if isinstance(raw, str):
-                key_str = raw
-        finally:
-            session.close()
+        bao_val = get_secret("auth", "credential_encryption_key")
+        if bao_val:
+            key_str = bao_val
     except Exception:
-        pass  # Fall through to env var
+        pass
+
+    if not key_str:
+        try:
+            from app.db import SessionLocal
+            from app.models.domain_settings import SettingDomain
+            from app.services.settings_spec import resolve_value
+
+            session = SessionLocal()
+            try:
+                raw = resolve_value(session, SettingDomain.auth, "credential_encryption_key")
+                if isinstance(raw, str):
+                    key_str = raw
+            finally:
+                session.close()
+        except Exception:
+            pass
 
     # Fall back to environment variable
     if not key_str:

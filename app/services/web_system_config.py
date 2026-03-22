@@ -257,6 +257,11 @@ BILLING_KEYS = [
     "billing_day",
     "use_creation_date",
     "payment_due_days",
+    "auto_suspend_on_overdue",
+    "suspension_grace_hours",
+    "expiry_reminder_days",
+    "invoice_reminder_days",
+    "dunning_escalation_days",
     "blocking_period_days",
     "deactivation_period_days",
     "minimum_balance",
@@ -276,6 +281,15 @@ def get_billing_config_context(db: Session) -> dict:
     billing = _read_settings(db, SettingDomain.billing, BILLING_KEYS)
     if not billing.get("payment_due_days"):
         billing["payment_due_days"] = str(resolve_payment_due_days(db))
+    defaults = {
+        "suspension_grace_hours": "48",
+        "expiry_reminder_days": "7",
+        "invoice_reminder_days": "7,1",
+        "dunning_escalation_days": "3,7,14,30",
+    }
+    for key, value in defaults.items():
+        if not billing.get(key):
+            billing[key] = value
     return {"billing": billing}
 
 
@@ -511,11 +525,56 @@ MONITORING_KEYS = [
     "cpu_warn_pct",
     "mem_warn_pct",
     "interface_warn_pct",
+    "device_metrics_retention_days",
+    "alert_evaluation_interval_seconds",
+    "ont_signal_warning_dbm",
+    "ont_signal_critical_dbm",
+    "ont_signal_alert_cooldown_minutes",
+    "interface_walk_interval_seconds",
+    "interface_discovery_interval_seconds",
+    "hot_retention_hours",
+    "cleanup_interval_seconds",
 ]
 
 
 def get_monitoring_config_context(db: Session) -> dict:
-    settings = _read_settings(db, SettingDomain.network_monitoring, MONITORING_KEYS)
+    settings = _read_settings(
+        db,
+        SettingDomain.network_monitoring,
+        [
+            "monitoring_vendors",
+            "monitoring_device_types",
+            "monitoring_groups",
+            "cpu_warn_pct",
+            "mem_warn_pct",
+            "interface_warn_pct",
+            "device_metrics_retention_days",
+            "alert_evaluation_interval_seconds",
+            "ont_signal_warning_dbm",
+            "ont_signal_critical_dbm",
+            "ont_signal_alert_cooldown_minutes",
+        ],
+    )
+    settings.update(
+        _read_settings(
+            db,
+            SettingDomain.snmp,
+            [
+                "interface_walk_interval_seconds",
+                "interface_discovery_interval_seconds",
+            ],
+        )
+    )
+    settings.update(
+        _read_settings(
+            db,
+            SettingDomain.bandwidth,
+            [
+                "hot_retention_hours",
+                "cleanup_interval_seconds",
+            ],
+        )
+    )
     # Provide defaults for list-type settings
     if not settings.get("monitoring_vendors"):
         settings["monitoring_vendors"] = "MikroTik,Cisco,Ubiquiti,Huawei,TP-Link,Juniper,D-Link,Ericsson"
@@ -523,11 +582,60 @@ def get_monitoring_config_context(db: Session) -> dict:
         settings["monitoring_device_types"] = "Router,Switch,Server,Access Point,CPE,OLT,ONT,Firewall"
     if not settings.get("monitoring_groups"):
         settings["monitoring_groups"] = "Core Infrastructure,Access Layer,Customer CPE"
+    defaults = {
+        "device_metrics_retention_days": "90",
+        "alert_evaluation_interval_seconds": "60",
+        "ont_signal_warning_dbm": "-25",
+        "ont_signal_critical_dbm": "-28",
+        "ont_signal_alert_cooldown_minutes": "30",
+        "interface_walk_interval_seconds": "300",
+        "interface_discovery_interval_seconds": "3600",
+        "hot_retention_hours": "24",
+        "cleanup_interval_seconds": "3600",
+    }
+    for key, value in defaults.items():
+        if not settings.get(key):
+            settings[key] = value
     return {"monitoring": settings}
 
 
 def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.network_monitoring, data, MONITORING_KEYS)
+    _save_settings(
+        db,
+        SettingDomain.network_monitoring,
+        data,
+        [
+            "monitoring_vendors",
+            "monitoring_device_types",
+            "monitoring_groups",
+            "cpu_warn_pct",
+            "mem_warn_pct",
+            "interface_warn_pct",
+            "device_metrics_retention_days",
+            "alert_evaluation_interval_seconds",
+            "ont_signal_warning_dbm",
+            "ont_signal_critical_dbm",
+            "ont_signal_alert_cooldown_minutes",
+        ],
+    )
+    _save_settings(
+        db,
+        SettingDomain.snmp,
+        data,
+        [
+            "interface_walk_interval_seconds",
+            "interface_discovery_interval_seconds",
+        ],
+    )
+    _save_settings(
+        db,
+        SettingDomain.bandwidth,
+        data,
+        [
+            "hot_retention_hours",
+            "cleanup_interval_seconds",
+        ],
+    )
 
 
 # ---------------------------------------------------------------------------

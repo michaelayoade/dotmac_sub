@@ -1,0 +1,379 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+
+{% block title %}Network Topology - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "indigo") }}
+
+<div class="relative space-y-6">
+    {% call page_header(
+        title="Network Topology",
+        subtitle="Interactive network graph — infrastructure devices, links, and traffic flow grouped by POP/site",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>',
+        color="blue",
+        color2="indigo"
+    ) %}
+        <div class="flex items-center gap-2">
+            <select id="siteFilter" onchange="updateTopologyFilters()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All POP Sites</option>
+                {% for site in form_options.pop_sites %}
+                <option value="{{ site.id }}" {% if selected_site == site.id %}selected{% endif %}>{{ site.name }}</option>
+                {% endfor %}
+            </select>
+            <select id="groupFilter" onchange="updateTopologyFilters()" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">All Groups</option>
+                {% for g in form_options.topology_groups %}
+                <option value="{{ g }}" {% if selected_group == g %}selected{% endif %}>{{ g }}</option>
+                {% endfor %}
+            </select>
+            <a href="/admin/network/topology/links/new" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-lg hover:shadow-xl">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Link
+            </a>
+        </div>
+    {% endcall %}
+
+    <!-- KPI Cards -->
+    <div class="grid gap-4 sm:grid-cols-3">
+        {{ stats_card("Nodes", graph.stats.node_count,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>',
+            color="blue", color2="indigo") }}
+        {{ stats_card("Links", graph.stats.edge_count,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>',
+            color="emerald", color2="teal") }}
+        {{ stats_card("Bundles", graph.stats.bundle_count,
+            '<svg class="h-6 w-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h16"/></svg>',
+            color="violet", color2="purple") }}
+    </div>
+
+    {% if graph.site_summaries %}
+    <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="mb-3 flex items-center justify-between">
+            <h2 class="text-lg font-display font-bold text-slate-900 dark:text-white">POP / Location Aggregation</h2>
+            <span class="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">{{ graph.stats.site_count }} sites</span>
+        </div>
+        <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {% for site in graph.site_summaries %}
+            <div class="rounded-xl border border-slate-200/60 bg-slate-50/70 p-4 dark:border-slate-700/60 dark:bg-slate-900/40">
+                <div class="text-sm font-semibold text-slate-900 dark:text-white">{{ site.pop_site_name }}</div>
+                <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ site.location_label }}</div>
+                <div class="mt-3 text-2xl font-bold text-blue-700 dark:text-blue-300">{{ site.node_count }}</div>
+                <div class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">devices</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- Topology Canvas -->
+    <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="flex items-center gap-2 text-lg font-display font-bold text-slate-900 dark:text-white">
+                <svg class="h-5 w-5 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+                Topology Graph
+            </h2>
+            <div class="flex items-center gap-3 text-xs">
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-emerald-500"></span> Normal</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-amber-500"></span> Warning (70%+)</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-rose-500"></span> Critical (90%+)</span>
+                <span class="flex items-center gap-1"><span class="h-3 w-3 rounded-full bg-slate-400"></span> Unknown</span>
+            </div>
+        </div>
+        <div id="topologyCanvas" style="height: 550px; position: relative;"></div>
+    </div>
+
+    <!-- Node Detail Panel (hidden by default) -->
+    <div id="nodeDetail" class="hidden rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="flex items-center justify-between mb-4">
+            <h3 id="nodeDetailTitle" class="text-lg font-display font-bold text-slate-900 dark:text-white"></h3>
+            <button onclick="document.getElementById('nodeDetail').classList.add('hidden')" class="text-slate-400 hover:text-slate-600">
+                <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+        <div id="nodeDetailContent"></div>
+    </div>
+
+    <!-- Links Table -->
+    {% if graph.edges %}
+    <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="text-lg font-display font-bold text-slate-900 dark:text-white">Topology Links</h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200/60 dark:divide-slate-700/60">
+                <thead>
+                    <tr class="bg-slate-50/80 dark:bg-slate-800/50">
+                        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Source</th>
+                        <th class="px-4 py-3 text-left text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Target</th>
+                        <th class="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Role</th>
+                        <th class="px-4 py-3 text-center text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Medium</th>
+                        <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Capacity</th>
+                        <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Utilization</th>
+                        <th class="px-4 py-3 text-right text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for edge in graph.edges %}
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                        <td class="px-4 py-3">
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">{{ edge.source_device }}</span>
+                            {% if edge.source_interface %}<br><span class="text-xs text-slate-500">{{ edge.source_interface }}</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-3">
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">{{ edge.target_device }}</span>
+                            {% if edge.target_interface %}<br><span class="text-xs text-slate-500">{{ edge.target_interface }}</span>{% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-center">
+                            <span class="inline-flex rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-800 dark:bg-blue-900/30 dark:text-blue-400">{{ edge.role }}</span>
+                        </td>
+                        <td class="px-4 py-3 text-center text-xs text-slate-600 dark:text-slate-400">{{ edge.medium }}</td>
+                        <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">
+                            {% if edge.capacity_bps %}{{ (edge.capacity_bps / 1000000) | int }} Mbps{% else %}—{% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            {% if edge.utilization_pct is not none %}
+                            <span class="text-sm font-bold
+                                {% if edge.util_state == 'critical' %}text-rose-600 dark:text-rose-400
+                                {% elif edge.util_state == 'warning' %}text-amber-600 dark:text-amber-400
+                                {% else %}text-emerald-600 dark:text-emerald-400{% endif %}">
+                                {{ edge.utilization_pct }}%
+                            </span>
+                            {% else %}
+                            <span class="text-xs text-slate-400">unknown</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-right">
+                            <a href="/admin/network/topology/links/{{ edge.id }}/edit" class="text-blue-600 hover:text-blue-800 text-sm">Edit</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+<!-- D3.js Topology Graph -->
+<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script>
+function updateTopologyFilters() {
+    var params = new URLSearchParams();
+    var site = document.getElementById('siteFilter').value;
+    var group = document.getElementById('groupFilter').value;
+    if (site) params.set('site', site);
+    if (group) params.set('group', group);
+    window.location = '/admin/network/topology' + (params.toString() ? '?' + params.toString() : '');
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    var container = document.getElementById('topologyCanvas');
+    var width = container.clientWidth;
+    var height = 550;
+    var graphData = {{ graph | tojson }};
+
+    if (!graphData.nodes.length) {
+        container.textContent = '';
+        var empty = document.createElement('div');
+        empty.className = 'flex items-center justify-center h-full text-slate-400';
+        empty.textContent = 'No topology data. Add links between devices to build the graph.';
+        container.appendChild(empty);
+        return;
+    }
+
+    var UTIL_COLORS = {normal: '#10b981', moderate: '#3b82f6', warning: '#f59e0b', critical: '#ef4444', unknown: '#94a3b8'};
+    var STATUS_COLORS = {online: '#10b981', offline: '#ef4444', degraded: '#f59e0b', maintenance: '#6366f1', unknown: '#94a3b8'};
+    var siteNames = Array.from(new Set(graphData.nodes.map(function(n) { return n.pop_site_name || 'Unassigned'; })));
+    var siteX = {};
+    siteNames.forEach(function(site, index) {
+        siteX[site] = siteNames.length === 1 ? width / 2 : 140 + index * ((width - 280) / Math.max(siteNames.length - 1, 1));
+    });
+
+    var svg = d3.select(container).append('svg')
+        .attr('width', width).attr('height', height)
+        .attr('viewBox', [0, 0, width, height]);
+
+    var g = svg.append('g');
+    svg.call(d3.zoom().scaleExtent([0.2, 4]).on('zoom', function(event) { g.attr('transform', event.transform); }));
+
+    // Count parallel edges for offset
+    var edgeCounts = {};
+    graphData.edges.forEach(function(e) {
+        var key = [e.source, e.target].sort().join('|');
+        edgeCounts[key] = (edgeCounts[key] || 0) + 1;
+    });
+    var edgeIndex = {};
+    graphData.edges.forEach(function(e) {
+        var key = [e.source, e.target].sort().join('|');
+        edgeIndex[key] = (edgeIndex[key] || 0);
+        e._parallelIndex = edgeIndex[key];
+        e._parallelTotal = edgeCounts[key];
+        edgeIndex[key]++;
+    });
+
+    var simulation = d3.forceSimulation(graphData.nodes)
+        .force('link', d3.forceLink(graphData.edges).id(function(d) { return d.id; }).distance(150))
+        .force('charge', d3.forceManyBody().strength(-400))
+        .force('center', d3.forceCenter(width / 2, height / 2))
+        .force('x', d3.forceX(function(d) { return siteX[d.pop_site_name || 'Unassigned'] || width / 2; }).strength(0.35))
+        .force('y', d3.forceY(height / 2).strength(0.08))
+        .force('collision', d3.forceCollide().radius(40));
+
+    // Edges
+    var link = g.append('g').selectAll('path')
+        .data(graphData.edges).join('path')
+        .attr('stroke', function(d) { return UTIL_COLORS[d.util_state || 'unknown']; })
+        .attr('stroke-width', function(d) { return d.util_state === 'critical' ? 4 : d.util_state === 'warning' ? 3 : 2; })
+        .attr('fill', 'none')
+        .attr('stroke-opacity', 0.7);
+
+    // Edge hover tooltips
+    link.append('title').text(function(d) {
+        return d.source_device + ' → ' + d.target_device +
+            (d.source_interface ? ' (' + d.source_interface + ' → ' + d.target_interface + ')' : '') +
+            '\nRole: ' + d.role + ' | Medium: ' + d.medium +
+            (d.capacity_bps ? '\nCapacity: ' + (d.capacity_bps/1e6) + ' Mbps' : '') +
+            (d.utilization_pct !== null ? '\nUtilization: ' + d.utilization_pct + '%' : '');
+    });
+
+    // Nodes
+    var node = g.append('g').selectAll('g')
+        .data(graphData.nodes).join('g')
+        .call(d3.drag()
+            .on('start', function(event, d) { if (!event.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; })
+            .on('drag', function(event, d) { d.fx = event.x; d.fy = event.y; })
+            .on('end', function(event, d) { if (!event.active) simulation.alphaTarget(0); d.fx = null; d.fy = null; })
+        );
+
+    node.append('circle')
+        .attr('r', 18)
+        .attr('fill', function(d) { return STATUS_COLORS[d.status] || '#94a3b8'; })
+        .attr('stroke', '#fff').attr('stroke-width', 2)
+        .style('cursor', 'pointer');
+
+    node.append('text')
+        .attr('dy', 30).attr('text-anchor', 'middle')
+        .attr('class', 'text-xs font-medium')
+        .attr('fill', '#475569')
+        .text(function(d) { return d.name.length > 15 ? d.name.substring(0, 14) + '…' : d.name; });
+
+    // Node click → drilldown
+    node.on('click', function(event, d) {
+        fetch('/admin/network/topology/api/node/' + d.id)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var panel = document.getElementById('nodeDetail');
+                document.getElementById('nodeDetailTitle').textContent = data.device.name + ' (' + data.device.status + ')';
+                var content = document.getElementById('nodeDetailContent');
+                content.textContent = '';
+                var info = document.createElement('p');
+                info.className = 'text-sm text-slate-500 mb-3';
+                info.textContent = 'POP: ' + data.device.pop_site_name + ' | Location: ' + data.device.location_label + ' | IP: ' + data.device.ip + ' | Vendor: ' + data.device.vendor + ' | Links: ' + data.link_count + ' | Interfaces: ' + data.interface_count;
+                content.appendChild(info);
+
+                var actions = document.createElement('div');
+                actions.className = 'mb-4 flex flex-wrap items-center gap-2';
+                actions.innerHTML =
+                    '<a href="/admin/network/core-devices/' + data.device.id + '" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Open Device</a>' +
+                    '<a href="/admin/network/core-devices/' + data.device.id + '/edit" class="inline-flex items-center rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Edit Device</a>';
+                content.appendChild(actions);
+
+                if (data.device.snmp_enabled === false) {
+                    var snmpWarn = document.createElement('div');
+                    snmpWarn.className = 'mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-300';
+                    snmpWarn.textContent = 'SNMP is disabled for this device, so interface discovery is unavailable until SNMP is enabled.';
+                    content.appendChild(snmpWarn);
+                } else if (!data.interface_count) {
+                    var discoverWarn = document.createElement('div');
+                    discoverWarn.className = 'mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800 dark:border-blue-800 dark:bg-blue-900/30 dark:text-blue-300';
+                    discoverWarn.textContent = 'No discovered interfaces yet. Run SNMP interface discovery from the device page to populate topology interfaces.';
+                    content.appendChild(discoverWarn);
+                }
+
+                var sectionWrap = document.createElement('div');
+                sectionWrap.className = 'grid gap-6 lg:grid-cols-2';
+
+                var linkSection = document.createElement('div');
+                var linkTitle = document.createElement('h4');
+                linkTitle.className = 'mb-2 text-sm font-semibold text-slate-900 dark:text-white';
+                linkTitle.textContent = 'Connected Links';
+                linkSection.appendChild(linkTitle);
+
+                if (data.links.length) {
+                    var table = document.createElement('table');
+                    table.className = 'min-w-full text-sm';
+                    var thead = document.createElement('thead');
+                    thead.innerHTML = '<tr class="text-xs text-slate-500"><th class="text-left pr-4">Peer</th><th class="text-left pr-4">Interface</th><th class="text-right pr-4">Role</th><th class="text-right">Util</th></tr>';
+                    table.appendChild(thead);
+                    var tbody = document.createElement('tbody');
+                    data.links.forEach(function(l) {
+                        var peer = l.source === d.id ? l.target_device : l.source_device;
+                        var iface = l.source === d.id ? l.source_interface : l.target_interface;
+                        var tr = document.createElement('tr');
+                        tr.className = 'border-t border-slate-100 dark:border-slate-700';
+                        var utilText = l.utilization_pct !== null ? l.utilization_pct + '%' : '—';
+                        tr.innerHTML = '<td class="py-2 pr-4 font-medium">' + peer + '</td><td class="pr-4 font-mono text-xs">' + (iface||'—') + '</td><td class="pr-4 text-right">' + l.role + '</td><td class="text-right font-bold">' + utilText + '</td>';
+                        tbody.appendChild(tr);
+                    });
+                    table.appendChild(tbody);
+                    linkSection.appendChild(table);
+                } else {
+                    var emptyLinks = document.createElement('p');
+                    emptyLinks.className = 'text-sm text-slate-500';
+                    emptyLinks.textContent = 'No topology links defined for this device yet.';
+                    linkSection.appendChild(emptyLinks);
+                }
+
+                var ifaceSection = document.createElement('div');
+                var ifaceTitle = document.createElement('h4');
+                ifaceTitle.className = 'mb-2 text-sm font-semibold text-slate-900 dark:text-white';
+                ifaceTitle.textContent = 'Device Interfaces';
+                ifaceSection.appendChild(ifaceTitle);
+
+                if (data.interfaces.length) {
+                    var ifaceTable = document.createElement('table');
+                    ifaceTable.className = 'min-w-full text-sm';
+                    var ifaceHead = document.createElement('thead');
+                    ifaceHead.innerHTML = '<tr class="text-xs text-slate-500"><th class="text-left pr-4">Name</th><th class="text-left pr-4">Status</th><th class="text-right pr-4">Speed</th><th class="text-right">Monitored</th></tr>';
+                    ifaceTable.appendChild(ifaceHead);
+                    var ifaceBody = document.createElement('tbody');
+                    data.interfaces.forEach(function(i) {
+                        var tr = document.createElement('tr');
+                        tr.className = 'border-t border-slate-100 dark:border-slate-700';
+                        var speedText = i.speed_mbps ? i.speed_mbps + ' Mbps' : '—';
+                        tr.innerHTML = '<td class="py-2 pr-4 font-mono text-xs">' + i.name + '</td><td class="pr-4">' + (i.status || 'unknown') + '</td><td class="pr-4 text-right">' + speedText + '</td><td class="text-right">' + (i.monitored ? 'Yes' : 'No') + '</td>';
+                        ifaceBody.appendChild(tr);
+                    });
+                    ifaceTable.appendChild(ifaceBody);
+                    ifaceSection.appendChild(ifaceTable);
+                } else {
+                    var emptyIfaces = document.createElement('p');
+                    emptyIfaces.className = 'text-sm text-slate-500';
+                    emptyIfaces.textContent = 'No interfaces discovered for this device yet.';
+                    ifaceSection.appendChild(emptyIfaces);
+                }
+
+                sectionWrap.appendChild(linkSection);
+                sectionWrap.appendChild(ifaceSection);
+                content.appendChild(sectionWrap);
+                panel.classList.remove('hidden');
+            });
+    });
+
+    simulation.on('tick', function() {
+        link.attr('d', function(d) {
+            if (d._parallelTotal <= 1) {
+                return 'M' + d.source.x + ',' + d.source.y + 'L' + d.target.x + ',' + d.target.y;
+            }
+            var dx = d.target.x - d.source.x, dy = d.target.y - d.source.y;
+            var dr = Math.sqrt(dx*dx + dy*dy);
+            var offset = (d._parallelIndex - (d._parallelTotal-1)/2) * 20;
+            var sweep = d._parallelIndex % 2;
+            return 'M' + d.source.x + ',' + d.source.y + 'A' + (dr + Math.abs(offset)*3) + ',' + (dr + Math.abs(offset)*3) + ' 0 0,' + sweep + ' ' + d.target.x + ',' + d.target.y;
+        });
+        node.attr('transform', function(d) { return 'translate(' + d.x + ',' + d.y + ')'; });
+    });
+});
+</script>
+{% endblock %}
