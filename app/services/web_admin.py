@@ -140,7 +140,6 @@ def get_sidebar_stats(db: Session) -> dict:
 
     stats = {
         "service_orders": service_orders_count,
-        "dispatch_jobs": 0,
         "notifications_unread": notifications_unread,
         "sidebar_logo_url": sidebar_logo_url,
         "sidebar_logo_dark_url": sidebar_logo_dark_url,

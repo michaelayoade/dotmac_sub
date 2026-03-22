@@ -271,10 +271,6 @@ def dashboard(request: Request, db: Session):
         "alarms_warning": net_stats["alarms_warning"],
         "bandwidth_current": bw_current,
         "bandwidth_peak": bw_peak,
-        "bandwidth_capacity": "0",
-        "jobs_completed": 0,
-        "jobs_total": 0,
-        "techs_active": 0,
         "churn_rate": sub_stats["churn_rate"],
     }
 
