@@ -199,6 +199,48 @@ def dashboard(request: Request, db: Session):
     active_subscribers = sub_stats["active_count"]
     arpu = payments_this_month / active_subscribers if active_subscribers > 0 else 0
 
+    # --- AR aging breakdown ---
+    ar_30 = 0
+    ar_60 = 0
+    try:
+        from sqlalchemy import text as sa_text
+
+        ar_row = db.execute(sa_text(
+            "SELECT "
+            "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
+            "  AND due_at >= NOW() - INTERVAL '30 days'), 0) as ar_30, "
+            "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
+            "  AND due_at < NOW() - INTERVAL '30 days' "
+            "  AND due_at >= NOW() - INTERVAL '60 days'), 0) as ar_60 "
+            "FROM invoices WHERE is_active = true AND status != 'void'"
+        )).one()
+        ar_30 = float(ar_row.ar_30)
+        ar_60 = float(ar_row.ar_60)
+    except Exception:
+        logger.debug("Failed to compute AR aging", exc_info=True)
+
+    # --- Bandwidth from device metrics ---
+    bw_current = "0"
+    bw_peak = "0"
+    try:
+        from sqlalchemy import text as sa_text
+
+        bw_row = db.execute(sa_text(
+            "SELECT COALESCE(SUM(value), 0) as total_bps "
+            "FROM device_metrics "
+            "WHERE metric_type = 'rx_bps' "
+            "AND recorded_at > NOW() - INTERVAL '10 minutes' AND value > 0"
+        )).one()
+        total_bps = float(bw_row.total_bps)
+        if total_bps > 1e9:
+            bw_current = f"{total_bps / 1e9:.1f} Gbps"
+        elif total_bps > 1e6:
+            bw_current = f"{total_bps / 1e6:.0f} Mbps"
+        else:
+            bw_current = f"{total_bps / 1e3:.0f} Kbps"
+    except Exception:
+        logger.debug("Failed to compute bandwidth stats", exc_info=True)
+
     stats = {
         "total_subscribers": sub_stats["total_count"],
         "active_subscribers": active_subscribers,
@@ -209,8 +251,8 @@ def dashboard(request: Request, db: Session):
         "revenue_change": 0,
         "system_uptime": net_stats["uptime_percentage"],
         "ar_current": pending_amount,
-        "ar_30": 0,
-        "ar_60": 0,
+        "ar_30": ar_30,
+        "ar_60": ar_60,
         "ar_90": overdue_amount,
         "suspended_accounts": sub_stats["suspended_count"],
         "orders_new": 0,
@@ -227,8 +269,8 @@ def dashboard(request: Request, db: Session):
         "alarms_major": net_stats["alarms_major"],
         "alarms_minor": net_stats["alarms_minor"],
         "alarms_warning": net_stats["alarms_warning"],
-        "bandwidth_current": "0",
-        "bandwidth_peak": "0",
+        "bandwidth_current": bw_current,
+        "bandwidth_peak": bw_peak,
         "bandwidth_capacity": "0",
         "jobs_completed": 0,
         "jobs_total": 0,
@@ -382,6 +424,9 @@ def dashboard(request: Request, db: Session):
 
         so_stats = service_orders.get_dashboard_stats(db)
         pending_orders = so_stats.get("pending", 0) + so_stats.get("in_progress", 0)
+        stats["orders_new"] = so_stats.get("pending", 0)
+        stats["orders_in_progress"] = so_stats.get("in_progress", 0)
+        stats["orders_completed_today"] = so_stats.get("completed", 0)
     except ImportError:
         logger.debug("provisioning_managers not available, skipping service order stats")
     except Exception:
@@ -488,13 +533,33 @@ def dashboard_server_health_partial(request: Request, db: Session):
 def dashboard_stats_partial(request: Request, db: Session):
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
 
+    # Monthly revenue from billing stats
+    monthly_revenue = 0
+    try:
+        from app.services import billing as _billing_svc
+
+        b_stats = _billing_svc.invoices.get_billing_stats(db)
+        monthly_revenue = b_stats.get("stats", {}).get("payments_amount", 0)
+    except Exception:
+        pass
+
+    # System uptime from network stats
+    system_uptime = 0.0
+    try:
+        from app.services import network_monitoring as _net_mon_svc
+
+        n_stats = _net_mon_svc.network_devices.get_dashboard_stats(db)
+        system_uptime = n_stats.get("uptime_percentage", 0.0)
+    except Exception:
+        pass
+
     stats = {
         "total_subscribers": sub_stats["total_count"],
         "active_subscribers": sub_stats["active_count"],
         "subscribers_change": sub_stats.get("new_this_month", 0),
-        "monthly_revenue": 0,
+        "monthly_revenue": monthly_revenue,
         "revenue_change": 0,
-        "system_uptime": 99.9,
+        "system_uptime": system_uptime,
     }
 
     return templates.TemplateResponse(
