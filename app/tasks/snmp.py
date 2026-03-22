@@ -35,12 +35,18 @@ def discover_interfaces() -> dict[str, int]:
             except VpnRoutingError as exc:
                 logger.warning("Skipping SNMP discovery for %s: %s", device.id, exc)
                 continue
-            snapshots = collect_interface_snapshot(device)
-            created, updated = apply_interface_snapshot(
-                session, device, snapshots, create_missing=True
-            )
-            created_total += created
-            updated_total += updated
+            try:
+                snapshots = collect_interface_snapshot(device)
+                created, updated = apply_interface_snapshot(
+                    session, device, snapshots, create_missing=True
+                )
+                created_total += created
+                updated_total += updated
+                if snapshots:
+                    device.last_snmp_ok = True
+            except Exception as exc:
+                device.last_snmp_ok = False
+                logger.debug("SNMP discovery failed for %s: %s", device.name, exc)
         session.commit()
         return {"created": created_total, "updated": updated_total}
     except Exception:
