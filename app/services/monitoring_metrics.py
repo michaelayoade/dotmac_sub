@@ -144,6 +144,8 @@ def poll_interface_traffic(db: Session, device: NetworkDevice) -> dict[str, int]
             select(DeviceInterface).where(
                 DeviceInterface.device_id == device.id,
                 DeviceInterface.status == "up",
+                DeviceInterface.monitored.is_(True),
+                DeviceInterface.snmp_index.is_not(None),
             )
         ).all()
     )

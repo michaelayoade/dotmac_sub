@@ -496,6 +496,26 @@ def core_device_snmp_oid_toggle(
     )
 
 
+@router.post("/core-devices/{device_id}/interfaces/{interface_id}/toggle-monitored", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+def core_device_interface_toggle_monitored(
+    device_id: str,
+    interface_id: str,
+    monitored: bool = Form(False),
+    db: Session = Depends(get_db),
+):
+    """Toggle whether an interface is included in bandwidth monitoring."""
+    from app.models.network_monitoring import DeviceInterface
+
+    iface = db.get(DeviceInterface, interface_id)
+    if iface and str(iface.device_id) == device_id:
+        iface.monitored = monitored
+        db.commit()
+    return RedirectResponse(
+        f"/admin/network/core-devices/{device_id}",
+        status_code=303,
+    )
+
+
 @router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
 def core_device_snmp_oid_delete(
     device_id: str,

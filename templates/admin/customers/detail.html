@@ -474,6 +474,64 @@
                     </div>
                 </div>
 
+                <!-- Network Access -->
+                {% if network_access_cards %}
+                <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                        <div class="flex items-center gap-2">
+                            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.142 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0"/></svg>
+                            </div>
+                            <h3 class="font-semibold text-slate-900 dark:text-white">Network Access</h3>
+                        </div>
+                    </div>
+                    <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                        {% for card in network_access_cards %}
+                        <div class="px-5 py-4">
+                            <div class="flex items-center justify-between mb-3">
+                                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
+                                {% set na_status = card.status %}
+                                {% set na_labels = {'active': 'Active', 'blocked': 'Blocked', 'suspended': 'Suspended', 'disabled': 'Disabled'} %}
+                                {{ status_badge(na_labels.get(na_status, na_status|title), na_status if na_status in na_labels else 'default', size="sm") }}
+                            </div>
+                            <div class="grid grid-cols-2 gap-3 text-sm">
+                                {% if card.login %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">PPPoE Username</p>
+                                    <p class="font-mono font-medium text-slate-900 dark:text-white">{{ card.login }}</p>
+                                </div>
+                                {% endif %}
+                                {% if card.ipv4_address %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">IPv4 Address</p>
+                                    <p class="font-mono font-medium text-slate-900 dark:text-white">{{ card.ipv4_address }}</p>
+                                </div>
+                                {% endif %}
+                                {% if card.nas_name %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">NAS Device</p>
+                                    <a href="/admin/nas/{{ card.nas_id }}" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400">{{ card.nas_name }}</a>
+                                </div>
+                                {% endif %}
+                                {% if card.pop_site_name %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">Location</p>
+                                    <p class="font-medium text-slate-700 dark:text-slate-300">{{ card.pop_site_name }}</p>
+                                </div>
+                                {% endif %}
+                                {% if card.mac_address %}
+                                <div>
+                                    <p class="text-xs text-slate-500 dark:text-slate-400">MAC Address</p>
+                                    <p class="font-mono text-slate-700 dark:text-slate-300">{{ card.mac_address }}</p>
+                                </div>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+                {% endif %}
+
                 <!-- Location -->
                 <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                     <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">

@@ -31,9 +31,9 @@ from app.services import catalog as catalog_service
 from app.services import geocoding as geocoding_service
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
-from app.services.billing_settings import resolve_payment_due_days
 from app.services import web_customer_user_access as web_customer_user_access_service
 from app.services.audit_helpers import extract_changes, format_changes
+from app.services.billing_settings import resolve_payment_due_days
 
 logger = logging.getLogger(__name__)
 
@@ -836,6 +836,29 @@ def _build_map_payload(primary_address, customer_name: str):
     return map_data, geocode_target
 
 
+def _build_network_access_cards(subscriptions: list) -> list[dict]:
+    """Build network access info cards from active subscriptions."""
+    cards = []
+    for sub in subscriptions:
+        if not sub.login and not sub.ipv4_address:
+            continue
+        nas = getattr(sub, "provisioning_nas_device", None)
+        pop_site = getattr(nas, "pop_site", None) if nas else None
+        cards.append({
+            "subscription_id": str(sub.id),
+            "offer_name": sub.offer.name if sub.offer else "Subscription",
+            "status": sub.status.value if sub.status else "unknown",
+            "login": sub.login,
+            "ipv4_address": sub.ipv4_address,
+            "ipv6_address": getattr(sub, "ipv6_address", None),
+            "mac_address": getattr(sub, "mac_address", None),
+            "nas_name": nas.name if nas else None,
+            "nas_id": str(nas.id) if nas else None,
+            "pop_site_name": pop_site.name if pop_site else None,
+        })
+    return cards
+
+
 def build_person_detail_snapshot(db: Session, customer_id: str):
     customer = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     subscribers = [customer]
@@ -958,6 +981,8 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     except Exception as exc:
         customer_user_access = {"error": str(exc)}
 
+    network_access_cards = _build_network_access_cards(subscriptions)
+
     return {
         "customer": customer,
         "customer_type": "person",
@@ -981,6 +1006,7 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         "activity_items": activity_items,
         "customer_user_access": customer_user_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
+        "network_access_cards": network_access_cards,
         **relationship_data,
     }
 

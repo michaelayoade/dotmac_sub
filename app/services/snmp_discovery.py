@@ -23,6 +23,17 @@ from app.services.credential_crypto import decrypt_credential
 
 logger = logging.getLogger(__name__)
 
+_MONITOR_PATTERNS = re.compile(
+    r"^(sfp|ether|pppoe|GigabitEthernet|TenGigabitEthernet|xe-|et-)",
+    re.IGNORECASE,
+)
+
+
+def _should_auto_monitor(name: str) -> bool:
+    """Return True if the interface name matches common uplink/subscriber patterns."""
+    return bool(_MONITOR_PATTERNS.search(name))
+
+
 @dataclass(frozen=True)
 class InterfaceSnapshot:
     index: str
@@ -386,6 +397,7 @@ def apply_interface_snapshot(
                 speed_mbps=snapshot.speed_mbps,
                 mac_address=snapshot.mac_address,
                 snmp_index=snmp_idx,
+                monitored=_should_auto_monitor(snapshot.name),
             )
             db.add(iface)
             created += 1
