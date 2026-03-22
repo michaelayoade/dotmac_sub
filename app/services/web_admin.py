@@ -34,6 +34,9 @@ def get_current_user(request) -> dict:
             "id": str(getattr(user, "id", "")),
             "person_id": subscriber_id,
             "subscriber_id": subscriber_id,
+            "principal_type": getattr(request.state, "auth", {}).get("principal_type", "subscriber")
+            if hasattr(request.state, "auth")
+            else "subscriber",
             "initials": _get_initials(name),
             "name": name,
             "email": getattr(user, "email", ""),

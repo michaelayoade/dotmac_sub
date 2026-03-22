@@ -9,6 +9,7 @@ from fastapi import HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser
 from app.schemas.auth_flow import AvatarUploadResponse, MeResponse, MeUpdateRequest
 from app.services import avatar as avatar_service
 
@@ -16,29 +17,29 @@ logger = logging.getLogger(__name__)
 
 
 def _build_me_response(
-    person: Subscriber,
+    person: Subscriber | SystemUser,
     roles: list[str],
     scopes: list[str],
 ) -> MeResponse:
-    """Build a MeResponse from a Subscriber and auth claims."""
+    """Build a MeResponse from a subscriber or system user and auth claims."""
     return MeResponse(
         id=person.id,
         first_name=person.first_name,
         last_name=person.last_name,
         display_name=person.display_name,
-        avatar_url=person.avatar_url,
+        avatar_url=getattr(person, "avatar_url", None),
         email=person.email,
-        email_verified=person.email_verified,
+        email_verified=getattr(person, "email_verified", False),
         phone=person.phone,
-        date_of_birth=person.date_of_birth,
-        gender=person.gender.value if person.gender else "unknown",
+        date_of_birth=getattr(person, "date_of_birth", None),
+        gender=person.gender.value if getattr(person, "gender", None) else "unknown",
         preferred_contact_method=(
             person.preferred_contact_method.value
-            if person.preferred_contact_method
+            if getattr(person, "preferred_contact_method", None)
             else None
         ),
-        locale=person.locale,
-        timezone=person.timezone,
+        locale=getattr(person, "locale", None),
+        timezone=getattr(person, "timezone", None),
         roles=roles,
         scopes=scopes,
     )
@@ -52,29 +53,49 @@ def _get_subscriber_or_404(db: Session, subscriber_id: UUID) -> Subscriber:
     return person
 
 
+def _get_system_user_or_404(db: Session, user_id: UUID) -> SystemUser:
+    """Fetch a system user by ID or raise 404."""
+    user = db.get(SystemUser, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+
 def get_me(
     db: Session,
-    subscriber_id: UUID,
+    principal_id: UUID,
+    principal_type: str,
     roles: list[str],
     scopes: list[str],
 ) -> MeResponse:
     """Return the current user's profile information."""
-    person = _get_subscriber_or_404(db, subscriber_id)
-    return _build_me_response(person, roles, scopes)
+    if principal_type == "system_user":
+        principal = _get_system_user_or_404(db, principal_id)
+    else:
+        principal = _get_subscriber_or_404(db, principal_id)
+    return _build_me_response(principal, roles, scopes)
 
 
 def update_me(
     db: Session,
-    subscriber_id: UUID,
+    principal_id: UUID,
+    principal_type: str,
     payload: MeUpdateRequest,
     roles: list[str],
     scopes: list[str],
 ) -> MeResponse:
     """Update the current user's profile and return the updated profile."""
-    person = _get_subscriber_or_404(db, subscriber_id)
+    if principal_type == "system_user":
+        person = _get_system_user_or_404(db, principal_id)
+        disallowed_fields = {"date_of_birth", "gender", "preferred_contact_method", "locale", "timezone"}
+    else:
+        person = _get_subscriber_or_404(db, principal_id)
+        disallowed_fields: set[str] = set()
 
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
+        if field in disallowed_fields:
+            continue
         setattr(person, field, value)
 
     db.flush()

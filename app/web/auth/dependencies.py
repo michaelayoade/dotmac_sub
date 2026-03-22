@@ -16,6 +16,7 @@ class AuthenticationRequired(Exception):
         self.redirect_url = redirect_url
         super().__init__("Authentication required")
 
+
 def get_session_token(request: Request) -> str | None:
     """Extract session token from cookie or Authorization header."""
     # First check for cookie-based token
@@ -97,7 +98,7 @@ def require_web_auth(
     request.state.auth = auth_info
     request.state.user = auth_info["subscriber"]
     request.state.actor_id = auth_info["subscriber_id"]
-    request.state.actor_type = "user"
+    request.state.actor_type = auth_info.get("principal_type", "user")
 
     return auth_info
 
@@ -121,6 +122,7 @@ def get_current_user_from_auth(auth: dict = Depends(require_web_auth)) -> dict:
         "initials": initials,
         "name": name,
         "email": subscriber.email or "",
+        "principal_type": auth.get("principal_type", "subscriber"),
         "roles": auth.get("roles", []),
     }
 

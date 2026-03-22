@@ -199,7 +199,8 @@ def get_me(
 ) -> MeResponse:
     return user_profile_service.get_me(
         db,
-        subscriber_id=auth["subscriber_id"],
+        principal_id=auth["principal_id"],
+        principal_type=auth.get("principal_type", "subscriber"),
         roles=auth.get("roles", []),
         scopes=auth.get("scopes", []),
     )
@@ -220,7 +221,8 @@ def update_me(
 ) -> MeResponse:
     return user_profile_service.update_me(
         db,
-        subscriber_id=auth["subscriber_id"],
+        principal_id=auth["principal_id"],
+        principal_type=auth.get("principal_type", "subscriber"),
         payload=payload,
         roles=auth.get("roles", []),
         scopes=auth.get("scopes", []),

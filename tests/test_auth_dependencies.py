@@ -8,11 +8,14 @@ from starlette.requests import Request
 
 from app.models.auth import ApiKey, AuthProvider, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
-from app.models.rbac import Permission, Role, RolePermission, SubscriberRole
+from app.models.rbac import Permission, Role, RolePermission, SubscriberRole, SystemUserRole
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
 from app.services import auth_dependencies as auth_dep
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_audit_auth, require_user_auth
 from app.services.auth_flow import AuthFlow, hash_password, hash_session_token
+from app.web.auth.dependencies import validate_session_token
 
 
 def _make_access_token(person_id: str, session_id: str, scopes: list[str] | None = None, roles: list[str] | None = None):
@@ -75,6 +78,82 @@ def test_require_user_auth_rejects_expired_session(db_session, person, monkeypat
     with pytest.raises(HTTPException) as exc:
         require_user_auth(authorization=f"Bearer {token}", db=db_session)
     assert exc.value.status_code == 401
+
+
+def test_require_user_auth_accepts_system_user_token(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    user = SystemUser(
+        first_name="System",
+        last_name="Admin",
+        display_name="System Admin",
+        email="sysadmin@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = Role(name="admin", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+
+    credential = UserCredential(
+        system_user_id=user.id,
+        provider=AuthProvider.local,
+        username="sysadmin@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    tokens = AuthFlow._issue_tokens(db_session, "system_user", str(user.id), _make_request())
+    auth = require_user_auth(authorization=f"Bearer {tokens['access_token']}", db=db_session)
+
+    assert auth["principal_type"] == "system_user"
+    assert auth["principal_id"] == str(user.id)
+
+
+def test_validate_session_token_accepts_system_user_cookie(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    user = SystemUser(
+        first_name="System",
+        last_name="Operator",
+        display_name="System Operator",
+        email="operator@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = Role(name="admin", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+
+    credential = UserCredential(
+        system_user_id=user.id,
+        provider=AuthProvider.local,
+        username="operator@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    tokens = AuthFlow._issue_tokens(db_session, "system_user", str(user.id), _make_request())
+    request = _make_request()
+    request._cookies = {"session_token": tokens["access_token"]}
+
+    auth = validate_session_token(request, db_session)
+
+    assert auth is not None
+    assert auth["principal_type"] == "system_user"
+    assert auth["principal_id"] == str(user.id)
 
 
 def test_require_audit_auth_accepts_api_key(db_session, person):

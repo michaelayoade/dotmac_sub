@@ -6,6 +6,10 @@ from fastapi import HTTPException
 from starlette.requests import Request
 
 from app.models.auth import SessionStatus
+from app.models.auth import AuthProvider, UserCredential
+from app.models.rbac import Role, SystemUserRole
+from app.models.subscriber import UserType
+from app.models.system_user import SystemUser
 from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
@@ -273,3 +277,46 @@ def test_web_login_submit_redirects_to_mfa_when_required(monkeypatch, db_session
     assert response.status_code == 303
     assert response.headers.get("location") == "/auth/mfa"
     assert "mfa_pending=mfa-token" in response.headers.get("set-cookie", "")
+
+
+def test_web_login_submit_supports_system_user(db_session, monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+
+    user = SystemUser(
+        first_name="Admin",
+        last_name="User",
+        display_name="Admin User",
+        email="admin-system@example.com",
+        user_type=UserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+
+    role = Role(name="admin", is_active=True)
+    db_session.add(role)
+    db_session.flush()
+    db_session.add(SystemUserRole(system_user_id=user.id, role_id=role.id))
+
+    credential = UserCredential(
+        system_user_id=user.id,
+        provider=AuthProvider.local,
+        username="admin-system@example.com",
+        password_hash=hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+
+    response = web_auth_service.login_submit(
+        _make_request(),
+        db_session,
+        "admin-system@example.com",
+        "secret",
+        False,
+        "",
+    )
+
+    assert response.status_code == 303
+    assert response.headers.get("location") == "/admin/dashboard"
+    assert "session_token=" in response.headers.get("set-cookie", "")
