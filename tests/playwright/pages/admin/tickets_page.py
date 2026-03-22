@@ -13,13 +13,17 @@ class AdminTicketsPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/admin/tickets") -> None:
-        super().goto(path)
+    def goto(self, path: str = "/admin/support/tickets") -> None:
+        self.page.goto(
+            f"{self.base_url}{path}",
+            wait_until="domcontentloaded",
+            timeout=30000,
+        )
 
     def expect_loaded(self) -> None:
         expect(
-            self.page.get_by_role("heading", name="Tickets", exact=True).or_(
-                self.page.get_by_text("Tickets", exact=False)
+            self.page.get_by_role("heading", name="Support Tickets", exact=True).or_(
+                self.page.get_by_text("Support Tickets", exact=False)
             ).first
         ).to_be_visible()
 

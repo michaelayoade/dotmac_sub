@@ -14,7 +14,7 @@
                 <span class="text-slate-900 dark:text-white">Assign</span>
             </nav>
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Assign ONT</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Link this ONT to a subscriber account and PON port.</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Link this ONT to a subscriber account. PON port is optional for TR-069-only devices and can be added later after OLT authorization.</p>
         </div>
     </div>
 
@@ -33,19 +33,17 @@
 
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div class="sm:col-span-2">
-                        <label for="pon_port_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PON Port <span class="text-red-500">*</span></label>
-                        <select name="pon_port_id" id="pon_port_id" required
+                        <label for="pon_port_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PON Port</label>
+                        <select name="pon_port_id" id="pon_port_id"
                             class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <option value="" {% if not form or not form.pon_port_id %}selected{% endif %}>Select a PON port</option>
+                            <option value="" {% if not form or not form.pon_port_id %}selected{% endif %}>Leave blank for TR-069-only assignment</option>
                             {% for port in pon_ports %}
                             <option value="{{ port.id }}" {% if form and form.pon_port_id == port.id|string %}selected{% endif %}>
                                 {{ port.name }}{% if port.olt %} - {{ port.olt.name }}{% endif %}
                             </option>
                             {% endfor %}
                         </select>
-                        {% if not pon_ports %}
-                        <p class="mt-2 text-xs text-amber-600 dark:text-amber-400">No active PON ports found. Create a PON port first.</p>
-                        {% endif %}
+                        <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Required for OLT-side provisioning and service-port actions. Optional for TR-069-only onboarding.</p>
                     </div>
 
                     <div x-data='{"query": "{{ (form.account_label or "") | e }}", "accountId": "{{ (form.account_id or "") | e }}", "results": [], "open": false, "loading": false}'>

@@ -17,6 +17,7 @@ import json
 import uuid
 from types import SimpleNamespace
 from typing import cast
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi import Request
@@ -1853,8 +1854,57 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/provisioning-preview" in route_paths
 
         # Phase 4: End-to-end provisioning
+        assert "/network/onts/{ont_id}/preflight" in route_paths
         assert "/network/onts/{ont_id}/provision" in route_paths
         assert "/network/onts/{ont_id}/provision-status" in route_paths
+
+
+class TestProvisioningUiTemplates:
+    def test_provisioning_widget_surfaces_preflight_checklist(self) -> None:
+        template = Path("templates/admin/network/onts/_provision_action.html").read_text()
+
+        assert "Preflight Checklist" in template
+        assert "/preflight" in template
+        assert "Provisioning blocked by preflight failures" in template
+        assert "Refresh Preflight" in template
+        assert "/provisioning-preview" in template
+        assert "Route Preview" in template
+
+    def test_provisioning_widget_no_longer_shows_background_toggle(self) -> None:
+        template = Path("templates/admin/network/onts/_provision_action.html").read_text()
+
+        assert "Background" not in template
+        assert "async_mode" not in template
+
+    def test_ont_form_describes_supported_external_id_formats(self) -> None:
+        template = Path("templates/admin/network/onts/form.html").read_text()
+
+        assert "huawei:4194320640.5" in template
+        assert "resolved ONT-ID" in template
+
+    def test_assignment_ui_allows_blank_pon_port_for_tr069_only(self) -> None:
+        template = Path("templates/admin/network/onts/assign.html").read_text()
+
+        assert "Leave blank for TR-069-only assignment" in template
+        assert "TR-069-only onboarding" in template
+        assert 'name="pon_port_id" id="pon_port_id" required' not in template
+
+
+class TestOntAssignmentValidation:
+    def test_validate_form_values_allows_blank_pon_port(self) -> None:
+        from app.services import web_network_ont_assignments as svc
+
+        error = svc.validate_form_values(
+            {
+                "pon_port_id": "",
+                "account_id": "acct-1",
+                "subscription_id": None,
+                "service_address_id": None,
+                "notes": None,
+            }
+        )
+
+        assert error is None
 
 
 # ---------------------------------------------------------------------------

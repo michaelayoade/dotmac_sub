@@ -64,8 +64,6 @@ def parse_form_values(form) -> dict[str, object]:
 
 def validate_form_values(values: dict[str, object]) -> str | None:
     """Validate required assignment fields."""
-    if not values.get("pon_port_id"):
-        return "PON port is required"
     if not values.get("account_id"):
         return "Subscriber account is required"
     return None
@@ -89,7 +87,11 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     """Create ONT assignment and activate ONT."""
     payload = OntAssignmentCreate(
         ont_unit_id=ont.id,
-        pon_port_id=coerce_uuid(str(values["pon_port_id"])),
+        pon_port_id=(
+            coerce_uuid(str(values["pon_port_id"]))
+            if values.get("pon_port_id")
+            else None
+        ),
         subscriber_id=coerce_uuid(str(values["account_id"])),
         subscription_id=(
             coerce_uuid(str(values["subscription_id"]))

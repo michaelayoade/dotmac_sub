@@ -200,6 +200,6 @@ class TestNetworkNavigation:
         olts.goto()
         olts.expect_loaded()
 
-        # Navigate to ONTs
-        admin_page.get_by_role("link", name="ONT").first.click()
-        admin_page.wait_for_url("**/onts**")
+        onts = ONTsPage(admin_page, settings.base_url)
+        onts.goto()
+        onts.expect_loaded()
