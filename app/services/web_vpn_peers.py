@@ -392,7 +392,11 @@ def get_peer_detail_context(
             mikrotik_script = wg_service.wg_mikrotik.generate_script(db, peer_id)
             peer_config = wg_service.wg_peers.generate_peer_config(db, peer_id)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to generate WireGuard peer artifacts for %s",
+                peer_id,
+                exc_info=True,
+            )
 
     activities = build_audit_activities(db, "wireguard_peer", str(peer.id), limit=10)
 

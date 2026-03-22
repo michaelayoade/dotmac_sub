@@ -155,7 +155,12 @@ def get_env_or_secret(
         if val:
             return val
     except Exception:
-        pass
+        logger.debug(
+            "OpenBao secret lookup failed for %s#%s",
+            bao_path,
+            bao_field,
+            exc_info=True,
+        )
     # Fall back to env var
     env_val = os.getenv(env_var, "")
     if env_val:

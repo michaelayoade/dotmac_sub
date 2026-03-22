@@ -1,6 +1,7 @@
 """Admin system management web routes."""
 
 import json
+import logging
 from base64 import b64encode
 from datetime import UTC, datetime
 from typing import cast
@@ -3258,7 +3259,7 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
         radius_reject_service.push_reject_rules_once(db)
     except Exception:
         # Do not block settings persistence if router push fails.
-        pass
+        logger.warning("Failed to push RADIUS reject rules after config save", exc_info=True)
     return RedirectResponse(url="/admin/system/config/radius", status_code=303)
 
 
@@ -3504,3 +3505,4 @@ def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
         f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+deleted",
         status_code=303,
     )
+logger = logging.getLogger(__name__)

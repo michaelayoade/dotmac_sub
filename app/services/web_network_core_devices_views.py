@@ -506,7 +506,12 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                     p_signal_total += float(olt_rx_val)
                     p_signal_count += 1
                 except Exception:
-                    pass
+                    logger.debug(
+                        "Could not parse OLT RX signal value for ONT %s: %r",
+                        getattr(ont, "id", None),
+                        olt_rx_val,
+                        exc_info=True,
+                    )
             if quality in ("warning", "critical"):
                 p_low_signal += 1
         avg_signal = (p_signal_total / p_signal_count) if p_signal_count > 0 else None

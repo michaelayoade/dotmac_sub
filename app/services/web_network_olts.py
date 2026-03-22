@@ -843,7 +843,11 @@ def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | 
                 olt.firmware_version = fw
                 db.commit()
         except Exception:
-            pass  # Non-critical; SSH test already passed
+            logger.debug(
+                "Firmware probe persistence failed for OLT %s",
+                olt.id,
+                exc_info=True,
+            )  # Non-critical; SSH test already passed
         return True, f"{message} ({policy_key})", policy_key
     return ok, message, policy_key
 

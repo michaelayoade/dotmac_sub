@@ -198,7 +198,7 @@ def forgot_password_submit(request: Request, db: Session, email: str):
     try:
         auth_flow_service.request_password_reset(db=db, email=email)
     except Exception:
-        pass
+        logger.info("Password reset request failed for %s", email, exc_info=True)
     return templates.TemplateResponse(
         "auth/forgot-password.html",
         {"request": request, "success": True},
@@ -302,7 +302,7 @@ def logout(request: Request, db: Session):
         try:
             auth_flow_service.auth_flow.logout(db, refresh_token)
         except Exception:
-            pass
+            logger.debug("Logout failed while clearing refresh token", exc_info=True)
     response = RedirectResponse(url="/auth/login", status_code=303)
     response.delete_cookie("session_token")
     response.delete_cookie("mfa_pending")

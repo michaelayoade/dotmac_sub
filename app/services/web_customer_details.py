@@ -772,7 +772,11 @@ def _build_person_fallback_address(db: Session, customer: Subscriber):
                         except Exception:
                             db.rollback()
         except Exception:
-            pass
+            logger.debug(
+                "Fallback geocoding preview failed for customer %s",
+                customer.id,
+                exc_info=True,
+            )
 
     return [
         SimpleNamespace(
@@ -882,7 +886,11 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
             )
             addresses.extend(sub_addresses)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to load addresses for subscriber %s in person snapshot",
+                sub.id,
+                exc_info=True,
+            )
         accounts.append(sub)
 
     accounts = _dedupe_accounts(accounts)
@@ -1045,7 +1053,11 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
             )
             addresses.extend(sub_addresses)
         except Exception:
-            pass
+            logger.debug(
+                "Failed to load addresses for subscriber %s in organization snapshot",
+                sub.id,
+                exc_info=True,
+            )
         accounts.append(sub)
         channels = (
             db.query(SubscriberChannel)

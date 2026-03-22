@@ -110,7 +110,11 @@ def run_scheduled_backups() -> dict[str, int]:
                         run_type="scheduled",
                     )
                 except Exception:
-                    pass
+                    logger.warning(
+                        "Failed to queue NAS backup failure notification for %s",
+                        device.id,
+                        exc_info=True,
+                    )
 
         logger.info(
             "Scheduled NAS backups: attempted=%d succeeded=%d failed=%d skipped=%d",

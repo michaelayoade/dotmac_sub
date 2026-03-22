@@ -45,6 +45,8 @@ from app.services.wireguard_crypto import (
     validate_key,
 )
 
+logger = logging.getLogger(__name__)
+
 
 def _ensure_utc_aware(dt: datetime) -> datetime:
     """Normalize a datetime to timezone-aware UTC.
@@ -1269,7 +1271,7 @@ class RouterSyncService:
             try:
                 password = decrypt_private_key(encrypted_password)
             except Exception:
-                pass
+                logger.debug("Failed to decrypt WireGuard router API password", exc_info=True)
 
         if not password:
             import os

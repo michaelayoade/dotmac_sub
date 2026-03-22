@@ -853,7 +853,11 @@ class UsageCharges(ListResponseMixin):
                 )
                 posted += 1
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to post usage charge %s",
+                    charge_id,
+                    exc_info=True,
+                )
         if posted:
             db.commit()
         return posted

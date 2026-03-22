@@ -18,7 +18,11 @@ from app.models.rbac import (
     SystemUserRole,
 )
 from app.services.auth import hash_api_key
-from app.services.auth_flow import _load_rbac_claims, decode_access_token, hash_session_token
+from app.services.auth_flow import (
+    _load_rbac_claims,
+    decode_access_token,
+    hash_session_token,
+)
 
 logger = logging.getLogger(__name__)
 

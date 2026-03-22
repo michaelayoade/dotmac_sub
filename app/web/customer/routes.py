@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -29,7 +30,7 @@ from app.web.customer.branding import get_customer_templates
 templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
 
-logger = __import__("logging").getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
@@ -390,7 +391,11 @@ def customer_invoice_pdf(
                 headers=headers,
             )
         except Exception:
-            pass
+            logger.debug(
+                "Failed streaming cached invoice PDF for invoice %s",
+                invoice_id,
+                exc_info=True,
+            )
 
     # Queue generation if not ready
     subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id")
@@ -516,7 +521,11 @@ def customer_bandwidth_live(
             try:
                 current = await metrics_store.get_current_bandwidth(str(subscription_id))
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to fetch current bandwidth for subscription %s",
+                    subscription_id,
+                    exc_info=True,
+                )
 
             try:
                 if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
@@ -540,7 +549,11 @@ def customer_bandwidth_live(
                     finally:
                         sse_db.close()
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to enrich SSE bandwidth stream for subscription %s",
+                    subscription_id,
+                    exc_info=True,
+                )
 
             now = datetime.now(UTC)
             yield {

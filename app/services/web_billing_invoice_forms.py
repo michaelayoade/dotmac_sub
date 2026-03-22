@@ -11,9 +11,9 @@ from app.models.domain_settings import SettingDomain
 from app.services import billing as billing_service
 from app.services import settings_spec
 from app.services import subscriber as subscriber_service
-from app.services.billing_settings import resolve_payment_due_days
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services.billing_settings import resolve_payment_due_days
 
 logger = logging.getLogger(__name__)
 

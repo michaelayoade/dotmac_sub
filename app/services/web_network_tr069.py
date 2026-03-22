@@ -18,8 +18,8 @@ from app.schemas.tr069 import (
     Tr069CpeDeviceUpdate,
     Tr069JobCreate,
 )
-from app.services import tr069 as tr069_service
 from app.services import network as network_service
+from app.services import tr069 as tr069_service
 from app.services.common import coerce_uuid
 from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
 from app.services.network._common import decode_huawei_hex_serial

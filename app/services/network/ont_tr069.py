@@ -188,7 +188,12 @@ def _resolve_param_paths_from_capability(
         if path:
             return [path]
     except Exception:
-        pass
+        logger.debug(
+            "Failed to resolve vendor-specific TR-069 path for %s/%s",
+            vendor,
+            model,
+            exc_info=True,
+        )
     return None
 
 

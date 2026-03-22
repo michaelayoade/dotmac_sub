@@ -128,7 +128,10 @@ def get_encryption_key() -> bytes | None:
         finally:
             session.close()
     except Exception:
-        pass  # Fall through to env var
+        _logger.debug(
+            "Database WireGuard encryption key lookup failed",
+            exc_info=True,
+        )  # Fall through to env var
 
     # Fall back to environment variable
     if not key_str:

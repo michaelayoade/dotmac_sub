@@ -15,13 +15,13 @@ from app.schemas.catalog import (
     ProvisioningTemplateUpdate,
 )
 from app.services import nas as nas_service
-from app.services.auth_dependencies import require_method_permission
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
     log_audit_event,
     model_to_dict,
 )
+from app.services.auth_dependencies import require_method_permission
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")

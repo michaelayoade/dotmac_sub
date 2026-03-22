@@ -39,7 +39,7 @@ def get_encryption_key() -> bytes | None:
         if bao_val:
             key_str = bao_val
     except Exception:
-        pass
+        _logger.debug("OpenBao credential encryption key lookup failed", exc_info=True)
 
     if not key_str:
         try:
@@ -55,7 +55,10 @@ def get_encryption_key() -> bytes | None:
             finally:
                 session.close()
         except Exception:
-            pass
+            _logger.debug(
+                "Database credential encryption key lookup failed",
+                exc_info=True,
+            )
 
     # Fall back to environment variable
     if not key_str:

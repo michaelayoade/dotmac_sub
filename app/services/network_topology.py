@@ -13,12 +13,12 @@ from app.models.network_monitoring import (
     DeviceInterface,
     DeviceMetric,
     DeviceRole,
+    DeviceType,
     MetricType,
     NetworkDevice,
     NetworkTopologyLink,
     PopSite,
     TopologyLinkAdminStatus,
-    DeviceType,
     TopologyLinkMedium,
     TopologyLinkRole,
 )

@@ -11,7 +11,11 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntUnit
-from app.models.network_monitoring import DeviceInterface, InterfaceStatus, NetworkDevice
+from app.models.network_monitoring import (
+    DeviceInterface,
+    InterfaceStatus,
+    NetworkDevice,
+)
 from app.models.subscriber import Subscriber
 from app.services import (
     audit as audit_service,
@@ -574,7 +578,7 @@ def dashboard_stats_partial(request: Request, db: Session):
         b_stats = _billing_svc.billing_reporting.get_dashboard_stats(db)
         monthly_revenue = b_stats.get("stats", {}).get("payments_amount", 0)
     except Exception:
-        pass
+        logger.debug("Failed to load billing dashboard stats", exc_info=True)
 
     # System uptime from network stats
     system_uptime = 0.0
@@ -584,7 +588,7 @@ def dashboard_stats_partial(request: Request, db: Session):
         n_stats = _net_mon_svc.network_devices.get_dashboard_stats(db)
         system_uptime = n_stats.get("uptime_percentage", 0.0)
     except Exception:
-        pass
+        logger.debug("Failed to load network monitoring dashboard stats", exc_info=True)
 
     stats = {
         "total_subscribers": sub_stats["total_count"],

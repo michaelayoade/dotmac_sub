@@ -10,9 +10,9 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services.auth_dependencies import require_method_permission
 from app.services import web_network_tr069 as web_network_tr069_service
 from app.services.audit_helpers import log_audit_event
+from app.services.auth_dependencies import require_method_permission
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")

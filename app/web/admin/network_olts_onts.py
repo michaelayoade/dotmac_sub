@@ -26,7 +26,6 @@ from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services import web_network_olts as web_network_olts_service
-from app.services import web_network_pon_interfaces as web_network_pon_interfaces_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
@@ -34,6 +33,9 @@ from app.services import (
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services import web_network_onts as web_network_onts_service
+from app.services import (
+    web_network_pon_interfaces as web_network_pon_interfaces_service,
+)
 from app.services import web_network_service_ports as web_network_service_ports_service
 from app.services.audit_helpers import (
     build_audit_activities,

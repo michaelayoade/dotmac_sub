@@ -6,8 +6,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services.auth_dependencies import require_permission
 from app.services import web_network_core_devices as web_network_core_devices_service
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])

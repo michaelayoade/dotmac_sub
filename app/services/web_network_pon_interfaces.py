@@ -10,7 +10,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, PonPort
-from app.models.network_monitoring import DeviceInterface, InterfaceStatus, NetworkDevice
+from app.models.network_monitoring import (
+    DeviceInterface,
+    InterfaceStatus,
+    NetworkDevice,
+)
 from app.services.common import coerce_uuid
 
 _PON_TOKENS = ("pon", "gpon", "epon", "xgpon", "xgs")

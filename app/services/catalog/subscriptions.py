@@ -733,7 +733,11 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
         provisioning_service.service_orders.create(db, payload)
     except Exception:
         # Don't fail subscription creation if service order creation fails
-        pass
+        logger.warning(
+            "Auto service-order creation failed for subscription %s",
+            subscription.id,
+            exc_info=True,
+        )
 
 class Subscriptions(ListResponseMixin):
     @staticmethod
@@ -1047,7 +1051,11 @@ class Subscriptions(ListResponseMixin):
                     db, str(subscription.id), reason="profile_change"
                 )
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to refresh active sessions for subscription %s after profile change",
+                    subscription.id,
+                    exc_info=True,
+                )
 
         # Emit upgrade/downgrade events when offer changes on an active subscription
         if (

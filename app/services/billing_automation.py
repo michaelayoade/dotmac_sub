@@ -28,8 +28,8 @@ from app.models.catalog import (
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Address, Subscriber, SubscriberStatus
 from app.services import settings_spec
-from app.services.billing_settings import resolve_payment_due_days
 from app.services.billing import _recalculate_invoice_totals
+from app.services.billing_settings import resolve_payment_due_days
 from app.services.common import round_money
 from app.services.events import emit_event
 from app.services.events.types import EventType

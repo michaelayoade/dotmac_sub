@@ -757,7 +757,7 @@ def test_smtp_connection(
             try:
                 server.quit()
             except Exception:
-                pass
+                logger.debug("SMTP quit failed after connection test", exc_info=True)
 
 
 def send_password_reset_email(db: Session, to_email: str, reset_token: str, person_name: str | None = None) -> bool:

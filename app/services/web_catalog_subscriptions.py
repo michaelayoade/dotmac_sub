@@ -23,11 +23,17 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
-from app.models.event_store import EventStore
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.event_store import EventStore
 from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
 from app.models.notification import Notification, NotificationTemplate
-from app.models.radius import RadiusClient, RadiusServer, RadiusSyncJob, RadiusSyncRun, RadiusUser
+from app.models.radius import (
+    RadiusClient,
+    RadiusServer,
+    RadiusSyncJob,
+    RadiusSyncRun,
+    RadiusUser,
+)
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
@@ -1868,7 +1874,9 @@ def create_subscription_with_audit(
         existing_credential = _current_access_credential(db, created.subscriber_id)
         if not existing_credential and str(getattr(created, "status", "") or "").strip().lower() == "active":
             try:
-                from app.services.pppoe_credentials import auto_generate_pppoe_credential
+                from app.services.pppoe_credentials import (
+                    auto_generate_pppoe_credential,
+                )
 
                 auto_generate_pppoe_credential(
                     db,

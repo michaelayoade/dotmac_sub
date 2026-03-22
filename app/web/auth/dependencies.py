@@ -6,7 +6,11 @@ from fastapi import Depends, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
-from app.services.auth_flow import _load_rbac_claims, decode_access_token, validate_active_session
+from app.services.auth_flow import (
+    _load_rbac_claims,
+    decode_access_token,
+    validate_active_session,
+)
 
 
 class AuthenticationRequired(Exception):

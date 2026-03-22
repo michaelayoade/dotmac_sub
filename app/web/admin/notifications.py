@@ -1,6 +1,7 @@
 """Admin notifications management routes."""
 
 import json
+import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
@@ -30,6 +31,7 @@ from app.services import (
 )
 from app.services.auth_dependencies import require_permission
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
 
@@ -744,7 +746,11 @@ def alert_policy_step_create(
             db=db, payload=payload
         )
     except Exception:
-        pass  # Redirect back regardless
+        logger.warning(
+            "Failed to create alert policy step for policy %s",
+            policy_id,
+            exc_info=True,
+        )  # Redirect back regardless
     return RedirectResponse(
         url=f"/admin/notifications/alert-policies/{policy_id}",
         status_code=303,
@@ -974,7 +980,11 @@ def oncall_rotation_member_create(
             db=db, payload=payload
         )
     except Exception:
-        pass  # Redirect back regardless
+        logger.warning(
+            "Failed to create on-call rotation member for rotation %s",
+            rotation_id,
+            exc_info=True,
+        )  # Redirect back regardless
     return RedirectResponse(
         url=f"/admin/notifications/oncall-rotations/{rotation_id}",
         status_code=303,

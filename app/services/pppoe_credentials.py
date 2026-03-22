@@ -13,9 +13,8 @@ import secrets
 import string
 from typing import TYPE_CHECKING
 
-from app.models.domain_settings import DomainSetting
 from app.models.catalog import AccessCredential, ConnectionType
-from app.models.domain_settings import SettingDomain
+from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import numbering, settings_spec
 from app.services.credential_crypto import encrypt_credential

@@ -1,5 +1,6 @@
 """Admin catalog component management web routes."""
 
+import logging
 from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -42,6 +43,7 @@ from app.services import catalog as catalog_service
 from app.services import web_catalog_settings as settings_svc
 from app.web.request_parsing import parse_form_data
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog/settings", tags=["web-admin-catalog-settings"])
 legacy_add_ons_router = APIRouter(prefix="/catalog/add-ons", tags=["web-admin-catalog-settings-legacy"])
@@ -233,7 +235,7 @@ def region_zone_delete(request: Request, zone_id: str, db: Session = Depends(get
     try:
         catalog_service.region_zones.delete(db=db, zone_id=zone_id)
     except Exception:
-        pass
+        logger.warning("Failed to delete region zone %s", zone_id, exc_info=True)
     return RedirectResponse("/admin/catalog/settings/region-zones", status_code=303)
 
 
@@ -396,7 +398,7 @@ def usage_allowance_delete(request: Request, allowance_id: str, db: Session = De
     try:
         catalog_service.usage_allowances.delete(db=db, allowance_id=allowance_id)
     except Exception:
-        pass
+        logger.warning("Failed to delete usage allowance %s", allowance_id, exc_info=True)
     return RedirectResponse("/admin/catalog/settings/usage-allowances", status_code=303)
 
 
@@ -563,7 +565,7 @@ def sla_profile_delete(request: Request, profile_id: str, db: Session = Depends(
     try:
         catalog_service.sla_profiles.delete(db=db, profile_id=profile_id)
     except Exception:
-        pass
+        logger.warning("Failed to delete SLA profile %s", profile_id, exc_info=True)
     return RedirectResponse("/admin/catalog/settings/sla-profiles", status_code=303)
 
 
@@ -826,7 +828,7 @@ def policy_set_delete(request: Request, policy_id: str, db: Session = Depends(ge
     try:
         catalog_service.policy_sets.delete(db=db, policy_id=policy_id)
     except Exception:
-        pass
+        logger.warning("Failed to delete policy set %s", policy_id, exc_info=True)
     return RedirectResponse("/admin/catalog/settings/policy-sets", status_code=303)
 
 
@@ -1061,7 +1063,7 @@ def add_on_delete(request: Request, addon_id: str, db: Session = Depends(get_db)
     try:
         catalog_service.add_ons.delete(db=db, add_on_id=addon_id)
     except Exception:
-        pass
+        logger.warning("Failed to delete add-on %s", addon_id, exc_info=True)
     return RedirectResponse("/admin/catalog/settings/add-ons", status_code=303)
 
 

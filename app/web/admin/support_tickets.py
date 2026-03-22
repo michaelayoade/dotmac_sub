@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from uuid import UUID
 
@@ -31,6 +32,7 @@ from app.services import support as support_service
 from app.services.auth_dependencies import require_permission
 from app.services.file_storage import file_uploads
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/support/tickets", tags=["web-admin-support-tickets"])
 templates = Jinja2Templates(directory="templates")
 
@@ -165,7 +167,11 @@ def _upload_ticket_attachments(
             try:
                 file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to clean up uploaded support ticket attachment %s",
+                    getattr(record, "id", None),
+                    exc_info=True,
+                )
         raise
 
 
