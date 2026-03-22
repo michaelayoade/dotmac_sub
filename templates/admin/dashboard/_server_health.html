@@ -22,8 +22,10 @@
         {{ status_badge("Critical", "error", size="sm") }}
         {% elif server_health_status.status == 'warning' %}
         {{ status_badge("Warning", "warning", size="sm") }}
-        {% else %}
+        {% elif server_health_status.status == 'healthy' %}
         {{ status_badge("Healthy", "success", size="sm") }}
+        {% else %}
+        {{ status_badge("Unknown", "default", size="sm") }}
         {% endif %}
     </div>
 

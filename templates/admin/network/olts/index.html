@@ -115,10 +115,10 @@
                 <td class="px-6 py-3 whitespace-nowrap">
                     {% if olt.runtime_ping_state == 'fail' or olt.runtime_snmp_state == 'fail' %}
                     <span class="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900/30 dark:text-rose-300"><span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>Attention</span>
-                    {% elif olt.runtime_ping_state == 'unknown' and olt.runtime_snmp_state == 'unknown' %}
-                    <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Unmonitored</span>
-                    {% else %}
+                    {% elif olt.runtime_ping_state == 'ok' or olt.runtime_snmp_state == 'ok' %}
                     <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"><span class="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Healthy</span>
+                    {% else %}
+                    <span class="inline-flex items-center gap-1.5 rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300"><span class="h-1.5 w-1.5 rounded-full bg-slate-400"></span>Unknown</span>
                     {% endif %}
                 </td>
                 <td class="px-6 py-3 whitespace-nowrap text-center">{{ health_dot(olt.runtime_ping_state, "Ping") }}</td>
