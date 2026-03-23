@@ -61,7 +61,6 @@ def upgrade() -> None:
                 target_type networkoperationtargettype NOT NULL,
                 target_id UUID NOT NULL,
                 parent_id UUID REFERENCES network_operations(id) ON DELETE CASCADE,
-                tr069_job_id UUID REFERENCES tr069_jobs(id) ON DELETE SET NULL,
                 status networkoperationstatus NOT NULL DEFAULT 'pending',
                 correlation_key VARCHAR(255),
                 waiting_reason TEXT,

@@ -15,12 +15,16 @@
             const trigger = document.querySelector('[data-tab=\"charts\"]');
             if (trigger) trigger.dataset.loaded = '1';
             htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'});
-        }
-        if (activeTab !== 'tr069') {
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-snapshot-refresh', swap: 'none'});
+        } else if (activeTab === 'service-ports') {
+            const trigger = document.querySelector('[data-tab=\"service-ports\"]');
+            if (trigger) trigger.dataset.loaded = '1';
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'});
+        } else if (activeTab === 'provisioning') {
+            const trigger = document.querySelector('[data-tab=\"provisioning\"]');
+            if (trigger) trigger.dataset.loaded = '1';
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/iphost-config', {target: '#provisioning-content', swap: 'innerHTML'});
         }
      ">
-    <div id="tr069-snapshot-refresh" class="hidden"></div>
     {# Header #}
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div>
@@ -58,7 +62,7 @@
                 </span>
                 {% endif %}
                 {% if subscriber_info.get('name') %}
-                <a href="/admin/customers/person/{{ subscriber_info.id }}" class="inline-flex items-center rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                <a href="{{ subscriber_info.customer_url or ('/admin/customers/person/' ~ subscriber_info.id) }}" class="inline-flex items-center rounded-full bg-indigo-100 px-3 py-1 text-xs font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
                     Subscriber: {{ subscriber_info.name }}
                 </a>
                 {% endif %}
@@ -95,6 +99,12 @@
             </a>
         </div>
     </div>
+
+    {% if inventory_ready %}
+    <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300">
+        This ONT is back in inventory and ready for a fresh assignment/provisioning flow.
+    </div>
+    {% endif %}
 
     <div class="grid gap-4 lg:grid-cols-5">
         <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
@@ -320,15 +330,15 @@
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '-' }}</dd>
                     </div>
                     <div>
                         <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.firmware_version or '&mdash;' }}</dd>
+                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.firmware_version or '-' }}</dd>
                     </div>
                     {% if ont.notes %}
                     <div class="sm:col-span-2">
@@ -535,6 +545,17 @@
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
                         Assign to Subscriber
                     </a>
+                    {% endif %}
+                    {% if assignment or ont.is_active or (provisioning_info and (provisioning_info.profile_id or provisioning_info.status)) %}
+                    <button
+                        hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
+                        hx-swap="none"
+                        hx-confirm="Return this ONT to inventory? This will deactivate it, close the active assignment, and clear provisioning/service state."
+                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:bg-slate-800 dark:text-amber-400"
+                    >
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7H9m11 0l-4-4m4 4l-4 4M4 17h11m-11 0l4-4m-4 4l4 4"/></svg>
+                        Return to Inventory
+                    </button>
                     {% endif %}
                 </div>
                 {% endcall %}

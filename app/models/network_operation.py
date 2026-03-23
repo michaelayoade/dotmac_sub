@@ -11,7 +11,6 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
 
 from sqlalchemy import (
     JSON,
@@ -27,9 +26,6 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
-
-if TYPE_CHECKING:
-    from app.models.tr069 import Tr069Job
 
 
 class NetworkOperationStatus(enum.Enum):
@@ -130,11 +126,6 @@ class NetworkOperation(Base):
         ForeignKey("network_operations.id", ondelete="CASCADE"),
         nullable=True,
     )
-    tr069_job_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True),
-        ForeignKey("tr069_jobs.id", ondelete="SET NULL"),
-        nullable=True,
-    )
     status: Mapped[NetworkOperationStatus] = mapped_column(
         Enum(
             NetworkOperationStatus,
@@ -176,4 +167,3 @@ class NetworkOperation(Base):
         "NetworkOperation",
         back_populates="parent",
     )
-    tr069_job: Mapped[Tr069Job | None] = relationship("Tr069Job")

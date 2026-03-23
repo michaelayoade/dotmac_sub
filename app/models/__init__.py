@@ -309,6 +309,7 @@ from app.models.offer_availability import (  # noqa: F401
     OfferLocationAvailability,
     OfferResellerAvailability,
 )
+from app.models.ont_autofind import OltAutofindCandidate  # noqa: F401
 from app.models.payment_arrangement import (  # noqa: F401
     ArrangementStatus,
     InstallmentStatus,

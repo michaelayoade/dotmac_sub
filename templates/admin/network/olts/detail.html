@@ -5,7 +5,7 @@
 
 {% block content %}
 {{ ambient_background("blue", "indigo") }}
-<div class="space-y-6" x-data="{ activeTab: new URLSearchParams(window.location.search).get('tab') || 'overview' }">
+<div class="space-y-6" x-data="{ activeTab: new URLSearchParams(window.location.search).get('tab') || 'overview', ontSearch: '' }">
     {% if ssh_test_message %}
     <div class="rounded-lg border px-4 py-3 text-sm {% if ssh_test_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
         {{ ssh_test_message }}
@@ -674,19 +674,45 @@
     <div x-show="activeTab === 'onts'" x-transition x-cloak>
         {% call card("Connected ONTs", color="blue") %}
         {% if onts_on_olt %}
+        <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+            <div class="w-full sm:max-w-md">
+                <label for="olt-ont-search" class="mb-1.5 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
+                    Search ONTs
+                </label>
+                <div class="relative">
+                    <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z"/>
+                    </svg>
+                    <input
+                        id="olt-ont-search"
+                        type="search"
+                        x-model.trim="ontSearch"
+                        placeholder="Search by MAC address or ONT ID"
+                        class="block w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-9 pr-3 text-sm text-slate-900 shadow-sm transition placeholder:text-slate-400 focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-200 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:placeholder:text-slate-500 dark:focus:border-blue-500 dark:focus:ring-blue-900/40"
+                    >
+                </div>
+            </div>
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+                Filters the connected ONTs table using the MAC/ID value shown in the first column.
+            </p>
+        </div>
         {% call data_table() %}
             {{ table_head(["MAC Address", "PON Port", "Online", "OLT Rx (dBm)", "ONU Rx (dBm)", "Signal", "Distance"]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for ont in onts_on_olt %}
                 {% set assignment = assignment_by_ont_id.get(ont.id | string) %}
                 {% set sd = signal_data.get(ont.id | string, {}) if ont else {} %}
-                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                {% set mac_display = ont_mac_by_ont_id.get(ont.id | string) if ont and ont_mac_by_ont_id else '' %}
+                {% if ont and not mac_display and ont.serial_number %}
+                {% set mac_display = ont.serial_number %}
+                {% endif %}
+                {% set ont_search_text = ((mac_display or '') ~ ' ' ~ (ont.id|string if ont and ont.id else '')) | lower %}
+                <tr
+                    class="hover:bg-slate-50 dark:hover:bg-slate-700/50"
+                    x-show='!ontSearch || {{ ont_search_text | tojson }}.includes(ontSearch.toLowerCase())'
+                >
                     <td class="px-6 py-3 whitespace-nowrap">
                         {% if ont %}
-                        {% set mac_display = ont_mac_by_ont_id.get(ont.id | string) if ont_mac_by_ont_id else '' %}
-                        {% if not mac_display and ont.serial_number %}
-                        {% set mac_display = ont.serial_number %}
-                        {% endif %}
                         <a href="/admin/network/onts/{{ ont.id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono">{{ mac_display or '&mdash;' }}</a>
                         {% else %}
                         <span class="text-sm text-slate-400">&mdash;</span>

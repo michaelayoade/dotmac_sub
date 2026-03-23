@@ -76,7 +76,6 @@ class NetworkOperations(ListResponseMixin):
         input_payload: dict[str, Any] | None = None,
         parent_id: str | None = None,
         initiated_by: str | None = None,
-        tr069_job_id: str | None = None,
     ) -> NetworkOperation:
         """Create a new operation in pending status.
 
@@ -89,7 +88,6 @@ class NetworkOperations(ListResponseMixin):
             input_payload: Request parameters to record.
             parent_id: Parent operation UUID for composable workflows.
             initiated_by: Who triggered this (username or "system").
-            tr069_job_id: Optional linked TR-069 job UUID.
 
         Returns:
             The created NetworkOperation record.
@@ -120,7 +118,6 @@ class NetworkOperations(ListResponseMixin):
             target_type=target_type,
             target_id=target_id,
             parent_id=parent_id,
-            tr069_job_id=tr069_job_id,
             status=NetworkOperationStatus.pending,
             correlation_key=correlation_key,
             input_payload=input_payload,
@@ -157,7 +154,9 @@ class NetworkOperations(ListResponseMixin):
         op = _get_operation(db, operation_id)
         _check_not_terminal(op)
         op.status = NetworkOperationStatus.running
-        op.started_at = datetime.now(UTC)
+        if not op.started_at:
+            op.started_at = datetime.now(UTC)
+        op.waiting_reason = None
         db.flush()
         return op
 

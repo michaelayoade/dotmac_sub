@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.network import OntAssignment, OntProvisioningStatus
+from app.services import network as network_service
 from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
@@ -179,3 +182,48 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
     return bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
+
+
+def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
+    """Deactivate an ONT, close any active assignment, and clear service state."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+
+    active_assignment = db.scalars(
+        select(OntAssignment)
+        .where(
+            OntAssignment.ont_unit_id == ont.id,
+            OntAssignment.active.is_(True),
+        )
+        .order_by(OntAssignment.created_at.desc())
+        .limit(1)
+    ).first()
+
+    if active_assignment is not None:
+        active_assignment.active = False
+
+    ont.is_active = False
+    ont.provisioning_profile_id = None
+    ont.provisioning_status = OntProvisioningStatus.unprovisioned
+    ont.last_provisioned_at = None
+    ont.wan_vlan_id = None
+    ont.wan_mode = None
+    ont.config_method = None
+    ont.ip_protocol = None
+    ont.pppoe_username = None
+    ont.pppoe_password = None
+    ont.wan_remote_access = False
+    ont.tr069_acs_server_id = None
+    ont.mgmt_ip_mode = None
+    ont.mgmt_vlan_id = None
+    ont.mgmt_ip_address = None
+    ont.mgmt_remote_access = False
+    ont.voip_enabled = False
+
+    db.commit()
+    db.refresh(ont)
+
+    assignment_msg = "assignment closed and " if active_assignment is not None else ""
+    return ActionResult(
+        success=True,
+        message=f"ONT returned to inventory: {assignment_msg}service state cleared.",
+    )

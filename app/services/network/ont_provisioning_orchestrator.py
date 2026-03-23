@@ -466,12 +466,6 @@ class OntProvisioningOrchestrator:
 
         Returns:
             ProvisioningJobResult with step-by-step results.
-
-        Note:
-            If an unexpected exception propagates from a provisioning step
-            (SSH error, SNMP timeout), the operation record may be left in
-            ``running`` status. The ``cleanup_old_operations`` task marks
-            stale operations as failed after 4 hours.
         """
         result = ProvisioningJobResult(success=False, message="", dry_run=dry_run)
 
@@ -516,6 +510,29 @@ class OntProvisioningOrchestrator:
                 )
                 op = None
 
+        try:
+            return OntProvisioningOrchestrator._execute_steps(
+                db, ont_id, profile_id, dry_run, tr069_olt_profile_id,
+                result, op,
+            )
+        except Exception as exc:
+            result.success = False
+            if not result.message:
+                result.message = f"Provisioning error: {exc}"
+            _finalize_operation_tracking(db, op, result)
+            raise
+
+    @staticmethod
+    def _execute_steps(
+        db: Session,
+        ont_id: str,
+        profile_id: str,
+        dry_run: bool,
+        tr069_olt_profile_id: int | None,
+        result: ProvisioningJobResult,
+        op: Any | None,
+    ) -> ProvisioningJobResult:
+        """Execute provisioning steps 1-13. Extracted for exception safety."""
         # ── Step 1: Resolve context ──
         step_start = time.monotonic()
         ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
@@ -785,9 +802,27 @@ class OntProvisioningOrchestrator:
         device_found = False
         if tr069_enabled:
             # ── Step 9: Wait for TR-069 bootstrap ──
+            # Transition to 'waiting' so the UI shows the real state
+            if op is not None:
+                try:
+                    from app.services.network_operations import (
+                        network_operations as _netops,
+                    )
+
+                    _netops.mark_waiting(db, str(op.id), "tr069_bootstrap")
+                    db.flush()
+                except Exception:
+                    pass  # Non-critical — UI hint only
             step_start = time.monotonic()
             device_found = _wait_for_tr069_bootstrap(db, ont)
             step_ms = int((time.monotonic() - step_start) * 1000)
+            # Back to running for remaining steps
+            if op is not None and device_found:
+                try:
+                    _netops.mark_running(db, str(op.id))
+                    db.flush()
+                except Exception:
+                    pass  # Non-critical
 
             if device_found:
                 result.steps.append(

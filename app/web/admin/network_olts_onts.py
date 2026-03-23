@@ -3,12 +3,19 @@
 import json
 import logging
 from datetime import datetime
+from typing import Any
 from urllib.parse import quote_plus
 
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import (
+    FileResponse,
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
@@ -30,6 +37,7 @@ from app.services import web_network_ont_actions as web_network_ont_actions_serv
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
 )
+from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services import web_network_onts as web_network_onts_service
@@ -101,12 +109,17 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
     }
 
 
-def _ont_form_dependencies(db: Session) -> dict:
+def _ont_form_dependencies(db: Session, ont: Any | None = None) -> dict:
     """Build all dropdown data needed by the ONT provisioning form."""
-    deps = web_network_onts_service.ont_form_dependencies(db)
+    deps = web_network_onts_service.ont_form_dependencies(db, ont)
     deps["gpon_channels"] = [e.value for e in GponChannel]
     deps["onu_modes"] = [e.value for e in OnuMode]
     return deps
+
+
+def _ont_has_active_assignment(db: Session, ont_id: str) -> bool:
+    """Return True when the ONT currently has an active assignment."""
+    return web_network_ont_assignments_service.has_active_assignment(db, ont_id)
 
 
 def _form_uuid_or_none(form: FormData, key: str) -> str | None:
@@ -722,6 +735,50 @@ def olt_autofind_scan(
     )
 
 
+@router.get(
+    "/unconfigured-onts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def unconfigured_onts_list(
+    request: Request,
+    search: str | None = None,
+    olt_id: str | None = None,
+    status: str | None = None,
+    message: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    context = _base_context(request, db, active_page="unconfigured-onts")
+    context.update(
+        web_network_ont_autofind_service.build_unconfigured_onts_page_data(
+            db,
+            search=search,
+            olt_id=olt_id,
+        )
+    )
+    context["status"] = status
+    context["message"] = message
+    return templates.TemplateResponse(
+        "admin/network/onts/unconfigured_index.html",
+        context,
+    )
+
+
+@router.post(
+    "/unconfigured-onts/scan",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def unconfigured_onts_scan_now() -> RedirectResponse:
+    from app.tasks.ont_autofind import discover_all_olt_autofind
+
+    discover_all_olt_autofind.delay()
+    return RedirectResponse(
+        "/admin/network/unconfigured-onts?status=success&message="
+        + quote_plus("Aggregated OLT autofind scan queued."),
+        status_code=303,
+    )
+
+
 @router.post(
     "/olts/{olt_id}/authorize-ont",
     dependencies=[Depends(require_permission("network:write"))],
@@ -731,6 +788,7 @@ def olt_authorize_ont(
     olt_id: str,
     fsp: str = Form(""),
     serial_number: str = Form(""),
+    return_to: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Authorize a discovered ONT on the OLT via SSH."""
@@ -738,6 +796,11 @@ def olt_authorize_ont(
 
     if not fsp or not serial_number:
         msg = quote_plus("Missing port or serial number")
+        if return_to == "/admin/network/unconfigured-onts":
+            return RedirectResponse(
+                f"{return_to}?status=error&message={msg}",
+                status_code=303,
+            )
         return RedirectResponse(
             f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
             status_code=303,
@@ -772,6 +835,27 @@ def olt_authorize_ont(
             web_network_olts_service.sync_onts_from_olt_snmp(db, olt_id)
         except Exception as e:
             logger.warning("Post-authorize SNMP sync failed for OLT %s: %s", olt_id, e)
+        try:
+            web_network_ont_autofind_service.resolve_candidate_authorized(
+                db,
+                olt_id=olt_id,
+                fsp=fsp,
+                serial_number=serial_number,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to resolve cached autofind candidate for %s on %s %s: %s",
+                serial_number,
+                olt_id,
+                fsp,
+                e,
+            )
+
+    if return_to == "/admin/network/unconfigured-onts":
+        return RedirectResponse(
+            f"{return_to}?status={status}&message={quote_plus(message)}",
+            status_code=303,
+        )
 
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
@@ -1257,7 +1341,7 @@ def onts_bulk_action(
     firmware_image_id: str = Form(""),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """Execute a bulk action (reboot/refresh/factory_reset/firmware_upgrade) on selected ONTs."""
+    """Execute a bulk action on selected ONTs."""
     stats = web_network_onts_service.execute_bulk_action(
         db, ont_ids, action, firmware_image_id=firmware_image_id or None
     )
@@ -1367,7 +1451,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
                 "ont": payload,
                 "action_url": "/admin/network/onts",
                 "error": "New ONTs must be inactive until assigned to a customer.",
-                **_ont_form_dependencies(db),
+                **_ont_form_dependencies(db, payload),
             }
         )
         return templates.TemplateResponse("admin/network/onts/form.html", context)
@@ -1396,7 +1480,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
                 "ont": ont_snapshot,
                 "action_url": "/admin/network/onts",
                 "error": error,
-                **_ont_form_dependencies(db),
+                **_ont_form_dependencies(db, payload),
             }
         )
         return templates.TemplateResponse("admin/network/onts/form.html", context)
@@ -1424,7 +1508,7 @@ def ont_edit(request: Request, ont_id: str, db: Session = Depends(get_db)):
         {
             "ont": ont,
             "action_url": f"/admin/network/onts/{ont.id}",
-            **_ont_form_dependencies(db),
+            **_ont_form_dependencies(db, ont),
         }
     )
     return templates.TemplateResponse("admin/network/onts/form.html", context)
@@ -1605,7 +1689,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
                 "ont": ont,
                 "action_url": f"/admin/network/onts/{ont.id}",
                 "error": "Serial number is required",
-                **_ont_form_dependencies(db),
+                **_ont_form_dependencies(db, ont),
             }
         )
         return templates.TemplateResponse("admin/network/onts/form.html", context)
@@ -1639,6 +1723,18 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
         gps_longitude=_form_float_or_none(form, "gps_longitude"),
     )
 
+    if payload.is_active and not _ont_has_active_assignment(db, ont_id):
+        context = _base_context(request, db, active_page="onts")
+        context.update(
+            {
+                "ont": payload,
+                "action_url": f"/admin/network/onts/{ont.id}",
+                "error": "ONT cannot be active until it has an active assignment.",
+                **_ont_form_dependencies(db, payload),
+            }
+        )
+        return templates.TemplateResponse("admin/network/onts/form.html", context)
+
     try:
         before_snapshot = model_to_dict(ont)
         ont = network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
@@ -1670,7 +1766,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
                 "ont": ont_snapshot,
                 "action_url": f"/admin/network/onts/{ont_id}",
                 "error": error,
-                **_ont_form_dependencies(db),
+                **_ont_form_dependencies(db, payload),
             }
         )
         return templates.TemplateResponse("admin/network/onts/form.html", context)
@@ -1695,7 +1791,7 @@ def ont_onu_mode_modal(
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
-    vlans = web_network_onts_service.get_vlans(db)
+    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
     context = {
         "request": request,
         "ont": ont,
@@ -1775,7 +1871,7 @@ def ont_mgmt_ip_modal(
     except HTTPException:
         raise HTTPException(status_code=404, detail="ONT not found")
 
-    vlans = web_network_onts_service.get_vlans(db)
+    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
     context = {
         "request": request,
         "ont": ont,
@@ -1915,6 +2011,47 @@ def ont_config(
     )
     return templates.TemplateResponse(
         "admin/network/onts/_config_partial.html", context
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/return-to-inventory",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_return_to_inventory(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> Response:
+    """Deactivate an ONT and reset it to reusable inventory state."""
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        return JSONResponse(
+            {"success": False, "message": "ONT not found"},
+            status_code=404,
+            headers=_toast_headers("ONT not found", "error"),
+        )
+
+    result = web_network_ont_actions_service.return_to_inventory(db, ont_id)
+    if result.success:
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="return_to_inventory",
+            entity_type="ont",
+            entity_id=str(ont.id),
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={"serial_number": ont.serial_number},
+        )
+
+    return Response(
+        status_code=200 if result.success else 400,
+        headers={
+            **_toast_headers(result.message, "success" if result.success else "error"),
+            "HX-Refresh": "true",
+        },
     )
 
 
@@ -2592,9 +2729,24 @@ def ont_iphost_config(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: Management IP config for ONT detail page."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     ok, msg, config = web_network_ont_actions_service.fetch_iphost_config(db, ont_id)
+    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
+    tr069_profiles, tr069_profiles_error = web_network_onts_service.get_tr069_profiles_for_ont(
+        db, ont
+    )
     context = _base_context(request, db, active_page="onts")
-    context.update({"iphost_config": config, "iphost_ok": ok, "iphost_msg": msg})
+    context.update(
+        {
+            "ont": ont,
+            "iphost_config": config,
+            "iphost_ok": ok,
+            "iphost_msg": msg,
+            "vlans": vlans,
+            "tr069_profiles": tr069_profiles,
+            "tr069_profiles_error": tr069_profiles_error,
+        }
+    )
     return templates.TemplateResponse("admin/network/onts/_mgmt_config.html", context)
 
 
