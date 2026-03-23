@@ -32,6 +32,7 @@ from app.schemas.network import (
     OltSfpModuleUpdate,
     OltShelfCreate,
     OltShelfUpdate,
+    OntAssignmentCreate,
     OntAssignmentUpdate,
     OntUnitUpdate,
     PonPortCreate,
@@ -442,6 +443,21 @@ class OntUnits(CRUDManager[OntUnit]):
 class OntAssignments(CRUDManager[OntAssignment]):
     model = OntAssignment
     not_found_detail = "ONT assignment not found"
+
+    @classmethod
+    def create(cls, db: Session, payload: OntAssignmentCreate) -> OntAssignment:
+        assignment = super().create(db, payload)
+        ont = db.get(OntUnit, assignment.ont_unit_id)
+        if ont is None:
+            return assignment
+        if assignment.active:
+            ont.is_active = True
+            db.commit()
+            db.refresh(ont)
+        from app.services.network.cpe import ensure_cpe_for_ont
+
+        ensure_cpe_for_ont(db, ont, assignment)
+        return assignment
 
     @staticmethod
     def list(

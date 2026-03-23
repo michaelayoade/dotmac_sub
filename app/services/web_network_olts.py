@@ -1643,6 +1643,65 @@ def sync_onts_from_olt_snmp(
     return True, message, result_stats
 
 
+def sync_onts_from_olt_snmp_tracked(
+    db: Session,
+    olt_id: str,
+    *,
+    initiated_by: str | None = None,
+) -> tuple[bool, str, dict[str, object]]:
+    """Tracked wrapper around sync_onts_from_olt_snmp.
+
+    Creates a NetworkOperation record to track the sync lifecycle,
+    then delegates to the existing sync function.
+    """
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+
+    try:
+        op = network_operations.start(
+            db,
+            NetworkOperationType.olt_ont_sync,
+            NetworkOperationTargetType.olt,
+            olt_id,
+            correlation_key=f"olt_sync:{olt_id}",
+            initiated_by=initiated_by,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return False, "A sync is already in progress for this OLT.", {}
+        raise
+    network_operations.mark_running(db, str(op.id))
+    db.flush()
+
+    try:
+        success, message, stats = sync_onts_from_olt_snmp(db, olt_id)
+        try:
+            if success:
+                network_operations.mark_succeeded(
+                    db, str(op.id), output_payload=dict(stats)
+                )
+            else:
+                network_operations.mark_failed(
+                    db, str(op.id), message, output_payload=dict(stats)
+                )
+        except Exception as track_err:
+            logger.error("Failed to record operation outcome for %s: %s", op.id, track_err)
+        return success, message, stats
+    except Exception as exc:
+        try:
+            network_operations.mark_failed(db, str(op.id), str(exc))
+        except Exception as track_err:
+            logger.error(
+                "Failed to record operation failure for %s: %s (original: %s)",
+                op.id, track_err, exc,
+            )
+            db.rollback()
+        raise
+
+
 def run_test_backup(db: Session, olt_id: str) -> tuple[OltConfigBackup | None, str]:
     olt = get_olt_or_none(db, olt_id)
     if not olt:

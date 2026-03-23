@@ -33,6 +33,7 @@ from app.services import (
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services import web_network_onts as web_network_onts_service
+from app.services import web_network_operations as web_network_operations_service
 from app.services import (
     web_network_pon_interfaces as web_network_pon_interfaces_service,
 )
@@ -88,6 +89,16 @@ def _service_ports_partial_response(
             {"showToast": {"message": toast_message, "type": toast_type}}
         )
     return response
+
+
+def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
+    """Build latin-1-safe HX-Trigger headers for toast notifications."""
+    return {
+        "HX-Trigger": json.dumps(
+            {"showToast": {"message": message, "type": toast_type}},
+            ensure_ascii=True,
+        )
+    }
 
 
 def _ont_form_dependencies(db: Session) -> dict:
@@ -344,6 +355,13 @@ def olt_detail(
         )
 
     activities = build_audit_activities(db, "olt", str(olt_id))
+    try:
+        operations = web_network_operations_service.build_operation_history(
+            db, "olt", str(olt_id)
+        )
+    except Exception:
+        logger.error("Failed to load operation history for OLT %s", olt_id, exc_info=True)
+        operations = []
     available_olt_firmware = web_network_olts_service.get_olt_firmware_images(
         db, olt_id
     )
@@ -363,6 +381,7 @@ def olt_detail(
         {
             **page_data,
             "activities": activities,
+            "operations": operations,
             "available_olt_firmware": available_olt_firmware,
             "acs_prefill": acs_prefill,
             "ssh_test_status": ssh_test_status,
@@ -608,9 +627,12 @@ def olt_sync_onts(
 ) -> RedirectResponse:
     from app.web.admin import get_current_user
 
-    ok, message, stats = web_network_olts_service.sync_onts_from_olt_snmp(db, olt_id)
-    status = "success" if ok else "error"
     current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    ok, message, stats = web_network_olts_service.sync_onts_from_olt_snmp_tracked(
+        db, olt_id, initiated_by=actor_name
+    )
+    status = "success" if ok else "error"
     actor_id = str(current_user.get("subscriber_id")) if current_user else None
     log_audit_event(
         db=db,
@@ -1316,7 +1338,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
         firmware_version=_form_str(form, "firmware_version").strip() or None,
         notes=_form_str(form, "notes").strip() or None,
         is_active=_form_str(form, "is_active") == "true",
-        # SmartOLT fields
+        # Imported / external provisioning fields
         onu_type_id=_form_uuid_or_none(form, "onu_type_id"),
         olt_device_id=_form_uuid_or_none(form, "olt_device_id"),
         pon_type=_form_str(form, "pon_type").strip() or None,
@@ -1439,6 +1461,13 @@ def ont_detail(
     active_tab = tab if tab in allowed_tabs else "overview"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
+    try:
+        operations = web_network_operations_service.build_operation_history(
+            db, "ont", str(ont_id)
+        )
+    except Exception:
+        logger.error("Failed to load operation history for ONT %s", ont_id, exc_info=True)
+        operations = []
     profiles = web_network_onts_service.get_provisioning_profiles(db)
 
     context = _base_context(request, db, active_page="onts")
@@ -1446,6 +1475,7 @@ def ont_detail(
         {
             **page_data,
             "activities": activities,
+            "operations": operations,
             "ont_active_tab": active_tab,
             "profiles": profiles,
         }
@@ -1587,7 +1617,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
         firmware_version=_form_str(form, "firmware_version").strip() or None,
         notes=_form_str(form, "notes").strip() or None,
         is_active=_form_str(form, "is_active") == "true",
-        # SmartOLT fields
+        # Imported / external provisioning fields
         onu_type_id=_form_uuid_or_none(form, "onu_type_id"),
         olt_device_id=_form_uuid_or_none(form, "olt_device_id"),
         pon_type=_form_str(form, "pon_type").strip() or None,
@@ -1811,10 +1841,13 @@ def ont_reboot(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Send reboot command to ONT via GenieACS."""
-    result = web_network_ont_actions_service.execute_reboot(db, ont_id)
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_ont_actions_service.execute_reboot(
+        db, ont_id, initiated_by=actor_name
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -1825,13 +1858,7 @@ def ont_reboot(
         metadata={"success": result.success, "message": result.message},
     )
     status_code = 200 if result.success else 502
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -1861,13 +1888,7 @@ def ont_refresh(
         metadata={"success": result.success},
     )
     status_code = 200 if result.success else 502
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -1905,10 +1926,13 @@ def ont_factory_reset(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Send factory reset command to ONT via GenieACS."""
-    result = web_network_ont_actions_service.execute_factory_reset(db, ont_id)
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_ont_actions_service.execute_factory_reset(
+        db, ont_id, initiated_by=actor_name
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -1919,13 +1943,7 @@ def ont_factory_reset(
         metadata={"success": result.success, "message": result.message},
     )
     status_code = 200 if result.success else 502
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -1947,9 +1965,7 @@ def ont_apply_profile(
         return JSONResponse(
             {"success": False, "message": "No profile selected"},
             status_code=400,
-            headers={
-                "HX-Trigger": '{"showToast": {"message": "No profile selected", "type": "error"}}'
-            },
+            headers=_toast_headers("No profile selected", "error"),
         )
 
     from app.services.network.ont_profile_apply import apply_profile_to_ont
@@ -1972,13 +1988,7 @@ def ont_apply_profile(
         },
     )
     status_code = 200 if result.success else 400
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -2001,9 +2011,7 @@ def ont_firmware_upgrade(
         return JSONResponse(
             {"success": False, "message": "No firmware image selected"},
             status_code=400,
-            headers={
-                "HX-Trigger": '{"showToast": {"message": "No firmware image selected", "type": "error"}}'
-            },
+            headers=_toast_headers("No firmware image selected", "error"),
         )
 
     from app.services.network.ont_actions import OntActions
@@ -2022,13 +2030,7 @@ def ont_firmware_upgrade(
         metadata={"firmware_image_id": firmware_image_id, "success": result.success},
     )
     status_code = 200 if result.success else 400
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -2059,13 +2061,7 @@ def ont_set_wifi_ssid(
         metadata={"success": result.success, "ssid": ssid},
     )
     status_code = 200 if result.success else 502
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -2098,13 +2094,7 @@ def ont_set_wifi_password(
         metadata={"success": result.success},
     )
     status_code = 200 if result.success else 502
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -2145,13 +2135,7 @@ def ont_toggle_lan_port(
         },
     )
     status_code = 200 if result.success else 502
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=status_code,
@@ -2173,10 +2157,11 @@ def ont_set_pppoe_credentials(
     """Push PPPoE credentials to ONT via TR-069."""
     from app.web.admin import get_current_user
 
-    result = web_network_ont_actions_service.set_pppoe_credentials(
-        db, ont_id, username, password
-    )
     current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_ont_actions_service.set_pppoe_credentials(
+        db, ont_id, username, password, initiated_by=actor_name
+    )
     actor_id = str(current_user.get("subscriber_id")) if current_user else None
     log_audit_event(
         db=db,
@@ -2193,13 +2178,7 @@ def ont_set_pppoe_credentials(
         status_code=200 if result.success else 500,
         is_success=result.success,
     )
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=200 if result.success else 502,
@@ -2241,13 +2220,7 @@ def ont_ping_diagnostic(
         status_code=200 if result.success else 500,
         is_success=result.success,
     )
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=200 if result.success else 502,
@@ -2282,13 +2255,7 @@ def ont_traceroute_diagnostic(
         status_code=200 if result.success else 500,
         is_success=result.success,
     )
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=200 if result.success else 502,
@@ -2306,16 +2273,14 @@ def ont_enable_ipv6(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Enable IPv6 dual-stack on an ONT via TR-069."""
-    from app.services.network.ont_action_network import enable_ipv6_on_wan
+    from app.web.admin import get_current_user
 
-    result = enable_ipv6_on_wan(db, ont_id)
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_ont_actions_service.execute_enable_ipv6(
+        db, ont_id, initiated_by=actor_name
+    )
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=200 if result.success else 502,
@@ -2333,16 +2298,13 @@ def ont_connection_request(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Send a TR-069 connection request to an ONT for on-demand management."""
-    from app.services.network.ont_action_network import send_connection_request
+    from app.services.network.ont_action_network import send_connection_request_tracked
+    from app.web.admin import get_current_user
 
-    result = send_connection_request(db, ont_id)
-    headers = {
-        "HX-Trigger": '{"showToast": {"message": "'
-        + result.message.replace('"', '\\"')
-        + '", "type": "'
-        + ("success" if result.success else "error")
-        + '"}}'
-    }
+    current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = send_connection_request_tracked(db, ont_id, initiated_by=actor_name)
+    headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
         {"success": result.success, "message": result.message},
         status_code=200 if result.success else 502,

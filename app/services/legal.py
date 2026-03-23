@@ -199,7 +199,7 @@ class LegalDocumentService:
             original_filename=file_name,
             content_type=mime_type,
             data=file_content,
-            organization_id=None,
+            owner_subscriber_id=None,
             uploaded_by=uploaded_by,
         )
 

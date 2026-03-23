@@ -91,11 +91,11 @@ def get_customer_defaults(
     Get default values for creating a new customer.
 
     Args:
-        customer_type: Either 'person' or 'organization'
+        customer_type: Either 'person' or 'business'
 
     Returns default status, country, locale, and type-specific defaults.
     """
-    if customer_type not in ("person", "organization"):
+    if customer_type not in ("person", "business"):
         customer_type = "person"
 
     service = SmartDefaultsService(db)

@@ -21,6 +21,7 @@ from app.models.catalog import (
 )
 from app.models.collections import DunningActionLog, DunningCase, DunningCaseStatus
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.collections import (
     DunningActionLogCreate,
@@ -219,31 +220,32 @@ def _create_action_log(
     return log
 
 
-def _suspend_account(db: Session, account_id: str) -> bool:
-    """Suspend account and all active subscriptions.
+def _suspend_account(
+    db: Session,
+    account_id: str,
+    reason: EnforcementReason = EnforcementReason.overdue,
+    source: str = "dunning",
+) -> bool:
+    """Suspend account via enforcement locks on all active subscriptions.
 
-    Returns True if account was suspended, False if already suspended/canceled.
+    Delegates to ``account_lifecycle.suspend_subscription`` per subscription
+    and lets ``compute_account_status`` derive the subscriber status.
+
+    Returns True if any subscription was suspended, False otherwise.
     """
+    from app.services.account_lifecycle import suspend_subscription
+
     account = db.get(Subscriber, coerce_uuid(account_id))
     if not account:
-        logger.warning(f"Cannot suspend account {account_id}: account not found")
-        return False
-
-    if account.status == SubscriberStatus.suspended:
-        logger.info(f"Account {account_id} already suspended")
+        logger.warning("Cannot suspend account %s: account not found", account_id)
         return False
 
     if account.status == SubscriberStatus.canceled:
-        logger.info(f"Account {account_id} is canceled, skipping suspension")
+        logger.info("Account %s is canceled, skipping suspension", account_id)
         return False
 
-    account.status = SubscriberStatus.suspended
-    suspended_count = 0
-
-    # Suspend all active (and pending) subscriptions.
     subscriptions = (
         db.query(Subscription)
-        .options(selectinload(Subscription.offer))
         .filter(Subscription.subscriber_id == account.id)
         .filter(
             Subscription.status.in_(
@@ -252,88 +254,106 @@ def _suspend_account(db: Session, account_id: str) -> bool:
         )
         .all()
     )
+    suspended_count = 0
     for sub in subscriptions:
-        from_status = sub.status.value if sub.status else None
-        sub.status = SubscriptionStatus.suspended
-        suspended_count += 1
-        # Emit subscription.suspended event
+        try:
+            suspend_subscription(
+                db,
+                str(sub.id),
+                reason=reason,
+                source=source,
+            )
+            suspended_count += 1
+        except ValueError as e:
+            if "Cannot suspend" in str(e):
+                logger.info("Skipped suspending subscription %s: %s", sub.id, e)
+            else:
+                logger.error(
+                    "Failed to suspend subscription %s: %s", sub.id, e
+                )
+                raise
+
+    if suspended_count:
         emit_event(
             db,
-            EventType.subscription_suspended,
+            EventType.subscriber_suspended,
             {
-                "subscription_id": str(sub.id),
-                "offer_name": sub.offer.name if sub.offer else None,
-                "from_status": from_status,
-                "to_status": "suspended",
-                "reason": "dunning",
+                "account_id": str(account.id),
+                "subscriber_id": str(account.id),
+                "suspended_subscriptions": suspended_count,
             },
-            subscription_id=sub.id,
-            account_id=sub.subscriber_id,
+            account_id=account.id,
+            subscriber_id=account.id,
         )
 
-    # Emit subscriber.suspended event
-    emit_event(
-        db,
-        EventType.subscriber_suspended,
-        {
-            "account_id": str(account.id),
-            "subscriber_id": str(account.id),
-            "suspended_subscriptions": suspended_count,
-        },
-        account_id=account.id,
-        subscriber_id=account.id,
+    logger.info(
+        "Suspended account %s with %d subscriptions", account_id, suspended_count
     )
-
-    logger.info(f"Suspended account {account_id} with {suspended_count} subscriptions")
-    return True
+    return suspended_count > 0
 
 
-def _restore_account(db: Session, account_id: str) -> int:
-    """Restore account and suspended subscriptions after payment."""
+def _restore_account(
+    db: Session,
+    account_id: str,
+    trigger: str = "payment",
+    resolved_by: str | None = None,
+) -> int:
+    """Restore account subscriptions via enforcement lock resolution.
+
+    Delegates to ``account_lifecycle.restore_subscription`` per subscription.
+    Only locks whose reason allows the given trigger will be resolved.
+    Subscriptions with remaining locks from other reasons stay suspended.
+
+    Returns count of subscriptions actually restored to active.
+    """
+    from app.services.account_lifecycle import restore_subscription
+
     account = db.get(Subscriber, coerce_uuid(account_id))
     if not account:
-        logger.warning(f"Cannot restore account {account_id}: account not found")
+        logger.warning("Cannot restore account %s: account not found", account_id)
         return 0
     if account.status == SubscriberStatus.canceled:
-        logger.info(f"Account {account_id} is canceled, skipping restore")
+        logger.info("Account %s is canceled, skipping restore", account_id)
         return 0
-    was_suspended = account.status in {
-        SubscriberStatus.suspended,
-        SubscriberStatus.delinquent,
-    }
-    if was_suspended:
-        account.status = SubscriberStatus.active
-    restored_count = 0
+
+    resolved_by_str = resolved_by or f"{trigger}:{account_id}"
     now = datetime.now(UTC)
+
     subscriptions = (
         db.query(Subscription)
-        .options(selectinload(Subscription.offer))
         .filter(Subscription.subscriber_id == account.id)
         .filter(Subscription.status == SubscriptionStatus.suspended)
         .all()
     )
+    restored_count = 0
     for sub in subscriptions:
         if sub.end_at and sub.end_at <= now:
             continue
-        sub.status = SubscriptionStatus.active
-        restored_count += 1
-        # Emit subscription.resumed event
-        emit_event(
-            db,
-            EventType.subscription_resumed,
-            {
-                "subscription_id": str(sub.id),
-                "offer_name": sub.offer.name if sub.offer else None,
-                "from_status": "suspended",
-                "to_status": "active",
-                "reason": "payment_received",
-            },
-            subscription_id=sub.id,
-            account_id=sub.subscriber_id,
-        )
+        try:
+            restored = restore_subscription(
+                db,
+                str(sub.id),
+                trigger=trigger,
+                resolved_by=resolved_by_str,
+            )
+            if restored:
+                restored_count += 1
+        except ValueError as e:
+            logger.error(
+                "Failed to restore subscription %s for account %s: %s",
+                sub.id,
+                account_id,
+                e,
+            )
+        except Exception as e:
+            logger.error(
+                "Unexpected error restoring subscription %s for account %s: %s",
+                sub.id,
+                account_id,
+                e,
+            )
 
-    if restored_count and was_suspended:
-        # Emit subscriber.reactivated event
+    if restored_count:
         emit_event(
             db,
             EventType.subscriber_reactivated,
@@ -345,7 +365,9 @@ def _restore_account(db: Session, account_id: str) -> int:
             account_id=account.id,
             subscriber_id=account.id,
         )
-        logger.info(f"Restored {restored_count} subscriptions for account {account_id}")
+        logger.info(
+            "Restored %d subscriptions for account %s", restored_count, account_id
+        )
     return restored_count
 
 
@@ -727,6 +749,12 @@ def _create_prepaid_deactivation_notification(db: Session, account_id: str) -> N
 def _deactivate_prepaid_subscriptions(
     db: Session, account_id: str, run_at: datetime
 ) -> int:
+    """Cancel all prepaid subscriptions for an account via lifecycle operations."""
+    from app.services.account_lifecycle import (
+        cancel_subscription,
+        compute_account_status,
+    )
+
     subscriptions = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == coerce_uuid(account_id))
@@ -744,30 +772,31 @@ def _deactivate_prepaid_subscriptions(
     )
     canceled_count = 0
     for sub in subscriptions:
-        if sub.status == SubscriptionStatus.canceled:
-            continue
-        previous_status = sub.status
-        sub.status = SubscriptionStatus.canceled
-        sub.canceled_at = run_at
-        sub.cancel_reason = "prepaid_deactivation"
-        emit_event(
-            db,
-            EventType.subscription_canceled,
-            {
-                "subscription_id": str(sub.id),
-                "offer_name": sub.offer.name if sub.offer else None,
-                "from_status": previous_status.value if previous_status else None,
-                "to_status": "canceled",
-                "reason": "prepaid_deactivation",
-            },
-            subscription_id=sub.id,
-            account_id=sub.subscriber_id,
-        )
-        canceled_count += 1
+        try:
+            cancel_subscription(
+                db,
+                str(sub.id),
+                cancel_reason="prepaid_deactivation",
+                source="prepaid_enforcement",
+            )
+            canceled_count += 1
+        except ValueError as e:
+            if "already canceled" in str(e):
+                logger.info("Skipped canceling subscription %s: %s", sub.id, e)
+            else:
+                logger.error(
+                    "Failed to cancel subscription %s: %s", sub.id, e
+                )
+                raise
 
-    account = db.get(Subscriber, coerce_uuid(account_id))
-    if account and account.status != SubscriberStatus.canceled:
-        account.status = SubscriberStatus.canceled
+    # Always recompute account status — handles edge case where all
+    # subscriptions were already canceled by a prior run
+    try:
+        compute_account_status(db, account_id)
+    except ValueError:
+        logger.warning(
+            "Could not compute account status for %s", account_id
+        )
 
     _create_prepaid_deactivation_notification(db, account_id)
     return canceled_count
@@ -799,7 +828,12 @@ def _execute_dunning_action(
         return "notification_sent"
 
     elif action == DunningAction.suspend:
-        suspended = _suspend_account(db, account_id)
+        suspended = _suspend_account(
+            db,
+            account_id,
+            reason=EnforcementReason.overdue,
+            source=f"dunning_case:{case.id}",
+        )
         if suspended:
             _create_suspension_notification(db, account_id)
             return "suspended"
@@ -816,8 +850,12 @@ def _execute_dunning_action(
         return "throttle_failed"
 
     elif action == DunningAction.reject:
-        # Reject action - similar to suspend but more severe
-        suspended = _suspend_account(db, account_id)
+        suspended = _suspend_account(
+            db,
+            account_id,
+            reason=EnforcementReason.overdue,
+            source=f"dunning_case:{case.id}",
+        )
         if suspended:
             _create_suspension_notification(db, account_id)
             return "rejected"
@@ -1591,7 +1629,12 @@ class PrepaidEnforcement(ListResponseMixin):
                 continue
 
             if not payload.dry_run:
-                _suspend_account(db, str(account_id))
+                _suspend_account(
+                    db,
+                    str(account_id),
+                    reason=EnforcementReason.prepaid,
+                    source="prepaid_enforcement",
+                )
             accounts_suspended += 1
 
         if not payload.dry_run:

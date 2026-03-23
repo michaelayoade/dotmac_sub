@@ -6,14 +6,29 @@ import logging
 
 from sqlalchemy.orm import Session
 
+from app.models.network_operation import (
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.services.network.ont_actions import ActionResult, OntActions
+from app.services.network_operations import run_tracked_action
 
 logger = logging.getLogger(__name__)
 
 
-def execute_reboot(db: Session, ont_id: str) -> ActionResult:
-    """Execute reboot action and return result."""
-    return OntActions.reboot(db, ont_id)
+def execute_reboot(
+    db: Session, ont_id: str, *, initiated_by: str | None = None
+) -> ActionResult:
+    """Execute reboot action with operation tracking."""
+    return run_tracked_action(
+        db,
+        NetworkOperationType.ont_reboot,
+        NetworkOperationTargetType.ont,
+        ont_id,
+        lambda: OntActions.reboot(db, ont_id),
+        correlation_key=f"ont_reboot:{ont_id}",
+        initiated_by=initiated_by,
+    )
 
 
 def execute_refresh(db: Session, ont_id: str) -> ActionResult:
@@ -26,9 +41,19 @@ def fetch_running_config(db: Session, ont_id: str) -> ActionResult:
     return OntActions.get_running_config(db, ont_id)
 
 
-def execute_factory_reset(db: Session, ont_id: str) -> ActionResult:
-    """Execute factory reset and return result."""
-    return OntActions.factory_reset(db, ont_id)
+def execute_factory_reset(
+    db: Session, ont_id: str, *, initiated_by: str | None = None
+) -> ActionResult:
+    """Execute factory reset with operation tracking."""
+    return run_tracked_action(
+        db,
+        NetworkOperationType.ont_factory_reset,
+        NetworkOperationTargetType.ont,
+        ont_id,
+        lambda: OntActions.factory_reset(db, ont_id),
+        correlation_key=f"ont_factory_reset:{ont_id}",
+        initiated_by=initiated_by,
+    )
 
 
 def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
@@ -47,10 +72,23 @@ def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> Actio
 
 
 def set_pppoe_credentials(
-    db: Session, ont_id: str, username: str, password: str
+    db: Session,
+    ont_id: str,
+    username: str,
+    password: str,
+    *,
+    initiated_by: str | None = None,
 ) -> ActionResult:
-    """Push PPPoE credentials to ONT via TR-069."""
-    return OntActions.set_pppoe_credentials(db, ont_id, username, password)
+    """Push PPPoE credentials to ONT via TR-069 with operation tracking."""
+    return run_tracked_action(
+        db,
+        NetworkOperationType.ont_set_pppoe,
+        NetworkOperationTargetType.ont,
+        ont_id,
+        lambda: OntActions.set_pppoe_credentials(db, ont_id, username, password),
+        correlation_key=f"ont_set_pppoe:{ont_id}",
+        initiated_by=initiated_by,
+    )
 
 
 def run_ping_diagnostic(
@@ -63,6 +101,23 @@ def run_ping_diagnostic(
 def run_traceroute_diagnostic(db: Session, ont_id: str, host: str) -> ActionResult:
     """Run traceroute diagnostic from ONT via TR-069."""
     return OntActions.run_traceroute_diagnostic(db, ont_id, host)
+
+
+def execute_enable_ipv6(
+    db: Session, ont_id: str, *, initiated_by: str | None = None
+) -> ActionResult:
+    """Enable IPv6 dual-stack on ONT with operation tracking."""
+    from app.services.network.ont_action_network import enable_ipv6_on_wan
+
+    return run_tracked_action(
+        db,
+        NetworkOperationType.ont_enable_ipv6,
+        NetworkOperationTargetType.ont,
+        ont_id,
+        lambda: enable_ipv6_on_wan(db, ont_id),
+        correlation_key=f"ont_enable_ipv6:{ont_id}",
+        initiated_by=initiated_by,
+    )
 
 
 def execute_omci_reboot(db: Session, ont_id: str) -> tuple[bool, str]:

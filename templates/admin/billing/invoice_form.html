@@ -3,8 +3,8 @@
 
 {% block title %}{{ form_title }} - Admin{% endblock %}
 
-{% block head %}
-<script src="/static/js/invoice-calculator.js" defer></script>
+{% block scripts %}
+<script src="/static/js/invoice-calculator.js"></script>
 {% endblock %}
 
 {% block content %}
@@ -180,7 +180,7 @@
                                                     class="block w-full rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                                 <option value="">None</option>
                                                 {% for rate in tax_rates %}
-                                                <option value="{{ rate.id }}">{{ rate.name }} ({{ (rate.rate * 100)|round(2) }}%)</option>
+                                                <option value="{{ rate.id }}">{{ rate.name }} ({{ rate.rate|round(2) }}%)</option>
                                                 {% endfor %}
                                             </select>
                                         </div>
@@ -277,7 +277,7 @@
                     </div>
 
                     <!-- Quick Actions -->
-                    <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div class="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
                         <div class="border-b border-slate-200 px-6 py-3 dark:border-slate-700">
                             <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Quick Actions</h3>
                         </div>
@@ -306,7 +306,7 @@
                                     {% for rate in tax_rates %}
                                     <button type="button" @click="applyTaxToAll('{{ rate.id }}'); open = false"
                                             class="w-full text-left px-3 py-2 text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-300 dark:hover:bg-slate-700 {% if loop.last %}rounded-b-lg{% endif %}">
-                                        {{ rate.name }} ({{ (rate.rate * 100)|round(2) }}%)
+                                        {{ rate.name }} ({{ rate.rate|round(2) }}%)
                                     </button>
                                     {% endfor %}
                                 </div>

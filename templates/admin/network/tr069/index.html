@@ -113,6 +113,7 @@
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Identity</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Last Inform</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">OLT / Port</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Linked CPE</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
                         </tr>
@@ -135,6 +136,17 @@
                                     {{ device.last_inform_at.strftime('%Y-%m-%d %H:%M') }}
                                 {% else %}
                                     -
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                                {% if device.linked_olt_name or device.linked_pon_port_name %}
+                                <div>{{ device.linked_olt_name or '-' }}</div>
+                                <div class="text-slate-500">{{ device.linked_pon_port_name or '-' }}</div>
+                                {% elif device.linked_ont %}
+                                <div>{{ device.linked_ont.serial_number or '-' }}</div>
+                                <div class="text-slate-500">ONT imported, no active port yet</div>
+                                {% else %}
+                                -
                                 {% endif %}
                             </td>
                             <td class="px-4 py-3 text-sm">
@@ -165,7 +177,7 @@
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="5" class="px-6 py-6 text-center text-sm text-slate-500">No unconfigured TR-069 devices.</td></tr>
+                        <tr><td colspan="6" class="px-6 py-6 text-center text-sm text-slate-500">No unconfigured TR-069 devices.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -183,6 +195,7 @@
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Identity</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Last Inform</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">OLT / Port</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Linked CPE</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
                         </tr>
@@ -205,6 +218,17 @@
                                     {{ device.last_inform_at.strftime('%Y-%m-%d %H:%M') }}
                                 {% else %}
                                     -
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                                {% if device.linked_olt_name or device.linked_pon_port_name %}
+                                <div>{{ device.linked_olt_name or '-' }}</div>
+                                <div class="text-slate-500">{{ device.linked_pon_port_name or '-' }}</div>
+                                {% elif device.linked_ont %}
+                                <div>{{ device.linked_ont.serial_number or '-' }}</div>
+                                <div class="text-slate-500">ONT imported, no active port yet</div>
+                                {% else %}
+                                -
                                 {% endif %}
                             </td>
                             <td class="px-4 py-3 text-sm">
@@ -239,7 +263,7 @@
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="5" class="px-6 py-6 text-center text-sm text-slate-500">No configured TR-069 devices.</td></tr>
+                        <tr><td colspan="6" class="px-6 py-6 text-center text-sm text-slate-500">No configured TR-069 devices.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>

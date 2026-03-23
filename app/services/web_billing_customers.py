@@ -6,7 +6,7 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Organization, Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
@@ -25,8 +25,8 @@ def parse_customer_ref(value: str | None) -> tuple[str | None, str | None]:
 def subscriber_label(subscriber: Subscriber | None) -> str:
     if not subscriber:
         return "Subscriber"
-    if getattr(subscriber, "organization", None):
-        return subscriber.organization.name or "Subscriber"
+    if subscriber.category == SubscriberCategory.business:
+        return subscriber.company_name or subscriber.display_name or "Subscriber"
     name = " ".join(
         part
         for part in [
@@ -43,19 +43,14 @@ def customer_label(db: Session, customer_ref: str | None) -> str | None:
     if not ref_id:
         return None
     try:
-        if kind == "organization":
-            organization = db.get(Organization, ref_id)
-            if organization:
-                return organization.name
+        if kind == "business":
+            subscriber = db.get(Subscriber, ref_id)
+            if subscriber and subscriber.category == SubscriberCategory.business:
+                return subscriber.company_name or subscriber.display_name or subscriber.full_name
         else:
             subscriber = db.get(Subscriber, ref_id)
             if subscriber:
-                label = " ".join(
-                    part
-                    for part in [subscriber.first_name, subscriber.last_name]
-                    if part
-                )
-                return label or None
+                return subscriber_label(subscriber)
     except Exception:
         return None
     return None
@@ -65,17 +60,11 @@ def subscriber_ids_for_customer(db: Session, customer_ref: str | None) -> list[s
     kind, ref_id = parse_customer_ref(customer_ref)
     if not ref_id:
         return []
-    if kind == "organization":
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            organization_id=ref_id,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-        return [str(sub.id) for sub in subscribers or []]
+    if kind == "business":
+        subscriber = db.get(Subscriber, ref_id)
+        if subscriber and subscriber.category == SubscriberCategory.business:
+            return [str(subscriber.id)]
+        return []
     subscriber = db.get(Subscriber, ref_id)
     if subscriber:
         return [str(subscriber.id)]
@@ -86,20 +75,8 @@ def accounts_for_customer(db: Session, customer_ref: str | None) -> list[dict]:
     kind, ref_id = parse_customer_ref(customer_ref)
     if not ref_id:
         return []
-    subscribers = []
-    if kind == "organization":
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            organization_id=ref_id,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    else:
-        subscriber = db.get(Subscriber, ref_id)
-        subscribers = [subscriber] if subscriber else []
+    subscriber = db.get(Subscriber, ref_id)
+    subscribers = [subscriber] if subscriber else []
     return [
         {
             "id": str(subscriber.id),
@@ -114,20 +91,8 @@ def subscribers_for_customer(db: Session, customer_ref: str | None) -> list[dict
     kind, ref_id = parse_customer_ref(customer_ref)
     if not ref_id:
         return []
-    subscribers = []
-    if kind == "organization":
-        subscribers = subscriber_service.subscribers.list(
-            db=db,
-            organization_id=ref_id,
-            subscriber_type=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    else:
-        subscriber = db.get(Subscriber, ref_id)
-        subscribers = [subscriber] if subscriber else []
+    subscriber = db.get(Subscriber, ref_id)
+    subscribers = [subscriber] if subscriber else []
     return [
         {
             "id": str(sub.id),
@@ -140,8 +105,8 @@ def subscribers_for_customer(db: Session, customer_ref: str | None) -> list[dict
 def account_label(account: Subscriber | None) -> str:
     if not account:
         return "Account"
-    if getattr(account, "organization", None):
-        name = account.organization.name or ""
+    if account.category == SubscriberCategory.business:
+        name = account.company_name or account.display_name or ""
         if name:
             return name
     label = f"{getattr(account, 'first_name', '')} {getattr(account, 'last_name', '')}".strip()

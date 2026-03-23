@@ -167,8 +167,8 @@
             "pages": [
                 {"label": "Customer List", "url": "/admin/customers"},
                 {"label": "New Customer", "url": "/admin/customers/new"},
-                {"label": "Customer Detail", "url": "#", "method": "GET /person/:id or /organization/:id"},
-                {"label": "Edit Customer", "url": "#", "method": "GET /person/:id/edit or /organization/:id/edit"},
+                {"label": "Customer Detail", "url": "#", "method": "GET /person/:id or /business/:id"},
+                {"label": "Edit Customer", "url": "#", "method": "GET /person/:id/edit or /business/:id/edit"},
                 {"label": "Billing Config", "url": "#", "method": "POST"},
                 {"label": "Communications Log", "url": "#", "method": "GET"},
                 {"label": "Bulk Status Change", "url": "#", "method": "POST"},
@@ -177,7 +177,7 @@
         },
         {
             "name": "Customers (CRM)",
-            "description": "People + Organizations with contacts, addresses, portal access",
+            "description": "People + business accounts with contacts, addresses, portal access",
             "badge": "Core",
             "badge_variant": "active",
             "route_file": "app/web/admin/customers.py",

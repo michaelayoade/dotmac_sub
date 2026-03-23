@@ -2,8 +2,8 @@ from decimal import Decimal
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.models.subscriber import Subscriber
-from app.services.web_customer_details import build_organization_detail_snapshot, build_person_detail_snapshot
+from app.models.subscriber import Subscriber, SubscriberCategory
+from app.services.web_customer_details import build_business_detail_snapshot, build_person_detail_snapshot
 
 
 def _billing_setting(key: str, value: str) -> DomainSetting:
@@ -42,37 +42,26 @@ def test_person_detail_includes_billing_policy_override_snapshot(db_session, sub
     assert rows["grace_period_days"]["effective"] == "3 day(s)"
 
 
-def test_organization_detail_marks_mixed_billing_policy(db_session, subscriber):
+def test_business_detail_marks_mixed_billing_policy(db_session, subscriber):
     db_session.add_all(
         [
             _billing_setting("billing_enabled", "true"),
             _billing_setting("payment_due_days", "14"),
         ]
     )
-    org_subscriber = Subscriber(
-        first_name="Org",
-        last_name="Member",
-        email="org-member@example.com",
-        organization_id=subscriber.organization_id,
-    )
-    subscriber.payment_due_days = 7
-    subscriber.organization_id = subscriber.organization_id or None
-    db_session.add(org_subscriber)
-    db_session.flush()
-
-    from app.models.subscriber import Organization
-
-    organization = Organization(name="Test Org")
-    db_session.add(organization)
-    db_session.flush()
-    subscriber.organization_id = organization.id
-    org_subscriber.organization_id = organization.id
-    org_subscriber.payment_due_days = 21
+    subscriber.company_name = "Test Org"
+    subscriber.legal_name = "Test Org Ltd"
+    subscriber.tax_id = "RC-123"
+    subscriber.domain = "test.example.com"
+    subscriber.website = "https://test.example.com"
+    subscriber.category = SubscriberCategory.business
+    subscriber.payment_due_days = 21
     db_session.commit()
 
-    context = build_organization_detail_snapshot(db_session, str(organization.id))
+    context = build_business_detail_snapshot(db_session, str(subscriber.id))
     rows = {row["key"]: row for row in context["billing_policy"]["rows"]}
 
-    assert context["billing_policy"]["has_mixed"] is True
-    assert rows["payment_due_days"]["effective"] == "Mixed"
-    assert rows["payment_due_days"]["source"] == "Mixed"
+    assert context["organization"] is not None
+    assert context["organization"].name == "Test Org"
+    assert rows["payment_due_days"]["effective"] == "21 day(s)"
+    assert rows["payment_due_days"]["source"] == "Customer override"

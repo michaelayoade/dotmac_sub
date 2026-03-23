@@ -64,11 +64,23 @@ def new_form_state(db: Session, *, account_id: str | None) -> dict[str, object]:
         {"id": str(rate.id), "name": rate.name, "rate": float(rate.rate or 0)}
         for rate in tax_rates or []
     ]
-    invoice_config = _build_invoice_form_config(None, tax_rates_json, [], 30)
+    invoice_config = _build_invoice_form_config(
+        None,
+        tax_rates_json,
+        [
+            {
+                "description": "",
+                "quantity": 1,
+                "unit_price": 0,
+                "tax_rate_id": None,
+            }
+        ],
+        30,
+    )
     if selected_account:
         invoice_config["accountId"] = str(selected_account.id)
 
-    payment_due_days = resolve_payment_due_days(db)
+    payment_due_days = resolve_payment_due_days(db, subscriber=selected_account)
     default_currency = settings_spec.resolve_value(
         db, SettingDomain.billing, "default_currency"
     )

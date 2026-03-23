@@ -7,7 +7,7 @@ import logging
 import uuid
 from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -15,7 +15,7 @@ from app.models.catalog import NasDevice, Subscription
 from app.models.network import NetworkZone
 from app.models.network_monitoring import NetworkDevice, PopSite, PopSiteContact
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Organization, Reseller
+from app.models.subscriber import Reseller, Subscriber, SubscriberCategory
 from app.models.wireless_mast import WirelessMast
 from app.schemas.wireless_mast import WirelessMastCreate
 from app.services import nas as nas_service
@@ -139,7 +139,7 @@ def parse_site_form_values(form: FormData) -> dict[str, object]:
         "latitude_raw": _form_str(form, "latitude"),
         "longitude_raw": _form_str(form, "longitude"),
         "zone_id_raw": _form_str(form, "zone_id"),
-        "organization_id_raw": _form_str(form, "organization_id"),
+        "owner_subscriber_id_raw": _form_str(form, "owner_subscriber_id"),
         "reseller_id_raw": _form_str(form, "reseller_id"),
         "notes": (_form_str(form, "notes") or None),
         "is_active": _form_str(form, "is_active") == "true",
@@ -195,8 +195,8 @@ def resolve_site_relationships(
     )
     if error:
         return None, error
-    organization_id, error = _parse_optional_uuid(
-        str(values.get("organization_id_raw") or ""), "Organization"
+    owner_subscriber_id, error = _parse_optional_uuid(
+        str(values.get("owner_subscriber_id_raw") or ""), "Business account"
     )
     if error:
         return None, error
@@ -208,13 +208,15 @@ def resolve_site_relationships(
 
     if zone_id and not db.get(NetworkZone, zone_id):
         return None, "Selected location reference was not found."
-    if organization_id and not db.get(Organization, organization_id):
-        return None, "Selected organization was not found."
+    if owner_subscriber_id:
+        owner_subscriber = db.get(Subscriber, owner_subscriber_id)
+        if not owner_subscriber or owner_subscriber.category != SubscriberCategory.business:
+            return None, "Selected business account was not found."
     if reseller_id and not db.get(Reseller, reseller_id):
         return None, "Selected partner was not found."
 
     normalized["zone_id"] = zone_id
-    normalized["organization_id"] = organization_id
+    normalized["owner_subscriber_id"] = owner_subscriber_id
     normalized["reseller_id"] = reseller_id
     return normalized, None
 
@@ -226,8 +228,17 @@ def form_reference_data(db: Session) -> dict[str, object]:
             .where(NetworkZone.is_active.is_(True))
             .order_by(NetworkZone.name)
         ).all(),
-        "organizations": db.scalars(
-            select(Organization).order_by(Organization.name)
+        "business_accounts": db.scalars(
+            select(Subscriber)
+            .where(
+                func.lower(
+                    func.coalesce(
+                        Subscriber.metadata_["subscriber_category"].as_string(), ""
+                    )
+                )
+                == SubscriberCategory.business.value
+            )
+            .order_by(Subscriber.company_name, Subscriber.display_name, Subscriber.last_name)
         ).all(),
         "resellers": db.scalars(
             select(Reseller).where(Reseller.is_active.is_(True)).order_by(Reseller.name)
@@ -275,7 +286,7 @@ def create_site(db: Session, values: dict[str, object]) -> PopSite:
         latitude=values.get("latitude"),
         longitude=values.get("longitude"),
         zone_id=values.get("zone_id"),
-        organization_id=values.get("organization_id"),
+        owner_subscriber_id=values.get("owner_subscriber_id"),
         reseller_id=values.get("reseller_id"),
         notes=values.get("notes"),
         is_active=bool(values.get("is_active")),
@@ -299,7 +310,9 @@ def apply_site_update(pop_site: PopSite, values: dict[str, object]) -> None:
     pop_site.latitude = cast(float | None, values.get("latitude"))
     pop_site.longitude = cast(float | None, values.get("longitude"))
     pop_site.zone_id = cast(uuid.UUID | None, values.get("zone_id"))
-    pop_site.organization_id = cast(uuid.UUID | None, values.get("organization_id"))
+    pop_site.owner_subscriber_id = cast(
+        uuid.UUID | None, values.get("owner_subscriber_id")
+    )
     pop_site.reseller_id = cast(uuid.UUID | None, values.get("reseller_id"))
     pop_site.notes = cast(str | None, values.get("notes"))
     pop_site.is_active = bool(values.get("is_active"))

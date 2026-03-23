@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Organization, Subscriber, UserType
+from app.models.subscriber import Subscriber, SubscriberCategory, UserType
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.settings_spec import resolve_value
 
@@ -45,43 +45,15 @@ def _invite_expiry_minutes(db: Session) -> int:
     return parsed if parsed > 0 else 60
 
 
-def _resolve_org_primary_contact(
-    db: Session, organization_id: str
+def _resolve_business_primary_contact(
+    db: Session, subscriber_id: str
 ) -> Subscriber | None:
-    org_uuid = UUID(str(organization_id))
-    organization = db.get(Organization, org_uuid)
-    if organization and organization.primary_login_subscriber_id:
-        configured = db.get(Subscriber, organization.primary_login_subscriber_id)
-        if (
-            configured
-            and configured.organization_id == org_uuid
-            and bool((configured.email or "").strip())
-        ):
-            return configured
-
-    # Best-effort "primary" resolution:
-    # 1) active customers with email, newest first
-    # 2) any customers with email, newest first
-    active = (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .filter(Subscriber.user_type == UserType.customer)
-        .filter(Subscriber.is_active.is_(True))
-        .filter(Subscriber.email.isnot(None))
-        .order_by(Subscriber.updated_at.desc(), Subscriber.created_at.desc())
-        .first()
-    )
-    if active:
-        return active
-    fallback = (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .filter(Subscriber.user_type == UserType.customer)
-        .filter(Subscriber.email.isnot(None))
-        .order_by(Subscriber.updated_at.desc(), Subscriber.created_at.desc())
-        .first()
-    )
-    return fallback
+    subscriber = db.get(Subscriber, UUID(str(subscriber_id)))
+    if not subscriber or subscriber.category != SubscriberCategory.business:
+        return None
+    if (subscriber.email or "").strip():
+        return subscriber
+    return None
 
 
 def resolve_customer_user_target(
@@ -98,13 +70,13 @@ def resolve_customer_user_target(
             subscriber=subscriber, email=email, source="subscriber_email"
         )
 
-    if customer_type == "organization":
-        primary = _resolve_org_primary_contact(db, customer_id)
+    if customer_type == "business":
+        primary = _resolve_business_primary_contact(db, customer_id)
         if not primary:
-            raise ValueError("Organization has no primary contact with email")
+            raise ValueError("Business customer has no primary contact with email")
         email = (primary.email or "").strip()
         if not email:
-            raise ValueError("Organization primary contact has no email")
+            raise ValueError("Business customer primary contact has no email")
         return CustomerUserTarget(
             subscriber=primary, email=email, source="primary_contact_email"
         )
@@ -119,8 +91,8 @@ def resolve_subscriber_user_target(
     if not subscriber:
         raise ValueError("Subscriber not found")
 
-    if subscriber.organization_id:
-        primary = _resolve_org_primary_contact(db, str(subscriber.organization_id))
+    if subscriber.category == SubscriberCategory.business:
+        primary = _resolve_business_primary_contact(db, str(subscriber.id))
         if primary and (primary.email or "").strip():
             return CustomerUserTarget(
                 subscriber=primary,
@@ -206,8 +178,8 @@ def _build_user_access_state(
     credential = _latest_local_credential(db, str(target.subscriber.id))
     page = page_subscriber or target.subscriber
     primary = (
-        _resolve_org_primary_contact(db, str(page.organization_id))
-        if page.organization_id
+        _resolve_business_primary_contact(db, str(page.id))
+        if page.category == SubscriberCategory.business
         else None
     )
 
@@ -236,7 +208,9 @@ def _build_user_access_state(
         "target_subscriber_name": target.subscriber.display_name
         or f"{target.subscriber.first_name} {target.subscriber.last_name}".strip(),
         "page_subscriber_id": str(page.id),
-        "organization_id": str(page.organization_id) if page.organization_id else None,
+        "business_account_id": str(page.id)
+        if page.category == SubscriberCategory.business
+        else None,
         "primary_login_subscriber_id": str(primary.id) if primary else None,
         "primary_login_subscriber_name": (
             primary.display_name or f"{primary.first_name} {primary.last_name}".strip()
@@ -245,7 +219,7 @@ def _build_user_access_state(
         ),
         "is_primary_login_subscriber": bool(primary and primary.id == page.id),
         "can_set_primary_login": bool(
-            page.organization_id and (page.email or "").strip()
+            page.category == SubscriberCategory.business and (page.email or "").strip()
         ),
         "email": target.email,
         "email_source": target.source,
@@ -325,23 +299,15 @@ def set_org_primary_login_subscriber(
     subscriber = db.get(Subscriber, UUID(str(subscriber_id)))
     if not subscriber:
         raise ValueError("Subscriber not found")
-    if not subscriber.organization_id:
-        raise ValueError("Subscriber is not linked to an organization")
+    if subscriber.category != SubscriberCategory.business:
+        raise ValueError("Subscriber is not a business customer")
     email = (subscriber.email or "").strip()
     if not email:
         raise ValueError("Subscriber needs an email before becoming primary login")
-
-    organization = db.get(Organization, subscriber.organization_id)
-    if not organization:
-        raise ValueError("Organization not found")
-
-    organization.primary_login_subscriber_id = subscriber.id
-    db.add(organization)
     db.commit()
-    db.refresh(organization)
 
     return CustomerUserTarget(
         subscriber=subscriber,
         email=email,
-        source="organization_primary_login",
+        source="business_primary_login",
     )

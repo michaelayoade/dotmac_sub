@@ -209,7 +209,7 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for pool in pools %}
                         <tr class="group transition-all hover:bg-gradient-to-r hover:from-indigo-50/50 hover:to-violet-50/30 dark:hover:from-indigo-900/10 dark:hover:to-violet-900/5"
-                            data-row-text="{{ pool.name }} {{ pool.notes or '' }} IPv{{ pool.ip_version.value if pool.ip_version else '4' }}"
+                            data-row-text="{{ pool.name }} {{ pool.cidr or '' }} {{ pool.notes or '' }} IPv{{ pool.ip_version.value if pool.ip_version else '4' }}"
                             data-row-copy="{{ pool.name }}">
                             <td class="px-6 py-4">
                                 <input type="checkbox" data-row-check class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500">

@@ -54,9 +54,14 @@ class SmartDefaultsService:
             SettingsCache.set(domain.value, key, default)
         return default
 
-    def get_invoice_defaults(self) -> dict[str, Any]:
+    def get_invoice_defaults(
+        self, subscriber: object | None = None
+    ) -> dict[str, Any]:
         """
         Get default values for creating a new invoice.
+
+        Args:
+            subscriber: Optional subscriber for per-customer payment terms.
 
         Returns:
             Dictionary containing default values for invoice fields:
@@ -68,7 +73,9 @@ class SmartDefaultsService:
         """
         # Get settings from billing domain
         currency = self._get_setting(SettingDomain.billing, "default_currency", "NGN")
-        payment_terms_days = resolve_payment_due_days(self.db, default=30)
+        payment_terms_days = resolve_payment_due_days(
+            self.db, default=30, subscriber=subscriber
+        )
 
         today = date.today()
         due_date = today + timedelta(days=payment_terms_days)
@@ -86,7 +93,7 @@ class SmartDefaultsService:
         Get default values for creating a new customer.
 
         Args:
-            customer_type: Either 'person' or 'organization'
+            customer_type: Either 'person' or 'business'
 
         Returns:
             Dictionary containing default values for customer fields.
@@ -114,8 +121,8 @@ class SmartDefaultsService:
                     "marketing_opt_in": False,
                 }
             )
-        elif customer_type == "organization":
-            # Organization-specific defaults
+        elif customer_type == "business":
+            # Business-specific defaults
             pass
 
         return defaults
@@ -143,14 +150,19 @@ class SmartDefaultsService:
         }
 
     def calculate_due_date(
-        self, issued_at: date | None = None, payment_terms_days: int | None = None
+        self,
+        issued_at: date | None = None,
+        payment_terms_days: int | None = None,
+        subscriber: object | None = None,
     ) -> date:
         """
         Calculate the due date based on issue date and payment terms.
 
         Args:
             issued_at: The invoice issue date. Defaults to today.
-            payment_terms_days: Days until due. If not provided, uses default setting.
+            payment_terms_days: Days until due. If not provided, uses subscriber
+                or global default setting.
+            subscriber: Optional subscriber for per-customer payment terms.
 
         Returns:
             The calculated due date.
@@ -159,7 +171,9 @@ class SmartDefaultsService:
             issued_at = date.today()
 
         if payment_terms_days is None:
-            payment_terms_days = resolve_payment_due_days(self.db, default=30)
+            payment_terms_days = resolve_payment_due_days(
+                self.db, default=30, subscriber=subscriber
+            )
 
         return issued_at + timedelta(days=payment_terms_days)
 
@@ -167,6 +181,7 @@ class SmartDefaultsService:
         self,
         issued_at: date | None = None,
         payment_terms_days: int | None = None,
+        subscriber: object | None = None,
     ) -> dict[str, Any]:
         """Calculate due date and return all resolved values.
 
@@ -176,7 +191,9 @@ class SmartDefaultsService:
             issued_at = date.today()
 
         if payment_terms_days is None:
-            payment_terms_days = resolve_payment_due_days(self.db, default=30)
+            payment_terms_days = resolve_payment_due_days(
+                self.db, default=30, subscriber=subscriber
+            )
 
         due_at = issued_at + timedelta(days=payment_terms_days)
         return {

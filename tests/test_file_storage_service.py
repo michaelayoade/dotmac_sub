@@ -6,7 +6,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Organization
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.file_storage import FileValidationError, file_uploads
 from app.services.object_storage import StreamResult
 
@@ -23,16 +23,16 @@ def test_validate_rejects_invalid_extension():
 
 
 def test_generate_storage_key_contains_tenant_entity():
-    org_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
     key = file_uploads.generate_storage_key(
         prefix="attachments",
-        organization_id=org_id,
+        owner_subscriber_id=owner_id,
         entity_type="invoice",
         entity_id="abc-123",
         file_bytes=b"hello",
         extension=".pdf",
     )
-    assert key.startswith(f"attachments/org-{org_id}/invoice/abc_123/")
+    assert key.startswith(f"attachments/acct-{owner_id}/invoice/abc_123/")
     assert key.endswith(".pdf")
 
 
@@ -46,8 +46,14 @@ def test_upload_persists_metadata(db_session, monkeypatch):
 
     monkeypatch.setattr(file_uploads, "storage", _Storage())
 
-    org = Organization(name="Acme Fiber")
-    db_session.add(org)
+    owner = Subscriber(
+        first_name="Acme",
+        last_name="Business",
+        email="billing@acme.example.com",
+        company_name="Acme Fiber",
+    )
+    owner.category = SubscriberCategory.business
+    db_session.add(owner)
     db_session.commit()
 
     uploaded = file_uploads.upload(
@@ -59,11 +65,11 @@ def test_upload_persists_metadata(db_session, monkeypatch):
         content_type="application/pdf",
         data=b"%PDF-1.4 file",
         uploaded_by=None,
-        organization_id=org.id,
+        owner_subscriber_id=owner.id,
     )
     assert uploaded.id is not None
     assert uploaded.storage_provider == "s3"
-    assert uploaded.organization_id == org.id
+    assert uploaded.owner_subscriber_id == owner.id
     assert captured["key"] == uploaded.storage_key_or_relative_path
 
 
@@ -77,7 +83,7 @@ def test_soft_delete_marks_deleted(db_session, monkeypatch):
     monkeypatch.setattr(file_uploads, "storage", _Storage())
 
     record = StoredFile(
-        organization_id=None,
+        owner_subscriber_id=None,
         entity_type="test_entity",
         entity_id="123",
         original_filename="test.txt",
@@ -99,7 +105,7 @@ def test_soft_delete_marks_deleted(db_session, monkeypatch):
 
 def test_tenant_access_denied():
     record = StoredFile(
-        organization_id=uuid.uuid4(),
+        owner_subscriber_id=uuid.uuid4(),
         entity_type="test",
         entity_id="1",
         original_filename="f.txt",
@@ -110,7 +116,7 @@ def test_tenant_access_denied():
         uploaded_by=None,
     )
     with pytest.raises(HTTPException) as exc:
-        file_uploads.assert_tenant_access(record, uuid.uuid4())
+        file_uploads.assert_owner_access(record, uuid.uuid4())
     assert exc.value.status_code == 404
 
 
@@ -119,7 +125,7 @@ def test_stream_legacy_file(tmp_path):
     legacy.write_bytes(b"legacy")
 
     record = StoredFile(
-        organization_id=None,
+        owner_subscriber_id=None,
         entity_type="test",
         entity_id="1",
         original_filename="legacy.txt",

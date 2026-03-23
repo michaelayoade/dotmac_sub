@@ -177,28 +177,37 @@ def _activate_pending_subscription(
 ) -> None:
     """Activate a pending subscription when its first invoice is generated.
 
-    Note: This emits the activation event with auto_activated=True flag.
-    The subscription service checks this flag to avoid double-billing
-    since billing automation already creates the invoice.
+    Delegates to the lifecycle module for status change and account status
+    derivation. Emits the activation event manually with the
+    ``auto_activated=True`` flag so other handlers (like proration) skip
+    since billing already creates the invoice.
     """
-    previous_status = subscription.status
-    subscription.status = SubscriptionStatus.active
-    if not subscription.start_at:
-        subscription.start_at = run_at
+    from app.services.account_lifecycle import activate_subscription
+
+    try:
+        activate_subscription(
+            db,
+            str(subscription.id),
+            start_at=run_at,
+            emit=False,  # Emit manually below with auto_activated flag
+        )
+    except ValueError as e:
+        logger.warning(
+            "Could not auto-activate subscription %s: %s", subscription.id, e
+        )
+        return
 
     logger.info("Auto-activated subscription %s (pending → active)", subscription.id)
 
-    # Emit activation event with auto_activated flag
-    # This flag tells other handlers (like proration) to skip since billing already handled it
     emit_event(
         db,
         EventType.subscription_activated,
         {
             "subscription_id": str(subscription.id),
             "offer_name": subscription.offer.name if subscription.offer else None,
-            "from_status": previous_status.value if previous_status else None,
+            "from_status": "pending",
             "to_status": "active",
-            "auto_activated": True,  # Indicates billing already handled invoicing
+            "auto_activated": True,
         },
         subscription_id=subscription.id,
         account_id=subscription.subscriber_id,
@@ -421,7 +430,7 @@ def run_invoice_cycle(
         auto_activate_pending: If True, auto-activate pending subscriptions when billed
     """
     run_at = _as_utc(run_at) or datetime.now(UTC)
-    due_days = resolve_payment_due_days(db)
+    global_due_days = resolve_payment_due_days(db)
 
     # Read auto-activate setting if not explicitly specified
     if auto_activate_pending is True:
@@ -567,6 +576,11 @@ def run_invoice_cycle(
                 .first()
             )
         if not invoice:
+            # Use subscriber-level payment_due_days if set, else global
+            account = db.get(Subscriber, subscription.subscriber_id)
+            due_days = resolve_payment_due_days(
+                db, subscriber=account
+            ) if account else global_due_days
             invoice = Invoice(
                 account_id=subscription.subscriber_id,
                 status=InvoiceStatus.issued,
@@ -764,8 +778,9 @@ def generate_prorated_invoice(
         )
         return None
 
-    # Get due days setting
-    due_days = resolve_payment_due_days(db)
+    # Get due days — subscriber override > global setting
+    account = db.get(Subscriber, subscription.subscriber_id)
+    due_days = resolve_payment_due_days(db, subscriber=account)
 
     # Create prorated invoice
     invoice = Invoice(
@@ -883,3 +898,191 @@ def run_invoice_cycle_with_retry(
     if last_error is not None:
         raise last_error
     raise RuntimeError("Billing run failed but no exception was captured")
+
+
+def mark_overdue_invoices(db: Session) -> dict[str, int]:
+    """Mark past-due invoices as overdue and emit events.
+
+    Runs independently of the billing cycle. Finds invoices where
+    ``due_at <= now``, ``balance_due > 0``, and status is ``issued``
+    or ``partially_paid``, then transitions them to ``overdue`` and
+    emits ``invoice_overdue`` events (which trigger the enforcement
+    handler for suspension).
+    """
+    now = datetime.now(UTC)
+    invoices = (
+        db.query(Invoice)
+        .filter(Invoice.is_active.is_(True))
+        .filter(
+            Invoice.status.in_(
+                [InvoiceStatus.issued, InvoiceStatus.partially_paid]
+            )
+        )
+        .filter(Invoice.due_at.is_not(None))
+        .filter(Invoice.due_at <= now)
+        .filter(Invoice.balance_due > Decimal("0.00"))
+        .all()
+    )
+
+    marked = 0
+    errors = 0
+    for invoice in invoices:
+        # Check idempotency flag before changing status
+        metadata = dict(invoice.metadata_ or {})
+        if metadata.get("overdue_event_sent"):
+            # Already processed in a prior run — just ensure status is overdue
+            if invoice.status != InvoiceStatus.overdue:
+                invoice.status = InvoiceStatus.overdue
+            marked += 1
+            continue
+
+        try:
+            invoice.status = InvoiceStatus.overdue
+            due_at = _as_utc(invoice.due_at)
+            days_overdue = (now.date() - due_at.date()).days if due_at else 0
+
+            emit_event(
+                db,
+                EventType.invoice_overdue,
+                {
+                    "invoice_id": str(invoice.id),
+                    "invoice_number": invoice.invoice_number or "",
+                    "amount": str(
+                        invoice.balance_due or invoice.total or Decimal("0.00")
+                    ),
+                    "due_date": due_at.date().isoformat() if due_at else "",
+                    "days_overdue": str(days_overdue),
+                },
+                invoice_id=invoice.id,
+                account_id=invoice.account_id,
+            )
+            _mark_invoice_metadata_flag(invoice, "overdue_event_sent")
+            marked += 1
+        except Exception as exc:
+            logger.error(
+                "Failed to process overdue invoice %s: %s", invoice.id, exc
+            )
+            errors += 1
+
+    if marked:
+        db.commit()
+
+    logger.info(
+        "Overdue detection: %d marked, %d errors, %d scanned",
+        marked,
+        errors,
+        len(invoices),
+    )
+    return {"marked_overdue": marked, "errors": errors, "scanned": len(invoices)}
+
+
+def generate_cancellation_credit(
+    db: Session,
+    subscription: Subscription,
+) -> None:
+    """Generate a credit note for unused days when a subscription is canceled mid-cycle.
+
+    Only generates if proration is enabled and the subscription has been billed
+    (has at least one invoice line). The credit covers the unused portion from
+    cancellation date to next_billing_at.
+    """
+    from app.models.billing import CreditNote, CreditNoteLine, CreditNoteStatus
+    from app.services import numbering
+
+    # Check if proration is enabled
+    proration_enabled = settings_spec.resolve_value(
+        db, SettingDomain.billing, "proration_enabled"
+    )
+    if proration_enabled is False:
+        return
+
+    if not subscription.next_billing_at:
+        return
+
+    now = datetime.now(UTC)
+    next_billing = _as_utc(subscription.next_billing_at)
+    if not next_billing or next_billing <= now:
+        return  # No unused future period
+
+    # Find the most recent invoice line for this subscription
+    last_line = (
+        db.query(InvoiceLine)
+        .filter(InvoiceLine.subscription_id == subscription.id)
+        .filter(InvoiceLine.is_active.is_(True))
+        .order_by(InvoiceLine.created_at.desc())
+        .first()
+    )
+    if not last_line or not last_line.amount:
+        return  # Never billed
+
+    # Calculate unused portion
+    start_at = _as_utc(subscription.start_at) or now
+    cycle = BillingCycle.monthly  # fallback
+    if subscription.offer and subscription.offer.billing_cycle:
+        cycle = subscription.offer.billing_cycle
+
+    period_start = _as_utc(subscription.next_billing_at)
+    if period_start:
+        # Work backwards: period_start = next_billing_at - cycle
+        if cycle == BillingCycle.daily:
+            period_start = period_start - timedelta(days=1)
+        elif cycle == BillingCycle.weekly:
+            period_start = period_start - timedelta(weeks=1)
+        elif cycle == BillingCycle.annual:
+            period_start = period_start.replace(year=period_start.year - 1)
+        else:  # monthly
+            month = period_start.month - 1 or 12
+            year = period_start.year if period_start.month > 1 else period_start.year - 1
+            day = min(period_start.day, monthrange(year, month)[1])
+            period_start = period_start.replace(year=year, month=month, day=day)
+
+    if not period_start:
+        return
+
+    total_seconds = max((next_billing - period_start).total_seconds(), 1)
+    unused_seconds = max((next_billing - now).total_seconds(), 0)
+    ratio = Decimal(str(unused_seconds)) / Decimal(str(total_seconds))
+    credit_amount = (last_line.amount * ratio).quantize(Decimal("0.01"))
+
+    if credit_amount <= Decimal("0.00"):
+        return
+
+    credit_number = numbering.generate_number(
+        db,
+        SettingDomain.billing,
+        "credit_note_number",
+        "credit_note_number_enabled",
+        "credit_note_number_prefix",
+        "credit_note_number_padding",
+        "credit_note_number_start",
+    )
+
+    offer_name = subscription.offer.name if subscription.offer else "Subscription"
+    credit = CreditNote(
+        account_id=subscription.subscriber_id,
+        credit_number=credit_number,
+        currency="NGN",
+        subtotal=credit_amount,
+        tax_total=Decimal("0"),
+        total=credit_amount,
+        status=CreditNoteStatus.issued,
+        memo=f"Cancellation credit: {offer_name} (unused {int(unused_seconds / 86400)} days)",
+    )
+    db.add(credit)
+    db.flush()
+
+    credit_line = CreditNoteLine(
+        credit_note_id=credit.id,
+        description=f"Prorated credit for {offer_name}",
+        amount=credit_amount,
+        quantity=Decimal("1"),
+    )
+    db.add(credit_line)
+    db.flush()
+
+    logger.info(
+        "Generated cancellation credit %s for subscription %s: %s",
+        credit_number or credit.id,
+        subscription.id,
+        credit_amount,
+    )

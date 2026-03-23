@@ -1,4 +1,4 @@
-"""Admin customer (person & organization) management web routes."""
+"""Admin customer (person & business) management web routes."""
 
 import json
 import logging
@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.billing import TaxRate
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services import customer_portal
 from app.services import subscriber as subscriber_service
 from app.services import web_customer_actions as web_customer_actions_service
@@ -78,6 +78,14 @@ def _get_subscriber(db: Session, subscriber_id: str):
     return subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
 
 
+def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
+    """Accept only a business subscriber id for business routes."""
+    subscriber = _get_subscriber(db=db, subscriber_id=customer_id)
+    if subscriber.category != SubscriberCategory.business:
+        raise HTTPException(status_code=404, detail="Business customer not found")
+    return customer_id
+
+
 def _load_tax_rates(db: Session):
     return (
         db.query(TaxRate)
@@ -100,33 +108,7 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
     }
     if not customer:
         return defaults
-    if customer_type == "person":
-        subscriber = customer
-    else:
-        subscriber = (
-            db.query(Subscriber)
-            .filter(Subscriber.organization_id == customer.id)
-            .order_by(Subscriber.created_at.asc())
-            .first()
-        )
-        if not subscriber:
-            return defaults
-        others = (
-            db.query(Subscriber).filter(Subscriber.organization_id == customer.id).all()
-        )
-        comparable_fields = (
-            "billing_enabled",
-            "billing_day",
-            "payment_due_days",
-            "grace_period_days",
-            "min_balance",
-            "tax_rate_id",
-            "payment_method",
-        )
-        for field in comparable_fields:
-            values = {str(getattr(item, field, None)) for item in others}
-            if len(values) > 1:
-                return defaults
+    subscriber = customer
     defaults.update(
         {
             "billing_enabled_override": (
@@ -194,12 +176,12 @@ def contacts_list(
     request: Request,
     search: str | None = None,
     status: str | None = None,  # 'lead', 'contact', 'customer', or None for all
-    entity_type: str | None = None,  # 'person' or 'organization'
+    entity_type: str | None = None,  # 'person' or 'business'
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
-    """Unified contacts view - all people and organizations with status filtering."""
+    """Unified contacts view for people and business customers."""
     context = _contacts_base_context(request, db, "contacts")
     context.update(
         web_customer_lists_service.build_contacts_index_context(
@@ -268,14 +250,14 @@ def customers_list(
     request: Request,
     search: str | None = None,
     status: str | None = None,
-    customer_type: str | None = None,  # 'person' or 'organization'
+    customer_type: str | None = None,  # 'person' or 'business'
     nas_id: str | None = None,
     pop_site_id: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
 ):
-    """List all customers (people and organizations) with search and filtering."""
+    """List all customers with search and filtering."""
     page_data = web_customer_lists_service.build_customers_index_context(
         db=db,
         search=search,
@@ -436,7 +418,7 @@ def customer_create(
     display_name: str | None = Form(None),
     avatar_url: str | None = Form(None),
     bio: str | None = Form(None),
-    # Organization fields
+    # Business fields
     name: str | None = Form(None),
     legal_name: str | None = Form(None),
     tax_id: str | None = Form(None),
@@ -475,7 +457,7 @@ def customer_create(
     contact_is_primary: list[str] = Form([]),
     db: Session = Depends(get_db),
 ):
-    """Create a new customer (person or organization)."""
+    """Create a new customer (person or business)."""
     try:
         contact_columns = {
             "first_name": contact_first_name,
@@ -586,9 +568,9 @@ def person_detail(
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """View person details."""
+    """View customer details (unified — person and org members)."""
     try:
-        detail_data = web_customer_details_service.build_person_detail_snapshot(
+        detail_data = web_customer_details_service.build_customer_detail_snapshot(
             db=db,
             customer_id=customer_id,
         )
@@ -599,7 +581,7 @@ def person_detail(
             status_code=404,
         )
     except Exception:
-        logger.exception("Error loading person detail for %s", customer_id)
+        logger.exception("Error loading customer detail for %s", customer_id)
         raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -619,44 +601,28 @@ def person_detail(
 
 
 @router.get(
-    "/organization/{customer_id}",
+    "/business/{customer_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
 )
-def organization_detail(
+def business_detail(
     request: Request,
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """View organization details."""
     try:
-        detail_data = web_customer_details_service.build_organization_detail_snapshot(
-            db=db,
-            customer_id=customer_id,
-        )
+        subscriber = _get_subscriber(db=db, subscriber_id=customer_id)
+        if subscriber.category != SubscriberCategory.business:
+            raise HTTPException(status_code=404, detail="Business customer not found")
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": "Organization not found"},
+            {"request": request, "message": "Customer not found"},
             status_code=404,
         )
-    except Exception:
-        logger.exception("Error loading organization detail for %s", customer_id)
-        raise
-
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    sidebar_stats = get_sidebar_stats(db)
-    current_user = get_current_user(request)
-
-    return templates.TemplateResponse(
-        "admin/customers/detail.html",
-        {
-            "request": request,
-            **detail_data,
-            "current_user": current_user,
-            "sidebar_stats": sidebar_stats,
-        },
+    return RedirectResponse(
+        url=f"/admin/customers/person/{subscriber.id}",
+        status_code=302,
     )
 
 
@@ -667,7 +633,7 @@ def organization_detail(
 )
 def customer_user_send_invite(
     request: Request,
-    customer_type: Literal["person", "organization"],
+    customer_type: Literal["person", "business"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -759,7 +725,7 @@ def customer_user_send_invite(
 )
 def customer_user_send_reset_link(
     request: Request,
-    customer_type: Literal["person", "organization"],
+    customer_type: Literal["person", "business"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -849,7 +815,7 @@ def customer_user_send_reset_link(
 )
 def customer_user_activate_login(
     request: Request,
-    customer_type: Literal["person", "organization"],
+    customer_type: Literal["person", "business"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -912,7 +878,7 @@ def customer_user_activate_login(
 )
 def customer_user_deactivate_login(
     request: Request,
-    customer_type: Literal["person", "organization"],
+    customer_type: Literal["person", "business"],
     customer_id: str,
     db: Session = Depends(get_db),
 ):
@@ -1006,8 +972,8 @@ def person_impersonate(
     return response
 
 
-@router.post("/organization/{customer_id}/impersonate", response_class=HTMLResponse)
-def organization_impersonate(
+@router.post("/business/{customer_id}/impersonate", response_class=HTMLResponse)
+def business_impersonate(
     request: Request,
     customer_id: str,
     account_id: str = Form(...),
@@ -1015,12 +981,12 @@ def organization_impersonate(
     db: Session = Depends(get_db),
     auth=Depends(require_permission("subscriber:impersonate")),
 ):
-    """Impersonate an organization customer and open the portal."""
+    """Impersonate a business customer and open the portal."""
     try:
         session_token = web_customer_actions_service.create_impersonation_session(
             db=db,
             request=request,
-            customer_type="organization",
+            customer_type="business",
             customer_id=customer_id,
             account_id=account_id,
             subscription_id=subscription_id,
@@ -1088,28 +1054,27 @@ def person_edit(
 
 
 @router.get(
-    "/organization/{customer_id}/edit",
+    "/business/{customer_id}/edit",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
 )
-def organization_edit(
+def business_edit(
     request: Request,
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """Edit organization form."""
+    """Edit business customer form."""
     try:
-        customer = subscriber_service.organizations.get(
-            db=db, organization_id=customer_id
-        )
+        resolved_customer_id = _resolve_business_customer_id(db, customer_id)
+        customer = _get_subscriber(db=db, subscriber_id=resolved_customer_id)
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": "Organization not found"},
+            {"request": request, "message": "Business customer not found"},
             status_code=404,
         )
     except Exception:
-        logger.exception("Error loading organization edit for %s", customer_id)
+        logger.exception("Error loading business edit for %s", customer_id)
         raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -1122,10 +1087,10 @@ def organization_edit(
         {
             "request": request,
             "customer": customer,
-            "customer_type": "organization",
+            "customer_type": "business",
             "action": "edit",
             "tax_rates": _load_tax_rates(db),
-            "billing_form": _billing_form_defaults(db, "organization", customer),
+            "billing_form": _billing_form_defaults(db, "business", customer),
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
         },
@@ -1261,11 +1226,11 @@ def person_update(
 
 
 @router.post(
-    "/organization/{customer_id}/edit",
+    "/business/{customer_id}/edit",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
 )
-def organization_update(
+def business_update(
     request: Request,
     customer_id: str,
     name: str = Form(...),
@@ -1273,8 +1238,8 @@ def organization_update(
     tax_id: str | None = Form(None),
     domain: str | None = Form(None),
     website: str | None = Form(None),
-    org_notes: str | None = Form(None),
-    org_account_start_date: str | None = Form(None),
+    business_notes: str | None = Form(None),
+    business_account_start_date: str | None = Form(None),
     billing_enabled_override: str | None = Form(None),
     billing_day: str | None = Form(None),
     payment_due_days: str | None = Form(None),
@@ -1285,9 +1250,9 @@ def organization_update(
     payment_method: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    """Update an organization."""
+    """Update a business customer."""
     try:
-        before, after = web_customer_actions_service.update_organization_customer(
+        before, after = web_customer_actions_service.update_business_customer(
             db=db,
             customer_id=customer_id,
             name=name,
@@ -1295,8 +1260,8 @@ def organization_update(
             tax_id=tax_id,
             domain=domain,
             website=website,
-            org_notes=org_notes,
-            org_account_start_date=org_account_start_date,
+            org_notes=business_notes,
+            org_account_start_date=business_account_start_date,
             billing_enabled_override=billing_enabled_override,
             billing_day=billing_day,
             payment_due_days=payment_due_days,
@@ -1314,13 +1279,13 @@ def organization_update(
             db=db,
             request=request,
             action="update",
-            entity_type="organization",
+            entity_type="subscriber",
             entity_id=str(customer_id),
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
         return RedirectResponse(
-            url=f"/admin/customers/organization/{customer_id}",
+            url=f"/admin/customers/business/{customer_id}",
             status_code=303,
         )
     except Exception as e:
@@ -1329,9 +1294,7 @@ def organization_update(
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         try:
-            customer = subscriber_service.organizations.get(
-                db=db, organization_id=customer_id
-            )
+            customer = _get_subscriber(db=db, subscriber_id=customer_id)
         except Exception:
             customer = None
         return templates.TemplateResponse(
@@ -1339,11 +1302,11 @@ def organization_update(
             {
                 "request": request,
                 "customer": customer,
-                "customer_type": "organization",
+                "customer_type": "business",
                 "action": "edit",
                 "error": str(e),
                 "tax_rates": _load_tax_rates(db),
-                "billing_form": _billing_form_defaults(db, "organization", customer),
+                "billing_form": _billing_form_defaults(db, "business", customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
             },
@@ -1387,17 +1350,17 @@ def person_deactivate(
 
 
 @router.post(
-    "/organization/{customer_id}/deactivate",
+    "/business/{customer_id}/deactivate",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:write"))],
 )
-def organization_deactivate(
+def business_deactivate(
     request: Request,
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """Deactivate organization subscribers before deletion."""
-    web_customer_actions_service.deactivate_organization_customer(
+    """Deactivate a business customer before deletion."""
+    web_customer_actions_service.deactivate_business_customer(
         db=db,
         customer_id=customer_id,
     )
@@ -1408,7 +1371,7 @@ def organization_deactivate(
         db=db,
         request=request,
         action="update",
-        entity_type="organization",
+        entity_type="subscriber",
         entity_id=str(customer_id),
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata={"changes": {"is_active": {"from": True, "to": False}}},
@@ -1416,7 +1379,7 @@ def organization_deactivate(
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(
-        url=f"/admin/customers/organization/{customer_id}", status_code=303
+        url=f"/admin/customers/business/{customer_id}", status_code=303
     )
 
 
@@ -1482,23 +1445,23 @@ def person_delete(
 
 
 @router.delete(
-    "/organization/{customer_id}",
+    "/business/{customer_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:delete"))],
 )
 @router.post(
-    "/organization/{customer_id}/delete",
+    "/business/{customer_id}/delete",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:delete"))],
 )
-def organization_delete(
+def business_delete(
     request: Request,
     customer_id: str,
     db: Session = Depends(get_db),
 ):
-    """Delete an organization."""
+    """Delete a business customer."""
     try:
-        web_customer_actions_service.delete_organization_customer(
+        web_customer_actions_service.delete_business_customer(
             db=db,
             customer_id=customer_id,
         )
@@ -1509,7 +1472,7 @@ def organization_delete(
             db=db,
             request=request,
             action="delete",
-            entity_type="organization",
+            entity_type="subscriber",
             entity_id=str(customer_id),
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         )
@@ -1522,7 +1485,7 @@ def organization_delete(
         raise
     except IntegrityError:
         db.rollback()
-        message = "Cannot delete organization. Linked records exist."
+        message = "Cannot delete business customer. Linked records exist."
         if request.headers.get("HX-Request"):
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)

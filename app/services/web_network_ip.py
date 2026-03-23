@@ -937,22 +937,28 @@ def build_ip_management_data(
     pool_filter: str | None = None,
     address_limit: int = 50,
 ) -> dict[str, object]:
+    from sqlalchemy import func, select
+
+    from app.models.network import IPv4Address, IPv6Address, IpBlock, IpPool
+
+    total_pools = db.execute(select(func.count(IpPool.id))).scalar() or 0
     pools = network_service.ip_pools.list(
         db=db,
         ip_version=None,
         is_active=None,
         order_by="name",
         order_dir="asc",
-        limit=100,
+        limit=max(int(total_pools), 1),
         offset=0,
     )
+    total_blocks = db.execute(select(func.count(IpBlock.id))).scalar() or 0
     blocks = network_service.ip_blocks.list(
         db=db,
         pool_id=None,
         is_active=None,
         order_by="cidr",
         order_dir="asc",
-        limit=100,
+        limit=max(int(total_blocks), 1),
         offset=0,
     )
     assignments = network_service.ip_assignments.list(
@@ -977,10 +983,6 @@ def build_ip_management_data(
     pool_id = pool_filter if pool_filter else None
 
     # Get total counts using SQL
-    from sqlalchemy import func, select
-
-    from app.models.network import IPv4Address, IPv6Address
-
     total_ipv4 = (
         db.execute(
             select(func.count(IPv4Address.id)).where(IPv4Address.is_reserved == False)
@@ -1617,13 +1619,18 @@ def build_ip_addresses_data(db, *, ip_version: str) -> dict[str, object]:
 
 
 def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
+    from sqlalchemy import func, select
+
+    from app.models.network import IpBlock, IpPool
+
+    total_pools = db.execute(select(func.count(IpPool.id))).scalar() or 0
     pools_all = network_service.ip_pools.list(
         db=db,
         ip_version=None,
         is_active=None,
         order_by="name",
         order_dir="asc",
-        limit=100,
+        limit=max(int(total_pools), 1),
         offset=0,
     )
     normalized_pool_type = str(pool_type or "all").strip().lower()
@@ -1643,13 +1650,16 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         pools = pools_all
 
     selected_pool_ids = {str(pool.id) for pool in pools}
+    total_blocks = db.execute(
+        select(func.count(IpBlock.id)).where(IpBlock.is_active.is_(True))
+    ).scalar() or 0
     blocks = network_service.ip_blocks.list(
         db=db,
         pool_id=None,
         is_active=True,
         order_by="cidr",
         order_dir="asc",
-        limit=100,
+        limit=max(int(total_blocks), 1),
         offset=0,
     )
     if normalized_pool_type in {"fallback", "standard"}:

@@ -115,7 +115,7 @@ def test_export_file_exists_and_stream_export_uses_s3(
         content_type="application/pdf",
         data=b"%PDF-1.4 body",
         uploaded_by=str(subscriber_account.id),
-        organization_id=None,
+        owner_subscriber_id=None,
     )
     current = file_uploads.get_active_entity_file(
         db_session, "invoice_pdf_export", str(export.id)

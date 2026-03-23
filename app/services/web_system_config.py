@@ -282,6 +282,16 @@ BILLING_KEYS = [
     "proforma_payment_period",
     "zero_total_invoices",
     "invoice_caching",
+    # Prepaid customer defaults
+    "prepaid_default_billing_day",
+    "prepaid_default_payment_due_days",
+    "prepaid_default_grace_period_days",
+    "prepaid_default_min_balance",
+    # Postpaid customer defaults
+    "postpaid_default_billing_day",
+    "postpaid_default_payment_due_days",
+    "postpaid_default_grace_period_days",
+    "postpaid_default_min_balance",
 ]
 
 
@@ -496,6 +506,11 @@ RADIUS_KEYS = [
     "captive_portal_url",
     "allow_unknown_nas",
     "default_nas_id",
+    # PPPoE auto-generation
+    "pppoe_username_prefix",
+    "pppoe_username_padding",
+    "pppoe_username_start",
+    "pppoe_default_password_length",
 ]
 
 

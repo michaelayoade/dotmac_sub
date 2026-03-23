@@ -3,6 +3,7 @@
 import logging
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -10,6 +11,8 @@ from app.models.network import (
     CPEDevice,
     DeviceStatus,
     DeviceType,
+    OntAssignment,
+    OntUnit,
     Port,
     PortStatus,
     PortType,
@@ -31,11 +34,49 @@ from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
+    normalize_mac_address,
 )
 from app.services.query_builders import apply_active_state, apply_optional_equals
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_cpe_device_type(
+    device_type: DeviceType | str | None,
+) -> DeviceType | None:
+    """Map inventory device types onto the legacy DB enum values persisted in CPE rows."""
+    if device_type is None:
+        return None
+    resolved = (
+        device_type
+        if isinstance(device_type, DeviceType)
+        else _validate_enum(device_type, DeviceType, "device_type")
+    )
+    if resolved in {DeviceType.ont, DeviceType.cpe}:
+        return DeviceType.other
+    return resolved
+
+
+def _normalize_cpe_data(data: dict) -> dict:
+    normalized = dict(data)
+    if "serial_number" in normalized:
+        serial_number = str(normalized.get("serial_number") or "").strip()
+        normalized["serial_number"] = serial_number[:120] or None
+    if "vendor" in normalized:
+        vendor = str(normalized.get("vendor") or "").strip()
+        normalized["vendor"] = vendor[:120] or None
+    if "model" in normalized:
+        model = str(normalized.get("model") or "").strip()
+        normalized["model"] = model[:120] or None
+    if "mac_address" in normalized:
+        mac_address = normalize_mac_address(normalized.get("mac_address"))
+        normalized["mac_address"] = mac_address
+    if "device_type" in normalized:
+        normalized["device_type"] = _normalize_cpe_device_type(
+            normalized.get("device_type")
+        )
+    return normalized
 
 
 def _auto_register_tr069_device(db: Session, device: CPEDevice) -> None:
@@ -98,6 +139,95 @@ def _auto_register_tr069_device(db: Session, device: CPEDevice) -> None:
     db.commit()
 
 
+def ensure_cpe_for_ont(
+    db: Session,
+    ont: OntUnit,
+    assignment: OntAssignment | None = None,
+) -> CPEDevice | None:
+    """Create or update the CPE inventory row for a configured ONT."""
+    if assignment is None:
+        assignment = db.scalars(
+            select(OntAssignment)
+            .where(OntAssignment.ont_unit_id == ont.id)
+            .where(OntAssignment.active.is_(True))
+            .order_by(OntAssignment.created_at.desc())
+            .limit(1)
+        ).first()
+
+    serial_number = str(getattr(ont, "serial_number", "") or "").strip()[:120] or None
+    existing = None
+    if serial_number:
+        existing = db.scalars(
+            select(CPEDevice)
+            .where(CPEDevice.serial_number == serial_number)
+            .order_by(CPEDevice.updated_at.desc(), CPEDevice.created_at.desc())
+            .limit(1)
+        ).first()
+
+    if existing is None and (
+        assignment is None or getattr(assignment, "subscriber_id", None) is None
+    ):
+        return None
+
+    data = _normalize_cpe_data(
+        {
+            "serial_number": serial_number,
+            "vendor": getattr(ont, "vendor", None),
+            "model": getattr(ont, "model", None),
+            "mac_address": getattr(ont, "mac_address", None),
+        }
+    )
+
+    if existing is None:
+        device = CPEDevice(
+            subscriber_id=assignment.subscriber_id,
+            subscription_id=getattr(assignment, "subscription_id", None),
+            service_address_id=getattr(assignment, "service_address_id", None),
+            device_type=DeviceType.other,
+            status=DeviceStatus.active
+            if getattr(ont, "is_active", False)
+            else DeviceStatus.inactive,
+            serial_number=data.get("serial_number"),
+            vendor=data.get("vendor"),
+            model=data.get("model"),
+            mac_address=data.get("mac_address"),
+            installed_at=getattr(assignment, "assigned_at", None),
+            tr069_data_model=getattr(ont, "tr069_data_model", None),
+        )
+        db.add(device)
+        db.commit()
+        db.refresh(device)
+        _auto_register_tr069_device(db, device)
+        return device
+
+    if assignment and getattr(assignment, "subscriber_id", None) is not None:
+        existing.subscriber_id = assignment.subscriber_id
+        existing.subscription_id = assignment.subscription_id
+        existing.service_address_id = assignment.service_address_id
+        if existing.installed_at is None and assignment.assigned_at is not None:
+            existing.installed_at = assignment.assigned_at
+    if data.get("serial_number"):
+        existing.serial_number = data["serial_number"]
+    if data.get("vendor"):
+        existing.vendor = data["vendor"]
+    if data.get("model"):
+        existing.model = data["model"]
+    if data.get("mac_address"):
+        existing.mac_address = data["mac_address"]
+    if getattr(ont, "tr069_data_model", None):
+        existing.tr069_data_model = ont.tr069_data_model
+    existing.device_type = DeviceType.other
+    existing.status = (
+        DeviceStatus.active
+        if getattr(ont, "is_active", False)
+        else DeviceStatus.inactive
+    )
+    db.commit()
+    db.refresh(existing)
+    _auto_register_tr069_device(db, existing)
+    return existing
+
+
 class CPEDevices(CRUDManager[CPEDevice]):
     model = CPEDevice
     not_found_detail = "CPE device not found"
@@ -126,6 +256,7 @@ class CPEDevices(CRUDManager[CPEDevice]):
             )
             if default_status:
                 data["status"] = _validate_enum(default_status, DeviceStatus, "status")
+        data = _normalize_cpe_data(data)
         device = CPEDevice(**data)
         db.add(device)
         db.commit()
@@ -178,6 +309,7 @@ class CPEDevices(CRUDManager[CPEDevice]):
             str(subscription_id) if subscription_id else None,
             str(service_address_id) if service_address_id else None,
         )
+        data = _normalize_cpe_data(data)
         for key, value in data.items():
             setattr(device, key, value)
         db.commit()

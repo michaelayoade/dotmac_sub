@@ -159,6 +159,7 @@ def _upload_ticket_attachments(
                 content_type=content_type,
                 data=payload,
                 uploaded_by=actor_id,
+                owner_subscriber_id=None,
             )
             uploaded_records.append(record)
             uploaded_metadata.append(

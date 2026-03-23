@@ -969,9 +969,7 @@ class BillingReporting:
         }
 
         # --- Recent invoices (last 10) ---
-        recent_stmt = select(Invoice).options(
-            joinedload(Invoice.account).joinedload(Subscriber.organization),
-        )
+        recent_stmt = select(Invoice).options(joinedload(Invoice.account))
         if period_start is not None:
             recent_stmt = recent_stmt.where(Invoice.created_at >= period_start)
         if period_end is not None:

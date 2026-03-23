@@ -1,9 +1,9 @@
-{# Step 4: Organization Contacts #}
+{# Step 4: Business Contacts #}
 <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
     <div class="mb-6 flex items-center justify-between">
         <div>
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Contact Persons</h2>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add key contact persons for this organization (optional)</p>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Add key contact persons for this business account (optional)</p>
         </div>
         <button type="button" @click="addContact()"
                 class="inline-flex items-center gap-1.5 rounded-lg border border-primary-300 bg-primary-50 px-3 py-1.5 text-xs font-medium text-primary-700 hover:bg-primary-100 transition dark:border-primary-700 dark:bg-primary-900/30 dark:text-primary-400 dark:hover:bg-primary-900/50">
@@ -86,7 +86,7 @@
                                :checked="contact.isPrimary"
                                @change="setPrimaryContact(index)"
                                class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
-                        <span class="text-xs font-medium text-slate-600 dark:text-slate-400">Primary contact for this organization</span>
+                        <span class="text-xs font-medium text-slate-600 dark:text-slate-400">Primary contact for this business account</span>
                     </label>
                     <button type="button" @click="removeContact(index)"
                             :disabled="contacts.length <= 1"

@@ -30,6 +30,8 @@ CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
 # Mapping from EventType to notification template codes
 # These codes are used to look up templates in the notification_templates table
 EVENT_TYPE_TO_TEMPLATE = {
+    # Subscriber events
+    EventType.subscriber_created: "subscriber_created",
     # Subscription events
     EventType.subscription_created: "subscription_created",
     EventType.subscription_activated: "subscription_activated",
@@ -46,6 +48,7 @@ EVENT_TYPE_TO_TEMPLATE = {
     # Usage events
     EventType.usage_warning: "usage_warning",
     EventType.usage_exhausted: "usage_exhausted",
+    EventType.usage_topped_up: "usage_topped_up",
     # Provisioning events
     EventType.provisioning_completed: "provisioning_completed",
     EventType.provisioning_failed: "provisioning_failed",

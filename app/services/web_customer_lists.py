@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -14,8 +13,12 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.models.catalog import NasDevice, Subscription
 from app.models.network_monitoring import PopSite
-from app.models.subscriber import Organization, Subscriber, SubscriberStatus, UserType
-from app.services import subscriber as subscriber_service
+from app.models.subscriber import (
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.services.subscriber import splynx_deleted_import_clause
 
 
@@ -40,6 +43,20 @@ def _customer_display_identifier(*values: str | None) -> str | None:
     return None
 
 
+def _business_customer_clause():
+    return (
+        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        == SubscriberCategory.business.value
+    )
+
+
+def _individual_customer_clause():
+    return (
+        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        != SubscriberCategory.business.value
+    )
+
+
 def build_contacts_index_context(
     db: Session,
     *,
@@ -49,45 +66,41 @@ def build_contacts_index_context(
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    """Build contacts list — all contacts are subscribers."""
     offset = (page - 1) * per_page
-    if entity_type == "organization" and status:
-        status = None
 
     _not_deleted = not_(splynx_deleted_import_clause())
-    people_query = db.query(Subscriber).filter(
+    query = db.query(Subscriber).filter(
         Subscriber.user_type != UserType.system_user,
         _not_deleted,
     )
+
+    # Filter by business vs individual
+    if entity_type == "business":
+        query = query.filter(_business_customer_clause())
+    elif entity_type == "individual":
+        query = query.filter(_individual_customer_clause())
+
     if status:
         normalized_status = status.strip().lower()
         if normalized_status in {"active", "customer", "subscriber", "lead", "contact"}:
-            people_query = people_query.filter(
-                Subscriber.status == SubscriberStatus.active
-            )
+            query = query.filter(Subscriber.status == SubscriberStatus.active)
         elif normalized_status == "blocked":
-            people_query = people_query.filter(
-                Subscriber.status == SubscriberStatus.blocked
-            )
+            query = query.filter(Subscriber.status == SubscriberStatus.blocked)
         elif normalized_status in {"inactive", "suspended"}:
-            people_query = people_query.filter(
-                Subscriber.status == SubscriberStatus.suspended
-            )
+            query = query.filter(Subscriber.status == SubscriberStatus.suspended)
         elif normalized_status == "disabled":
-            people_query = people_query.filter(
-                Subscriber.status == SubscriberStatus.disabled
-            )
+            query = query.filter(Subscriber.status == SubscriberStatus.disabled)
         elif normalized_status == "new":
-            people_query = people_query.filter(
-                Subscriber.status == SubscriberStatus.new
-            )
+            query = query.filter(Subscriber.status == SubscriberStatus.new)
         elif normalized_status in {"delinquent", "canceled"}:
-            people_query = people_query.filter(
+            query = query.filter(
                 Subscriber.status == SubscriberStatus(normalized_status)
             )
 
     if search:
         search_filter = f"%{search}%"
-        people_query = people_query.filter(
+        query = query.filter(
             (Subscriber.first_name.ilike(search_filter))
             | (Subscriber.last_name.ilike(search_filter))
             | (Subscriber.email.ilike(search_filter))
@@ -99,111 +112,66 @@ def build_contacts_index_context(
         .filter(Subscriber.user_type != UserType.system_user)
         .filter(_not_deleted)
     )
-    active_people_count = (
+    active_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.active).scalar() or 0
     )
-    blocked_people_count = (
+    blocked_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.blocked).scalar() or 0
     )
-    suspended_people_count = (
+    suspended_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.suspended).scalar()
         or 0
     )
-    disabled_people_count = (
+    disabled_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.disabled).scalar() or 0
     )
-    new_people_count = (
+    new_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.new).scalar() or 0
     )
-    delinquent_people_count = (
+    delinquent_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.delinquent).scalar()
         or 0
     )
-    canceled_people_count = (
+    canceled_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.canceled).scalar() or 0
     )
-    orgs_count = db.query(func.count(Organization.id)).scalar() or 0
 
-    contacts: list[dict[str, Any]] = []
-
-    if entity_type != "organization":
-        people = (
-            people_query.order_by(Subscriber.created_at.desc())
-            .limit(per_page)
-            .offset(offset)
-            .all()
-        )
-        for person in people:
-            contacts.append(
-                {
-                    "id": str(person.id),
-                    "type": "person",
-                    "name": f"{person.first_name} {person.last_name}".strip(),
-                    "email": person.email,
-                    "phone": person.phone,
-                    "status": person.status.value if person.status else "active",
-                    "organization": person.organization.name
-                    if person.organization
-                    else None,
-                    "is_active": person.is_active,
-                    "created_at": person.created_at,
-                    "raw": person,
-                }
-            )
-
-    if entity_type != "person" and not status:
-        orgs_query = db.query(Organization)
-        if search:
-            orgs_query = orgs_query.filter(Organization.name.ilike(f"%{search}%"))
-        orgs = (
-            orgs_query.order_by(Organization.created_at.desc())
-            .limit(per_page)
-            .offset(offset)
-            .all()
-        )
-        for organization in orgs:
-            contacts.append(
-                {
-                    "id": str(organization.id),
-                    "type": "organization",
-                    "name": organization.name,
-                    "email": getattr(organization, "email", None),
-                    "phone": getattr(organization, "phone", None),
-                    "status": "organization",
-                    "organization": None,
-                    "is_active": getattr(organization, "is_active", True),
-                    "created_at": organization.created_at,
-                    "raw": organization,
-                }
-            )
-
-    contacts.sort(
-        key=lambda item: item["created_at"] or datetime.min.replace(tzinfo=UTC),
-        reverse=True,
+    people = (
+        query.order_by(Subscriber.created_at.desc())
+        .limit(per_page)
+        .offset(offset)
+        .all()
     )
+    contacts: list[dict[str, Any]] = []
+    for person in people:
+        contacts.append(
+            {
+                "id": str(person.id),
+                "type": "person",
+                "name": f"{person.first_name} {person.last_name}".strip(),
+                "email": person.email,
+                "phone": person.phone,
+                "status": person.status.value if person.status else "active",
+                "organization": person.company_name if person.is_business else None,
+                "is_active": person.is_active,
+                "is_business": person.is_business,
+                "created_at": person.created_at,
+                "raw": person,
+            }
+        )
 
-    people_total = people_query.count() if entity_type != "organization" else 0
-    org_total = 0
-    if entity_type != "person" and not status:
-        org_query = db.query(func.count(Organization.id))
-        if search:
-            org_query = org_query.filter(Organization.name.ilike(f"%{search}%"))
-        org_total = org_query.scalar() or 0
-
-    total = people_total + org_total
+    total = query.count()
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
 
     stats_total = (
-        active_people_count
-        + blocked_people_count
-        + suspended_people_count
-        + disabled_people_count
-        + new_people_count
-        + delinquent_people_count
-        + canceled_people_count
+        active_count
+        + blocked_count
+        + suspended_count
+        + disabled_count
+        + new_count
+        + delinquent_count
+        + canceled_count
     )
-    if entity_type != "person":
-        stats_total += orgs_count
 
     return {
         "contacts": contacts,
@@ -215,16 +183,15 @@ def build_contacts_index_context(
         "total": total,
         "total_pages": total_pages,
         "stats": {
-            "active": active_people_count,
-            "blocked": blocked_people_count,
-            "suspended": suspended_people_count,
-            "disabled": disabled_people_count,
-            "new": new_people_count,
-            "delinquent": delinquent_people_count,
-            "canceled": canceled_people_count,
-            "customers": active_people_count,
-            "subscribers": active_people_count,
-            "organizations": orgs_count,
+            "active": active_count,
+            "blocked": blocked_count,
+            "suspended": suspended_count,
+            "disabled": disabled_count,
+            "new": new_count,
+            "delinquent": delinquent_count,
+            "canceled": canceled_count,
+            "customers": active_count,
+            "subscribers": active_count,
             "total": stats_total,
         },
     }
@@ -249,10 +216,11 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
         if pppoe_login:
             break
 
+    display_name = person.company_name or person.display_name or person.full_name
     return {
         "id": str(person.id),
-        "type": "person",
-        "name": f"{person.first_name} {person.last_name}",
+        "type": "business" if person.is_business else "person",
+        "name": display_name,
         "subscriber_number": person.subscriber_number,
         "account_number": person.account_number,
         "account_label": _customer_display_identifier(
@@ -271,6 +239,8 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
         "email": person.email,
         "phone": person.phone,
         "is_active": person.is_active,
+        "is_business": person.is_business,
+        "business_name": person.legal_name if person.is_business else None,
         "created_at": person.created_at,
         "raw": person,
     }
@@ -287,11 +257,8 @@ def build_customers_index_context(
     page: int,
     per_page: int,
 ) -> dict[str, Any]:
+    """Build customer list context — all customers are subscribers."""
     offset = (page - 1) * per_page
-    list_limit = per_page if customer_type else (offset + per_page)
-    list_offset = offset if customer_type else 0
-
-    customers: list[dict[str, Any]] = []
 
     _not_deleted2 = not_(splynx_deleted_import_clause())
 
@@ -312,148 +279,103 @@ def build_customers_index_context(
         ):
             _status_filter = Subscriber.status == SubscriberStatus(normalized)
 
-    if customer_type != "organization":
-        people_query = (
-            db.query(Subscriber)
-            .options(
-                selectinload(Subscriber.subscriptions)
-                .selectinload(Subscription.provisioning_nas_device)
-                .selectinload(NasDevice.pop_site),
-            )
-            .filter(Subscriber.organization_id.is_(None))
-            .filter(Subscriber.user_type != UserType.system_user)
-            .filter(_not_deleted2)
+    # All customers are subscribers (including org members)
+    query = (
+        db.query(Subscriber)
+        .options(
+            selectinload(Subscriber.subscriptions)
+            .selectinload(Subscription.provisioning_nas_device)
+            .selectinload(NasDevice.pop_site),
         )
-        if _status_filter is not None:
-            people_query = people_query.filter(_status_filter)
-        if search:
-            like = f"%{search}%"
-            people_query = people_query.filter(
-                Subscriber.first_name.ilike(like)
-                | Subscriber.last_name.ilike(like)
-                | Subscriber.display_name.ilike(like)
-                | Subscriber.email.ilike(like)
-                | Subscriber.phone.ilike(like)
-                | Subscriber.subscriber_number.ilike(like)
-                | Subscriber.account_number.ilike(like)
-                | Subscriber.subscriptions.any(Subscription.login.ilike(like))
-                | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
+        .filter(Subscriber.user_type != UserType.system_user)
+        .filter(_not_deleted2)
+    )
+    # Optional: filter to business vs individual customers
+    if customer_type == "business":
+        query = query.filter(_business_customer_clause())
+    elif customer_type == "individual":
+        query = query.filter(_individual_customer_clause())
+
+    if _status_filter is not None:
+        query = query.filter(_status_filter)
+    if search:
+        like = f"%{search}%"
+        query = query.filter(
+            Subscriber.first_name.ilike(like)
+            | Subscriber.last_name.ilike(like)
+            | Subscriber.display_name.ilike(like)
+            | Subscriber.email.ilike(like)
+            | Subscriber.phone.ilike(like)
+            | Subscriber.subscriber_number.ilike(like)
+            | Subscriber.account_number.ilike(like)
+            | Subscriber.subscriptions.any(Subscription.login.ilike(like))
+            | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
+        )
+    if nas_id:
+        query = query.filter(
+            Subscriber.subscriptions.any(
+                Subscription.provisioning_nas_device_id == nas_id
             )
-        # NAS device filter
-        if nas_id:
-            people_query = people_query.filter(
-                Subscriber.subscriptions.any(
-                    Subscription.provisioning_nas_device_id == nas_id
+        )
+    if pop_site_id:
+        query = query.filter(
+            Subscriber.subscriptions.any(
+                Subscription.provisioning_nas_device.has(
+                    NasDevice.pop_site_id == pop_site_id
                 )
             )
-        # POP site filter (via NAS device's pop_site)
-        if pop_site_id:
-            people_query = people_query.filter(
-                Subscriber.subscriptions.any(
-                    Subscription.provisioning_nas_device.has(
-                        NasDevice.pop_site_id == pop_site_id
-                    )
+        )
+
+    people = (
+        query.order_by(Subscriber.created_at.desc())
+        .limit(per_page)
+        .offset(offset)
+        .all()
+    )
+    customers: list[dict[str, Any]] = [_build_customer_dict(p) for p in people]
+
+    # Count query (mirrors filters above)
+    count_query = (
+        db.query(func.count(Subscriber.id))
+        .select_from(Subscriber)
+        .filter(Subscriber.user_type != UserType.system_user)
+        .filter(_not_deleted2)
+    )
+    if customer_type == "business":
+        count_query = count_query.filter(_business_customer_clause())
+    elif customer_type == "individual":
+        count_query = count_query.filter(_individual_customer_clause())
+    if _status_filter is not None:
+        count_query = count_query.filter(_status_filter)
+    if search:
+        like = f"%{search}%"
+        count_query = count_query.filter(
+            Subscriber.first_name.ilike(like)
+            | Subscriber.last_name.ilike(like)
+            | Subscriber.display_name.ilike(like)
+            | Subscriber.email.ilike(like)
+            | Subscriber.phone.ilike(like)
+            | Subscriber.subscriber_number.ilike(like)
+            | Subscriber.account_number.ilike(like)
+            | Subscriber.subscriptions.any(Subscription.login.ilike(like))
+            | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
+        )
+    if nas_id:
+        count_query = count_query.filter(
+            Subscriber.subscriptions.any(
+                Subscription.provisioning_nas_device_id == nas_id
+            )
+        )
+    if pop_site_id:
+        count_query = count_query.filter(
+            Subscriber.subscriptions.any(
+                Subscription.provisioning_nas_device.has(
+                    NasDevice.pop_site_id == pop_site_id
                 )
             )
-        people = (
-            people_query.order_by(Subscriber.created_at.desc())
-            .limit(list_limit)
-            .offset(list_offset)
-            .all()
         )
-        for person in people:
-            customers.append(_build_customer_dict(person))
-
-    if customer_type != "person":
-        orgs = subscriber_service.organizations.list(
-            db=db,
-            name=search if search else None,
-            order_by="name",
-            order_dir="asc",
-            limit=list_limit,
-            offset=list_offset,
-        )
-        for organization in orgs:
-            customers.append(
-                {
-                    "id": str(organization.id),
-                    "type": "organization",
-                    "name": organization.name,
-                    "account_number": getattr(organization, "account_number", None),
-                    "account_label": _customer_display_identifier(
-                        getattr(organization, "account_number", None),
-                        getattr(organization, "customer_number", None),
-                    ),
-                    "display_identifier": _customer_display_identifier(
-                        getattr(organization, "account_number", None),
-                        getattr(organization, "customer_number", None),
-                    ),
-                    "pppoe_login": None,
-                    "ipv4": None,
-                    "nas_name": None,
-                    "pop_site_name": None,
-                    "email": getattr(organization, "email", None),
-                    "phone": getattr(organization, "phone", None),
-                    "is_active": getattr(organization, "is_active", True),
-                    "created_at": organization.created_at,
-                    "raw": organization,
-                }
-            )
-
-    customers.sort(key=lambda item: item["created_at"] or "", reverse=True)
-
-    people_total = 0
-    org_total = 0
-    if customer_type != "organization":
-        people_count_query = (
-            db.query(func.count(Subscriber.id))
-            .select_from(Subscriber)
-            .filter(Subscriber.organization_id.is_(None))
-            .filter(Subscriber.user_type != UserType.system_user)
-            .filter(_not_deleted2)
-        )
-        if _status_filter is not None:
-            people_count_query = people_count_query.filter(_status_filter)
-        if search:
-            like = f"%{search}%"
-            people_count_query = people_count_query.filter(
-                Subscriber.first_name.ilike(like)
-                | Subscriber.last_name.ilike(like)
-                | Subscriber.display_name.ilike(like)
-                | Subscriber.email.ilike(like)
-                | Subscriber.phone.ilike(like)
-                | Subscriber.subscriber_number.ilike(like)
-                | Subscriber.account_number.ilike(like)
-                | Subscriber.subscriptions.any(Subscription.login.ilike(like))
-                | Subscriber.subscriptions.any(Subscription.ipv4_address.ilike(like))
-            )
-        if nas_id:
-            people_count_query = people_count_query.filter(
-                Subscriber.subscriptions.any(
-                    Subscription.provisioning_nas_device_id == nas_id
-                )
-            )
-        if pop_site_id:
-            people_count_query = people_count_query.filter(
-                Subscriber.subscriptions.any(
-                    Subscription.provisioning_nas_device.has(
-                        NasDevice.pop_site_id == pop_site_id
-                    )
-                )
-            )
-        people_total = people_count_query.scalar() or 0
-
-    if customer_type != "person":
-        org_query = db.query(func.count(Organization.id))
-        if search:
-            org_query = org_query.filter(Organization.name.ilike(f"%{search}%"))
-        org_total = org_query.scalar() or 0
-
-    total = people_total + org_total
+    total = count_query.scalar() or 0
     total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-
-    if not customer_type:
-        customers = customers[offset : offset + per_page]
 
     # Load filter dropdown options
     nas_options = (
@@ -468,8 +390,6 @@ def build_customers_index_context(
         "customers": customers,
         "stats": {
             "total_customers": total,
-            "total_people": people_total,
-            "total_organizations": org_total,
         },
         "page": page,
         "per_page": per_page,

@@ -56,7 +56,7 @@ def upload_branding_asset(
         content_type=content_type,
         data=file_data,
         uploaded_by=uploaded_by,
-        organization_id=None,
+        owner_subscriber_id=None,
     )
 
 

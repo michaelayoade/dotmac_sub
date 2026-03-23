@@ -128,13 +128,13 @@ def search_resellers(
     return typeahead_service.resellers_response(db, q, limit)
 
 
-@router.get("/organizations", response_model=ListResponse[TypeaheadItem])
-def search_organizations(
+@router.get("/business-accounts", response_model=ListResponse[TypeaheadItem])
+def search_business_accounts(
     q: str = Query(min_length=2),
     limit: int = Query(default=20, ge=1, le=50),
     db: Session = Depends(get_db),
 ):
-    return typeahead_service.organizations_response(db, q, limit)
+    return typeahead_service.business_accounts_response(db, q, limit)
 
 
 @router.get("/catalog-offers", response_model=ListResponse[TypeaheadItem])

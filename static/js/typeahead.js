@@ -28,7 +28,7 @@
                 return;
             }
             var menu = document.createElement("div");
-            menu.className = "absolute z-10 mt-2 w-full rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800";
+            menu.className = "absolute z-50 mt-2 max-h-72 w-full overflow-y-auto rounded-lg border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-800";
             items.forEach(function (item) {
                 var button = document.createElement("button");
                 button.type = "button";

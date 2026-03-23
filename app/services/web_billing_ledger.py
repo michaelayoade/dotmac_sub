@@ -78,9 +78,7 @@ def build_ledger_entries_data(
     if account_ids or not customer_ref:
         query = (
             db.query(LedgerEntry)
-            .options(
-                joinedload(LedgerEntry.account).joinedload(Subscriber.organization)
-            )
+            .options(joinedload(LedgerEntry.account))
             .filter(LedgerEntry.is_active.is_(True))
         )
         if account_ids:

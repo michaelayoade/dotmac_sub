@@ -99,6 +99,10 @@ class EventType(enum.Enum):
     dunning_resolved = "dunning.resolved"
     dunning_paused = "dunning.paused"
 
+    # Enforcement locks (2)
+    enforcement_lock_created = "enforcement_lock.created"
+    enforcement_lock_resolved = "enforcement_lock.resolved"
+
     # Network alert (legacy, kept for compatibility)
     network_alert = "network.alert"
 

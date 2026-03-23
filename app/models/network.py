@@ -28,8 +28,16 @@ from app.db import Base
 class DeviceType(enum.Enum):
     ont = "ont"
     router = "router"
+    switch = "switch"
+    hub = "hub"
+    firewall = "firewall"
+    inverter = "inverter"
+    access_point = "access_point"
+    bridge = "bridge"
     modem = "modem"
+    server = "server"
     cpe = "cpe"
+    other = "other"
 
 
 class DeviceStatus(enum.Enum):
@@ -245,7 +253,7 @@ class CPEDevice(Base):
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
     device_type: Mapped[DeviceType] = mapped_column(
-        Enum(DeviceType), default=DeviceType.ont
+        Enum(DeviceType), default=DeviceType.router
     )
     status: Mapped[DeviceStatus] = mapped_column(
         Enum(DeviceStatus, name="cpe_devicestatus"), default=DeviceStatus.active
@@ -1697,15 +1705,15 @@ class OntProvisioningProfile(Base):
     __tablename__ = "ont_provisioning_profiles"
     __table_args__ = (
         UniqueConstraint(
-            "organization_id", "name", name="uq_ont_prov_profiles_org_name"
+            "owner_subscriber_id", "name", name="uq_ont_prov_profiles_owner_name"
         ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    organization_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id"), nullable=False
+    owner_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     profile_type: Mapped[OntProfileType] = mapped_column(
@@ -1792,7 +1800,9 @@ class OntProvisioningProfile(Base):
     )
 
     # Relationships
-    organization = relationship("Organization", backref="ont_provisioning_profiles")
+    owner_subscriber = relationship(
+        "Subscriber", backref="ont_provisioning_profiles", foreign_keys=[owner_subscriber_id]
+    )
     download_speed_profile = relationship(
         "SpeedProfile", foreign_keys=[download_speed_profile_id]
     )

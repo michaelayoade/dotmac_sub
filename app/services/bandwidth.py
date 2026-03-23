@@ -548,14 +548,10 @@ class BandwidthSamples(ListResponseMixin):
                     subscription = db.get(Subscription, UUID(sub_id))
                     if subscription and subscription.subscriber:
                         subscriber = subscription.subscriber
-                        if subscriber.organization:
-                            account_name = (
-                                subscriber.organization.legal_name
-                                or subscriber.organization.name
-                            )
-                        else:
-                            full_name = f"{subscriber.first_name} {subscriber.last_name}".strip()
-                            account_name = full_name or subscriber.display_name
+                        account_name = (
+                            str(getattr(subscriber, "name", "") or "").strip()
+                            or subscriber.display_name
+                        )
 
                 enriched.append(
                     {

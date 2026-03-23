@@ -61,8 +61,8 @@
             {% include "admin/customers/_wizard_step_address.html" %}
         </div>
 
-        <!-- Step 4: Contacts (Organizations only) -->
-        <div x-show="currentStep === 4 && customerType === 'organization'" x-cloak class="space-y-6">
+        <!-- Step 4: Contacts (Business accounts only) -->
+        <div x-show="currentStep === 4 && customerType === 'business'" x-cloak class="space-y-6">
             {% include "admin/customers/_wizard_step_contacts.html" %}
         </div>
 
@@ -134,9 +134,12 @@ function customerWizard() {
             { label: 'Type', validate: () => this.customerType !== '' },
             { label: 'Details', validate: () => this.validateBasicInfo() },
             { label: 'Address', validate: () => true },  // Optional
-            { label: 'Contacts', validate: () => true },  // Only for organizations, optional
+            { label: 'Contacts', validate: () => true },  // Only for business accounts, optional
             { label: 'Review', validate: () => true }
         ],
+
+        // Billing mode
+        billingMode: 'prepaid',
 
         // Form data - Person
         firstName: '',
@@ -148,7 +151,7 @@ function customerWizard() {
         gender: 'unknown',
         showOptionalPerson: false,
 
-        // Form data - Organization
+        // Form data - Business
         orgName: '',
         legalName: '',
         taxId: '',
@@ -164,7 +167,7 @@ function customerWizard() {
         postalCode: '',
         countryCode: '{{ default_country|default("NG") }}',
 
-        // Form data - Contacts (for organizations)
+        // Form data - Contacts (for business accounts)
         contacts: [],
 
         // Status
@@ -179,7 +182,7 @@ function customerWizard() {
 
         get totalSteps() {
             // Skip contacts step for individuals
-            return this.customerType === 'organization' ? 5 : 4;
+            return this.customerType === 'business' ? 5 : 4;
         },
 
         get canProceed() {
@@ -191,6 +194,7 @@ function customerWizard() {
         },
 
         validateBasicInfo() {
+            if (!this.billingMode) return false;
             if (this.customerType === 'person') {
                 return this.firstName.trim() !== '' &&
                        this.lastName.trim() !== '' &&
@@ -228,7 +232,7 @@ function customerWizard() {
         },
 
         skipAddress() {
-            if (this.customerType === 'organization') {
+            if (this.customerType === 'business') {
                 this.currentStep = 4;
             } else {
                 this.currentStep = this.totalSteps;
@@ -271,6 +275,7 @@ function customerWizard() {
         getFormData() {
             const data = {
                 customer_type: this.customerType,
+                billing_mode: this.billingMode,
                 status: this.status,
                 is_active: this.isActive,
                 notes: this.notes,
@@ -356,7 +361,7 @@ function customerWizard() {
         },
 
         init() {
-            // Initialize with one contact for organizations
+            // Initialize with one contact for business accounts
             if (this.contacts.length === 0) {
                 this.addContact();
             }

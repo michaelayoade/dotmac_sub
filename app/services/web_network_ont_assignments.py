@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.schemas.network import OntAssignmentCreate, OntUnitUpdate
+from app.schemas.network import OntAssignmentCreate
 from app.services import catalog as catalog_service
 from app.services import network as network_service
 from app.services import subscriber as subscriber_service
@@ -113,11 +113,6 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         notes=str(values.get("notes")) if values.get("notes") else None,
     )
     network_service.ont_assignments.create(db=db, payload=payload)
-    network_service.ont_units.update(
-        db=db,
-        unit_id=str(ont.id),
-        payload=OntUnitUpdate(is_active=True),
-    )
 
 
 def form_payload(values: dict[str, object]) -> dict[str, object]:

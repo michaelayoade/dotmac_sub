@@ -12,7 +12,7 @@ from app.models.auth import AuthProvider, UserCredential
 from app.models.catalog import AccessCredential, Subscription
 from app.models.domain_settings import SettingDomain
 from app.models.radius import RadiusUser
-from app.models.subscriber import Organization, Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.session_store import delete_session, load_session, store_session
 from app.services.settings_spec import resolve_value
 
@@ -220,16 +220,20 @@ def _build_current_user(db: Session, session: dict) -> dict:
     name = session.get("username") or "Customer"
     email = None
     if subscriber:
-        name = (
-            subscriber.display_name
-            or f"{subscriber.first_name} {subscriber.last_name}".strip()
-            or name
-        )
+        if subscriber.category == SubscriberCategory.business:
+            name = (
+                subscriber.company_name
+                or subscriber.display_name
+                or f"{subscriber.first_name} {subscriber.last_name}".strip()
+                or name
+            )
+        else:
+            name = (
+                subscriber.display_name
+                or f"{subscriber.first_name} {subscriber.last_name}".strip()
+                or name
+            )
         email = subscriber.email or email
-        if subscriber.organization_id:
-            organization = db.get(Organization, subscriber.organization_id)
-            if organization and organization.name:
-                name = organization.name
     if not email and session.get("username"):
         email = session.get("username")
 

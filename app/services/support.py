@@ -1222,7 +1222,6 @@ def list_people(db: Session, *, limit: int = 500) -> list[dict[str, str]]:
 
     rows = (
         db.query(Subscriber)
-        .options(selectinload(Subscriber.organization))
         .filter(Subscriber.is_active.is_(True))
         .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
         .limit(limit)
@@ -1238,7 +1237,7 @@ def list_people(db: Session, *, limit: int = 500) -> list[dict[str, str]]:
                 "label": label,
                 "email": row.email or "",
                 "phone": row.phone or "",
-                "organization": row.organization.name if row.organization else "",
+                "organization": row.company_name if getattr(row, "is_business", False) else "",
                 "address": ", ".join(
                     [p for p in [row.address_line1, row.city, row.region] if p]
                 ),

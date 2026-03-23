@@ -3,12 +3,63 @@
     <div class="mb-6">
         <h2 class="text-lg font-semibold text-slate-900 dark:text-white">
             <span x-show="customerType === 'person'">Personal Information</span>
-            <span x-show="customerType === 'organization'">Organization Details</span>
+            <span x-show="customerType === 'business'">Business Details</span>
         </h2>
         <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
             <span x-show="customerType === 'person'">Enter the customer's personal details</span>
-            <span x-show="customerType === 'organization'">Enter the organization's business details</span>
+            <span x-show="customerType === 'business'">Enter the business account details</span>
         </p>
+    </div>
+
+    <!-- Billing Mode Selection -->
+    <div class="mb-6">
+        <label class="flex items-center gap-1 text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">
+            Billing Mode <span class="text-red-500">*</span>
+        </label>
+        <div class="grid grid-cols-2 gap-4">
+            <label class="relative cursor-pointer rounded-xl border-2 p-4 transition-all"
+                   :class="billingMode === 'prepaid'
+                       ? 'border-emerald-500 bg-emerald-50 shadow-sm dark:border-emerald-400 dark:bg-emerald-900/20'
+                       : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600'">
+                <input type="radio" name="billing_mode" value="prepaid" x-model="billingMode" class="sr-only">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg"
+                         :class="billingMode === 'prepaid'
+                             ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400'
+                             : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Prepaid</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Pay before service</p>
+                    </div>
+                </div>
+                <div x-show="billingMode === 'prepaid'" class="absolute top-2 right-2">
+                    <svg class="h-5 w-5 text-emerald-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                </div>
+            </label>
+            <label class="relative cursor-pointer rounded-xl border-2 p-4 transition-all"
+                   :class="billingMode === 'postpaid'
+                       ? 'border-blue-500 bg-blue-50 shadow-sm dark:border-blue-400 dark:bg-blue-900/20'
+                       : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600'">
+                <input type="radio" name="billing_mode" value="postpaid" x-model="billingMode" class="sr-only">
+                <div class="flex items-center gap-3">
+                    <div class="flex h-10 w-10 items-center justify-center rounded-lg"
+                         :class="billingMode === 'postpaid'
+                             ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'
+                             : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400'">
+                        <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                    </div>
+                    <div>
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">Postpaid</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">Invoice after service</p>
+                    </div>
+                </div>
+                <div x-show="billingMode === 'postpaid'" class="absolute top-2 right-2">
+                    <svg class="h-5 w-5 text-blue-500" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                </div>
+            </label>
+        </div>
     </div>
 
     <!-- Person Fields -->
@@ -93,10 +144,10 @@
     </div>
 
     <!-- Organization Fields -->
-    <div x-show="customerType === 'organization'" class="space-y-5">
+    <div x-show="customerType === 'business'" class="space-y-5">
         <div>
             <label for="org_name" class="flex items-center gap-1 text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">
-                Organization Name <span class="text-red-500">*</span>
+                Business Name <span class="text-red-500">*</span>
             </label>
             <input type="text" id="org_name" x-model="orgName" required
                    placeholder="Acme Corporation"

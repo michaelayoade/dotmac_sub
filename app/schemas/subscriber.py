@@ -6,6 +6,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
+from app.models.catalog import BillingMode
 from app.models.subscriber import (
     AddressType,
     ChannelType,
@@ -98,6 +99,11 @@ class SubscriberBase(BaseModel):
     last_name: str = Field(min_length=1, max_length=80)
     display_name: str | None = Field(default=None, max_length=120)
     avatar_url: str | None = Field(default=None, max_length=512)
+    company_name: str | None = Field(default=None, max_length=160)
+    legal_name: str | None = Field(default=None, max_length=200)
+    tax_id: str | None = Field(default=None, max_length=80)
+    domain: str | None = Field(default=None, max_length=120)
+    website: str | None = Field(default=None, max_length=255)
     email: EmailStr
     email_verified: bool = False
     phone: str | None = Field(default=None, max_length=40)
@@ -127,8 +133,7 @@ class SubscriberBase(BaseModel):
     is_active: bool = True
     marketing_opt_in: bool = False
 
-    # Organization & Reseller
-    organization_id: UUID | None = None
+    # Reseller
     reseller_id: UUID | None = None
 
     # Billing fields
@@ -144,6 +149,7 @@ class SubscriberBase(BaseModel):
     billing_country_code: str | None = Field(default=None, max_length=2)
 
     # Payment settings
+    billing_mode: BillingMode = BillingMode.prepaid
     payment_method: str | None = Field(default=None, max_length=80)
     deposit: Decimal | None = None
     billing_day: int | None = None
@@ -183,6 +189,11 @@ class SubscriberUpdate(BaseModel):
     last_name: str | None = Field(default=None, min_length=1, max_length=80)
     display_name: str | None = Field(default=None, max_length=120)
     avatar_url: str | None = Field(default=None, max_length=512)
+    company_name: str | None = Field(default=None, max_length=160)
+    legal_name: str | None = Field(default=None, max_length=200)
+    tax_id: str | None = Field(default=None, max_length=80)
+    domain: str | None = Field(default=None, max_length=120)
+    website: str | None = Field(default=None, max_length=255)
     email: EmailStr | None = None
     email_verified: bool | None = None
     phone: str | None = Field(default=None, max_length=40)
@@ -212,8 +223,7 @@ class SubscriberUpdate(BaseModel):
     is_active: bool | None = None
     marketing_opt_in: bool | None = None
 
-    # Organization & Reseller
-    organization_id: UUID | None = None
+    # Reseller
     reseller_id: UUID | None = None
 
     # Billing fields
@@ -229,6 +239,7 @@ class SubscriberUpdate(BaseModel):
     billing_country_code: str | None = Field(default=None, max_length=2)
 
     # Payment settings
+    billing_mode: BillingMode | None = None
     payment_method: str | None = Field(default=None, max_length=80)
     deposit: Decimal | None = None
     billing_day: int | None = None

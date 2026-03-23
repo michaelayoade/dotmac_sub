@@ -163,7 +163,7 @@
                                         <svg class="h-5 w-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
                                     </div>
                                     <div>
-                                        <a href="/admin/network/core-devices/{{ device.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
+                                        <a href="{{ device.detail_url if device.detail_url is defined and device.detail_url else '/admin/network/core-devices/' ~ device.id }}" class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ device.name }}</a>
                                         {% if device.hostname %}
                                         <p class="text-xs text-slate-500 dark:text-slate-400">{{ device.hostname }}</p>
                                         {% endif %}
@@ -201,8 +201,8 @@
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap text-right">
                                 <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-                                    {{ row_action("/admin/network/core-devices/" ~ device.id, icon_view(), "View details", "slate") }}
-                                    {{ row_action("/admin/network/core-devices/" ~ device.id ~ "/edit", icon_edit(), "Edit", "slate") }}
+                                    {{ row_action(device.detail_url if device.detail_url is defined and device.detail_url else "/admin/network/core-devices/" ~ device.id, icon_view(), "View details", "slate") }}
+                                    {{ row_action(device.edit_url if device.edit_url is defined and device.edit_url else "/admin/network/core-devices/" ~ device.id ~ "/edit", icon_edit(), "Edit", "slate") }}
                                 </div>
                             </td>
                         </tr>

@@ -937,8 +937,8 @@
                     typeLabel = p.is_online ? 'Customer (Online)' : 'Customer (Offline)';
                 }
                 if (p.subscriber_id) {
-                    detailUrl = p.organization_id
-                        ? `/admin/customers/organization/${p.organization_id}`
+                    detailUrl = p.customer_type === 'business'
+                        ? `/admin/customers/business/${p.subscriber_id}`
                         : `/admin/customers/person/${p.subscriber_id}`;
                 }
                 break;

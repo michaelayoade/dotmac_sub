@@ -78,7 +78,7 @@
         payments: "/admin/billing/payments/",
         service_orders: "/admin/service-orders/",
         catalog_offers: "/admin/catalog/offers/",
-        organizations: "/admin/subscribers/organizations/",
+        business_accounts: "/admin/subscribers/business-accounts/",
         resellers: "/admin/resellers/"
     };
 

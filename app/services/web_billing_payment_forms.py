@@ -18,10 +18,9 @@ def account_label(account) -> str:
     """Build a human label for account/subscriber objects."""
     if not account:
         return "Account"
-    if getattr(account, "organization", None):
-        name = account.organization.name or ""
-        if name:
-            return name
+    name = str(getattr(account, "name", "") or "").strip()
+    if name:
+        return name
     label = f"{getattr(account, 'first_name', '')} {getattr(account, 'last_name', '')}".strip()
     if label:
         return label

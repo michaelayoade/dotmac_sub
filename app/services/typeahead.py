@@ -1,12 +1,12 @@
 import logging
 
-from sqlalchemy import or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice
 from app.models.catalog import CatalogOffer, NasDevice, Subscription
 from app.models.network_monitoring import NetworkDevice, PopSite
-from app.models.subscriber import Organization, Reseller, Subscriber, UserType
+from app.models.subscriber import Reseller, Subscriber, SubscriberCategory, UserType
 from app.services.response import list_response
 
 logger = logging.getLogger(__name__)
@@ -14,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 def _subscriber_label(subscriber: Subscriber) -> str:
     """Generate label for a subscriber."""
-    organization = subscriber.organization
-    if organization:
-        return str(organization.name)
+    if subscriber.category == SubscriberCategory.business:
+        return str(
+            subscriber.company_name
+            or subscriber.display_name
+            or f"{subscriber.first_name} {subscriber.last_name}".strip()
+            or "Subscriber"
+        )
     name = f"{subscriber.first_name} {subscriber.last_name}".strip()
     if subscriber.account_number:
         return f"{name} ({subscriber.account_number})"
@@ -45,6 +49,13 @@ def _invoice_label(invoice: Invoice) -> str:
     return number
 
 
+def _business_clause():
+    return (
+        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        == SubscriberCategory.business.value
+    )
+
+
 def subscribers(db: Session, query: str, limit: int) -> list[dict]:
     """Search subscribers by name, email, account number, or organization."""
     term = (query or "").strip()
@@ -53,17 +64,16 @@ def subscribers(db: Session, query: str, limit: int) -> list[dict]:
     like_term = f"%{term}%"
     results = (
         db.query(Subscriber)
-        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Subscriber.organization))
         .filter(
             or_(
                 Subscriber.first_name.ilike(like_term),
                 Subscriber.last_name.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
+                Subscriber.legal_name.ilike(like_term),
+                Subscriber.domain.ilike(like_term),
                 Subscriber.email.ilike(like_term),
                 Subscriber.account_number.ilike(like_term),
                 Subscriber.subscriber_number.ilike(like_term),
-                Organization.name.ilike(like_term),
-                Organization.domain.ilike(like_term),
             )
         )
         .limit(limit)
@@ -80,18 +90,17 @@ def reseller_linkable_subscribers(db: Session, query: str, limit: int) -> list[d
     like_term = f"%{term}%"
     results = (
         db.query(Subscriber)
-        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Subscriber.organization))
         .filter(Subscriber.user_type == UserType.customer)
         .filter(
             or_(
                 Subscriber.first_name.ilike(like_term),
                 Subscriber.last_name.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
+                Subscriber.legal_name.ilike(like_term),
+                Subscriber.domain.ilike(like_term),
                 Subscriber.email.ilike(like_term),
                 Subscriber.account_number.ilike(like_term),
                 Subscriber.subscriber_number.ilike(like_term),
-                Organization.name.ilike(like_term),
-                Organization.domain.ilike(like_term),
             )
         )
         .limit(limit)
@@ -105,7 +114,11 @@ def reseller_linkable_subscribers(db: Session, query: str, limit: int) -> list[d
         base_name = full_name or (sub.display_name or "").strip() or "Subscriber"
         if sub.account_number:
             base_name = f"{base_name} ({sub.account_number})"
-        org_name = (sub.organization.name or "").strip() if sub.organization else ""
+        org_name = (
+            (sub.company_name or "").strip()
+            if sub.category == SubscriberCategory.business
+            else ""
+        )
         email = (sub.email or "").strip()
         suffix_parts = [part for part in [org_name, email] if part]
         label = (
@@ -131,11 +144,6 @@ def subscriptions(db: Session, query: str, limit: int) -> list[dict]:
         db.query(Subscription)
         .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
         .outerjoin(Subscriber, Subscription.subscriber_id == Subscriber.id)
-        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(
-            joinedload(Subscription.subscriber).joinedload(Subscriber.organization),
-            joinedload(Subscription.offer),
-        )
         .filter(
             or_(
                 CatalogOffer.name.ilike(like_term),
@@ -143,7 +151,8 @@ def subscriptions(db: Session, query: str, limit: int) -> list[dict]:
                 Subscriber.first_name.ilike(like_term),
                 Subscriber.last_name.ilike(like_term),
                 Subscriber.email.ilike(like_term),
-                Organization.name.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
+                Subscriber.domain.ilike(like_term),
             )
         )
         .limit(limit)
@@ -200,15 +209,13 @@ def invoices(
     query_base = (
         db.query(Invoice)
         .outerjoin(Subscriber, Invoice.account_id == Subscriber.id)
-        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Invoice.account))
         .filter(
             or_(
                 Invoice.invoice_number.ilike(like_term),
                 Subscriber.account_number.ilike(like_term),
                 Subscriber.first_name.ilike(like_term),
                 Subscriber.last_name.ilike(like_term),
-                Organization.name.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
             )
         )
     )
@@ -390,26 +397,32 @@ def resellers_response(db: Session, query: str, limit: int) -> dict:
 
 
 def organizations(db: Session, query: str, limit: int) -> list[dict]:
-    """Search organizations by name."""
+    """Search business customers by company name."""
     term = (query or "").strip()
     if not term:
         return []
     like_term = f"%{term}%"
     results = (
-        db.query(Organization)
+        db.query(Subscriber)
+        .filter(_business_clause())
         .filter(
             or_(
-                Organization.name.ilike(like_term),
-                Organization.domain.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
+                Subscriber.legal_name.ilike(like_term),
+                Subscriber.domain.ilike(like_term),
             )
         )
+        .order_by(Subscriber.company_name.asc())
         .limit(limit)
         .all()
     )
-    return [{"id": org.id, "label": org.name} for org in results]
+    return [
+        {"id": org.id, "label": org.company_name or org.display_name or org.full_name}
+        for org in results
+    ]
 
 
-def organizations_response(db: Session, query: str, limit: int) -> dict:
+def business_accounts_response(db: Session, query: str, limit: int) -> dict:
     return list_response(organizations(db, query, limit), limit, 0)
 
 
@@ -459,15 +472,14 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
     # Search subscribers (customers)
     customer_results = (
         db.query(Subscriber)
-        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Subscriber.organization))
         .filter(
             or_(
                 Subscriber.first_name.ilike(like_term),
                 Subscriber.last_name.ilike(like_term),
                 Subscriber.email.ilike(like_term),
                 Subscriber.account_number.ilike(like_term),
-                Organization.name.ilike(like_term),
+                Subscriber.company_name.ilike(like_term),
+                Subscriber.domain.ilike(like_term),
             )
         )
         .limit(limit_per_type)
@@ -483,8 +495,8 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
                         "id": str(sub.id),
                         "label": _subscriber_label(sub),
                         "url": (
-                            f"/admin/customers/organization/{sub.organization_id}"
-                            if sub.organization_id
+                            f"/admin/customers/business/{sub.id}"
+                            if sub.category == SubscriberCategory.business
                             else f"/admin/customers/person/{sub.id}"
                         ),
                         "type": "customer",
@@ -498,8 +510,6 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
     invoice_results = (
         db.query(Invoice)
         .outerjoin(Subscriber, Invoice.account_id == Subscriber.id)
-        .outerjoin(Organization, Subscriber.organization_id == Organization.id)
-        .options(joinedload(Invoice.account))
         .filter(
             or_(
                 Invoice.invoice_number.ilike(like_term),

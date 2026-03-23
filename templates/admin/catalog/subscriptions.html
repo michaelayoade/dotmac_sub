@@ -107,8 +107,8 @@
                         <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-700 dark:text-slate-300">
                             {% if subscription.account and subscription.account.subscriber and subscription.account.subscriber.person %}
                                 {{ subscription.account.first_name }} {{ subscription.account.last_name }}
-                            {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.organization %}
-                                {{ subscription.account.subscriber.organization.name }}
+                            {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.is_business %}
+                                {{ subscription.account.subscriber.name }}
                             {% elif subscription.account and subscription.account.account_number %}
                                 {{ subscription.account.account_number }}
                             {% else %}

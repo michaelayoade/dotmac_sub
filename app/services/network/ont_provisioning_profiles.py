@@ -59,7 +59,7 @@ class OntProvisioningProfiles:
     def list(
         db: Session,
         *,
-        organization_id: str | None = None,
+        owner_subscriber_id: str | None = None,
         profile_type: str | None = None,
         config_method: str | None = None,
         onu_mode: str | None = None,
@@ -76,9 +76,10 @@ class OntProvisioningProfiles:
             selectinload(OntProvisioningProfile.download_speed_profile),
             selectinload(OntProvisioningProfile.upload_speed_profile),
         )
-        if organization_id:
+        if owner_subscriber_id:
             stmt = stmt.where(
-                OntProvisioningProfile.organization_id == coerce_uuid(organization_id)
+                OntProvisioningProfile.owner_subscriber_id
+                == coerce_uuid(owner_subscriber_id)
             )
         if is_active is not None:
             stmt = stmt.where(OntProvisioningProfile.is_active.is_(is_active))
@@ -136,7 +137,7 @@ class OntProvisioningProfiles:
     def create(
         db: Session,
         *,
-        organization_id: str,
+        owner_subscriber_id: str,
         name: str,
         profile_type: OntProfileType = OntProfileType.residential,
         description: str | None = None,
@@ -167,7 +168,7 @@ class OntProvisioningProfiles:
             validate_template_string(wifi_ssid_template, "wifi_ssid_template")
 
         profile = OntProvisioningProfile(
-            organization_id=coerce_uuid(organization_id),
+            owner_subscriber_id=coerce_uuid(owner_subscriber_id),
             name=name,
             profile_type=profile_type,
             description=description,

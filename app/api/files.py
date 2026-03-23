@@ -31,10 +31,10 @@ def download_file(
     if not file_record or file_record.is_deleted:
         raise HTTPException(status_code=404, detail="File not found")
 
-    request_org = file_uploads.resolve_user_organization(
+    request_owner = file_uploads.resolve_user_owner_subscriber(
         db, current_user["subscriber_id"]
     )
-    file_uploads.assert_tenant_access(file_record, request_org)
+    file_uploads.assert_owner_access(file_record, request_owner)
 
     try:
         stream = file_uploads.stream_file(file_record)

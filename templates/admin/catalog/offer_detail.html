@@ -324,8 +324,8 @@
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">
                                     {% if sub.account and sub.account.subscriber and sub.account.subscriber.person %}
                                         {{ sub.account.first_name }} {{ sub.account.last_name }}
-                                    {% elif sub.account and sub.account.subscriber and sub.account.subscriber.organization %}
-                                        {{ sub.account.subscriber.organization.name }}
+                                    {% elif sub.account and sub.account.subscriber and sub.account.subscriber.is_business %}
+                                        {{ sub.account.subscriber.name }}
                                     {% else %}
                                         Subscription #{{ sub.id | string | truncate(8, True, '') }}
                                     {% endif %}

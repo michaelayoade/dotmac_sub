@@ -34,7 +34,7 @@
                 <div>
                     <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Customer</label>
                     <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-700 dark:border-slate-600 dark:bg-slate-700/60 dark:text-slate-200">
-                        {{ customer_label or (account.organization.name if account.organization else ((account.first_name ~ " " ~ account.last_name)|trim)) or "Customer" }}
+                        {{ customer_label or (account.name if account else "") or "Customer" }}
                     </div>
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Customer cannot be changed from account edit.</p>
                 </div>

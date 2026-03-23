@@ -21,17 +21,14 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import (
     AddressType,
     ChannelType,
-    Organization,
     Subscriber,
+    SubscriberCategory,
     SubscriberChannel,
     SubscriberStatus,
 )
 from app.schemas.audit import AuditEventCreate
-from app.schemas.catalog import SubscriptionUpdate
 from app.schemas.subscriber import (
     AddressCreate,
-    OrganizationCreate,
-    OrganizationUpdate,
     SubscriberCreate,
     SubscriberUpdate,
 )
@@ -43,6 +40,25 @@ from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
 
 logger = logging.getLogger(__name__)
+
+
+def _business_identity_from_contacts(
+    company_name: str,
+    contact_rows: list[dict[str, Any]],
+) -> dict[str, str | None]:
+    primary_contact = next(
+        (row for row in contact_rows if row.get("is_primary")),
+        contact_rows[0] if contact_rows else None,
+    )
+    email = _normalize_optional((primary_contact or {}).get("email"))
+    return {
+        "first_name": _normalize_optional((primary_contact or {}).get("first_name"))
+        or company_name,
+        "last_name": _normalize_optional((primary_contact or {}).get("last_name"))
+        or "Business",
+        "email": email or f"business-{uuid4().hex}@placeholder.local",
+        "phone": _normalize_optional((primary_contact or {}).get("phone")),
+    }
 
 
 def _normalize_optional(value: str | None) -> str | None:
@@ -98,7 +114,10 @@ def _billing_override_payload(
 
 
 def _suspend_customer_subscriptions(db: Session, customer_id: str) -> int:
-    """Suspend active/pending subscriptions for a customer via catalog flow."""
+    """Suspend active/pending subscriptions for a customer via enforcement locks."""
+    from app.models.enforcement_lock import EnforcementReason
+    from app.services.account_lifecycle import suspend_subscription
+
     subscriptions = (
         db.query(Subscription)
         .filter(Subscription.subscriber_id == coerce_uuid(customer_id))
@@ -109,13 +128,86 @@ def _suspend_customer_subscriptions(db: Session, customer_id: str) -> int:
         )
         .all()
     )
+    suspended_count = 0
     for subscription in subscriptions:
-        catalog_service.subscriptions.update(
-            db,
-            str(subscription.id),
-            SubscriptionUpdate(status=SubscriptionStatus.suspended),
-        )
-    return len(subscriptions)
+        try:
+            suspend_subscription(
+                db,
+                str(subscription.id),
+                reason=EnforcementReason.admin,
+                source=f"admin:deactivate_customer:{customer_id}",
+            )
+            suspended_count += 1
+        except ValueError as e:
+            logger.info("Skipped suspending subscription %s: %s", subscription.id, e)
+    return suspended_count
+
+
+def _apply_subscriber_activation_state(
+    db: Session,
+    subscriber: Subscriber,
+    *,
+    is_active: bool,
+    source: str,
+) -> None:
+    from app.models.enforcement_lock import EnforcementReason
+    from app.services.account_lifecycle import (
+        compute_account_status,
+        restore_subscription,
+        suspend_subscription,
+    )
+
+    subscriber.is_active = is_active
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .all()
+    )
+
+    if is_active:
+        for subscription in subscriptions:
+            if subscription.status == SubscriptionStatus.suspended:
+                try:
+                    restore_subscription(
+                        db,
+                        str(subscription.id),
+                        trigger="admin",
+                        resolved_by=source,
+                    )
+                except ValueError as exc:
+                    logger.info(
+                        "Skipped restoring subscription %s: %s",
+                        subscription.id,
+                        exc,
+                    )
+    else:
+        for subscription in subscriptions:
+            if subscription.status in (
+                SubscriptionStatus.active,
+                SubscriptionStatus.pending,
+            ):
+                try:
+                    suspend_subscription(
+                        db,
+                        str(subscription.id),
+                        reason=EnforcementReason.admin,
+                        source=source,
+                    )
+                except ValueError as exc:
+                    logger.info(
+                        "Skipped suspending subscription %s: %s",
+                        subscription.id,
+                        exc,
+                    )
+        db.query(UserCredential).filter(
+            UserCredential.subscriber_id == subscriber.id
+        ).update({"is_active": False}, synchronize_session=False)
+
+    compute_account_status(db, str(subscriber.id))
+    # Keep explicit admin activation/deactivation authoritative over the
+    # derived default portal eligibility computed from subscription status.
+    subscriber.is_active = is_active
+    db.flush()
 
 
 def _create_subscriber(db: Session, payload: dict[str, Any]) -> Subscriber:
@@ -338,6 +430,7 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
                 "phone": (data.get("phone") or "").strip() or None,
                 "date_of_birth": data.get("date_of_birth") or None,
                 "gender": data.get("gender", "unknown"),
+                "billing_mode": data.get("billing_mode", "prepaid"),
                 "address_line1": (data.get("address_line1") or "").strip() or None,
                 "address_line2": (data.get("address_line2") or "").strip() or None,
                 "city": (data.get("city") or "").strip() or None,
@@ -352,54 +445,48 @@ def create_customer_from_wizard(db: Session, data: dict[str, Any]) -> tuple[str,
         )
         return "person", str(person.id)
 
-    if customer_type == "organization":
-        org_name = (data.get("name") or "").strip()
-        if not org_name:
-            raise ValueError("Organization name is required")
-        existing_org = (
-            db.query(Organization)
-            .filter(func.lower(Organization.name) == org_name.lower())
-            .first()
+    if customer_type == "business":
+        company_name = (data.get("name") or "").strip()
+        if not company_name:
+            raise ValueError("Business name is required")
+        contacts = [
+            item
+            for item in data.get("contacts", [])
+            if (item.get("first_name") or "").strip()
+            or (item.get("last_name") or "").strip()
+            or (item.get("email") or "").strip()
+            or (item.get("phone") or "").strip()
+        ]
+        identity = _business_identity_from_contacts(company_name, contacts)
+        subscriber = _create_subscriber(
+            db=db,
+            payload={
+                "first_name": identity["first_name"],
+                "last_name": identity["last_name"],
+                "display_name": company_name,
+                "company_name": company_name,
+                "legal_name": (data.get("legal_name") or "").strip() or None,
+                "tax_id": (data.get("tax_id") or "").strip() or None,
+                "domain": (data.get("domain") or "").strip() or None,
+                "website": (data.get("website") or "").strip() or None,
+                "email": identity["email"],
+                "phone": identity["phone"],
+                "billing_mode": data.get("billing_mode", "prepaid"),
+                "address_line1": (data.get("address_line1") or "").strip() or None,
+                "address_line2": (data.get("address_line2") or "").strip() or None,
+                "city": (data.get("city") or "").strip() or None,
+                "region": (data.get("region") or "").strip() or None,
+                "postal_code": (data.get("postal_code") or "").strip() or None,
+                "country_code": (data.get("country_code") or "").strip() or None,
+                "is_active": True,
+                "status": "active",
+                "notes": (data.get("notes") or "").strip() or None,
+                "category": SubscriberCategory.business.value,
+            },
         )
-        if existing_org:
-            raise ValueError(f"An organization with name {org_name} already exists.")
-        organization = subscriber_service.organizations.create(
-            db,
-            OrganizationCreate(
-                name=org_name,
-                legal_name=(data.get("legal_name") or "").strip() or None,
-                tax_id=(data.get("tax_id") or "").strip() or None,
-                domain=(data.get("domain") or "").strip() or None,
-                website=(data.get("website") or "").strip() or None,
-                address_line1=(data.get("address_line1") or "").strip() or None,
-                address_line2=(data.get("address_line2") or "").strip() or None,
-                city=(data.get("city") or "").strip() or None,
-                region=(data.get("region") or "").strip() or None,
-                postal_code=(data.get("postal_code") or "").strip() or None,
-                country_code=(data.get("country_code") or "").strip() or None,
-                notes=(data.get("notes") or "").strip() or None,
-            ),
-        )
-        contacts = data.get("contacts", [])
-        for contact_data in contacts:
-            first_name = (contact_data.get("first_name") or "").strip()
-            last_name = (contact_data.get("last_name") or "").strip()
-            if not first_name or not last_name:
-                continue
-            _create_subscriber(
-                db=db,
-                payload={
-                    "first_name": first_name,
-                    "last_name": last_name,
-                    "email": (contact_data.get("email") or "").strip() or None,
-                    "phone": (contact_data.get("phone") or "").strip() or None,
-                    "organization_id": organization.id,
-                    "is_active": True,
-                    "status": "active",
-                },
-            )
-        db.commit()
-        return "organization", str(organization.id)
+        if contacts:
+            _create_subscriber_channels_from_rows(db, str(subscriber.id), contacts)
+        return "business", str(subscriber.id)
 
     raise ValueError("Invalid customer type")
 
@@ -412,8 +499,8 @@ def create_customer_from_form(
     contact_columns: dict[str, list[str]],
 ) -> tuple[str, str]:
     contact_rows = parse_contact_rows(contact_columns)
-    if customer_type not in {"person", "organization"}:
-        raise ValueError("customer_type must be person or organization")
+    if customer_type not in {"person", "business"}:
+        raise ValueError("customer_type must be person or business")
 
     if customer_type == "person":
         normalized_email = _normalize_optional(form_data.get("email"))
@@ -465,36 +552,32 @@ def create_customer_from_form(
             _create_subscriber_channels_from_rows(db, str(customer.id), contact_rows)
         return "person", str(customer.id)
 
-    organization = subscriber_service.organizations.create(
+    company_name = cast(str, form_data.get("name") or "").strip()
+    if not company_name:
+        raise ValueError("Business name is required")
+    identity = _business_identity_from_contacts(company_name, contact_rows)
+    business = _create_subscriber(
         db=db,
-        payload=OrganizationCreate(
-            name=cast(str, form_data.get("name") or "").strip(),
-            legal_name=_normalize_optional(form_data.get("legal_name")),
-            tax_id=_normalize_optional(form_data.get("tax_id")),
-            domain=_normalize_optional(form_data.get("domain")),
-            website=_normalize_optional(form_data.get("website")),
-            notes=_normalize_optional(form_data.get("org_notes")),
-        ),
+        payload={
+            "first_name": identity["first_name"],
+            "last_name": identity["last_name"],
+            "display_name": company_name,
+            "company_name": company_name,
+            "legal_name": _normalize_optional(form_data.get("legal_name")),
+            "tax_id": _normalize_optional(form_data.get("tax_id")),
+            "domain": _normalize_optional(form_data.get("domain")),
+            "website": _normalize_optional(form_data.get("website")),
+            "email": identity["email"],
+            "phone": identity["phone"],
+            "is_active": True,
+            "category": SubscriberCategory.business.value,
+            "notes": _normalize_optional(form_data.get("org_notes")),
+            "account_start_date": _parse_date(form_data.get("org_account_start_date")),
+        },
     )
     if contact_rows:
-        first_contact = contact_rows[0]
-        primary_person = _create_subscriber(
-            db=db,
-            payload={
-                "first_name": first_contact["first_name"],
-                "last_name": first_contact["last_name"],
-                "email": first_contact["email"]
-                or f"org-{organization.id}@placeholder.local",
-                "phone": first_contact["phone"] or None,
-                "organization_id": organization.id,
-                "is_active": True,
-                "account_start_date": _parse_date(
-                    form_data.get("org_account_start_date")
-                ),
-            },
-        )
-        _create_subscriber_channels_from_rows(db, str(primary_person.id), contact_rows)
-    return "organization", str(organization.id)
+        _create_subscriber_channels_from_rows(db, str(business.id), contact_rows)
+    return "business", str(business.id)
 
 
 def create_impersonation_session(
@@ -511,14 +594,8 @@ def create_impersonation_session(
         subscriber = db.get(Subscriber, customer_id)
         subscribers = [subscriber] if subscriber else []
     else:
-        org_uuid = UUID(customer_id)
-        subscribers = (
-            db.query(Subscriber)
-            .filter(Subscriber.organization_id == org_uuid)
-            .order_by(Subscriber.created_at.desc())
-            .limit(50)
-            .all()
-        )
+        subscriber = db.get(Subscriber, customer_id)
+        subscribers = [subscriber] if subscriber else []
 
     accounts = [sub for sub in subscribers if sub]
     account_lookup = {str(acc.id): acc for acc in accounts}
@@ -567,8 +644,8 @@ def create_impersonation_session(
         subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
         return_to=(
-            f"/admin/customers/organization/{selected_account.organization_id}"
-            if selected_account.organization_id
+            f"/admin/customers/business/{selected_account.id}"
+            if selected_account.category == SubscriberCategory.business
             else f"/admin/customers/person/{selected_account.id}"
         ),
     )
@@ -713,7 +790,7 @@ def _normalize_status_for_customer_edit(
     return _status_from_legacy(status, is_active=None), is_active
 
 
-def update_organization_customer(
+def update_business_customer(
     db: Session,
     customer_id: str,
     *,
@@ -733,30 +810,18 @@ def update_organization_customer(
     tax_rate_id: str | None,
     payment_method: str | None,
 ):
-    before = subscriber_service.organizations.get(db=db, organization_id=customer_id)
-    payload = OrganizationUpdate(
-        name=name,
-        legal_name=_normalize_optional(legal_name),
-        tax_id=_normalize_optional(tax_id),
-        domain=_normalize_optional(domain),
-        website=_normalize_optional(website),
-        notes=_normalize_optional(org_notes),
-    )
-    subscriber_service.organizations.update(
-        db=db,
-        organization_id=customer_id,
-        payload=payload,
-    )
-    after = subscriber_service.organizations.get(db=db, organization_id=customer_id)
-    subscriber_ids = [
-        str(subscriber.id)
-        for subscriber in db.query(Subscriber)
-        .filter(Subscriber.organization_id == coerce_uuid(customer_id))
-        .all()
-    ]
-    if subscriber_ids:
-        subscriber_payload = SubscriberUpdate.model_validate(
-            _billing_override_payload(
+    before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    payload = SubscriberUpdate.model_validate(
+        {
+            "company_name": name,
+            "display_name": name,
+            "legal_name": _normalize_optional(legal_name),
+            "tax_id": _normalize_optional(tax_id),
+            "domain": _normalize_optional(domain),
+            "website": _normalize_optional(website),
+            "notes": _normalize_optional(org_notes),
+            "category": SubscriberCategory.business.value,
+            **_billing_override_payload(
                 billing_enabled_override=billing_enabled_override,
                 billing_day=billing_day,
                 payment_due_days=payment_due_days,
@@ -765,20 +830,17 @@ def update_organization_customer(
                 captive_redirect_enabled=captive_redirect_enabled,
                 tax_rate_id=tax_rate_id,
                 payment_method=payment_method,
-            )
-        )
-        for subscriber_id in subscriber_ids:
-            subscriber_service.subscribers.update(
-                db=db,
-                subscriber_id=subscriber_id,
-                payload=subscriber_payload,
-            )
+            ),
+        }
+    )
+    subscriber_service.subscribers.update(
+        db=db,
+        subscriber_id=customer_id,
+        payload=payload,
+    )
+    after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     if org_account_start_date:
-        subscriber = (
-            db.query(Subscriber)
-            .filter(Subscriber.organization_id == coerce_uuid(customer_id))
-            .first()
-        )
+        subscriber = db.get(Subscriber, customer_id)
         if subscriber:
             parsed_date = _parse_date(org_account_start_date)
             if parsed_date:
@@ -789,26 +851,24 @@ def update_organization_customer(
 
 def deactivate_person_customer(db: Session, customer_id: str):
     before = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    subscriber_service.subscribers.update(
-        db=db,
-        subscriber_id=customer_id,
-        payload=SubscriberUpdate(is_active=False, status=SubscriberStatus.suspended),
-    )
-    db.query(UserCredential).filter(UserCredential.subscriber_id == before.id).update(
-        {"is_active": False}
+    _apply_subscriber_activation_state(
+        db,
+        before,
+        is_active=False,
+        source=f"admin:deactivate_customer:{customer_id}",
     )
     db.commit()
     after = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
     return before, after
 
 
-def deactivate_organization_customer(db: Session, customer_id: str) -> None:
-    subscriber_service.organizations.get(db=db, organization_id=customer_id)
-    org_uuid = UUID(customer_id)
-    (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .update({"is_active": False}, synchronize_session=False)
+def deactivate_business_customer(db: Session, customer_id: str) -> None:
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    _apply_subscriber_activation_state(
+        db,
+        subscriber,
+        is_active=False,
+        source=f"admin:deactivate_business:{customer_id}",
     )
     db.commit()
 
@@ -836,15 +896,18 @@ def delete_person_customer(db: Session, customer_id: str) -> None:
     subscriber_service.subscribers.delete(db=db, subscriber_id=customer_id)
 
 
-def delete_organization_customer(db: Session, customer_id: str) -> None:
-    subscriber_service.organizations.get(db=db, organization_id=customer_id)
-    org_uuid = UUID(customer_id)
-    if db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).count():
+def delete_business_customer(db: Session, customer_id: str) -> None:
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    if (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .count()
+    ):
         raise HTTPException(
             status_code=409,
-            detail="Delete subscribers before deleting organization.",
+            detail="Delete subscriptions before deleting business customer.",
         )
-    subscriber_service.organizations.delete(db=db, organization_id=customer_id)
+    delete_person_customer(db, customer_id)
 
 
 def bulk_update_customer_status(
@@ -852,8 +915,6 @@ def bulk_update_customer_status(
     customer_ids: list[dict[str, str]],
     is_active: bool,
 ) -> dict[str, Any]:
-    from app.models.subscriber import SubscriberStatus
-
     updated_count = 0
     errors: list[dict[str, str]] = []
     for item in customer_ids:
@@ -871,21 +932,39 @@ def bulk_update_customer_status(
                         }
                     )
                     continue
-                subscriber.is_active = is_active
-                subscriber.status = (
-                    SubscriberStatus.active if is_active else SubscriberStatus.suspended
+                _apply_subscriber_activation_state(
+                    db,
+                    subscriber,
+                    is_active=is_active,
+                    source=(
+                        f"admin:bulk_activate:{customer_id}"
+                        if is_active
+                        else f"admin:bulk_deactivate:{customer_id}"
+                    ),
                 )
-                if not is_active:
-                    db.query(UserCredential).filter(
-                        UserCredential.subscriber_id == subscriber.id
-                    ).update({"is_active": False}, synchronize_session=False)
-            elif customer_type == "organization":
-                org_uuid = UUID(str(customer_id))
-                (
-                    db.query(Subscriber)
-                    .filter(Subscriber.organization_id == org_uuid)
-                    .update({"is_active": is_active}, synchronize_session=False)
+
+            elif customer_type == "business":
+                subscriber = db.get(Subscriber, customer_id)
+                if not subscriber:
+                    errors.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "error": "Business customer not found",
+                        }
+                    )
+                    continue
+                _apply_subscriber_activation_state(
+                    db,
+                    subscriber,
+                    is_active=is_active,
+                    source=(
+                        f"admin:bulk_activate:{customer_id}"
+                        if is_active
+                        else f"admin:bulk_deactivate:{customer_id}"
+                    ),
                 )
+
             updated_count += 1
         except Exception as exc:
             errors.append(
@@ -958,24 +1037,31 @@ def bulk_delete_customers(
                     db=db, subscriber_id=str(customer_id)
                 )
                 deleted_count += 1
-            elif customer_type == "organization":
-                org_uuid = UUID(str(customer_id))
+            elif customer_type == "business":
+                subscriber = db.get(Subscriber, customer_id)
+                if not subscriber:
+                    skipped.append(
+                        {
+                            "id": str(customer_id),
+                            "type": str(customer_type),
+                            "reason": "Business customer not found",
+                        }
+                    )
+                    continue
                 if (
-                    db.query(Subscriber)
-                    .filter(Subscriber.organization_id == org_uuid)
+                    db.query(Subscription)
+                    .filter(Subscription.subscriber_id == subscriber.id)
                     .count()
                 ):
                     skipped.append(
                         {
                             "id": str(customer_id),
                             "type": str(customer_type),
-                            "reason": "Has associated subscribers",
+                            "reason": "Has associated subscriptions",
                         }
                     )
                     continue
-                subscriber_service.organizations.delete(
-                    db=db, organization_id=str(customer_id)
-                )
+                delete_person_customer(db, str(customer_id))
                 deleted_count += 1
         except Exception as exc:
             skipped.append(
@@ -997,9 +1083,12 @@ def export_customers_csv(
 ) -> tuple[str, str]:
     customers: list[dict[str, str]] = []
     if ids == "all":
-        if customer_type != "organization":
+        if customer_type != "business":
             people_query = db.query(Subscriber).filter(
-                Subscriber.organization_id.is_(None)
+                func.lower(
+                    func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+                )
+                != SubscriberCategory.business.value
             )
             if search:
                 people_query = people_query.filter(
@@ -1021,21 +1110,24 @@ def export_customers_csv(
                     }
                 )
         if customer_type != "person":
-            orgs_query = db.query(Organization)
+            orgs_query = db.query(Subscriber).filter(
+                func.lower(
+                    func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+                )
+                == SubscriberCategory.business.value
+            )
             if search:
-                orgs_query = orgs_query.filter(Organization.name.ilike(f"%{search}%"))
-            orgs = orgs_query.order_by(Organization.name.asc()).all()
+                orgs_query = orgs_query.filter(Subscriber.company_name.ilike(f"%{search}%"))
+            orgs = orgs_query.order_by(Subscriber.company_name.asc()).all()
             for org in orgs:
                 customers.append(
                     {
                         "id": str(org.id),
-                        "type": "organization",
-                        "name": org.name,
-                        "email": getattr(org, "email", ""),
-                        "phone": getattr(org, "phone", ""),
-                        "is_active": "Active"
-                        if getattr(org, "is_active", True)
-                        else "Inactive",
+                        "type": "business",
+                        "name": org.company_name or org.display_name or org.full_name,
+                        "email": org.email,
+                        "phone": org.phone or "",
+                        "is_active": "Active" if org.is_active else "Inactive",
                         "created_at": org.created_at.strftime("%Y-%m-%d %H:%M:%S")
                         if org.created_at
                         else "",
@@ -1066,20 +1158,18 @@ def export_customers_csv(
                             else "",
                         }
                     )
-                elif ctype == "organization":
-                    org = subscriber_service.organizations.get(
-                        db=db, organization_id=cid
+                elif ctype == "business":
+                    org = subscriber_service.subscribers.get(
+                        db=db, subscriber_id=cid
                     )
                     customers.append(
                         {
                             "id": str(org.id),
-                            "type": "organization",
-                            "name": org.name,
-                            "email": getattr(org, "email", ""),
-                            "phone": getattr(org, "phone", ""),
-                            "is_active": "Active"
-                            if getattr(org, "is_active", True)
-                            else "Inactive",
+                            "type": "business",
+                            "name": org.company_name or org.display_name or org.full_name,
+                            "email": org.email,
+                            "phone": org.phone or "",
+                            "is_active": "Active" if org.is_active else "Inactive",
                             "created_at": org.created_at.strftime("%Y-%m-%d %H:%M:%S")
                             if org.created_at
                             else "",

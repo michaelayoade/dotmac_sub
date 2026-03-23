@@ -145,6 +145,20 @@ def _build_traffic_fallback_from_bandwidth_samples(
     )
 
 
+def _build_empty_traffic_snapshot(time_range: str, reason: str) -> ChartData:
+    """Render a one-point zeroed traffic chart when live series are absent."""
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ChartData(
+        series=[
+            ChartSeries(label="Download (bps)", timestamps=[timestamp], values=[0.0]),
+            ChartSeries(label="Upload (bps)", timestamps=[timestamp], values=[0.0]),
+        ],
+        time_range=time_range,
+        available=True,
+        error=reason,
+    )
+
+
 def _query_vm_range(
     query: str, start: datetime, end: datetime, step: str
 ) -> list[dict]:
@@ -275,10 +289,18 @@ def charts_tab_data(
     if time_range not in valid_ranges:
         time_range = "24h"
 
-    signal_chart = get_signal_history(ont.serial_number, time_range)
+    signal_chart = get_signal_history(
+        ont.serial_number,
+        time_range,
+        ont_id=str(ont.id),
+    )
     if not signal_chart.available or not signal_chart.series:
         signal_chart = _build_signal_fallback_from_ont(ont, time_range)
-    traffic_chart = get_traffic_history(ont.serial_number, time_range)
+    traffic_chart = get_traffic_history(
+        ont.serial_number,
+        time_range,
+        ont_id=str(ont.id),
+    )
     if not traffic_chart.available or not traffic_chart.series:
         traffic_chart = _build_traffic_from_vm_subscription_aggregates(
             db, ont, time_range
@@ -288,12 +310,13 @@ def charts_tab_data(
             db, ont, time_range
         )
     if not traffic_chart.available:
-        existing_error = (traffic_chart.error or "").strip()
-        suffix = (
-            "No ont_rx_bytes_total/ont_tx_bytes_total or subscription aggregate "
-            "traffic series were found for this ONT yet."
+        existing_error = (traffic_chart.error or "").strip() or (
+            "No live traffic history data is available for this ONT yet."
         )
-        traffic_chart.error = f"{existing_error} {suffix}".strip()
+        traffic_chart = _build_empty_traffic_snapshot(
+            time_range,
+            f"{existing_error} Showing a zeroed live placeholder until traffic metrics arrive.",
+        )
 
     # Get thresholds for chart reference lines
     warn_thresh, crit_thresh = get_signal_thresholds(db)

@@ -170,7 +170,7 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
         )
 
 
-def _auto_generate_pppoe_if_enabled(
+def _auto_generate_pppoe(
     db: Session,
     subscription: Subscription,
 ) -> None:
@@ -271,7 +271,7 @@ def _emit_subscription_status_event(
     # Map status transitions to event types
     if to_status == SubscriptionStatus.active:
         # Generate PPPoE BEFORE events so provisioning handler sees credentials
-        _auto_generate_pppoe_if_enabled(db, subscription)
+        _auto_generate_pppoe(db, subscription)
 
         if from_status == SubscriptionStatus.suspended:
             emit_event(
@@ -319,6 +319,94 @@ def _emit_subscription_status_event(
             subscription_id=subscription.id,
             account_id=subscription.subscriber_id,
         )
+
+
+def _handle_status_transition_via_lifecycle(
+    db: Session,
+    subscription: Subscription,
+    from_status: SubscriptionStatus | None,
+    to_status: SubscriptionStatus,
+) -> None:
+    """Route status transitions through the lifecycle module.
+
+    Called after the subscription status has already been committed.
+    Manages enforcement locks, computes account status, and emits events.
+    For transitions that also need PPPoE generation or RADIUS sync,
+    delegates to the original ``_emit_subscription_status_event`` which
+    handles those side effects.
+    """
+    from app.models.enforcement_lock import EnforcementReason
+    from app.services.account_lifecycle import (
+        SUSPENDED_EQUIVALENT,
+        compute_account_status,
+        suspend_subscription,
+    )
+
+    sub_id = str(subscription.id)
+    subscriber_id = str(subscription.subscriber_id)
+
+    if to_status == SubscriptionStatus.suspended:
+        # Admin/catalog-initiated suspension — create enforcement lock
+        try:
+            suspend_subscription(
+                db,
+                sub_id,
+                reason=EnforcementReason.admin,
+                source="catalog_update",
+                emit=False,
+            )
+        except ValueError as e:
+            if "not found" in str(e):
+                logger.error(
+                    "Data integrity: subscription %s not found during suspend "
+                    "despite being just committed: %s",
+                    sub_id,
+                    e,
+                )
+            else:
+                logger.info(
+                    "Skipped enforcement lock for subscription %s: %s", sub_id, e
+                )
+        _emit_subscription_status_event(db, subscription, from_status, to_status)
+
+    elif to_status == SubscriptionStatus.active:
+        from app.services.account_lifecycle import resolve_locks_for_trigger
+
+        if from_status in SUSPENDED_EQUIVALENT:
+            resolve_locks_for_trigger(
+                db,
+                subscription,
+                trigger="admin",
+                resolved_by="catalog_update",
+                emit=False,
+            )
+        compute_account_status(db, subscriber_id)
+        _emit_subscription_status_event(db, subscription, from_status, to_status)
+
+    elif to_status == SubscriptionStatus.canceled:
+        from app.services.account_lifecycle import resolve_all_locks
+
+        resolve_all_locks(db, subscription, "canceled")
+        if not subscription.canceled_at:
+            subscription.canceled_at = datetime.now(UTC)
+            db.flush()
+        compute_account_status(db, subscriber_id)
+        _emit_subscription_status_event(db, subscription, from_status, to_status)
+
+    elif to_status == SubscriptionStatus.expired:
+        from app.services.account_lifecycle import resolve_all_locks
+
+        resolve_all_locks(db, subscription, "expired")
+        compute_account_status(db, subscriber_id)
+        _emit_subscription_status_event(db, subscription, from_status, to_status)
+
+    else:
+        compute_account_status(db, subscriber_id)
+        _emit_subscription_status_event(db, subscription, from_status, to_status)
+
+    # Ensure lifecycle state (locks, account status) is persisted
+    # independently of event dispatcher's internal commits
+    db.commit()
 
 
 def _validate_plan_change(
@@ -842,12 +930,19 @@ class Subscriptions(ListResponseMixin):
                     default_contract_term, ContractTerm, "contract_term"
                 )
         if "billing_mode" not in fields_set:
-            offer = db.get(CatalogOffer, str(payload.offer_id))
-            data["billing_mode"] = (
-                offer.billing_mode
-                if offer and offer.billing_mode
-                else BillingMode.prepaid
-            )
+            # Inherit from subscriber first, then fall back to offer
+            from app.models.subscriber import Subscriber
+
+            subscriber = db.get(Subscriber, str(payload.subscriber_id))
+            if subscriber and subscriber.billing_mode:
+                data["billing_mode"] = subscriber.billing_mode
+            else:
+                offer = db.get(CatalogOffer, str(payload.offer_id))
+                data["billing_mode"] = (
+                    offer.billing_mode
+                    if offer and offer.billing_mode
+                    else BillingMode.prepaid
+                )
         if (
             "start_at" not in fields_set
             and data.get("status") == SubscriptionStatus.active
@@ -904,7 +999,7 @@ class Subscriptions(ListResponseMixin):
         # If created as active, generate credentials FIRST so the provisioning
         # handler (triggered by the activation event) sees them.
         if subscription.status == SubscriptionStatus.active:
-            _auto_generate_pppoe_if_enabled(db, subscription)
+            _auto_generate_pppoe(db, subscription)
 
             emit_event(
                 db,
@@ -1113,10 +1208,10 @@ class Subscriptions(ListResponseMixin):
         db.commit()
         db.refresh(subscription)
 
-        # Emit lifecycle events based on status transitions
+        # Handle lifecycle events based on status transitions
         new_status = subscription.status
         if previous_status != new_status:
-            _emit_subscription_status_event(
+            _handle_status_transition_via_lifecycle(
                 db, subscription, previous_status, new_status
             )
         elif (
@@ -1219,32 +1314,21 @@ class Subscriptions(ListResponseMixin):
         )
 
         expired_count = 0
+        skipped_count = 0
         for subscription in subscriptions_to_expire:
             if not dry_run:
-                previous_status = subscription.status
-                subscription.status = SubscriptionStatus.expired
+                try:
+                    from app.services.account_lifecycle import expire_subscription
 
-                # Emit expiration event
-                emit_event(
-                    db,
-                    EventType.subscription_expired,
-                    {
-                        "subscription_id": str(subscription.id),
-                        "offer_name": subscription.offer.name
-                        if subscription.offer
-                        else None,
-                        "from_status": previous_status.value
-                        if previous_status
-                        else None,
-                        "to_status": "expired",
-                        "reason": "contract_end",
-                        "end_at": subscription.end_at.isoformat()
-                        if subscription.end_at
-                        else None,
-                    },
-                    subscription_id=subscription.id,
-                    account_id=subscription.subscriber_id,
-                )
+                    expire_subscription(db, str(subscription.id))
+                except ValueError as e:
+                    logger.info(
+                        "Skipped expiring subscription %s: %s",
+                        subscription.id,
+                        e,
+                    )
+                    skipped_count += 1
+                    continue
 
             expired_count += 1
 
@@ -1253,7 +1337,9 @@ class Subscriptions(ListResponseMixin):
 
         return {
             "run_at": run_at,
+            "subscriptions_matched": len(subscriptions_to_expire),
             "subscriptions_expired": expired_count,
+            "subscriptions_skipped": skipped_count,
             "dry_run": dry_run,
         }
 

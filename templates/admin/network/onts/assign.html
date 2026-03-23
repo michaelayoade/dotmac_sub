@@ -83,8 +83,8 @@
                             {% for subscription in subscriptions %}
                                 {% if subscription.account and subscription.account.subscriber and subscription.account.subscriber.person %}
                                     {% set sub_label = subscription.account.first_name ~ ' ' ~ subscription.account.last_name %}
-                                {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.organization %}
-                                    {% set sub_label = subscription.account.subscriber.organization.name %}
+                                {% elif subscription.account and subscription.account.subscriber and subscription.account.subscriber.is_business %}
+                                    {% set sub_label = subscription.account.subscriber.name %}
                                 {% else %}
                                     {% set sub_label = subscription.id %}
                                 {% endif %}

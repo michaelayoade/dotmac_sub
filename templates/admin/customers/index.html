@@ -9,6 +9,10 @@
 
 {% block content %}
 <div x-data="customersPage()" x-init="init()" class="space-y-6">
+    {% set customer_stats = stats if stats is mapping else {} %}
+    {% set total_customers = customer_stats.get('total_customers', 0) %}
+    {% set total_people = customer_stats.get('total_people', 0) %}
+    {% set total_businesses = customer_stats.get('total_organizations', 0) %}
     {{ ambient_background("amber", "orange") }}
 
     {# ── Page Header ── #}
@@ -46,14 +50,14 @@
 
     {# ── Stats Grid ── #}
     <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {{ stats_card("Total Customers", stats.total_customers | default(0),
+        {{ stats_card("Total Customers", total_customers,
             icon=icon_users(), color="amber", color2="orange", href="/admin/customers"
         ) }}
-        {{ stats_card("Individuals", stats.total_people | default(0),
+        {{ stats_card("Individuals", total_people,
             icon=icon_user(), color="blue", color2="indigo", href="/admin/customers?customer_type=person"
         ) }}
-        {{ stats_card("Organizations", stats.total_organizations | default(0),
-            icon=icon_building(), color="purple", color2="violet", href="/admin/customers?customer_type=organization"
+        {{ stats_card("Businesses", total_businesses,
+            icon=icon_building(), color="purple", color2="violet", href="/admin/customers?customer_type=business"
         ) }}
 
         {# Composition Donut — custom inline #}
@@ -62,7 +66,7 @@
             <p class="text-xs font-semibold uppercase tracking-wider text-slate-600 dark:text-slate-400">Composition</p>
             <div class="relative mt-3 flex items-center gap-4">
                 <div class="relative h-14 w-14">
-                    {% set people_pct = (stats.total_people / stats.total_customers * 100) | round | int if stats.total_customers else 50 %}
+                    {% set people_pct = (total_people / total_customers * 100) | round | int if total_customers else 50 %}
                     {% set org_pct = 100 - people_pct %}
                     <svg class="h-14 w-14 -rotate-90" viewBox="0 0 36 36">
                         <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" stroke-width="4" class="text-slate-100 dark:text-slate-700"/>
@@ -114,8 +118,8 @@
                         <select name="customer_type"
                                 class="block w-full rounded-xl border-0 bg-slate-50 py-2.5 pl-3 pr-10 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:ring-amber-500">
                             <option value="">All Types</option>
-                            <option value="person" {% if customer_type == 'person' %}selected{% endif %}>Individuals</option>
-                            <option value="organization" {% if customer_type == 'organization' %}selected{% endif %}>Organizations</option>
+                            <option value="individual" {% if customer_type == 'individual' %}selected{% endif %}>Individual</option>
+                            <option value="business" {% if customer_type == 'business' %}selected{% endif %}>Business</option>
                         </select>
                     </div>
                     <div class="w-full sm:w-40">
@@ -179,7 +183,7 @@
                 {% if customer_type %}
                 {% set ct_color = 'blue' if customer_type == 'person' else 'purple' %}
                 <span class="inline-flex items-center gap-1 rounded-full bg-{{ ct_color }}-50 px-2.5 py-1 text-xs font-medium text-{{ ct_color }}-700 dark:bg-{{ ct_color }}-900/30 dark:text-{{ ct_color }}-300">
-                    {{ 'Individuals' if customer_type == 'person' else 'Organizations' }}
+                    {{ 'Individuals' if customer_type == 'person' else 'Businesses' }}
                     <a href="/admin/customers?search={{ search or '' }}&per_page={{ per_page }}" class="ml-0.5 text-{{ ct_color }}-600 hover:text-{{ ct_color }}-800 dark:text-{{ ct_color }}-400">
                         <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </a>

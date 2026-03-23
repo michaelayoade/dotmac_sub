@@ -86,9 +86,28 @@
    ============================================ #}
 {% macro page_header(title, subtitle="", icon="", color="amber", color2=None, actions=None, breadcrumbs=None) %}
 {% set c2 = color2 or color %}
-<div class="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-gradient-to-br from-{{ color }}-50 via-white to-{{ c2 }}-50/70 px-6 py-6 shadow-sm animate-fade-in-up dark:border-slate-700/60 dark:from-{{ color }}-900/20 dark:via-slate-900 dark:to-{{ c2 }}-900/10">
-    <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-gradient-to-br from-{{ c2 }}-400/15 to-{{ color }}-500/5 blur-3xl dark:from-{{ c2 }}-500/10 dark:to-{{ color }}-500/5"></div>
-    <div class="pointer-events-none absolute -bottom-16 left-10 h-28 w-28 rounded-full bg-gradient-to-tr from-{{ color }}-300/10 to-transparent blur-2xl dark:from-{{ color }}-500/10"></div>
+{% set auto_breadcrumbs = breadcrumbs %}
+{% if not auto_breadcrumbs and request is defined and request and request.url and request.url.path %}
+{% set request_path = request.url.path %}
+{% if request_path.startswith('/admin/system') %}
+    {% set auto_breadcrumbs = [{'label': 'Settings', 'href': '/admin/system/settings-hub'}] %}
+    {% if request_path.startswith('/admin/system/config') or request_path.startswith('/admin/system/configuration') %}
+        {% if request_path not in ['/admin/system/configuration', '/admin/system/configuration/'] %}
+            {% set auto_breadcrumbs = auto_breadcrumbs + [{'label': 'Configuration', 'href': '/admin/system/configuration'}] %}
+        {% endif %}
+    {% elif request_path not in ['/admin/system/settings-hub', '/admin/system/settings-hub/'] %}
+        {% set auto_breadcrumbs = auto_breadcrumbs + [{'label': 'System', 'href': '/admin/system'}] %}
+    {% endif %}
+    {% if request_path not in ['/admin/system', '/admin/system/', '/admin/system/settings-hub', '/admin/system/settings-hub/', '/admin/system/configuration', '/admin/system/configuration/'] %}
+        {% set auto_breadcrumbs = auto_breadcrumbs + [{'label': title, 'href': request_path}] %}
+    {% elif request_path in ['/admin/system/settings-hub', '/admin/system/settings-hub/', '/admin/system/configuration', '/admin/system/configuration/'] %}
+        {% set auto_breadcrumbs = auto_breadcrumbs + [{'label': title, 'href': request_path}] %}
+    {% endif %}
+{% endif %}
+{% endif %}
+<div class="relative overflow-hidden rounded-3xl border border-slate-200/70 bg-gradient-to-br from-{{ color }}-50 via-white to-{{ c2 }}-50/70 px-6 py-6 shadow-sm animate-fade-in-up dark:border-slate-700/60 dark:from-slate-800 dark:via-slate-800 dark:to-slate-700">
+    <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-gradient-to-br from-{{ c2 }}-400/15 to-{{ color }}-500/5 blur-3xl dark:hidden"></div>
+    <div class="pointer-events-none absolute -bottom-16 left-10 h-28 w-28 rounded-full bg-gradient-to-tr from-{{ color }}-300/10 to-transparent blur-2xl dark:hidden"></div>
     <div class="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
     <div class="flex items-center gap-4">
         {% if icon %}
@@ -97,9 +116,9 @@
         </div>
         {% endif %}
         <div>
-            {% if breadcrumbs %}
+            {% if auto_breadcrumbs %}
             <nav class="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
-                {% for crumb in breadcrumbs %}
+                {% for crumb in auto_breadcrumbs %}
                 {% if not loop.last %}
                 <a href="{{ crumb.href }}" class="transition hover:text-{{ color }}-700 dark:hover:text-{{ color }}-300">{{ crumb.label }}</a>
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>

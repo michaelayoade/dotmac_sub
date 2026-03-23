@@ -886,8 +886,8 @@
                         </td>
                         <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
                             {% if pa.subscriber %}
-                            <a href="/admin/customers/{{ 'organization/' ~ pa.subscriber.organization_id if pa.subscriber.organization_id else 'person/' ~ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
-                                {% if pa.subscriber.person %}{{ pa.subscriber.first_name }} {{ pa.subscriber.last_name }}{% elif pa.subscriber.organization %}{{ pa.subscriber.organization.name }}{% else %}{{ pa.subscriber.id | string | truncate(12) }}{% endif %}
+                            <a href="/admin/customers/{{ 'business/' ~ pa.subscriber.id if pa.subscriber.is_business else 'person/' ~ pa.subscriber.id }}" class="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">
+                                {{ pa.subscriber.name if pa.subscriber else 'Subscriber' }}
                             </a>
                             {% else %}&mdash;{% endif %}
                         </td>
@@ -899,6 +899,11 @@
             {% endcall %}
             {% endcall %}
             {% endif %}
+
+            {# Network Operations #}
+            {% call card("Network Operations", color="blue") %}
+            {% include "admin/network/_operations_history.html" %}
+            {% endcall %}
 
             {# Activity Log #}
             {% call card("Recent Activity", color="slate") %}

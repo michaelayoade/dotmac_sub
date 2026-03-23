@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import logging
 
+import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+from app.services.credential_crypto import decrypt_credential
 from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
@@ -14,8 +19,56 @@ from app.services.network.ont_action_common import (
     get_cpe_or_error,
     resolve_cpe_client_or_error,
 )
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
+
+
+def _send_connection_request_http(
+    conn_url: str,
+    username: str = "",
+    password: str = "",
+) -> int:
+    with httpx.Client(timeout=10.0) as http:
+        if username:
+            response = http.get(
+                str(conn_url),
+                auth=httpx.DigestAuth(str(username), str(password)),
+            )
+        else:
+            response = http.get(str(conn_url))
+    return response.status_code
+
+
+def _resolve_cpe_fallback_connection_request_auth(
+    db: Session,
+    cpe_id: str,
+) -> tuple[str, str] | None:
+    linked = db.scalars(
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.cpe_device_id == cpe_id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
+        .limit(1)
+    ).first()
+    server = (
+        db.get(Tr069AcsServer, linked.acs_server_id)
+        if linked and linked.acs_server_id
+        else None
+    )
+    if server is None:
+        default_server_id = resolve_value(
+            db, SettingDomain.tr069, "default_acs_server_id"
+        )
+        if default_server_id:
+            server = db.get(Tr069AcsServer, str(default_server_id))
+    if not server:
+        return None
+    username = str(server.connection_request_username or "").strip()
+    password = decrypt_credential(server.connection_request_password) or ""
+    if not username and not password:
+        return None
+    return username, password
 
 
 def set_connection_request_credentials(
@@ -125,31 +178,40 @@ def send_connection_request(db: Session, cpe_id: str) -> ActionResult:
         or ""
     )
 
-    import httpx
-
     try:
-        with httpx.Client(timeout=10.0) as http:
-            if conn_user:
-                auth = httpx.DigestAuth(str(conn_user), str(conn_pass))
-                resp = http.get(str(conn_url), auth=auth)
-            else:
-                resp = http.get(str(conn_url))
-        if resp.status_code in (200, 204):
+        status_code = _send_connection_request_http(
+            str(conn_url),
+            str(conn_user),
+            str(conn_pass),
+        )
+        if status_code == 401:
+            fallback_auth = _resolve_cpe_fallback_connection_request_auth(
+                db, str(cpe.id)
+            )
+            if fallback_auth:
+                fallback_user, fallback_pass = fallback_auth
+                if (fallback_user, fallback_pass) != (str(conn_user), str(conn_pass)):
+                    status_code = _send_connection_request_http(
+                        str(conn_url),
+                        fallback_user,
+                        fallback_pass,
+                    )
+        if status_code in (200, 204):
             logger.info(
                 "Connection request sent to CPE %s at %s", cpe.serial_number, conn_url
             )
             return ActionResult(
                 success=True,
-                message=f"Connection request sent to {cpe.serial_number} ({resp.status_code}).",
+                message=f"Connection request sent to {cpe.serial_number} ({status_code}).",
             )
         logger.warning(
             "Connection request to CPE %s returned %d",
             cpe.serial_number,
-            resp.status_code,
+            status_code,
         )
         return ActionResult(
             success=False,
-            message=f"Connection request returned HTTP {resp.status_code}.",
+            message=f"Connection request returned HTTP {status_code}.",
         )
     except httpx.RequestError as exc:
         logger.error("Connection request failed for CPE %s: %s", cpe.serial_number, exc)

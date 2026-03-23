@@ -16,7 +16,6 @@ from app.services.pppoe_credentials import (
 def _seed_pppoe_settings(
     db,
     *,
-    enabled: bool = True,
     prefix: str = "1050",
     padding: int = 5,
     start: int = 1,
@@ -24,7 +23,6 @@ def _seed_pppoe_settings(
 ) -> None:
     """Insert PPPoE domain settings for tests."""
     specs = [
-        ("pppoe_auto_generate_enabled", SettingValueType.boolean, str(enabled), enabled),
         ("pppoe_username_prefix", SettingValueType.string, prefix, None),
         ("pppoe_username_padding", SettingValueType.integer, str(padding), None),
         ("pppoe_username_start", SettingValueType.integer, str(start), None),
@@ -47,20 +45,9 @@ def _seed_pppoe_settings(
 class TestAutoGeneratePppoeCredential:
     """Tests for auto_generate_pppoe_credential."""
 
-    def test_disabled_by_default_returns_none(self, db_session, subscriber):
-        """When pppoe_auto_generate_enabled is False, returns None."""
-        _seed_pppoe_settings(db_session, enabled=False)
-        result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
-        assert result is None
-
-    def test_no_setting_returns_none(self, db_session, subscriber):
-        """When no settings exist at all, returns None (defaults to disabled)."""
-        result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
-        assert result is None
-
-    def test_generates_credential_when_enabled(self, db_session, subscriber):
-        """When enabled, creates AccessCredential with correct username."""
-        _seed_pppoe_settings(db_session, enabled=True, start=25915)
+    def test_generates_credential(self, db_session, subscriber):
+        """Creates AccessCredential with correct username."""
+        _seed_pppoe_settings(db_session, start=25915)
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
 
         assert result is not None
@@ -71,7 +58,7 @@ class TestAutoGeneratePppoeCredential:
 
     def test_skips_when_credential_exists(self, db_session, subscriber):
         """When subscriber already has active credential, skips."""
-        _seed_pppoe_settings(db_session, enabled=True, start=1000)
+        _seed_pppoe_settings(db_session, start=1000)
 
         # Create existing credential
         existing = AccessCredential(
@@ -88,7 +75,7 @@ class TestAutoGeneratePppoeCredential:
 
     def test_generates_when_only_inactive_credential_exists(self, db_session, subscriber):
         """When subscriber only has inactive credentials, generates new one."""
-        _seed_pppoe_settings(db_session, enabled=True, start=5000)
+        _seed_pppoe_settings(db_session, start=5000)
 
         inactive = AccessCredential(
             subscriber_id=subscriber.id,
@@ -107,7 +94,7 @@ class TestAutoGeneratePppoeCredential:
         """Two consecutive calls produce sequential usernames."""
         from app.models.subscriber import Subscriber
 
-        _seed_pppoe_settings(db_session, enabled=True, start=100)
+        _seed_pppoe_settings(db_session, start=100)
 
         sub1 = Subscriber(
             first_name="A",
@@ -133,7 +120,7 @@ class TestAutoGeneratePppoeCredential:
     def test_custom_prefix_and_padding(self, db_session, subscriber):
         """Respects custom prefix and padding settings."""
         _seed_pppoe_settings(
-            db_session, enabled=True, prefix="PPP", padding=3, start=1,
+            db_session, prefix="PPP", padding=3, start=1,
         )
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
 
@@ -142,7 +129,7 @@ class TestAutoGeneratePppoeCredential:
 
     def test_password_encrypted(self, db_session, subscriber):
         """Generated password is stored encrypted or with plain: prefix."""
-        _seed_pppoe_settings(db_session, enabled=True, start=1)
+        _seed_pppoe_settings(db_session, start=1)
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
 
         assert result is not None
@@ -153,7 +140,7 @@ class TestAutoGeneratePppoeCredential:
         """Passes through the radius_profile_id when provided."""
         from app.models.catalog import RadiusProfile
 
-        _seed_pppoe_settings(db_session, enabled=True, start=1)
+        _seed_pppoe_settings(db_session, start=1)
 
         profile = RadiusProfile(name="Test Profile", is_active=True)
         db_session.add(profile)
@@ -205,7 +192,7 @@ class TestSeedPppoeSequence:
 
     def test_sequence_used_by_auto_gen(self, db_session, subscriber):
         """DocumentSequence feeds into auto-generation."""
-        _seed_pppoe_settings(db_session, enabled=True)
+        _seed_pppoe_settings(db_session)
 
         # Pre-seed sequence at 25915
         seq = DocumentSequence(key=SEQUENCE_KEY, next_value=25915)

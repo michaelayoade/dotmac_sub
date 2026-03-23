@@ -20,7 +20,7 @@ from app.models.catalog import (
     ProvisioningAction,
 )
 from app.models.network_monitoring import PopSite
-from app.models.subscriber import Organization
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -75,17 +75,24 @@ def get_pop_site(db: Session, pop_site_id: str | UUID) -> PopSite | None:
     return db.get(PopSite, site_uuid)
 
 
-def list_organizations(
+def list_business_accounts(
     db: Session,
     *,
     ids: list[UUID] | None = None,
     limit: int = 500,
-) -> list[Organization]:
-    """Return organizations for NAS form and validation usage."""
-    query = db.query(Organization)
+) -> list[Subscriber]:
+    """Return business subscribers for NAS form and validation usage."""
+    query = db.query(Subscriber).filter(
+        Subscriber.metadata_["subscriber_category"].as_string()
+        == SubscriberCategory.business.value
+    )
     if ids:
-        query = query.filter(Organization.id.in_(ids))
-    return query.order_by(Organization.name.asc()).limit(limit).all()
+        query = query.filter(Subscriber.id.in_(ids))
+    return (
+        query.order_by(Subscriber.company_name.asc(), Subscriber.display_name.asc())
+        .limit(limit)
+        .all()
+    )
 
 
 def get_nas_form_options(db: Session) -> dict[str, object]:
@@ -102,11 +109,11 @@ def get_nas_form_options(db: Session) -> dict[str, object]:
         limit=200,
         offset=0,
     )
-    organizations = list_organizations(db, limit=500)
+    business_accounts = list_business_accounts(db, limit=500)
     return {
         "pop_sites": pop_sites,
         "ip_pools": ip_pools,
-        "organizations": organizations,
+        "business_accounts": business_accounts,
         "vendors": [{"value": v.value, "label": v.value.title()} for v in NasVendor],
         "statuses": [
             {"value": s.value, "label": s.value.title()} for s in NasDeviceStatus
@@ -271,8 +278,8 @@ def resolve_partner_org_names(db: Session, device: NasDevice) -> list[str]:
             continue
     if not valid_ids:
         return []
-    orgs = list_organizations(db, ids=valid_ids, limit=500)
-    return [str(org.name) for org in orgs]
+    accounts = list_business_accounts(db, ids=valid_ids, limit=500)
+    return [str(account.company_name or account.display_name or account.full_name) for account in accounts]
 
 
 def pop_site_label(device: NasDevice | None) -> str | None:

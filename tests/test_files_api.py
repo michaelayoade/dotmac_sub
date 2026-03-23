@@ -8,33 +8,30 @@ from starlette.responses import StreamingResponse
 
 from app.api import files as files_api
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Organization, Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.file_storage import file_uploads
 from app.services.object_storage import ObjectNotFoundError, StreamResult
 
 
-def _subscriber(email: str, org_id):
-    return Subscriber(
+def _subscriber(email: str, business_name: str):
+    subscriber = Subscriber(
         first_name="T",
         last_name="User",
         email=email,
-        organization_id=org_id,
+        company_name=business_name,
     )
+    subscriber.category = SubscriberCategory.business
+    return subscriber
 
 
 def test_authenticated_download_and_tenant_isolation(db_session, monkeypatch):
-    org_a = Organization(name="Org A")
-    org_b = Organization(name="Org B")
-    db_session.add_all([org_a, org_b])
-    db_session.commit()
-
-    user_a = _subscriber("a@example.com", org_a.id)
-    user_b = _subscriber("b@example.com", org_b.id)
+    user_a = _subscriber("a@example.com", "Org A")
+    user_b = _subscriber("b@example.com", "Org B")
     db_session.add_all([user_a, user_b])
     db_session.commit()
 
     record = StoredFile(
-        organization_id=org_a.id,
+        owner_subscriber_id=user_a.id,
         entity_type="ticket",
         entity_id=str(uuid.uuid4()),
         original_filename="evidence.pdf",
@@ -72,15 +69,12 @@ def test_authenticated_download_and_tenant_isolation(db_session, monkeypatch):
 
 
 def test_download_missing_object_and_deleted_record(db_session, monkeypatch):
-    org = Organization(name="Org")
-    db_session.add(org)
-    db_session.commit()
-    user = _subscriber("c@example.com", org.id)
+    user = _subscriber("c@example.com", "Org")
     db_session.add(user)
     db_session.commit()
 
     active_record = StoredFile(
-        organization_id=org.id,
+        owner_subscriber_id=user.id,
         entity_type="ticket",
         entity_id=str(uuid.uuid4()),
         original_filename="proof.txt",
@@ -91,7 +85,7 @@ def test_download_missing_object_and_deleted_record(db_session, monkeypatch):
         uploaded_by=user.id,
     )
     deleted_record = StoredFile(
-        organization_id=org.id,
+        owner_subscriber_id=user.id,
         entity_type="ticket",
         entity_id=str(uuid.uuid4()),
         original_filename="gone.txt",

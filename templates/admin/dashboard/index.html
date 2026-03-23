@@ -55,13 +55,13 @@
 
     {# ═══════════ Section 2: Attention Banner (only when issues exist) ═══════════ #}
     {% if attention_items %}
-    <div class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-rose-950/30 dark:to-amber-950/10">
+    <div class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-slate-900 dark:via-rose-950/20 dark:to-slate-800">
         <div class="flex h-10 w-10 shrink-0 animate-pulse items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
             {{ icon_warning("h-5 w-5") }}
         </div>
-        <div class="min-w-0 flex-1">
-            <p class="font-semibold text-rose-900 dark:text-rose-100">{{ attention_items[0].label }}</p>
-            <p class="mt-0.5 text-sm text-rose-800/80 dark:text-rose-200/70">{{ attention_items | length }} item{{ 's' if attention_items | length != 1 }} need attention</p>
+        <div class="min-w-0 flex-1 rounded-xl bg-white/55 px-3 py-2 backdrop-blur-sm dark:bg-slate-900/25">
+            <p class="font-semibold text-slate-900 dark:text-white">{{ attention_items[0].label }}</p>
+            <p class="mt-0.5 text-sm text-slate-700 dark:text-slate-200">{{ attention_items | length }} item{{ 's' if attention_items | length != 1 }} need attention</p>
         </div>
         <a href="{{ attention_items[0].href }}" class="shrink-0 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-rose-700">
             View {{ 'Alarms' if 'alarm' in attention_items[0].label else 'Issues' }}

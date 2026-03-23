@@ -613,9 +613,7 @@ def build_payments_list_data(
         status_totals = _build_status_totals(filtered_subquery)
 
         base_stmt = _apply_payment_filters(
-            select(Payment).options(
-                joinedload(Payment.account).joinedload(Subscriber.organization)
-            )
+            select(Payment).options(joinedload(Payment.account))
         ).order_by(Payment.created_at.desc())
         payments = list(db.scalars(base_stmt.offset(offset).limit(per_page)).all())
         for payment in payments:

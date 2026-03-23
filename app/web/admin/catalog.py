@@ -13,6 +13,7 @@ from starlette.datastructures import FormData
 
 from app.db import get_db
 from app.models.catalog import SubscriptionStatus
+from app.models.subscriber import SubscriberCategory
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
 from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
@@ -52,10 +53,8 @@ def _get_actor_id(request: Request) -> str | None:
 
 def _customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
     subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
-    if subscriber.organization_id:
-        return (
-            f"/admin/customers/organization/{subscriber.organization_id}#subscriptions"
-        )
+    if subscriber.category == SubscriberCategory.business:
+        return f"/admin/customers/business/{subscriber.id}#subscriptions"
     return f"/admin/customers/person/{subscriber.id}#subscriptions"
 
 

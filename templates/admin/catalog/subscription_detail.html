@@ -621,11 +621,11 @@
                     <div>
                         <p class="text-xs text-slate-500 dark:text-slate-400">Subscriber</p>
                         {% if subscription.account and subscription.account.subscriber %}
-                        <a href="/admin/customers/{{ 'organization/' ~ subscription.account.subscriber.organization_id if subscription.account.subscriber.organization_id else 'person/' ~ subscription.account.subscriber.id }}#subscriptions" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
+                        <a href="/admin/customers/{{ 'business/' ~ subscription.account.subscriber.id if subscription.account.subscriber.is_business else 'person/' ~ subscription.account.subscriber.id }}#subscriptions" class="font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
                             {% if subscription.account.subscriber.person %}
                                 {{ subscription.account.first_name }} {{ subscription.account.last_name }}
-                            {% elif subscription.account.subscriber.organization %}
-                                {{ subscription.account.subscriber.organization.name }}
+                            {% elif subscription.account.subscriber.is_business %}
+                                {{ subscription.account.subscriber.name }}
                             {% else %}
                                 Subscriber
                             {% endif %}

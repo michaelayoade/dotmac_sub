@@ -1154,6 +1154,7 @@ def _push_signal_metrics(db: Session) -> int:
     # Collect ONTs with recent signal data and their OLT/PON info
     stmt = (
         select(
+            OntUnit.id.label("ont_id"),
             OntUnit.serial_number,
             OntUnit.olt_rx_signal_dbm,
             OntUnit.onu_rx_signal_dbm,
@@ -1193,7 +1194,11 @@ def _push_signal_metrics(db: Session) -> int:
         seen_serials.add(serial)
         olt_name = row.olt_name or "unknown"
         pon_port = row.pon_port_name or "unknown"
-        labels = f'ont_serial="{serial}",olt_name="{olt_name}",pon_port="{pon_port}"'
+        ont_id = str(row.ont_id)
+        labels = (
+            f'ont_id="{ont_id}",ont_serial="{serial}",'
+            f'olt_name="{olt_name}",pon_port="{pon_port}"'
+        )
 
         if row.olt_rx_signal_dbm is not None:
             lines.append(f"ont_olt_rx_dbm{{{labels}}} {row.olt_rx_signal_dbm} {now_ms}")

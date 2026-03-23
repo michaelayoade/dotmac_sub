@@ -1,7 +1,7 @@
 import builtins
 import logging
 from datetime import UTC, datetime
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import and_, case, func, not_, or_
@@ -12,7 +12,6 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import (
     Address,
     AddressType,
-    Organization,
     Reseller,
     Subscriber,
     SubscriberCategory,
@@ -23,8 +22,6 @@ from app.models.subscriber import (
 from app.schemas.subscriber import (
     AddressCreate,
     AddressUpdate,
-    OrganizationCreate,
-    OrganizationUpdate,
     ResellerCreate,
     ResellerUpdate,
     SubscriberAccountCreate,
@@ -54,6 +51,16 @@ _RESTRICTED_STATUSES = {
     SubscriberStatus.suspended,
     SubscriberStatus.disabled,
 }
+
+
+def _subscriber_category_clause():
+    return func.lower(
+        func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+    )
+
+
+def _is_business_clause():
+    return _subscriber_category_clause() == SubscriberCategory.business.value
 
 
 def _metadata_flag(value: object) -> bool:
@@ -188,57 +195,6 @@ def _validate_tax_rate(db: Session, tax_rate_id: str | None):
     return rate
 
 
-class Organizations(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: OrganizationCreate):
-        organization = Organization(**payload.model_dump())
-        db.add(organization)
-        db.commit()
-        db.refresh(organization)
-        return organization
-
-    @staticmethod
-    def get(db: Session, organization_id: str):
-        organization = db.get(Organization, organization_id)
-        if not organization:
-            raise HTTPException(status_code=404, detail="Organization not found")
-        return organization
-
-    @staticmethod
-    def list(
-        db: Session,
-        name: str | None,
-        order_by: str,
-        order_dir: str,
-        limit: int,
-        offset: int,
-    ):
-        query = db.query(Organization)
-        if name:
-            query = query.filter(Organization.name.ilike(f"%{name}%"))
-        query = apply_ordering(query, order_by, order_dir, {"name": Organization.name})
-        return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, organization_id: str, payload: OrganizationUpdate):
-        organization = db.get(Organization, organization_id)
-        if not organization:
-            raise HTTPException(status_code=404, detail="Organization not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
-            setattr(organization, key, value)
-        db.commit()
-        db.refresh(organization)
-        return organization
-
-    @staticmethod
-    def delete(db: Session, organization_id: str):
-        organization = db.get(Organization, organization_id)
-        if not organization:
-            raise HTTPException(status_code=404, detail="Organization not found")
-        db.delete(organization)
-        db.commit()
-
-
 class Resellers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ResellerCreate):
@@ -301,6 +257,47 @@ class Resellers(ListResponseMixin):
         db.commit()
 
 
+def _apply_billing_defaults(db: Session, subscriber: Subscriber) -> None:
+    """Auto-populate billing_day, payment_due_days, grace_period_days,
+    min_balance from global settings based on subscriber's billing_mode."""
+    from decimal import Decimal
+
+    mode = subscriber.billing_mode.value  # "prepaid" or "postpaid"
+    prefix = f"{mode}_default"
+
+    if subscriber.billing_day is None:
+        val = settings_spec.resolve_value(
+            db, SettingDomain.billing, f"{prefix}_billing_day"
+        )
+        if val is not None:
+            billing_day = int(str(val))
+            # 0 means "day of activation" — use today's day
+            subscriber.billing_day = (
+                billing_day if billing_day > 0 else datetime.now(UTC).day
+            )
+
+    if subscriber.payment_due_days is None:
+        val = settings_spec.resolve_value(
+            db, SettingDomain.billing, f"{prefix}_payment_due_days"
+        )
+        if val is not None:
+            subscriber.payment_due_days = int(str(val))
+
+    if subscriber.grace_period_days is None:
+        val = settings_spec.resolve_value(
+            db, SettingDomain.billing, f"{prefix}_grace_period_days"
+        )
+        if val is not None:
+            subscriber.grace_period_days = int(str(val))
+
+    if subscriber.min_balance is None:
+        val = settings_spec.resolve_value(
+            db, SettingDomain.billing, f"{prefix}_min_balance"
+        )
+        if val is not None:
+            subscriber.min_balance = Decimal(str(val))
+
+
 class Subscribers(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriberCreate):
@@ -346,6 +343,7 @@ class Subscribers(ListResponseMixin):
                 )
                 if generated_account:
                     subscriber.account_number = generated_account
+            _apply_billing_defaults(db, subscriber)
             db.commit()
             db.refresh(subscriber)
             return subscriber
@@ -384,6 +382,7 @@ class Subscribers(ListResponseMixin):
             subscriber.category = (
                 category if isinstance(category, SubscriberCategory) else str(category)
             )
+        _apply_billing_defaults(db, subscriber)
         db.add(subscriber)
         db.commit()
         db.refresh(subscriber)
@@ -418,7 +417,7 @@ class Subscribers(ListResponseMixin):
     def list(
         db: Session,
         person_id: str | None = None,
-        organization_id: str | None = None,
+        business_account_id: str | None = None,
         subscriber_type: str | None = None,
         order_by: str = "created_at",
         order_dir: str = "desc",
@@ -567,16 +566,15 @@ class Subscribers(ListResponseMixin):
         # Backwards-compat: allow filtering by legacy "person_id" keyword.
         if person_id:
             query = query.filter(Subscriber.id == coerce_uuid(person_id))
-        if organization_id:
-            query = query.filter(
-                Subscriber.organization_id == coerce_uuid(organization_id)
-            )
+        if business_account_id:
+            query = query.filter(Subscriber.id == coerce_uuid(business_account_id))
+            query = query.filter(_is_business_clause())
         if subscriber_type:
             normalized = subscriber_type.strip().lower()
             if normalized == "person":
-                query = query.filter(Subscriber.organization_id.is_(None))
-            elif normalized == "organization":
-                query = query.filter(Subscriber.organization_id.is_not(None))
+                query = query.filter(not_(_is_business_clause()))
+            elif normalized == "business":
+                query = query.filter(_is_business_clause())
             else:
                 raise HTTPException(status_code=400, detail="Invalid subscriber_type")
         query = apply_ordering(
@@ -675,13 +673,11 @@ class Subscribers(ListResponseMixin):
                     0,
                 ),
                 func.coalesce(
-                    func.sum(case((Subscriber.organization_id.is_(None), 1), else_=0)),
+                    func.sum(case((not_(_is_business_clause()), 1), else_=0)),
                     0,
                 ),
                 func.coalesce(
-                    func.sum(
-                        case((Subscriber.organization_id.is_not(None), 1), else_=0)
-                    ),
+                    func.sum(case((_is_business_clause(), 1), else_=0)),
                     0,
                 ),
             )
@@ -699,7 +695,7 @@ class Subscribers(ListResponseMixin):
     def count(
         db: Session,
         subscriber_type: str | None = None,
-        organization_id: str | None = None,
+        business_account_id: str | None = None,
         status: str | None = None,
         search: str | None = None,
         include_deleted: bool = False,
@@ -804,16 +800,17 @@ class Subscribers(ListResponseMixin):
                         ),
                     )
                 )
-        if organization_id:
-            query = query.filter(
-                Subscriber.organization_id == coerce_uuid(organization_id)
-            )
+        if business_account_id:
+            query = query.filter(Subscriber.id == coerce_uuid(business_account_id))
+            query = query.filter(_is_business_clause())
         if subscriber_type:
             normalized = subscriber_type.strip().lower()
             if normalized == "person":
-                query = query.filter(Subscriber.organization_id.is_(None))
-            elif normalized == "organization":
-                query = query.filter(Subscriber.organization_id.is_not(None))
+                query = query.filter(not_(_is_business_clause()))
+            elif normalized == "business":
+                query = query.filter(_is_business_clause())
+            else:
+                raise HTTPException(status_code=400, detail="Invalid subscriber_type")
         return query.scalar() or 0
 
     @staticmethod
@@ -1189,7 +1186,6 @@ class SubscriberCustomFields(ListResponseMixin):
         db.commit()
 
 
-organizations = Organizations()
 resellers = Resellers()
 subscribers = Subscribers()
 accounts = Accounts()

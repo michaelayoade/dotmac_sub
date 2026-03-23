@@ -985,14 +985,7 @@ def seed_radius_settings(db: Session) -> None:
         value_json=refresh_raw.lower() in {"1", "true", "yes", "on"},
     )
     # PPPoE auto-generation settings (disabled by default for dual-run)
-    pppoe_enabled_raw = os.getenv("PPPOE_AUTO_GENERATE_ENABLED", "false")
-    radius_settings.ensure_by_key(
-        db,
-        key="pppoe_auto_generate_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=pppoe_enabled_raw,
-        value_json=pppoe_enabled_raw.lower() in {"1", "true", "yes", "on"},
-    )
+    # pppoe_auto_generate_enabled removed — PPPoE generation is now mandatory
     radius_settings.ensure_by_key(
         db,
         key="pppoe_username_prefix",
@@ -1687,7 +1680,7 @@ def seed_network_policy_settings(db: Session) -> None:
         db,
         key="default_device_type",
         value_type=SettingValueType.string,
-        value_text=os.getenv("NETWORK_DEFAULT_DEVICE_TYPE", "ont"),
+        value_text=os.getenv("NETWORK_DEFAULT_DEVICE_TYPE", "other"),
     )
     network_settings.ensure_by_key(
         db,

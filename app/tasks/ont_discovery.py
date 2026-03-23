@@ -44,7 +44,7 @@ def discover_all_olt_onts() -> dict[str, int]:
                 "skipped_due_to_lock": 1,
             }
 
-        from app.services.web_network_olts import sync_onts_from_olt_snmp
+        from app.services.web_network_olts import sync_onts_from_olt_snmp_tracked
 
         olts = list(
             db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
@@ -54,11 +54,14 @@ def discover_all_olt_onts() -> dict[str, int]:
         olts_scanned = 0
         onts_created = 0
         onts_updated = 0
+        skipped = 0
         errors = 0
 
         for olt in olts:
             try:
-                ok, msg, stats = sync_onts_from_olt_snmp(db, str(olt.id))
+                ok, msg, stats = sync_onts_from_olt_snmp_tracked(
+                    db, str(olt.id), initiated_by="celery:discover_all_olt_onts"
+                )
                 if ok:
                     olts_scanned += 1
                     created_raw = stats.get("created", 0)
@@ -72,6 +75,7 @@ def discover_all_olt_onts() -> dict[str, int]:
                         stats,
                     )
                 else:
+                    skipped += 1
                     logger.warning(
                         "ONT discovery skipped OLT %s (%s): %s",
                         olt.name,
@@ -91,6 +95,7 @@ def discover_all_olt_onts() -> dict[str, int]:
             "olts_scanned": olts_scanned,
             "onts_created": onts_created,
             "onts_updated": onts_updated,
+            "skipped": skipped,
             "errors": errors,
         }
         logger.info("ONT discovery complete: %s", result)

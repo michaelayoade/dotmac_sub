@@ -9,8 +9,15 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from starlette.requests import Request
 
-from app.models.catalog import ConnectionType, NasConfigBackup, NasDevice, NasVendor
+from app.models.catalog import (
+    ConnectionType,
+    NasConfigBackup,
+    NasDevice,
+    NasDeviceStatus,
+    NasVendor,
+)
 from app.models.network import (
+    CPEDevice,
     OltConfigBackup,
     OltConfigBackupType,
     OLTDevice,
@@ -46,7 +53,7 @@ from app.models.notification import (
 )
 from app.models.radius import RadiusClient, RadiusServer
 from app.models.subscriber import Address, AddressType, Subscriber
-from app.models.tr069 import Tr069Job, Tr069JobStatus
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice, Tr069Job, Tr069JobStatus
 from app.schemas.catalog import NasDeviceCreate
 from app.schemas.network import (
     CPEDeviceCreate,
@@ -61,6 +68,7 @@ from app.services import nas as nas_service
 from app.services import network as network_service
 from app.services import network_map as network_map_service
 from app.services import network_monitoring as monitoring_service
+from app.services import network_topology as network_topology_service
 from app.services import snmp_discovery as snmp_discovery_service
 from app.services import tr069 as tr069_service
 from app.services import web_network_core_devices as web_network_core_devices_service
@@ -73,9 +81,9 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.services import network_topology as network_topology_service
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network.cpe_tr069 import CpeTR069
 from app.services.network.ont_tr069 import OntTR069
 from app.web.admin import nas as nas_web
 
@@ -132,9 +140,13 @@ def test_extract_enhanced_fields_includes_shaper_and_mikrotik_api_tags():
     assert fields["blocking_rules_enabled"] == "true"
 
 
-def test_nas_index_renders_status_cards_with_non_active_buckets(db_session, monkeypatch):
+def test_nas_index_renders_status_cards_with_non_active_buckets(
+    db_session, monkeypatch
+):
     device_id = uuid4()
-    request = Request({"type": "http", "method": "GET", "path": "/admin/network/nas", "headers": []})
+    request = Request(
+        {"type": "http", "method": "GET", "path": "/admin/network/nas", "headers": []}
+    )
 
     monkeypatch.setattr(
         nas_web,
@@ -143,7 +155,9 @@ def test_nas_index_renders_status_cards_with_non_active_buckets(db_session, monk
             "request": _request,
             "active_page": active_page,
             "active_menu": active_menu,
-            "current_user": SimpleNamespace(name="Admin User", email="admin@example.com", initials="AU"),
+            "current_user": SimpleNamespace(
+                name="Admin User", email="admin@example.com", initials="AU"
+            ),
             "sidebar_stats": SimpleNamespace(
                 notifications_unread=0,
                 sidebar_logo_url="",
@@ -184,7 +198,9 @@ def test_nas_index_renders_status_cards_with_non_active_buckets(db_session, monk
                     last_seen_at=None,
                 )
             ],
-            "ping_statuses": {str(device_id): {"state": "unreachable", "label": "Unreachable"}},
+            "ping_statuses": {
+                str(device_id): {"state": "unreachable", "label": "Unreachable"}
+            },
             "runtime_statuses": {},
             "runtime_last_seen": {},
             "stats": {
@@ -220,7 +236,9 @@ def test_nas_index_renders_status_cards_with_non_active_buckets(db_session, monk
     assert "Offline" in body
 
 
-def test_build_nas_payload_requires_nas_ip_when_radius_authorization_selected(db_session):
+def test_build_nas_payload_requires_nas_ip_when_radius_authorization_selected(
+    db_session,
+):
     payload, errors = nas_service.build_nas_device_payload(
         db_session,
         form={
@@ -395,7 +413,14 @@ def test_get_mikrotik_api_status_success(db_session, monkeypatch):
 
     def _fake_get(url, **kwargs):
         if url.endswith("/rest/system/resource"):
-            return _Resp({"platform": "MikroTik", "board-name": "CCR", "cpu-load": 17, "ipv6": True})
+            return _Resp(
+                {
+                    "platform": "MikroTik",
+                    "board-name": "CCR",
+                    "cpu-load": 17,
+                    "ipv6": True,
+                }
+            )
         return _Resp([{"name": "routeros", "version": "7.15"}])
 
     monkeypatch.setattr("requests.get", _fake_get)
@@ -408,7 +433,9 @@ def test_get_mikrotik_api_status_success(db_session, monkeypatch):
 def test_nas_connection_rules_create_list_toggle_delete(db_session):
     device = nas_service.NasDevices.create(
         db_session,
-        NasDeviceCreate(name="RuleNAS", vendor=NasVendor.mikrotik, ip_address="192.0.2.21"),
+        NasDeviceCreate(
+            name="RuleNAS", vendor=NasVendor.mikrotik, ip_address="192.0.2.21"
+        ),
     )
     created = nas_service.NasConnectionRules.create(
         db_session,
@@ -421,7 +448,9 @@ def test_nas_connection_rules_create_list_toggle_delete(db_session):
     )
     assert created.name == "Corp PPPoE"
     assert created.connection_type == ConnectionType.pppoe
-    rules = nas_service.NasConnectionRules.list(db_session, nas_device_id=device.id, is_active=None)
+    rules = nas_service.NasConnectionRules.list(
+        db_session, nas_device_id=device.id, is_active=None
+    )
     assert [r.name for r in rules] == ["Corp PPPoE"]
 
     disabled = nas_service.NasConnectionRules.set_active(
@@ -432,7 +461,9 @@ def test_nas_connection_rules_create_list_toggle_delete(db_session):
     )
     assert disabled.is_active is False
 
-    nas_service.NasConnectionRules.delete(db_session, rule_id=created.id, nas_device_id=device.id)
+    nas_service.NasConnectionRules.delete(
+        db_session, rule_id=created.id, nas_device_id=device.id
+    )
     rules_after_delete = nas_service.NasConnectionRules.list(
         db_session,
         nas_device_id=device.id,
@@ -444,7 +475,9 @@ def test_nas_connection_rules_create_list_toggle_delete(db_session):
 def test_nas_connection_rules_reject_duplicate_name_per_device(db_session):
     device = nas_service.NasDevices.create(
         db_session,
-        NasDeviceCreate(name="RuleNAS-2", vendor=NasVendor.mikrotik, ip_address="192.0.2.31"),
+        NasDeviceCreate(
+            name="RuleNAS-2", vendor=NasVendor.mikrotik, ip_address="192.0.2.31"
+        ),
     )
     nas_service.NasConnectionRules.create(
         db_session,
@@ -460,6 +493,35 @@ def test_nas_connection_rules_reject_duplicate_name_per_device(db_session):
             connection_type=ConnectionType.pppoe,
         )
     assert "already exists" in str(exc_info.value.detail).lower()
+
+
+def test_nas_device_detail_data_preserves_vlans_tab(db_session, monkeypatch):
+    device = nas_service.NasDevices.create(
+        db_session,
+        NasDeviceCreate(
+            name="VLAN-NAS",
+            vendor=NasVendor.mikrotik,
+            ip_address="192.0.2.41",
+        ),
+    )
+
+    monkeypatch.setattr(
+        "app.services.nas.web_builders.get_ping_status",
+        lambda host: {"state": "unknown", "label": "Unknown"},
+    )
+
+    payload = nas_service.build_nas_device_detail_data(
+        db_session,
+        device_id=str(device.id),
+        tab="vlans",
+        api_test_status=None,
+        api_test_message=None,
+        rule_status=None,
+        rule_message=None,
+        build_activities_fn=lambda *args, **kwargs: [],
+    )
+
+    assert payload["active_tab"] == "vlans"
 
 
 def test_core_devices_list_page_data_filters_site_status_and_search(db_session):
@@ -499,7 +561,9 @@ def test_core_devices_list_page_data_filters_site_status_and_search(db_session):
     assert filtered["devices"][0].name == "Core Alpha Router"
 
 
-def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(db_session):
+def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(
+    db_session,
+):
     pop = PopSite(name="Gamma Site", is_active=True)
     db_session.add(pop)
     db_session.flush()
@@ -558,7 +622,9 @@ def test_core_devices_list_page_data_includes_uptime_ping_history_and_backup(db_
 
 
 def test_create_snmp_oid_for_device_and_poll_success(db_session):
-    device = NetworkDevice(name="SNMP Core", mgmt_ip="192.0.2.90", snmp_enabled=True, is_active=True)
+    device = NetworkDevice(
+        name="SNMP Core", mgmt_ip="192.0.2.90", snmp_enabled=True, is_active=True
+    )
     db_session.add(device)
     db_session.commit()
 
@@ -595,7 +661,9 @@ def test_create_snmp_oid_for_device_and_poll_success(db_session):
 
 
 def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
-    device = NetworkDevice(name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True)
+    device = NetworkDevice(
+        name="Graph Core", mgmt_ip="192.0.2.120", snmp_enabled=True, is_active=True
+    )
     db_session.add(device)
     db_session.flush()
 
@@ -619,7 +687,11 @@ def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
     assert ok is True
     assert "created" in msg.lower()
 
-    graph = db_session.query(NetworkDeviceBandwidthGraph).filter_by(device_id=device.id).first()
+    graph = (
+        db_session.query(NetworkDeviceBandwidthGraph)
+        .filter_by(device_id=device.id)
+        .first()
+    )
     assert graph is not None
     assert graph.is_public is False
 
@@ -666,12 +738,16 @@ def test_create_bandwidth_graph_add_source_clone_and_public_toggle(db_session):
     assert ok is True
     db_session.refresh(graph)
     assert graph.public_token is not None
-    public_graph = core_devices_forms.get_public_bandwidth_graph(db_session, token=graph.public_token)
+    public_graph = core_devices_forms.get_public_bandwidth_graph(
+        db_session, token=graph.public_token
+    )
     assert public_graph is not None
 
 
 def test_bandwidth_graph_preview_snapshot_uses_snmp_values(db_session):
-    device = NetworkDevice(name="Preview Device", mgmt_ip="192.0.2.121", snmp_enabled=True, is_active=True)
+    device = NetworkDevice(
+        name="Preview Device", mgmt_ip="192.0.2.121", snmp_enabled=True, is_active=True
+    )
     db_session.add(device)
     db_session.flush()
 
@@ -994,7 +1070,9 @@ def test_tr069_dashboard_data_filters_and_stats(db_session, acs_server):
     assert data["stats"]["jobs_failed"] >= 1
 
 
-def test_tr069_queue_device_job_creates_and_executes(db_session, acs_server, monkeypatch):
+def test_tr069_queue_device_job_creates_and_executes(
+    db_session, acs_server, monkeypatch
+):
     device = tr069_service.cpe_devices.create(
         db_session,
         Tr069CpeDeviceCreate(
@@ -1023,7 +1101,9 @@ def test_tr069_queue_device_job_creates_and_executes(db_session, acs_server, mon
     assert job.status == Tr069JobStatus.succeeded
 
 
-def test_tr069_dashboard_data_decodes_huawei_hex_serial_for_display(db_session, acs_server):
+def test_tr069_dashboard_data_decodes_huawei_hex_serial_for_display(
+    db_session, acs_server
+):
     tr069_service.cpe_devices.create(
         db_session,
         Tr069CpeDeviceCreate(
@@ -1042,6 +1122,63 @@ def test_tr069_dashboard_data_decodes_huawei_hex_serial_for_display(db_session, 
 
     assert len(data["unconfigured_devices"]) == 1
     assert data["unconfigured_devices"][0].display_serial_number == "HWTC858C4184"
+
+
+def test_tr069_dashboard_data_handles_joinedload_assignments_without_500(
+    db_session, acs_server
+):
+    olt = OLTDevice(
+        name="TR069 OLT",
+        status="active",
+        is_active=True,
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    pon_port = PonPort(
+        olt_id=olt.id,
+        name="PON 1/1/1",
+        port_number=1,
+        is_active=True,
+    )
+    db_session.add(pon_port)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="HWTC858C4184",
+        olt_device_id=olt.id,
+        is_active=True,
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    assignment = OntAssignment(
+        ont_unit_id=ont.id,
+        pon_port_id=pon_port.id,
+        active=True,
+    )
+    db_session.add(assignment)
+
+    tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="48575443858C4184",
+            oui="485754",
+            product_class="HG8145X6",
+            is_active=True,
+        ),
+    )
+    db_session.commit()
+
+    data = web_network_tr069_service.tr069_dashboard_data(
+        db_session,
+        acs_server_id=str(acs_server.id),
+    )
+
+    assert len(data["devices"]) == 1
+    assert data["devices"][0].linked_ont is not None
+    assert data["devices"][0].linked_pon_port_name == "PON 1/1/1"
 
 
 def test_network_map_context_includes_network_device_markers(db_session):
@@ -1183,7 +1320,9 @@ def test_dns_threat_form_parse_and_validate():
 
 
 def test_dns_threat_list_page_data_filters_and_stats(db_session, subscriber):
-    pop = PopSite(name="DNS POP", code="DNS-POP", latitude=9.2, longitude=7.6, is_active=True)
+    pop = PopSite(
+        name="DNS POP", code="DNS-POP", latitude=9.2, longitude=7.6, is_active=True
+    )
     db_session.add(pop)
     db_session.flush()
 
@@ -1393,7 +1532,9 @@ def test_core_device_create_allows_save_when_ping_probe_fails(db_session, monkey
     assert result.device.last_ping_ok is False
 
 
-def test_ping_device_respects_notification_delay_before_offline(db_session, pop_site, monkeypatch):
+def test_ping_device_respects_notification_delay_before_offline(
+    db_session, pop_site, monkeypatch
+):
     device = monitoring_service.network_devices.create(
         db_session,
         NetworkDeviceCreate(
@@ -1513,14 +1654,18 @@ def test_parent_devices_for_forms_scopes_by_site_and_excludes_descendants(db_ses
     db_session.flush()
 
     root = NetworkDevice(name="Root A", pop_site_id=site_a.id, is_active=True)
-    child = NetworkDevice(name="Child A", pop_site_id=site_a.id, is_active=True, parent_device=root)
+    child = NetworkDevice(
+        name="Child A", pop_site_id=site_a.id, is_active=True, parent_device=root
+    )
     grandchild = NetworkDevice(
         name="Grandchild A",
         pop_site_id=site_a.id,
         is_active=True,
         parent_device=child,
     )
-    other_site = NetworkDevice(name="Other Site Root", pop_site_id=site_b.id, is_active=True)
+    other_site = NetworkDevice(
+        name="Other Site Root", pop_site_id=site_b.id, is_active=True
+    )
     db_session.add_all([root, child, grandchild, other_site])
     db_session.commit()
 
@@ -1593,7 +1738,9 @@ def test_backup_overview_page_data_classifies_and_filters(db_session):
     stale_backup.created_at = datetime.now(UTC) - timedelta(hours=60)
     db_session.flush()
 
-    olt = OLTDevice(name="OLT North", mgmt_ip="198.51.100.20", vendor="Huawei", model="MA5800")
+    olt = OLTDevice(
+        name="OLT North", mgmt_ip="198.51.100.20", vendor="Huawei", model="MA5800"
+    )
     db_session.add(olt)
     db_session.flush()
     olt_backup = OltConfigBackup(
@@ -1671,7 +1818,9 @@ def test_backup_overview_page_data_search_and_sort(db_session):
 def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_session):
     for idx in range(500):
         db_session.add(OntUnit(serial_number=f"AA-{idx:04d}", is_active=True))
-    target = OntUnit(serial_number="ZZ-TARGET-ONT", is_active=True, mgmt_ip_address="10.55.66.77")
+    target = OntUnit(
+        serial_number="ZZ-TARGET-ONT", is_active=True, mgmt_ip_address="10.55.66.77"
+    )
     db_session.add(target)
     db_session.commit()
 
@@ -1684,7 +1833,9 @@ def test_consolidated_page_data_search_includes_onts_beyond_default_limit(db_ses
     assert "ZZ-TARGET-ONT" in serials
 
 
-def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(db_session):
+def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucket(
+    db_session,
+):
     promoted = NetworkDevice(
         name="Aggregation OLT",
         hostname="agg-olt.local",
@@ -1714,7 +1865,34 @@ def test_consolidated_page_data_moves_network_devices_ending_in_olt_to_olt_bucke
     assert payload["stats"]["olt_total"] == 1
     assert [device.name for device in payload["core_devices"]] == ["Aggregation SW1"]
     assert [olt.name for olt in payload["olts"]] == ["Aggregation OLT"]
-    assert db_session.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")).first() is not None
+    assert (
+        db_session.scalars(
+            select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.210")
+        ).first()
+        is not None
+    )
+
+
+def test_consolidated_page_data_includes_active_nas_inventory_devices(db_session):
+    db_session.add(
+        NasDevice(
+            name="Fiber POP NAS",
+            code="fiber-pop-nas",
+            vendor=NasVendor.huawei,
+            model="MA5608T",
+            management_ip="192.0.2.230",
+            status=NasDeviceStatus.active,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    payload = core_devices_views.consolidated_page_data(tab="core", db=db_session)
+
+    included = next(
+        device for device in payload["core_devices"] if device.name == "Fiber POP NAS"
+    )
+    assert included.detail_url.endswith(f"/admin/network/nas/devices/{included.id}")
 
 
 def test_olts_list_page_data_includes_network_devices_ending_in_olt(db_session):
@@ -1736,7 +1914,12 @@ def test_olts_list_page_data_includes_network_devices_ending_in_olt(db_session):
     assert payload["stats"]["total"] == 1
     assert payload["olts"][0]["name"] == "Metro OLT"
     assert payload["olts"][0]["detail_url"].startswith("/admin/network/olts/")
-    assert db_session.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.220")).first() is not None
+    assert (
+        db_session.scalars(
+            select(OLTDevice).where(OLTDevice.mgmt_ip == "192.0.2.220")
+        ).first()
+        is not None
+    )
 
 
 def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):
@@ -1748,7 +1931,9 @@ def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):
     db_session.add(pon)
     db_session.flush()
 
-    ont = OntUnit(serial_number="ONT-PON-LINK-001", is_active=True, olt_device_id=olt.id)
+    ont = OntUnit(
+        serial_number="ONT-PON-LINK-001", is_active=True, olt_device_id=olt.id
+    )
     db_session.add(ont)
     db_session.flush()
 
@@ -1760,7 +1945,10 @@ def test_olt_detail_page_data_pon_rows_link_to_specific_pon(db_session):
     assert payload is not None
     rows = payload["pon_port_table_rows"]
     assert rows
-    assert rows[0]["action_url"] == f"/admin/network/onts?olt_id={olt.id}&pon_port_id={pon.id}"
+    assert (
+        rows[0]["action_url"]
+        == f"/admin/network/onts?olt_id={olt.id}&pon_port_id={pon.id}"
+    )
 
 
 def test_olt_detail_page_data_pon_row_name_uses_short_port_number(db_session):
@@ -1789,11 +1977,15 @@ def test_olt_detail_page_data_ont_pon_display_prefers_port_description(db_sessio
     db_session.add(olt)
     db_session.flush()
 
-    pon = PonPort(olt_id=olt.id, name="0/2/0", notes="Main Street Splitter A", is_active=True)
+    pon = PonPort(
+        olt_id=olt.id, name="0/2/0", notes="Main Street Splitter A", is_active=True
+    )
     db_session.add(pon)
     db_session.flush()
 
-    ont = OntUnit(serial_number="ONT-PON-DESC-001", is_active=True, olt_device_id=olt.id)
+    ont = OntUnit(
+        serial_number="ONT-PON-DESC-001", is_active=True, olt_device_id=olt.id
+    )
     db_session.add(ont)
     db_session.flush()
 
@@ -1806,7 +1998,9 @@ def test_olt_detail_page_data_ont_pon_display_prefers_port_description(db_sessio
     assert display == "0 - Main Street Splitter A"
 
 
-def test_olt_detail_page_data_ont_pon_display_uses_port_index_and_description(db_session):
+def test_olt_detail_page_data_ont_pon_display_uses_port_index_and_description(
+    db_session,
+):
     olt = OLTDevice(name="OLT-PON-DESC-IDX", mgmt_ip="198.51.100.126")
     db_session.add(olt)
     db_session.flush()
@@ -1845,7 +2039,9 @@ def test_olt_detail_page_data_ont_pon_display_uses_port_index_and_description(db
     assert display == "1 - AYA 2"
 
 
-def test_olt_detail_page_data_maps_ont_mac_from_assigned_subscriber_cpe(db_session, subscriber):
+def test_olt_detail_page_data_maps_ont_mac_from_assigned_subscriber_cpe(
+    db_session, subscriber
+):
     olt = OLTDevice(name="OLT-ONT-MAC", mgmt_ip="198.51.100.127")
     db_session.add(olt)
     db_session.flush()
@@ -1905,7 +2101,9 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
     olt = OLTDevice(name="OLT-TR069-RUNTIME", mgmt_ip="198.51.100.129")
     db_session.add(olt)
     db_session.flush()
-    ont = OntUnit(serial_number="ONT-TR069-RUNTIME-001", is_active=True, olt_device_id=olt.id)
+    ont = OntUnit(
+        serial_number="ONT-TR069-RUNTIME-001", is_active=True, olt_device_id=olt.id
+    )
     db_session.add(ont)
     db_session.commit()
 
@@ -1913,6 +2111,10 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
         @staticmethod
         def get_device(_device_id):
             return {}
+
+        @staticmethod
+        def parse_device_id(_device_id):
+            return ("HWTC7D", "EG8145V5", "HWTC7D4806C3")
 
         @staticmethod
         def extract_parameter_value(_device, path):
@@ -1950,6 +2152,189 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
     assert refreshed.observed_wifi_clients == 5
     assert refreshed.observed_lan_hosts == 12
     assert refreshed.observed_lan_mode == "router"
+
+
+def test_ont_tr069_prefers_device_mac_over_first_lan_port(db_session, monkeypatch):
+    olt = OLTDevice(name="OLT-TR069-MAC", mgmt_ip="198.51.100.130")
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-TR069-MAC-001", is_active=True, olt_device_id=olt.id
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    class _FakeClient:
+        @staticmethod
+        def get_device(_device_id):
+            return {
+                "Device": {
+                    "Ethernet": {
+                        "Interface": {
+                            "1": {"MACAddress": {"_value": "E0:37:68:80:50:0E"}},
+                            "2": {"MACAddress": {"_value": "E0:37:68:80:50:11"}},
+                        }
+                    }
+                }
+            }
+
+        @staticmethod
+        def extract_parameter_value(_device, path):
+            values = {
+                "Device.Ethernet.Interface.1.MACAddress": "E0:37:68:80:50:0E",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress": "e0-37-68-80-50-11",
+            }
+            return values.get(path)
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(
+        ont_tr069_module,
+        "resolve_genieacs",
+        lambda _db, _ont: (_FakeClient(), "fake-device-id"),
+    )
+
+    OntTR069.get_device_summary(
+        db_session,
+        str(ont.id),
+        persist_observed_runtime=True,
+    )
+
+    refreshed = db_session.get(OntUnit, ont.id)
+    assert refreshed is not None
+    assert refreshed.mac_address == "E0:37:68:80:50:11"
+
+
+def test_build_cpe_identity_context_prefers_active_ont_mac(db_session, subscriber):
+    olt = OLTDevice(name="OLT-CPE-IDENTITY-MAC", mgmt_ip="198.51.100.131")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(olt_id=olt.id, name="0/1/0", is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="HWTC7D4806C3",
+        is_active=True,
+        olt_device_id=olt.id,
+        mac_address="E0:37:68:80:50:11",
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    cpe = network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="HWTC7D4806C3",
+            mac_address="E0:37:68:80:50:0E",
+        ),
+    )
+
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            subscriber_id=subscriber.id,
+            active=True,
+        )
+    )
+    db_session.commit()
+
+    identity = web_network_cpes_service.build_cpe_identity_context(db_session, cpe)
+    assert identity["mac_address"] == "E0:37:68:80:50:11"
+
+
+def test_cpe_tr069_summary_prefers_active_ont_mac_over_acs_value(
+    db_session, subscriber, monkeypatch
+):
+    olt = OLTDevice(name="OLT-CPE-TR069-MAC", mgmt_ip="198.51.100.132")
+    db_session.add(olt)
+    db_session.flush()
+
+    pon = PonPort(olt_id=olt.id, name="0/1/0", is_active=True)
+    db_session.add(pon)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="HWTC7D4806C3",
+        is_active=True,
+        olt_device_id=olt.id,
+        mac_address="E0:37:68:80:50:11",
+    )
+    db_session.add(ont)
+    db_session.flush()
+
+    cpe = network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="HWTC7D4806C3",
+            mac_address="E0:37:68:80:50:0E",
+        ),
+    )
+
+    db_session.add(
+        OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            subscriber_id=subscriber.id,
+            active=True,
+        )
+    )
+    db_session.flush()
+
+    acs_server = Tr069AcsServer(
+        name="ACS",
+        base_url="http://acs.local",
+        is_active=True,
+    )
+    db_session.add(acs_server)
+    db_session.flush()
+
+    db_session.add(
+        Tr069CpeDevice(
+            acs_server_id=acs_server.id,
+            cpe_device_id=cpe.id,
+            serial_number="HWTC7D4806C3",
+            product_class="EG8145V5",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    class _FakeClient:
+        @staticmethod
+        def get_device(_device_id):
+            return {}
+
+        @staticmethod
+        def parse_device_id(_device_id):
+            return ("HWTC7D", "EG8145V5", "HWTC7D4806C3")
+
+        @staticmethod
+        def extract_parameter_value(_device, path):
+            values = {
+                "Device.DeviceInfo.Manufacturer": "Huawei",
+                "Device.DeviceInfo.ModelName": "EG8145V5",
+                "Device.DeviceInfo.SerialNumber": "HWTC7D4806C3",
+                "Device.Ethernet.Interface.1.MACAddress": "E0:37:68:80:50:0E",
+            }
+            return values.get(path)
+
+    cpe_tr069_module = importlib.import_module("app.services.network.cpe_tr069")
+    monkeypatch.setattr(
+        cpe_tr069_module,
+        "resolve_genieacs_for_cpe",
+        lambda _db, _cpe: (_FakeClient(), "fake-device-id"),
+    )
+
+    summary = CpeTR069.get_device_summary(db_session, str(cpe.id))
+
+    refreshed = db_session.get(CPEDevice, cpe.id)
+    assert summary.system["MAC Address"] == "E0:37:68:80:50:11"
+    assert refreshed is not None
+    assert refreshed.mac_address == "E0:37:68:80:50:11"
 
 
 def test_onts_list_page_data_filters_by_pon_port(db_session):
@@ -2165,7 +2550,9 @@ def test_queue_backup_failure_notification_queues_notification(db_session, monke
     def _fake_resolve(_db, _domain, key):
         return values.get(key)
 
-    monkeypatch.setattr(backup_alerts_service.settings_spec, "resolve_value", _fake_resolve)
+    monkeypatch.setattr(
+        backup_alerts_service.settings_spec, "resolve_value", _fake_resolve
+    )
 
     queued = backup_alerts_service.queue_backup_failure_notification(
         db_session,
@@ -2196,7 +2583,9 @@ def test_queue_backup_failure_notification_no_recipient_noop(db_session, monkeyp
     def _fake_resolve(_db, _domain, key):
         return values.get(key)
 
-    monkeypatch.setattr(backup_alerts_service.settings_spec, "resolve_value", _fake_resolve)
+    monkeypatch.setattr(
+        backup_alerts_service.settings_spec, "resolve_value", _fake_resolve
+    )
 
     queued = backup_alerts_service.queue_backup_failure_notification(
         db_session,
@@ -2243,7 +2632,9 @@ def test_list_olt_backups_orders_desc_and_filters(db_session):
     assert [row.file_path for row in filtered] == ["olt/recent.txt"]
 
 
-def test_olt_backup_file_resolution_and_preview(db_session, monkeypatch, tmp_path: Path):
+def test_olt_backup_file_resolution_and_preview(
+    db_session, monkeypatch, tmp_path: Path
+):
     monkeypatch.setenv("OLT_BACKUP_DIR", str(tmp_path))
     olt = OLTDevice(name="OLT Files", mgmt_ip="198.51.100.41")
     db_session.add(olt)
@@ -2361,7 +2752,9 @@ def test_test_olt_connection_and_test_backup(db_session, monkeypatch, tmp_path: 
     assert ok is True
     assert "successful" in message.lower()
 
-    backup, backup_message = web_network_olts_service.run_test_backup(db_session, str(olt.id))
+    backup, backup_message = web_network_olts_service.run_test_backup(
+        db_session, str(olt.id)
+    )
     assert backup is not None
     assert "successfully" in backup_message.lower()
     assert backup.backup_type == OltConfigBackupType.manual
@@ -2773,12 +3166,16 @@ def test_build_ip_pools_data_filters_fallback_and_standard(db_session):
     assert fallback_err is None and standard_err is None
     assert fallback is not None and standard is not None
 
-    fallback_state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="fallback")
+    fallback_state = web_network_ip_service.build_ip_pools_data(
+        db_session, pool_type="fallback"
+    )
     fallback_names = {pool.name for pool in fallback_state["pools"]}
     assert fallback_names == {"Fallback Only"}
     assert fallback_state["stats"]["fallback_pools"] == 1
 
-    standard_state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="standard")
+    standard_state = web_network_ip_service.build_ip_pools_data(
+        db_session, pool_type="standard"
+    )
     standard_names = {pool.name for pool in standard_state["pools"]}
     assert "Standard Only" in standard_names
     assert "Fallback Only" not in standard_names
@@ -2804,11 +3201,15 @@ def test_build_ip_pools_data_tracks_ipv6_utilization(db_session):
 
     network_service.ipv6_addresses.create(
         db_session,
-        IPv6AddressCreate(address="2001:db8:abcd::1", pool_id=pool.id, is_reserved=False),
+        IPv6AddressCreate(
+            address="2001:db8:abcd::1", pool_id=pool.id, is_reserved=False
+        ),
     )
     network_service.ipv6_addresses.create(
         db_session,
-        IPv6AddressCreate(address="2001:db8:abcd::2", pool_id=pool.id, is_reserved=False),
+        IPv6AddressCreate(
+            address="2001:db8:abcd::2", pool_id=pool.id, is_reserved=False
+        ),
     )
 
     state = web_network_ip_service.build_ip_pools_data(db_session, pool_type="all")
@@ -3148,7 +3549,9 @@ def test_build_dual_stack_data_groups_ipv4_and_ipv6_by_subscriber_location(
     )
     v6 = network_service.ipv6_addresses.create(
         db_session,
-        IPv6AddressCreate(address="2001:db8:60::10", pool_id=pool6.id, is_reserved=False),
+        IPv6AddressCreate(
+            address="2001:db8:60::10", pool_id=pool6.id, is_reserved=False
+        ),
     )
 
     network_service.ip_assignments.create(

@@ -6,10 +6,10 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.network import CPEDevice, OntUnit
+from app.models.network import CPEDevice, OntAssignment, OntUnit
 from app.models.tr069 import Tr069CpeDevice, Tr069JobStatus
 from app.schemas.network import OntUnitCreate
 from app.schemas.tr069 import (
@@ -274,12 +274,56 @@ def tr069_dashboard_data(
         else []
     )
     cpe_by_id = {str(cpe.id): cpe for cpe in linked_cpes}
+    normalized_serials = {
+        normalize_tr069_serial(
+            _display_serial_number(item.serial_number) or item.serial_number or ""
+        )
+        for item in devices
+        if item.serial_number
+    }
+    ont_by_normalized_serial: dict[str, OntUnit] = {}
+    if normalized_serials:
+        onts = list(
+            db.scalars(
+                select(OntUnit).options(
+                    joinedload(OntUnit.olt_device),
+                    joinedload(OntUnit.assignments).joinedload(OntAssignment.pon_port),
+                )
+            )
+            .unique()
+            .all()
+        )
+        ont_by_normalized_serial = {
+            serial: ont
+            for ont in onts
+            for serial in [normalize_tr069_serial(ont.serial_number or "")]
+            if serial in normalized_serials
+        }
 
     for device in devices:
         device.linked_cpe = (
             cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
         )
         device.display_serial_number = _display_serial_number(device.serial_number)
+        normalized_serial = normalize_tr069_serial(
+            device.display_serial_number or device.serial_number or ""
+        )
+        device.linked_ont = ont_by_normalized_serial.get(normalized_serial)
+        active_assignment = next(
+            (
+                assignment
+                for assignment in getattr(device.linked_ont, "assignments", [])
+                if getattr(assignment, "active", False)
+            ),
+            None,
+        )
+        device.linked_pon_port_name = (
+            getattr(getattr(active_assignment, "pon_port", None), "name", None) or None
+        )
+        device.linked_olt_name = (
+            getattr(getattr(device.linked_ont, "olt_device", None), "name", None)
+            or None
+        )
 
     unconfigured_devices = [item for item in devices if not item.cpe_device_id]
     configured_devices = [item for item in devices if item.cpe_device_id]

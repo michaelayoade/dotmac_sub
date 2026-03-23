@@ -295,7 +295,7 @@ def list_reseller_people(db: Session) -> list[Subscriber]:
         list[Subscriber],
         subscriber_service.subscribers.list(
             db=db,
-            organization_id=None,
+            business_account_id=None,
             subscriber_type="person",
             order_by="created_at",
             order_dir="asc",

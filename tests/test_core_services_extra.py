@@ -23,7 +23,7 @@ def test_subscriber_create_list(db_session, person):
     )
     items = subscriber_service.subscribers.list(
         db_session,
-        organization_id=None,
+        business_account_id=None,
         subscriber_type="person",
         order_by="created_at",
         order_dir="desc",

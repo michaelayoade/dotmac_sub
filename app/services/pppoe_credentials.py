@@ -2,8 +2,8 @@
 
 Generates PPPoE usernames from a DocumentSequence and random passwords
 when a subscription is activated and no active AccessCredential exists.
-Disabled by default — controlled by the ``pppoe_auto_generate_enabled``
-domain setting under ``SettingDomain.radius``.
+This always runs on subscription activation — PPPoE credentials are
+mandatory for all subscribers.
 """
 
 from __future__ import annotations
@@ -102,12 +102,11 @@ def auto_generate_pppoe_credential(
     *,
     radius_profile_id: str | None = None,
 ) -> AccessCredential | None:
-    """Auto-generate a PPPoE AccessCredential if enabled and none exists.
+    """Auto-generate a PPPoE AccessCredential if none exists.
 
-    Checks the ``pppoe_auto_generate_enabled`` setting.  If enabled and the
-    subscriber has no active AccessCredential, generates one with a
-    sequential username (``1050`` prefix + zero-padded sequence) and a
-    random encrypted password.
+    If the subscriber has no active AccessCredential, generates one with a
+    sequential username (prefix + zero-padded sequence) and a random
+    encrypted password.
 
     Args:
         db: Database session.
@@ -115,12 +114,8 @@ def auto_generate_pppoe_credential(
         radius_profile_id: Optional RADIUS profile to assign.
 
     Returns:
-        The newly created AccessCredential, or None if skipped.
+        The newly created AccessCredential, or None if one already exists.
     """
-    enabled = _resolve_radius_setting(db, "pppoe_auto_generate_enabled")
-    if enabled is not True:
-        return None
-
     # Check for existing active credentials
     existing = (
         db.query(AccessCredential)

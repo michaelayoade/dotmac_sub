@@ -609,10 +609,9 @@ class TestEnforcementHandler:
         handler.handle(db_session, event)
         mock_settings.resolve_value.assert_not_called()
 
-    @patch("app.services.events.handlers.enforcement.emit_event")
     @patch("app.services.events.handlers.enforcement.settings_spec")
     def test_usage_exhausted_suspend_action(
-        self, mock_settings, mock_emit, db_session, subscription
+        self, mock_settings, db_session, subscription
     ):
         def settings_side_effect(db, domain, key):
             if key == "fup_action":
@@ -633,13 +632,15 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
 
-        # Should have updated status
+        # Should have updated status via lifecycle (emit=False, no event recursion)
         db_session.refresh(subscription)
         assert subscription.status == SubscriptionStatus.suspended
-        # Should have emitted a subscription_suspended event
-        mock_emit.assert_called_once()
-        call_args = mock_emit.call_args
-        assert call_args[0][1] == EventType.subscription_suspended
+
+        # Should have created an enforcement lock
+        from app.models.enforcement_lock import EnforcementReason
+        from app.services.account_lifecycle import has_active_lock
+
+        assert has_active_lock(db_session, str(subscription.id), EnforcementReason.fup)
 
     @patch("app.services.events.handlers.enforcement.disconnect_account_sessions")
     @patch("app.services.events.handlers.enforcement.apply_radius_profile_to_account")

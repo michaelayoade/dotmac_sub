@@ -75,7 +75,7 @@
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                             {% if appt.service_order and appt.service_order.subscriber %}
-                            <a href="/admin/customers/{{ 'organization/' ~ appt.service_order.subscriber.organization_id if appt.service_order.subscriber.organization_id else 'person/' ~ appt.service_order.subscriber_id }}" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">
+                            <a href="/admin/customers/{{ 'business/' ~ appt.service_order.subscriber_id if appt.service_order.subscriber and appt.service_order.subscriber.is_business else 'person/' ~ appt.service_order.subscriber_id }}" class="hover:text-amber-600 dark:hover:text-amber-400 transition-colors">
                                 {{ subscriber_label(appt.service_order.subscriber) }}
                             </a>
                             {% else %}

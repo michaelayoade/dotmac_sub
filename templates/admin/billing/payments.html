@@ -209,7 +209,7 @@
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if payment.account_id %}
                             <a href="/admin/billing/accounts/{{ payment.account_id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
-                                {{ payment.account.organization.name if payment.account and payment.account.organization else payment.account.full_name if payment.account and payment.account.full_name else payment.account.display_name if payment.account and payment.account.display_name else payment.account.account_number if payment.account and payment.account.account_number else 'Account' }}
+                                {{ payment.account.name if payment.account else 'Account' }}
                             </a>
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">—</span>

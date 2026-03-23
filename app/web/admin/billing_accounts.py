@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.notification import NotificationChannel, NotificationStatus
+from app.models.subscriber import SubscriberCategory
 from app.schemas.notification import NotificationCreate
 from app.services import notification as notification_service
 from app.services import subscriber as subscriber_service
@@ -166,8 +167,8 @@ def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_d
 
     account = subscriber_service.accounts.get(db, str(account_id))
     customer_ref = (
-        f"organization:{account.organization_id}"
-        if account.organization_id
+        f"business:{account.id}"
+        if account.category == SubscriberCategory.business
         else f"person:{account.id}"
     )
     form_data = web_billing_accounts_service.build_account_form_data(
@@ -243,8 +244,8 @@ def account_update(
         )
     except Exception as exc:
         customer_ref = (
-            f"organization:{before.organization_id}"
-            if before.organization_id
+            f"business:{before.id}"
+            if before.category == SubscriberCategory.business
             else f"person:{before.id}"
         )
         form_data = web_billing_accounts_service.build_account_form_data(
@@ -342,7 +343,11 @@ def account_statement_csv(
     )
     account_label = (
         account.account_number
-        or (account.organization.name if getattr(account, "organization", None) else "")
+        or (
+            account.company_name
+            if account.category == SubscriberCategory.business
+            else ""
+        )
         or f"Account {str(account.id)[:8]}"
     )
     content = web_billing_statements_service.render_statement_csv(

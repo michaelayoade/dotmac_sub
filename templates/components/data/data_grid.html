@@ -25,12 +25,12 @@
        page=page, total_pages=total_pages, total=total, per_page=per_page,
        current_sort=sort, current_dir=dir
    ) %}
-       {{ cell_link("name", row.display_name, "/admin/customers/" ~ ("organization/" ~ row.organization_id if row.organization_id else "person/" ~ row.id), row.email) }}
+       {{ cell_link("name", row.display_name, "/admin/customers/" ~ ("business/" ~ row.id if row.customer_type == "business" else "person/" ~ row.id), row.email) }}
        {{ cell_status("status", row.status.value|title, "active") }}
        {{ cell_date("created_at", row.created_at) }}
        {{ cell_actions("actions", [
-           {"href": "/admin/customers/" ~ ("organization/" ~ row.organization_id if row.organization_id else "person/" ~ row.id), "icon": "view", "title": "View"},
-           {"href": "/admin/customers/" ~ ("organization/" ~ row.organization_id if row.organization_id else "person/" ~ row.id) ~ "/edit", "icon": "edit", "title": "Edit"},
+           {"href": "/admin/customers/" ~ ("business/" ~ row.id if row.customer_type == "business" else "person/" ~ row.id), "icon": "view", "title": "View"},
+           {"href": "/admin/customers/" ~ ("business/" ~ row.id if row.customer_type == "business" else "person/" ~ row.id) ~ "/edit", "icon": "edit", "title": "Edit"},
        ]) }}
    {% endcall %}
 

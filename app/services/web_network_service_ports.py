@@ -78,7 +78,7 @@ def _resolve_ont_olt_context(
         return ont, olt, None, None
 
     # ONT-ID extraction from external_id
-    # Formats: "5" (plain), "huawei:4194320640.5" (SNMP), "smartolt:SERIAL" (no ID)
+    # Formats: "5" (plain), "huawei:4194320640.5" (SNMP), "external:SERIAL" (no ID)
     ont_id_on_olt = _parse_ont_id_on_olt(ont.external_id)
 
     return ont, olt, fsp, ont_id_on_olt

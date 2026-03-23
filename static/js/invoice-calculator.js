@@ -11,8 +11,8 @@
  * - Sticky totals summary panel
  */
 
-document.addEventListener('alpine:init', () => {
-    Alpine.data('invoiceCalculator', (config = {}) => ({
+function createInvoiceCalculator(config = {}) {
+    return {
         // Invoice metadata
         accountId: config.accountId || '',
         invoiceNumber: config.invoiceNumber || '',
@@ -195,7 +195,7 @@ document.addEventListener('alpine:init', () => {
         getLineItemTax(item) {
             const subtotal = this.getLineItemTotal(item);
             const taxRate = parseFloat(item.taxRate) || 0;
-            return this.round(subtotal * taxRate, 2);
+            return this.round(subtotal * (taxRate / 100), 2);
         },
 
         getLineItemGross(item) {
@@ -317,5 +317,21 @@ document.addEventListener('alpine:init', () => {
                 item.taxRate = taxRate;
             });
         }
-    }));
-});
+    };
+}
+
+window.invoiceCalculator = createInvoiceCalculator;
+
+function registerInvoiceCalculator() {
+    if (!window.Alpine) {
+        return;
+    }
+
+    window.Alpine.data('invoiceCalculator', createInvoiceCalculator);
+}
+
+if (window.Alpine) {
+    registerInvoiceCalculator();
+} else {
+    document.addEventListener('alpine:init', registerInvoiceCalculator);
+}

@@ -5,23 +5,32 @@ from __future__ import annotations
 import logging
 from datetime import datetime
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
-from app.models.network import CPEDevice, DeviceStatus
+from app.models.network import CPEDevice, DeviceStatus, OntAssignment, OntUnit
 from app.models.subscriber import Address, Subscriber
 from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import CPEDeviceCreate, CPEDeviceUpdate
 from app.services import network as network_service
 from app.services.common import coerce_uuid, validate_enum
-from app.services.network._common import decode_huawei_hex_serial
+from app.services.network._common import decode_huawei_hex_serial, normalize_mac_address
 
 logger = logging.getLogger(__name__)
 
 _CPE_META_KEYS = ("winbox_host", "api_host", "api_port", "api_user")
 _CPE_DEVICE_TYPE_OPTIONS = [
     "router",
+    "switch",
+    "hub",
+    "firewall",
+    "inverter",
+    "access_point",
+    "bridge",
     "modem",
+    "server",
+    "other",
 ]
 _CPE_DEFAULT_DEVICE_TYPE = "router"
 
@@ -37,6 +46,52 @@ def _vendor_from_serial(value: str | None) -> str | None:
     if probe.startswith("NK"):
         return "Nokia"
     return None
+
+
+def resolve_authoritative_cpe_mac(db: Session, cpe: CPEDevice) -> str | None:
+    """Return the best MAC for a CPE, preferring linked active ONT inventory."""
+    serial_number = str(getattr(cpe, "serial_number", "") or "").strip()
+    subscriber_id = getattr(cpe, "subscriber_id", None)
+    subscription_id = getattr(cpe, "subscription_id", None)
+
+    if serial_number:
+        ont = db.scalars(
+            select(OntUnit)
+            .where(OntUnit.serial_number == serial_number)
+            .order_by(OntUnit.updated_at.desc(), OntUnit.created_at.desc())
+            .limit(1)
+        ).first()
+        ont_mac = normalize_mac_address(getattr(ont, "mac_address", None))
+        if ont_mac:
+            return ont_mac
+
+    if subscription_id is not None:
+        ont = db.scalars(
+            select(OntUnit)
+            .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
+            .where(OntAssignment.subscription_id == subscription_id)
+            .where(OntAssignment.active.is_(True))
+            .order_by(OntAssignment.updated_at.desc(), OntAssignment.created_at.desc())
+            .limit(1)
+        ).first()
+        ont_mac = normalize_mac_address(getattr(ont, "mac_address", None))
+        if ont_mac:
+            return ont_mac
+
+    if subscriber_id is not None:
+        ont = db.scalars(
+            select(OntUnit)
+            .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
+            .where(OntAssignment.subscriber_id == subscriber_id)
+            .where(OntAssignment.active.is_(True))
+            .order_by(OntAssignment.updated_at.desc(), OntAssignment.created_at.desc())
+            .limit(1)
+        ).first()
+        ont_mac = normalize_mac_address(getattr(ont, "mac_address", None))
+        if ont_mac:
+            return ont_mac
+
+    return normalize_mac_address(getattr(cpe, "mac_address", None))
 
 
 def build_cpe_identity_context(db: Session, cpe: CPEDevice) -> dict[str, object]:
@@ -62,7 +117,7 @@ def build_cpe_identity_context(db: Session, cpe: CPEDevice) -> dict[str, object]
         or str(getattr(linked_tr069, "product_class", "") or "").strip()
         or None
     )
-    mac_address = str(cpe.mac_address or "").strip() or None
+    mac_address = resolve_authoritative_cpe_mac(db, cpe)
     return {
         "linked_tr069": linked_tr069,
         "display_serial": display_serial,
@@ -85,7 +140,7 @@ def _normalize_cpe_device_type(value: str | None) -> str:
     device_type = str(value or "").strip()
     if device_type in _CPE_DEVICE_TYPE_OPTIONS:
         return device_type
-    if device_type in {"cpe", "ont", "access_point", "bridge", "other"}:
+    if device_type in {"cpe", "ont"}:
         return _CPE_DEFAULT_DEVICE_TYPE
     return _CPE_DEFAULT_DEVICE_TYPE
 
@@ -220,14 +275,7 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str | None) -> str:
         return ""
     if not subscriber:
         return ""
-    if subscriber.organization and subscriber.organization.name:
-        label = str(subscriber.organization.name)
-    else:
-        label = (
-            f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
-            or str(getattr(subscriber, "display_name", "") or "").strip()
-            or "Subscriber"
-        )
+    label = str(getattr(subscriber, "name", "") or "").strip() or "Subscriber"
     if subscriber.account_number:
         label = f"{label} ({subscriber.account_number})"
     elif subscriber.subscriber_number:

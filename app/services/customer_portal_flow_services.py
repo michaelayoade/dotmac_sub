@@ -547,6 +547,27 @@ def get_service_detail(
         db, str(subscription.subscriber_id) if subscription else None
     )
 
+    # Renewal context: show renewal banner when contract nearing expiration
+    renewal_context: dict[str, Any] = {"show_renewal": False}
+    if subscription.end_at:
+        days_remaining = (subscription.end_at - datetime.now(UTC)).days
+        if days_remaining <= 30 and subscription.status in (
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+        ):
+            renewal_context = {
+                "show_renewal": True,
+                "days_remaining": max(days_remaining, 0),
+                "end_date": subscription.end_at,
+                "offer_id": str(current_offer.id) if current_offer else None,
+                "offer_name": current_offer.name if current_offer else "Service",
+            }
+
+    # Billing mode for display
+    billing_mode = "postpaid"
+    if subscription.billing_mode:
+        billing_mode = subscription.billing_mode.value
+
     return {
         "subscription": subscription,
         "current_offer": current_offer,
@@ -554,6 +575,9 @@ def get_service_detail(
         "next_billing_date": next_billing_date,
         "fup_status": fup_status,
         "pppoe_credentials": pppoe_creds,
+        "billing_mode": billing_mode,
+        "billing_mode_display": "Prepaid" if billing_mode == "prepaid" else "Postpaid",
+        **renewal_context,
         **copy,
     }
 
@@ -713,4 +737,95 @@ __all__ = [
     "get_service_orders_page",
     "get_service_order_detail",
     "get_installation_detail",
+    "get_suspend_page",
+    "apply_service_suspend",
 ]
+
+
+def get_suspend_page(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+) -> dict | None:
+    """Build context for the vacation hold confirmation page."""
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import resolve_value
+
+    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
+    if enabled is False:
+        return None
+
+    max_days = int(
+        resolve_value(db, SettingDomain.catalog, "max_suspend_days") or 30
+    )
+
+    account_id = customer.get("account_id")
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription or str(subscription.subscriber_id) != str(account_id):
+        return None
+
+    if subscription.status != SubscriptionStatus.active:
+        return None
+
+    offer = subscription.offer
+    return {
+        "subscription": subscription,
+        "offer_name": offer.name if offer else "Service",
+        "billing_mode": subscription.billing_mode.value if subscription.billing_mode else "postpaid",
+        "max_days": max_days,
+    }
+
+
+def apply_service_suspend(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+    days: int,
+) -> dict:
+    """Apply a customer-initiated vacation hold on a subscription."""
+    from app.models.domain_settings import SettingDomain
+    from app.models.enforcement_lock import EnforcementReason
+    from app.services.account_lifecycle import suspend_subscription
+    from app.services.settings_spec import resolve_value
+
+    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
+    if enabled is False:
+        raise ValueError("Self-service suspension is not enabled")
+
+    max_days = int(
+        resolve_value(db, SettingDomain.catalog, "max_suspend_days") or 30
+    )
+    if days < 1 or days > max_days:
+        raise ValueError(f"Suspension must be between 1 and {max_days} days")
+
+    account_id = customer.get("account_id")
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription or str(subscription.subscriber_id) != str(account_id):
+        raise ValueError("Subscription not found")
+
+    if subscription.status != SubscriptionStatus.active:
+        raise ValueError("Only active subscriptions can be suspended")
+
+    subscriber_id = str(subscription.subscriber_id)
+    lock = suspend_subscription(
+        db,
+        subscription_id,
+        reason=EnforcementReason.customer_hold,
+        source=f"customer_portal:vacation_hold:{subscriber_id}",
+        notes=f"Customer-initiated vacation hold for {days} days",
+    )
+
+    db.flush()
+
+    logger.info(
+        "Customer %s suspended subscription %s for %d days (vacation hold)",
+        subscriber_id,
+        subscription_id,
+        days,
+    )
+
+    return {
+        "subscription_id": subscription_id,
+        "days": days,
+        "lock_id": str(lock.id),
+    }

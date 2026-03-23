@@ -41,7 +41,7 @@ from app.services.nas._helpers import (
     TEMPLATE_AUDIT_EXCLUDE_FIELDS,
     extract_enhanced_fields,
     extract_mikrotik_status,
-    list_organizations,
+    list_business_accounts,
     merge_partner_org_tags,
     merge_radius_pool_tags,
     merge_single_tag,
@@ -119,10 +119,12 @@ def build_nas_device_payload(
 
     partner_org_ids = cast(list[str], form.get("partner_org_ids") or [])
     if partner_org_ids:
-        valid_org_ids = {str(org.id) for org in list_organizations(db, limit=5000)}
+        valid_org_ids = {
+            str(account.id) for account in list_business_accounts(db, limit=5000)
+        }
         for org_id in partner_org_ids:
             if org_id not in valid_org_ids:
-                errors.append(f"Invalid organization selected: {org_id}")
+                errors.append(f"Invalid business account selected: {org_id}")
                 break
 
     latitude = cast(str | None, form.get("latitude"))
@@ -705,6 +707,7 @@ def build_nas_device_detail_data(
         "information",
         "connection-rules",
         "vendor-specific",
+        "vlans",
         "device-log",
         "map",
     }:

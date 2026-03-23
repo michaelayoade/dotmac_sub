@@ -21,7 +21,6 @@ from app.services.audit_helpers import log_audit_event
 from app.services.web_subscriber_forms import (
     create_subscriber_with_optional_login,
     resolve_form_customer_ids,
-    resolve_subscriber_for_org,
 )
 
 
@@ -53,7 +52,7 @@ def create_subscriber_from_form(
     customer_search: str | None,
     subscriber_type: str | None,
     person_id: str | None,
-    organization_id: str | None,
+    business_account_id: str | None,
     subscriber_number: str | None,
     subscriber_category: str | None,
     notes: str | None,
@@ -68,7 +67,7 @@ def create_subscriber_from_form(
         customer_search=customer_search,
         subscriber_type=subscriber_type,
         person_id=person_id,
-        organization_id=organization_id,
+        business_account_id=business_account_id,
     )
     if not person_uuid:
         raise ValueError("person_id is required")
@@ -110,14 +109,9 @@ def create_subscriber_from_full_form(
         person_uuid = UUID(created_id)
         organization_uuid = None
     else:
-        subscriber_type = "organization"
+        subscriber_type = "business"
         organization_uuid = UUID(created_id)
-        resolved_person_uuid = resolve_subscriber_for_org(db, organization_uuid)
-        if not resolved_person_uuid:
-            raise ValueError(
-                "Could not resolve a primary subscriber for the organization."
-            )
-        person_uuid = resolved_person_uuid
+        person_uuid = organization_uuid
 
     notes_value = subscriber_notes
     if not notes_value and customer_type == "person":
@@ -190,12 +184,10 @@ def update_subscriber_from_full_form(
             payment_method=form_data.get("payment_method"),
             metadata_json=form_data.get("metadata_json"),
         )
-    elif customer_type == "organization":
-        if not before.organization_id:
-            raise ValueError("Subscriber is not linked to an organization.")
-        web_customer_actions_service.update_organization_customer(
+    elif customer_type == "business":
+        web_customer_actions_service.update_business_customer(
             db=db,
-            customer_id=str(before.organization_id),
+            customer_id=str(before.id),
             name=form_data.get("name") or "",
             legal_name=form_data.get("legal_name"),
             tax_id=form_data.get("tax_id"),
@@ -213,7 +205,7 @@ def update_subscriber_from_full_form(
             payment_method=form_data.get("payment_method"),
         )
     else:
-        raise ValueError("customer_type must be person or organization")
+        raise ValueError("customer_type must be person or business")
 
     payload = SubscriberUpdate(
         subscriber_number=subscriber_number.strip() if subscriber_number else None,
@@ -236,7 +228,7 @@ def build_subscriber_create_form_values(
     customer_search: str | None,
     subscriber_type: str | None,
     person_id: str | None,
-    organization_id: str | None,
+    business_account_id: str | None,
     subscriber_number: str | None,
     subscriber_category: str | None,
     notes: str | None,
@@ -249,7 +241,7 @@ def build_subscriber_create_form_values(
         "customer_search": customer_search or "",
         "subscriber_type": subscriber_type or "",
         "person_id": person_id or "",
-        "organization_id": organization_id or "",
+        "business_account_id": business_account_id or "",
         "subscriber_number": subscriber_number or "",
         "subscriber_category": subscriber_category or "",
         "notes": notes or "",
@@ -267,7 +259,7 @@ def update_subscriber_from_form(
     customer_search: str | None,
     subscriber_type: str | None,
     person_id: str | None,
-    organization_id: str | None,
+    business_account_id: str | None,
     subscriber_number: str | None,
     subscriber_category: str | None,
     notes: str | None,
@@ -280,13 +272,16 @@ def update_subscriber_from_form(
         customer_search=customer_search,
         subscriber_type=subscriber_type,
         person_id=person_id,
-        organization_id=organization_id,
+        business_account_id=business_account_id,
     )
     active = before.is_active if is_active is None else (is_active == "true")
     payload = SubscriberUpdate(
-        organization_id=org_uuid if resolved_type == "organization" else None,
         subscriber_number=subscriber_number.strip() if subscriber_number else None,
-        category=_parse_category(subscriber_category),
+        category=(
+            SubscriberCategory.business
+            if resolved_type == "business"
+            else _parse_category(subscriber_category)
+        ),
         notes=notes.strip() if notes else None,
         is_active=active,
     )

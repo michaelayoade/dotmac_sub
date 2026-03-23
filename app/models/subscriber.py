@@ -23,6 +23,7 @@ from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
 from app.db import Base
+from app.models.catalog import BillingMode
 from app.models.subscription_engine import SettingValueType
 
 
@@ -99,53 +100,6 @@ class ChannelType(enum.Enum):
     whatsapp = "whatsapp"
 
 
-class Organization(Base):
-    """Organization for B2B subscribers."""
-
-    __tablename__ = "organizations"
-
-    id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    name: Mapped[str] = mapped_column(String(160), nullable=False)
-    legal_name: Mapped[str | None] = mapped_column(String(200))
-    tax_id: Mapped[str | None] = mapped_column(String(80))
-    domain: Mapped[str | None] = mapped_column(String(120))
-    website: Mapped[str | None] = mapped_column(String(255))
-    address_line1: Mapped[str | None] = mapped_column(String(120))
-    address_line2: Mapped[str | None] = mapped_column(String(120))
-    city: Mapped[str | None] = mapped_column(String(80))
-    region: Mapped[str | None] = mapped_column(String(80))
-    postal_code: Mapped[str | None] = mapped_column(String(20))
-    country_code: Mapped[str | None] = mapped_column(String(2))
-    notes: Mapped[str | None] = mapped_column(Text)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    primary_login_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=True
-    )
-
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC)
-    )
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True),
-        default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC),
-    )
-
-    subscribers = relationship(
-        "Subscriber",
-        back_populates="organization",
-        primaryjoin="Organization.id == Subscriber.organization_id",
-        foreign_keys="[Subscriber.organization_id]",
-    )
-    primary_login_subscriber = relationship(
-        "Subscriber",
-        foreign_keys=[primary_login_subscriber_id],
-        uselist=False,
-    )
-
-
 class Reseller(Base):
     """Reseller/partner who manages subscribers."""
 
@@ -193,6 +147,11 @@ class Subscriber(Base):
     last_name: Mapped[str] = mapped_column(String(80), nullable=False)
     display_name: Mapped[str | None] = mapped_column(String(120))
     avatar_url: Mapped[str | None] = mapped_column(String(512))
+    company_name: Mapped[str | None] = mapped_column(String(160))
+    legal_name: Mapped[str | None] = mapped_column(String(200))
+    tax_id: Mapped[str | None] = mapped_column(String(80))
+    domain: Mapped[str | None] = mapped_column(String(120))
+    website: Mapped[str | None] = mapped_column(String(255))
 
     email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -234,10 +193,7 @@ class Subscriber(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     marketing_opt_in: Mapped[bool] = mapped_column(Boolean, default=False)
 
-    # === Organization & Reseller ===
-    organization_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id")
-    )
+    # === Reseller ===
     reseller_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("resellers.id")
     )
@@ -261,6 +217,9 @@ class Subscriber(Base):
     # Payment settings
     payment_method: Mapped[str | None] = mapped_column(String(80))
     deposit: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    billing_mode: Mapped[BillingMode] = mapped_column(
+        Enum(BillingMode), default=BillingMode.prepaid
+    )
     billing_day: Mapped[int | None] = mapped_column(Integer)  # Day of month for billing
     payment_due_days: Mapped[int | None] = mapped_column(Integer)  # Days after invoice
     grace_period_days: Mapped[int | None] = mapped_column(Integer)
@@ -296,11 +255,6 @@ class Subscriber(Base):
     )
 
     # === Relationships ===
-    organization = relationship(
-        "Organization",
-        back_populates="subscribers",
-        foreign_keys=[organization_id],
-    )
     reseller = relationship("Reseller", back_populates="subscribers")
     tax_rate = relationship("TaxRate")
 
@@ -329,6 +283,23 @@ class Subscriber(Base):
     def full_name(self) -> str:
         """Return full name."""
         return f"{self.first_name} {self.last_name}"
+
+    @property
+    def is_business(self) -> bool:
+        return self.category == SubscriberCategory.business
+
+    @property
+    def business_name(self) -> str:
+        return (
+            self.company_name
+            or self.display_name
+            or self.full_name.strip()
+            or self.email
+        )
+
+    @property
+    def name(self) -> str:
+        return self.business_name if self.is_business else (self.full_name.strip() or self.email)
 
     @property
     def category(self) -> SubscriberCategory:

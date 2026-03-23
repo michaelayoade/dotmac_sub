@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 from app.models.network import CPEDevice
 from app.models.tr069 import Tr069CpeDevice
 from app.services.genieacs import GenieACSError
-from app.services.network._common import decode_huawei_hex_serial
+from app.services.network._common import decode_huawei_hex_serial, normalize_mac_address
 from app.services.network._resolve import resolve_genieacs_for_cpe
 from app.services.network.ont_tr069 import (
     _ETH_FIELDS,
@@ -25,9 +25,11 @@ from app.services.network.ont_tr069 import (
     _HOST_FIELDS,
     _HOSTS_PATH_DEV,
     _HOSTS_PATH_IGD,
+    OntTR069,
     _extract_group,
     _extract_object_instances,
 )
+from app.services.web_network_cpes import resolve_authoritative_cpe_mac
 
 logger = logging.getLogger(__name__)
 
@@ -192,6 +194,20 @@ class CpeTR069:
                 parsed_oui,
             )
 
+        observed_tr069_mac = OntTR069._choose_mac_address(summary)
+        authoritative_mac = resolve_authoritative_cpe_mac(db, cpe)
+        preferred_mac = authoritative_mac or observed_tr069_mac
+        if preferred_mac:
+            summary.system["MAC Address"] = preferred_mac
+            if authoritative_mac and observed_tr069_mac != authoritative_mac:
+                summary.system["WAN MAC Address"] = observed_tr069_mac
+        if authoritative_mac:
+            normalized_stored_mac = normalize_mac_address(cpe.mac_address)
+            if normalized_stored_mac != authoritative_mac:
+                cpe.mac_address = authoritative_mac
+                db.add(cpe)
+                db.commit()
+                db.refresh(cpe)
         return summary
 
 

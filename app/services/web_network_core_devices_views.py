@@ -7,6 +7,7 @@ import os
 import re
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any
 
 import httpx
@@ -14,11 +15,15 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
+from app.models.catalog import NasDevice, NasDeviceStatus
 from app.models.network import CPEDevice
 from app.models.network_monitoring import (
     DeviceInterface,
+    DeviceRole,
+    DeviceStatus,
     NetworkDevice,
 )
+from app.models.subscriber import SubscriberCategory
 from app.models.provisioning import ProvisioningRun
 from app.services import network as network_service
 from app.services.web_network_core_devices_inventory import (
@@ -29,6 +34,30 @@ from app.services.web_network_core_devices_inventory import (
 logger = logging.getLogger(__name__)
 
 _VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
+
+
+def _nas_status_to_monitoring_status(status: NasDeviceStatus | None) -> DeviceStatus:
+    if status == NasDeviceStatus.maintenance:
+        return DeviceStatus.maintenance
+    if status == NasDeviceStatus.active:
+        return DeviceStatus.online
+    return DeviceStatus.offline
+
+
+def _nas_inventory_stub(device: NasDevice) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=device.id,
+        name=device.name,
+        hostname=device.code,
+        mgmt_ip=device.management_ip or device.ip_address or device.nas_ip,
+        vendor=device.vendor.value if device.vendor else None,
+        model=device.model,
+        serial_number=device.serial_number,
+        role=DeviceRole.access,
+        status=_nas_status_to_monitoring_status(device.status),
+        detail_url=f"/admin/network/nas/devices/{device.id}",
+        edit_url=f"/admin/network/nas/{device.id}/edit",
+    )
 
 
 def _summarize_provisioning_run(run: ProvisioningRun) -> dict[str, object]:
@@ -1513,8 +1542,10 @@ def onts_list_page_data(
                 if subscriber
                 else "",
                 "subscriber_customer_url": (
-                    f"/admin/customers/organization/{subscriber.organization_id}"
-                    if subscriber and getattr(subscriber, "organization_id", None)
+                    f"/admin/customers/business/{subscriber.id}"
+                    if subscriber
+                    and getattr(subscriber, "category", None)
+                    == SubscriberCategory.business
                     else f"/admin/customers/person/{subscriber.id}"
                     if subscriber
                     else ""
@@ -1667,8 +1698,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         sub = assignment.subscriber
         subscriber_info["id"] = str(sub.id)
         subscriber_info["customer_url"] = (
-            f"/admin/customers/organization/{sub.organization_id}"
-            if getattr(sub, "organization_id", None)
+            f"/admin/customers/business/{sub.id}"
+            if getattr(sub, "category", None) == SubscriberCategory.business
             else f"/admin/customers/person/{sub.id}"
         )
         subscriber_info["name"] = _subscriber_display_name(sub)
@@ -1853,6 +1884,32 @@ def consolidated_page_data(
         )
         not in promoted_olt_keys
     ][:200]
+    core_device_keys = {
+        (
+            str(getattr(device, "mgmt_ip", "") or "").strip(),
+            str(getattr(device, "hostname", "") or "").strip(),
+            str(getattr(device, "name", "") or "").strip(),
+        )
+        for device in core_devices
+    }
+    nas_devices = list(
+        db.scalars(
+            select(NasDevice)
+            .where(NasDevice.is_active.is_(True))
+            .order_by(NasDevice.name.asc())
+        ).all()
+    )
+    for nas_device in nas_devices:
+        nas_stub = _nas_inventory_stub(nas_device)
+        key = (
+            str(getattr(nas_stub, "mgmt_ip", "") or "").strip(),
+            str(getattr(nas_stub, "hostname", "") or "").strip(),
+            str(getattr(nas_stub, "name", "") or "").strip(),
+        )
+        if key in promoted_olt_keys or key in core_device_keys:
+            continue
+        core_devices.append(nas_stub)
+        core_device_keys.add(key)
     core_roles = {
         "core": len([d for d in core_devices if d.role and d.role.value == "core"]),
         "distribution": len(

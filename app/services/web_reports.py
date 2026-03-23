@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import InvoiceStatus
 from app.models.network import IPAssignment, IPv4Address, IPv6Address
-from app.models.subscriber import AccountStatus, Subscriber
+from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
 from app.services import billing as billing_service
 from app.services import network as network_service
 from app.services import provisioning as operations_service
@@ -366,7 +366,7 @@ def get_subscribers_report_data(db: Session) -> dict:
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        organization_id=None,
+        business_account_id=None,
         order_by="created_at",
         order_dir="desc",
         limit=1000,
@@ -423,7 +423,7 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        organization_id=None,
+        business_account_id=None,
         order_by="created_at",
         order_dir="desc",
         limit=5000,
@@ -443,13 +443,17 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
     for sub in all_subscribers:
         status = _derive_subscriber_status(sub)
         name = (
-            sub.organization.name
-            if sub.organization
+            sub.company_name
+            if sub.category == SubscriberCategory.business
             else f"{sub.first_name} {sub.last_name}".strip()
             or sub.display_name
             or "Subscriber"
         )
-        subscriber_type = "organization" if sub.organization_id else "person"
+        subscriber_type = (
+            "organization"
+            if sub.category == SubscriberCategory.business
+            else "person"
+        )
         writer.writerow(
             [
                 str(sub.id),
@@ -473,7 +477,7 @@ def get_churn_report_data(db: Session) -> dict:
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        organization_id=None,
+        business_account_id=None,
         order_by="created_at",
         order_dir="desc",
         limit=1000,
@@ -522,7 +526,7 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
     all_subscribers = subscriber_service.subscribers.list(
         db=db,
         subscriber_type=None,
-        organization_id=None,
+        business_account_id=None,
         order_by="created_at",
         order_dir="desc",
         limit=5000,
@@ -565,8 +569,8 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
     writer.writerow(["subscriber_id", "name", "status", "updated_at"])
     for sub in cancelled_subscribers:
         name = (
-            sub.organization.name
-            if sub.organization
+            sub.company_name
+            if sub.category == SubscriberCategory.business
             else f"{sub.first_name} {sub.last_name}".strip()
             or sub.display_name
             or "Subscriber"

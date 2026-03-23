@@ -1,7 +1,20 @@
 {% extends "base.html" %}
 
 {% block body %}
-<div x-data="{ sidebarOpen: window.innerWidth >= 1024, sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true', isDesktop: window.innerWidth >= 1024 }"
+<style>
+    .dark [data-admin-shell] input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+    .dark [data-admin-shell] select:focus,
+    .dark [data-admin-shell] textarea:focus {
+        background-color: rgb(15 23 42);
+        color: rgb(255 255 255);
+    }
+
+    .dark [data-admin-shell] option {
+        background-color: rgb(15 23 42);
+        color: rgb(255 255 255);
+    }
+</style>
+<div data-admin-shell x-data="{ sidebarOpen: window.innerWidth >= 1024, sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true', isDesktop: window.innerWidth >= 1024 }"
      x-init="
         $watch('sidebarCollapsed', val => localStorage.setItem('sidebarCollapsed', val));
         const updateSidebar = () => {

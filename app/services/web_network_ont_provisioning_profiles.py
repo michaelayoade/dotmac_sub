@@ -49,12 +49,12 @@ def _form_bool(form: FormData, key: str) -> bool:
     return _form_str(form, key) == "true"
 
 
-def _get_org_id(request: Request) -> str:
-    """Extract organization ID from the current admin session."""
+def _get_owner_subscriber_id(request: Request) -> str:
+    """Extract the current business account subscriber id, if any."""
     from app.web.admin import get_current_user
 
     user = get_current_user(request)
-    return str(user.get("organization_id", ""))
+    return str(user.get("subscriber_id", ""))
 
 
 def list_context(
@@ -67,10 +67,10 @@ def list_context(
     """Return context dict for the provisioning profile list page."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    org_id = _get_org_id(request)
+    owner_subscriber_id = _get_owner_subscriber_id(request)
     items = ont_provisioning_profiles.list(
         db,
-        organization_id=org_id,
+        owner_subscriber_id=owner_subscriber_id,
         search=search,
         profile_type=profile_type,
         config_method=config_method,
@@ -202,10 +202,10 @@ def handle_create(
     request: Request, db: Session, form_data: dict[str, object]
 ) -> OntProvisioningProfile:
     """Create a new provisioning profile from validated form values."""
-    org_id = _get_org_id(request)
+    owner_subscriber_id = _get_owner_subscriber_id(request)
     return ont_provisioning_profiles.create(
         db,
-        organization_id=org_id,
+        owner_subscriber_id=owner_subscriber_id,
         name=str(form_data["name"]),
         profile_type=OntProfileType(str(form_data["profile_type"])),
         description=str(form_data["description"])

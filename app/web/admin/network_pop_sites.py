@@ -392,8 +392,10 @@ def pop_site_photo_upload(
 
     current_user = get_current_user(request) or {}
     actor_id = current_user.get("subscriber_id")
-    organization_id = (
-        file_uploads.resolve_user_organization(db, actor_id) if actor_id else None
+    owner_subscriber_id = (
+        file_uploads.resolve_user_owner_subscriber(db, actor_id)
+        if actor_id
+        else None
     )
     file_uploads.upload(
         db=db,
@@ -404,7 +406,7 @@ def pop_site_photo_upload(
         content_type=file.content_type,
         data=payload,
         uploaded_by=actor_id,
-        organization_id=organization_id,
+        owner_subscriber_id=owner_subscriber_id,
     )
     return RedirectResponse(
         f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
@@ -444,8 +446,10 @@ def pop_site_document_upload(
 
     current_user = get_current_user(request) or {}
     actor_id = current_user.get("subscriber_id")
-    organization_id = (
-        file_uploads.resolve_user_organization(db, actor_id) if actor_id else None
+    owner_subscriber_id = (
+        file_uploads.resolve_user_owner_subscriber(db, actor_id)
+        if actor_id
+        else None
     )
     file_uploads.upload(
         db=db,
@@ -456,7 +460,7 @@ def pop_site_document_upload(
         content_type=file.content_type,
         data=payload,
         uploaded_by=actor_id,
-        organization_id=organization_id,
+        owner_subscriber_id=owner_subscriber_id,
     )
     return RedirectResponse(
         f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
@@ -480,12 +484,14 @@ def pop_site_file_download(
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request) or {}
-    current_org = (
-        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+    current_owner = (
+        file_uploads.resolve_user_owner_subscriber(
+            db, current_user.get("subscriber_id")
+        )
         if current_user.get("subscriber_id")
         else None
     )
-    file_uploads.assert_tenant_access(record, current_org)
+    file_uploads.assert_owner_access(record, current_owner)
     try:
         stream = file_uploads.stream_file(record)
     except ObjectNotFoundError as exc:
@@ -519,12 +525,14 @@ def pop_site_file_preview(
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request) or {}
-    current_org = (
-        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+    current_owner = (
+        file_uploads.resolve_user_owner_subscriber(
+            db, current_user.get("subscriber_id")
+        )
         if current_user.get("subscriber_id")
         else None
     )
-    file_uploads.assert_tenant_access(record, current_org)
+    file_uploads.assert_owner_access(record, current_owner)
     try:
         stream = file_uploads.stream_file(record)
     except ObjectNotFoundError as exc:
@@ -552,12 +560,14 @@ def pop_site_file_delete(
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request) or {}
-    current_org = (
-        file_uploads.resolve_user_organization(db, current_user.get("subscriber_id"))
+    current_owner = (
+        file_uploads.resolve_user_owner_subscriber(
+            db, current_user.get("subscriber_id")
+        )
         if current_user.get("subscriber_id")
         else None
     )
-    file_uploads.assert_tenant_access(record, current_org)
+    file_uploads.assert_owner_access(record, current_owner)
     file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
     if tab not in {"gallery", "documents"}:
         tab = "documents"

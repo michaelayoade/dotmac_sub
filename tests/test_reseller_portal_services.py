@@ -131,7 +131,8 @@ def test_subscriber_label_with_person():
     person.first_name = "John"
     person.last_name = "Doe"
     person.display_name = None
-    person.organization = None
+    person.company_name = None
+    person.legal_name = None
 
     subscriber = MagicMock()
     subscriber.person = person
@@ -146,7 +147,8 @@ def test_subscriber_label_with_person_display_name():
     person.first_name = ""
     person.last_name = ""
     person.display_name = "Johnny D"
-    person.organization = None
+    person.company_name = None
+    person.legal_name = None
 
     subscriber = MagicMock()
     subscriber.person = person
@@ -161,7 +163,8 @@ def test_subscriber_label_with_person_no_names():
     person.first_name = None
     person.last_name = None
     person.display_name = None
-    person.organization = None
+    person.company_name = None
+    person.legal_name = None
 
     subscriber = MagicMock()
     subscriber.person = person
@@ -170,14 +173,14 @@ def test_subscriber_label_with_person_no_names():
     assert result == "Customer"
 
 
-def test_subscriber_label_with_organization_legal_name():
-    """Test _subscriber_label with organization legal name (B2B)."""
-    org = MagicMock()
-    org.legal_name = "ACME Corporation Inc."
-    org.name = "ACME Corp"
-
+def test_subscriber_label_with_business_legal_name():
+    """Test _subscriber_label with business legal name."""
     person = MagicMock()
-    person.organization = org
+    person.legal_name = "ACME Corporation Inc."
+    person.company_name = "ACME Corp"
+    person.first_name = None
+    person.last_name = None
+    person.display_name = None
 
     subscriber = MagicMock()
     subscriber.person = person
@@ -186,14 +189,14 @@ def test_subscriber_label_with_organization_legal_name():
     assert result == "ACME Corporation Inc."
 
 
-def test_subscriber_label_with_organization_name():
-    """Test _subscriber_label with organization name (B2B)."""
-    org = MagicMock()
-    org.legal_name = None
-    org.name = "ACME Corp"
-
+def test_subscriber_label_with_business_name():
+    """Test _subscriber_label with business company name."""
     person = MagicMock()
-    person.organization = org
+    person.legal_name = None
+    person.company_name = "ACME Corp"
+    person.first_name = None
+    person.last_name = None
+    person.display_name = None
 
     subscriber = MagicMock()
     subscriber.person = person
@@ -202,17 +205,14 @@ def test_subscriber_label_with_organization_name():
     assert result == "ACME Corp"
 
 
-def test_subscriber_label_with_empty_organization():
-    """Test _subscriber_label with empty organization (B2B with missing names)."""
-    org = MagicMock()
-    org.legal_name = None
-    org.name = None
-
+def test_subscriber_label_with_empty_business_fields():
+    """Test _subscriber_label with missing business and person names."""
     person = MagicMock()
+    person.legal_name = None
+    person.company_name = None
     person.first_name = None
     person.last_name = None
     person.display_name = None
-    person.organization = org
 
     subscriber = MagicMock()
     subscriber.person = person

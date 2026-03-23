@@ -23,6 +23,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -156,6 +157,38 @@ def _rollback_service_ports(
     return deleted, errors
 
 
+def _finalize_operation_tracking(
+    db: Session,
+    op: Any | None,
+    result: ProvisioningJobResult,
+) -> None:
+    """Record the final outcome of a tracked provisioning operation.
+
+    No-ops if ``op`` is None (tracking was not enabled). On tracking
+    failure, logs the error but does NOT rollback the session — the
+    provisioning changes must be preserved even if tracking fails.
+    """
+    if op is None:
+        return
+    try:
+        from app.services.network_operations import network_operations
+
+        result_dict = result.to_dict()
+        if result.success:
+            network_operations.mark_succeeded(
+                db, str(op.id), output_payload=result_dict
+            )
+        else:
+            network_operations.mark_failed(
+                db, str(op.id), result.message, output_payload=result_dict
+            )
+    except Exception as track_err:
+        # Log but do NOT rollback — provisioning DB changes must be preserved.
+        # The operation record may be left in 'running' state; the cleanup
+        # task will mark it stale after 4 hours.
+        logger.error("Failed to finalize operation tracker %s: %s", op.id, track_err)
+
+
 class OntProvisioningOrchestrator:
     """Orchestrates end-to-end ONT provisioning."""
 
@@ -172,8 +205,6 @@ class OntProvisioningOrchestrator:
             Subscription,
             SubscriptionStatus,
         )
-        from app.models.domain_settings import SettingDomain
-        from app.services import settings_spec
 
         checks: list[dict] = []
         ont = db.get(OntUnit, coerce_uuid(ont_id))
@@ -369,27 +400,15 @@ class OntProvisioningOrchestrator:
                     }
                 )
             else:
-                pppoe_enabled = settings_spec.resolve_value(
-                    db, SettingDomain.radius, "pppoe_auto_generate_enabled"
+                # PPPoE auto-generation is always enabled
+                checks.append(
+                    {
+                        "name": "PPPoE credential",
+                        "status": "warn",
+                        "message": "None — will auto-generate on activation",
+                        "can_auto_fix": True,
+                    }
                 )
-                if pppoe_enabled is True:
-                    checks.append(
-                        {
-                            "name": "PPPoE credential",
-                            "status": "warn",
-                            "message": "None — will auto-generate",
-                            "can_auto_fix": True,
-                        }
-                    )
-                else:
-                    checks.append(
-                        {
-                            "name": "PPPoE credential",
-                            "status": "fail",
-                            "message": "None — auto-gen disabled",
-                            "can_auto_fix": False,
-                        }
-                    )
         else:
             checks.append(
                 {
@@ -447,8 +466,55 @@ class OntProvisioningOrchestrator:
 
         Returns:
             ProvisioningJobResult with step-by-step results.
+
+        Note:
+            If an unexpected exception propagates from a provisioning step
+            (SSH error, SNMP timeout), the operation record may be left in
+            ``running`` status. The ``cleanup_old_operations`` task marks
+            stale operations as failed after 4 hours.
         """
         result = ProvisioningJobResult(success=False, message="", dry_run=dry_run)
+
+        # ── Track operation ──
+        op = None
+        if not dry_run:
+            try:
+                from app.models.network_operation import (
+                    NetworkOperationTargetType,
+                    NetworkOperationType,
+                )
+                from app.services.network_operations import network_operations
+
+                op = network_operations.start(
+                    db,
+                    NetworkOperationType.ont_provision,
+                    NetworkOperationTargetType.ont,
+                    ont_id,
+                    correlation_key=f"ont_provision:{ont_id}",
+                    input_payload={
+                        "profile_id": profile_id,
+                        "tr069_olt_profile_id": tr069_olt_profile_id,
+                    },
+                )
+                network_operations.mark_running(db, str(op.id))
+                db.flush()
+            except HTTPException as exc:
+                if exc.status_code == 409:
+                    result.message = "Provisioning already in progress for this ONT"
+                    return result
+                logger.warning(
+                    "Operation tracking unavailable (HTTP %s: %s) — "
+                    "provisioning will proceed untracked",
+                    exc.status_code, exc.detail,
+                )
+                op = None
+            except Exception as track_err:
+                logger.warning(
+                    "Operation tracking unavailable (%s) — "
+                    "provisioning will proceed untracked",
+                    track_err,
+                )
+                op = None
 
         # ── Step 1: Resolve context ──
         step_start = time.monotonic()
@@ -459,6 +525,7 @@ class OntProvisioningOrchestrator:
                 ProvisioningStepResult(1, "Resolve Context", False, "ONT not found")
             )
             result.message = "ONT not found"
+            _finalize_operation_tracking(db, op, result)
             return result
 
         if not olt or not fsp or olt_ont_id is None:
@@ -468,6 +535,7 @@ class OntProvisioningOrchestrator:
                 )
             )
             result.message = "Cannot resolve OLT context"
+            _finalize_operation_tracking(db, op, result)
             return result
 
         profile = db.get(OntProvisioningProfile, profile_id)
@@ -476,6 +544,7 @@ class OntProvisioningOrchestrator:
                 ProvisioningStepResult(1, "Resolve Context", False, "Profile not found")
             )
             result.message = "Provisioning profile not found"
+            _finalize_operation_tracking(db, op, result)
             return result
 
         # Build provisioning context
@@ -545,6 +614,7 @@ class OntProvisioningOrchestrator:
                     3, "Dry Run", True, "Commands generated, not executed"
                 )
             )
+            _finalize_operation_tracking(db, op, result)
             return result
 
         # ── Step 3b: Validate VLAN chain ──
@@ -596,6 +666,7 @@ class OntProvisioningOrchestrator:
             if sp_created == 0:
                 result.message = "Service-port creation failed"
                 _finalize_ont(db, ont, profile_id=profile_id, success=False)
+                _finalize_operation_tracking(db, op, result)
                 return result
         else:
             result.steps.append(
@@ -737,6 +808,7 @@ class OntProvisioningOrchestrator:
                 result.success = False
                 result.message = "Provisioning incomplete — TR-069 bootstrap timed out"
                 _finalize_ont(db, ont, profile_id=profile_id, success=False)
+                _finalize_operation_tracking(db, op, result)
                 return result
         else:
             result.steps.append(
@@ -983,6 +1055,7 @@ class OntProvisioningOrchestrator:
             result.success = True
             result.message = "Provisioning complete"
 
+        _finalize_operation_tracking(db, op, result)
         return result
 
 

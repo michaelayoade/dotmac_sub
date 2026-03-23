@@ -35,6 +35,7 @@ from app.tasks.network_monitoring import (
     refresh_core_device_ping,
     refresh_core_device_snmp,
 )
+from app.tasks.network_operations import cleanup_old_operations
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
@@ -86,6 +87,7 @@ from app.tasks.wireguard import (
 )
 
 __all__ = [
+    "cleanup_old_operations",
     "sync_gis_sources",
     "run_batch_geocode_job",
     "run_import_job",

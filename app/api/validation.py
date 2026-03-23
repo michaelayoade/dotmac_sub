@@ -79,7 +79,7 @@ def validate_form(
 
     Supported form types:
     - person: Person/individual customer form
-    - organization: Organization/business form
+    - business: Business customer form
     - invoice: Invoice form
     """
     errors = validation_api_service.validate_form(

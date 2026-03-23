@@ -28,3 +28,23 @@ def run_invoice_cycle() -> dict[str, int]:
         raise
     finally:
         session.close()
+
+
+@celery_app.task(name="app.tasks.billing.mark_invoices_overdue")
+def mark_invoices_overdue() -> dict[str, int]:
+    """Hourly task: detect past-due invoices and trigger enforcement."""
+    logger.info("Starting overdue invoice detection")
+    session = SessionLocal()
+    try:
+        result = billing_automation_service.mark_overdue_invoices(session)
+        logger.info(
+            "Overdue detection completed: %d marked",
+            result.get("marked_overdue", 0),
+        )
+        return result
+    except Exception as e:
+        logger.error("Overdue invoice detection failed: %s", e)
+        session.rollback()
+        raise
+    finally:
+        session.close()

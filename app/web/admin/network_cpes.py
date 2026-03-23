@@ -1,6 +1,7 @@
 """Admin network CPE management routes."""
 
 import json
+import logging
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -9,11 +10,14 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_network_cpe_actions as web_network_cpe_actions_service
 from app.services import web_network_cpes as web_network_cpes_service
+from app.services import web_network_operations as web_network_operations_service
 from app.services.audit_helpers import build_audit_activities, log_audit_event
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
+logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
@@ -141,6 +145,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
     try:
         cpe = web_network_cpes_service.create_cpe(db, values)
     except Exception as exc:
+        logger.error("Failed to create CPE: %s", exc, exc_info=True)
         db.rollback()
         context = _base_context(request, db, active_page="cpes")
         context.update(
@@ -150,7 +155,7 @@ def cpe_create(request: Request, db: Session = Depends(get_db)):
                 **web_network_cpes_service.cpe_form_reference_data(
                     db, subscriber_id=str(values.get("subscriber_id") or "")
                 ),
-                "error": str(exc),
+                "error": "Failed to create CPE. Please check the form and try again.",
             }
         )
         return templates.TemplateResponse("admin/network/cpes/form.html", context)
@@ -236,6 +241,7 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
     try:
         cpe = web_network_cpes_service.update_cpe(db, cpe_id=cpe_id, values=values)
     except Exception as exc:
+        logger.error("Failed to update CPE %s: %s", cpe_id, exc, exc_info=True)
         db.rollback()
         context = _base_context(request, db, active_page="cpes")
         context.update(
@@ -247,7 +253,7 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
                 **web_network_cpes_service.cpe_form_reference_data(
                     db, subscriber_id=str(values.get("subscriber_id") or "")
                 ),
-                "error": str(exc),
+                "error": "Failed to update CPE. Please check the form and try again.",
             }
         )
         return templates.TemplateResponse("admin/network/cpes/form.html", context)
@@ -274,8 +280,15 @@ def cpe_update(request: Request, cpe_id: str, db: Session = Depends(get_db)):
 def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     try:
         cpe = web_network_cpes_service.get_cpe(db, cpe_id=cpe_id)
-    except Exception:
+    except (HTTPException, ValueError, LookupError):
         message = quote_plus("CPE not found")
+        return RedirectResponse(
+            f"/admin/network/cpes/{cpe_id}?test_status=error&test_message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        logger.error("Failed to load CPE %s for API test: %s", cpe_id, exc, exc_info=True)
+        message = quote_plus("Failed to load CPE")
         return RedirectResponse(
             f"/admin/network/cpes/{cpe_id}?test_status=error&test_message={message}",
             status_code=303,
@@ -330,6 +343,13 @@ def cpe_detail(
     identity = web_network_cpes_service.build_cpe_identity_context(db, cpe)
     tr069_summary = CpeTR069.get_device_summary(db, cpe_id)
     activities = build_audit_activities(db, "cpe", str(cpe_id), limit=20)
+    try:
+        operations = web_network_operations_service.build_operation_history(
+            db, "cpe", str(cpe_id), limit=10
+        )
+    except Exception:
+        logger.error("Failed to load operation history for CPE %s", cpe_id, exc_info=True)
+        operations = []
     context = _base_context(request, db, active_page="cpes")
     context.update(
         {
@@ -340,6 +360,7 @@ def cpe_detail(
             "cpe_notes": cleaned_notes,
             "is_mikrotik": "mikrotik" in str(cpe.vendor or "").lower(),
             "activities": activities,
+            "operations": operations,
             "test_status": test_status,
             "test_message": test_message,
         }
@@ -420,12 +441,13 @@ def cpe_reboot(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Reboot CPE device via TR-069."""
-    from app.services.network.cpe_actions import CpeActions
-
-    result = CpeActions.reboot(db, cpe_id)
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_cpe_actions_service.execute_reboot(
+        db, cpe_id, initiated_by=actor_name
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -446,12 +468,13 @@ def cpe_factory_reset(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Factory reset CPE device via TR-069."""
-    from app.services.network.cpe_actions import CpeActions
-
-    result = CpeActions.factory_reset(db, cpe_id)
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_cpe_actions_service.execute_factory_reset(
+        db, cpe_id, initiated_by=actor_name
+    )
     log_audit_event(
         db=db,
         request=request,
@@ -546,9 +569,13 @@ def cpe_connection_request(
     request: Request, cpe_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Send connection request to CPE device."""
-    from app.services.network.cpe_actions import CpeActions
+    from app.web.admin import get_current_user
 
-    result = CpeActions.send_connection_request(db, cpe_id)
+    current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    result = web_network_cpe_actions_service.execute_connection_request(
+        db, cpe_id, initiated_by=actor_name
+    )
     return _cpe_action_response(result)
 
 

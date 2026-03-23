@@ -279,6 +279,29 @@ def build_beat_schedule() -> dict:
             enabled=billing_enabled,
             interval_seconds=billing_interval_seconds,
         )
+        # Overdue invoice detection — independent of billing cycle
+        overdue_enabled = _effective_bool(
+            session,
+            SettingDomain.billing,
+            "overdue_check_enabled",
+            "BILLING_OVERDUE_CHECK_ENABLED",
+            True,
+        )
+        overdue_interval = _effective_int(
+            session,
+            SettingDomain.billing,
+            "overdue_check_interval_seconds",
+            "BILLING_OVERDUE_CHECK_INTERVAL_SECONDS",
+            3600,
+        )
+        overdue_interval = max(overdue_interval, 300)
+        _sync_scheduled_task(
+            session,
+            name="overdue_checker",
+            task_name="app.tasks.billing.mark_invoices_overdue",
+            enabled=overdue_enabled,
+            interval_seconds=overdue_interval,
+        )
         dunning_enabled = _effective_bool(
             session,
             SettingDomain.collections,

@@ -8,7 +8,7 @@ import re
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.subscriber import Organization, Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 
 logger = logging.getLogger(__name__)
 
@@ -88,11 +88,19 @@ def validate_org_name_unique(
 ) -> tuple[bool, str | None]:
     if not name:
         return True, None
-    query = db.query(Organization).filter(func.lower(Organization.name) == name.lower())
+    query = db.query(Subscriber).filter(
+        func.lower(Subscriber.company_name) == name.lower()
+    )
+    query = query.filter(
+        func.lower(
+            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+        )
+        == SubscriberCategory.business.value
+    )
     if exclude_id:
-        query = query.filter(Organization.id != exclude_id)
+        query = query.filter(Subscriber.id != exclude_id)
     if query.first() is not None:
-        return False, "An organization with this name already exists"
+        return False, "A business customer with this name already exists"
     return True, None
 
 

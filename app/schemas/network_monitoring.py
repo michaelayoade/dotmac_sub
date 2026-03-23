@@ -30,7 +30,7 @@ class PopSiteBase(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     zone_id: UUID | None = None
-    organization_id: UUID | None = None
+    owner_subscriber_id: UUID | None = None
     reseller_id: UUID | None = None
     notes: str | None = None
     is_active: bool = True
@@ -52,7 +52,7 @@ class PopSiteUpdate(BaseModel):
     latitude: float | None = None
     longitude: float | None = None
     zone_id: UUID | None = None
-    organization_id: UUID | None = None
+    owner_subscriber_id: UUID | None = None
     reseller_id: UUID | None = None
     notes: str | None = None
     is_active: bool | None = None

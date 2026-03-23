@@ -336,7 +336,11 @@ def build_network_map_context(db: Session) -> dict:
             Address.latitude,
             Address.longitude,
             Subscriber.id.label("subscriber_id"),
-            Subscriber.organization_id.label("organization_id"),
+            Subscriber.company_name,
+            Subscriber.display_name,
+            Subscriber.metadata_["subscriber_category"]
+            .as_string()
+            .label("subscriber_category"),
             Subscriber.first_name,
             Subscriber.last_name,
             (active_sessions_subq.c.subscriber_id.isnot(None)).label("is_online"),
@@ -357,10 +361,12 @@ def build_network_map_context(db: Session) -> dict:
     customer_addresses = customer_addresses_query.all()
 
     for addr in customer_addresses:
+        is_business = str(addr.subscriber_category or "").lower() == "business"
         subscriber_name = (
-            f"{addr.first_name or ''} {addr.last_name or ''}".strip()
-            or "Unknown Customer"
-        )
+            (addr.company_name or "").strip()
+            if is_business
+            else f"{addr.first_name or ''} {addr.last_name or ''}".strip()
+        ) or (addr.display_name or "").strip() or "Unknown Customer"
         is_online = bool(addr.is_online)
         features.append(
             {
@@ -376,9 +382,7 @@ def build_network_map_context(db: Session) -> dict:
                     "address": addr.address_line1,
                     "city": addr.city or "",
                     "subscriber_id": str(addr.subscriber_id),
-                    "organization_id": str(addr.organization_id)
-                    if addr.organization_id
-                    else None,
+                    "customer_type": "business" if is_business else "person",
                     "is_online": is_online,
                 },
             }

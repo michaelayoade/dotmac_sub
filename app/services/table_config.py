@@ -15,7 +15,7 @@ from sqlalchemy.orm import Query, Session
 from app.models.catalog import CatalogOffer, NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import PopSite
-from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
+from app.models.subscriber import Reseller, Subscriber, SubscriberCategory, SubscriberStatus
 from app.models.table_column_config import TableColumnConfig
 from app.models.table_column_default_config import TableColumnDefaultConfig
 from app.schemas.table_config import (
@@ -576,9 +576,9 @@ class TableConfigurationService:
                 "code",
             ):
                 if hasattr(definition.model, field_name):
-                    search_columns.append(
-                        getattr(definition.model, field_name).ilike(like_term)
-                    )
+                    field = getattr(definition.model, field_name)
+                    if hasattr(field, "ilike"):
+                        search_columns.append(field.ilike(like_term))
             if search_columns:
                 query = query.filter(or_(*search_columns))
 
@@ -641,7 +641,24 @@ class TableConfigurationService:
 
 
 def _full_name_expression(model: type) -> Any:
-    return func.trim(model.first_name + literal(" ") + model.last_name)
+    person_name = func.trim(model.first_name + literal(" ") + model.last_name)
+    return case(
+        (
+            _is_business_expression(model),
+            func.coalesce(model.company_name, model.display_name, person_name),
+        ),
+        else_=person_name,
+    )
+
+
+def _category_value_expression(model: type) -> Any:
+    return func.lower(
+        func.coalesce(model.metadata_["subscriber_category"].as_string(), "")
+    )
+
+
+def _is_business_expression(model: type) -> Any:
+    return _category_value_expression(model) == SubscriberCategory.business.value
 
 
 def _activation_state_expression(model: type) -> Any:
@@ -652,9 +669,13 @@ def _activation_state_expression(model: type) -> Any:
 
 def _customer_type_expression(model: type) -> Any:
     return case(
-        (model.organization_id.is_not(None), literal("organization")),
+        (_is_business_expression(model), literal("business")),
         else_=literal("person"),
     )
+
+
+def _business_account_id_expression(model: type) -> Any:
+    return case((_is_business_expression(model), model.id), else_=literal(None))
 
 
 def _approval_status_expression(model: type) -> Any:
@@ -789,7 +810,6 @@ TableRegistry.register(
         "marketing_opt_in",
         "created_at",
         "updated_at",
-        "organization_id",
         "reseller_id",
         "min_balance",
     ],
@@ -820,9 +840,9 @@ TableRegistry.register(
             filterable=True,
             expression_resolver=_customer_type_expression,
             filter_resolver=lambda query, model, value: query.filter(
-                model.organization_id.is_not(None)
-                if str(value).lower() == "organization"
-                else model.organization_id.is_(None)
+                _is_business_expression(model)
+                if str(value).lower() == "business"
+                else ~_is_business_expression(model)
             ),
             is_computed=True,
         ),
@@ -890,6 +910,15 @@ TableRegistry.register(
             hidden_by_default=True,
         ),
         TableFieldDefinition(
+            key="business_account_id",
+            label="Business Account ID",
+            sortable=False,
+            filterable=False,
+            expression_resolver=_business_account_id_expression,
+            is_computed=True,
+            hidden_by_default=True,
+        ),
+        TableFieldDefinition(
             key="subscription_name",
             label="Subscription",
             sortable=True,
@@ -909,10 +938,9 @@ TableRegistry.register(
         "user_type": {"label": "Role/State"},
         "billing_enabled": {"label": "Approval Status"},
         "marketing_opt_in": {"label": "Tier Flag"},
-        "organization_id": {"label": "Organization ID", "hidden_by_default": True},
         "reseller_id": {"label": "Reseller ID", "hidden_by_default": True},
     },
-    row_meta_fields=["id", "customer_type", "organization_id"],
+    row_meta_fields=["id", "customer_type", "business_account_id"],
 )
 
 TableRegistry.register(
@@ -931,7 +959,6 @@ TableRegistry.register(
         "user_type",
         "billing_enabled",
         "marketing_opt_in",
-        "organization_id",
         "created_at",
         "updated_at",
     ],
@@ -962,9 +989,9 @@ TableRegistry.register(
             filterable=True,
             expression_resolver=_customer_type_expression,
             filter_resolver=lambda query, model, value: query.filter(
-                model.organization_id.is_not(None)
-                if str(value).lower() == "organization"
-                else model.organization_id.is_(None)
+                _is_business_expression(model)
+                if str(value).lower() == "business"
+                else ~_is_business_expression(model)
             ),
             is_computed=True,
         ),
@@ -997,6 +1024,15 @@ TableRegistry.register(
             filterable=False,
             expression_resolver=_reseller_name_expression,
             is_computed=True,
+        ),
+        TableFieldDefinition(
+            key="business_account_id",
+            label="Business Account ID",
+            sortable=False,
+            filterable=False,
+            expression_resolver=_business_account_id_expression,
+            is_computed=True,
+            hidden_by_default=True,
         ),
         TableFieldDefinition(
             key="subscription_name",

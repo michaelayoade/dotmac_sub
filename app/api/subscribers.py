@@ -7,9 +7,6 @@ from app.schemas.subscriber import (
     AddressCreate,
     AddressRead,
     AddressUpdate,
-    OrganizationCreate,
-    OrganizationRead,
-    OrganizationUpdate,
     ResellerCreate,
     ResellerRead,
     ResellerUpdate,
@@ -24,68 +21,6 @@ from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter()
-
-
-@router.post(
-    "/organizations",
-    response_model=OrganizationRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["organizations"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
-)
-def create_organization(payload: OrganizationCreate, db: Session = Depends(get_db)):
-    return subscriber_service.organizations.create(db, payload)
-
-
-@router.get(
-    "/organizations/{organization_id}",
-    response_model=OrganizationRead,
-    tags=["organizations"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
-)
-def get_organization(organization_id: str, db: Session = Depends(get_db)):
-    return subscriber_service.organizations.get(db, organization_id)
-
-
-@router.get(
-    "/organizations",
-    response_model=ListResponse[OrganizationRead],
-    tags=["organizations"],
-    dependencies=[Depends(require_permission("subscriber:read"))],
-)
-def list_organizations(
-    name: str | None = Query(default=None, max_length=160),
-    order_by: str = Query(default="name"),
-    order_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-):
-    return subscriber_service.organizations.list_response(
-        db, name, order_by, order_dir, limit, offset
-    )
-
-
-@router.patch(
-    "/organizations/{organization_id}",
-    response_model=OrganizationRead,
-    tags=["organizations"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
-)
-def update_organization(
-    organization_id: str, payload: OrganizationUpdate, db: Session = Depends(get_db)
-):
-    return subscriber_service.organizations.update(db, organization_id, payload)
-
-
-@router.delete(
-    "/organizations/{organization_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    tags=["organizations"],
-    dependencies=[Depends(require_permission("subscriber:write"))],
-)
-def delete_organization(organization_id: str, db: Session = Depends(get_db)):
-    subscriber_service.organizations.delete(db, organization_id)
 
 
 @router.post(
@@ -180,7 +115,6 @@ def get_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
 def list_subscribers(
     subscriber_type: str | None = None,
     person_id: str | None = None,
-    organization_id: str | None = None,
     order_by: str = Query(default="created_at"),
     order_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     limit: int = Query(default=50, ge=1, le=200),
@@ -190,7 +124,7 @@ def list_subscribers(
     return subscriber_service.subscribers.list_response(
         db,
         person_id,
-        organization_id,
+        None,
         subscriber_type,
         order_by,
         order_dir,

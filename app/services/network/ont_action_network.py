@@ -4,8 +4,15 @@ from __future__ import annotations
 
 import logging
 
+import httpx
+from fastapi import HTTPException
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.models.domain_settings import SettingDomain
+from app.models.network import CPEDevice
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
+from app.services.credential_crypto import decrypt_credential
 from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
@@ -14,8 +21,96 @@ from app.services.network.ont_action_common import (
     get_ont_or_error,
     resolve_client_or_error,
 )
+from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
+
+
+def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
+    expr = func.upper(column)
+    for token in ("-", " ", ":", ".", "_", "/"):
+        expr = func.replace(expr, token, "")
+    return expr
+
+
+def _normalize_serial(value: str | None) -> str:
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _send_connection_request_http(
+    conn_url: str,
+    username: str = "",
+    password: str = "",
+) -> int:
+    with httpx.Client(timeout=10.0) as http:
+        if username:
+            response = http.get(
+                str(conn_url),
+                auth=httpx.DigestAuth(str(username), str(password)),
+            )
+        else:
+            response = http.get(str(conn_url))
+    return response.status_code
+
+
+def _resolve_ont_fallback_connection_request_auth(
+    db: Session,
+    serial_number: str | None,
+) -> tuple[str, str] | None:
+    server: Tr069AcsServer | None = None
+
+    cpe = None
+    serial = str(serial_number or "").strip()
+    if serial:
+        normalized_serial = _normalize_serial(serial)
+        cpe = db.scalars(
+            select(CPEDevice)
+            .where(
+                _normalized_serial_expr(CPEDevice.serial_number) == normalized_serial
+            )
+            .order_by(CPEDevice.updated_at.desc(), CPEDevice.created_at.desc())
+            .limit(1)
+        ).first()
+    linked = None
+    if cpe is not None:
+        linked = db.scalars(
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.cpe_device_id == cpe.id)
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .order_by(
+                Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc()
+            )
+            .limit(1)
+        ).first()
+    if linked is None and serial:
+        normalized_serial = _normalize_serial(serial)
+        linked = db.scalars(
+            select(Tr069CpeDevice)
+            .where(
+                _normalized_serial_expr(Tr069CpeDevice.serial_number)
+                == normalized_serial
+            )
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .order_by(
+                Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc()
+            )
+            .limit(1)
+        ).first()
+    if linked and linked.acs_server_id:
+        server = db.get(Tr069AcsServer, linked.acs_server_id)
+    if server is None:
+        default_server_id = resolve_value(
+            db, SettingDomain.tr069, "default_acs_server_id"
+        )
+        if default_server_id:
+            server = db.get(Tr069AcsServer, str(default_server_id))
+    if not server:
+        return None
+    username = str(server.connection_request_username or "").strip()
+    password = decrypt_credential(server.connection_request_password) or ""
+    if not username and not password:
+        return None
+    return username, password
 
 
 def set_connection_request_credentials(
@@ -125,35 +220,104 @@ def send_connection_request(db: Session, ont_id: str) -> ActionResult:
         or ""
     )
 
-    import httpx
-
     try:
-        with httpx.Client(timeout=10.0) as http:
-            if conn_user:
-                auth = httpx.DigestAuth(str(conn_user), str(conn_pass))
-                resp = http.get(str(conn_url), auth=auth)
-            else:
-                resp = http.get(str(conn_url))
-        if resp.status_code in (200, 204):
+        status_code = _send_connection_request_http(
+            str(conn_url),
+            str(conn_user),
+            str(conn_pass),
+        )
+        if status_code == 401:
+            fallback_auth = _resolve_ont_fallback_connection_request_auth(
+                db, ont.serial_number
+            )
+            if fallback_auth:
+                fallback_user, fallback_pass = fallback_auth
+                if (fallback_user, fallback_pass) != (str(conn_user), str(conn_pass)):
+                    status_code = _send_connection_request_http(
+                        str(conn_url),
+                        fallback_user,
+                        fallback_pass,
+                    )
+        if status_code in (200, 204):
             logger.info(
                 "Connection request sent to ONT %s at %s", ont.serial_number, conn_url
             )
             return ActionResult(
                 success=True,
-                message=f"Connection request sent to {ont.serial_number} ({resp.status_code}).",
+                message=f"Connection request sent to {ont.serial_number} ({status_code}).",
             )
         logger.warning(
             "Connection request to ONT %s returned %d",
             ont.serial_number,
-            resp.status_code,
+            status_code,
         )
         return ActionResult(
             success=False,
-            message=f"Connection request returned HTTP {resp.status_code}.",
+            message=f"Connection request returned HTTP {status_code}.",
         )
     except httpx.RequestError as exc:
         logger.error("Connection request failed for ONT %s: %s", ont.serial_number, exc)
         return ActionResult(success=False, message=f"Connection request failed: {exc}")
+
+
+def send_connection_request_tracked(
+    db: Session,
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+) -> ActionResult:
+    """Tracked wrapper around send_connection_request.
+
+    Creates a NetworkOperation record to track the action lifecycle,
+    then delegates to the existing function.
+    """
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+
+    try:
+        op = network_operations.start(
+            db,
+            NetworkOperationType.ont_send_conn_request,
+            NetworkOperationTargetType.ont,
+            ont_id,
+            correlation_key=f"ont_conn_req:{ont_id}",
+            initiated_by=initiated_by,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return ActionResult(
+                success=False,
+                message="A connection request is already in progress for this ONT.",
+            )
+        raise
+    network_operations.mark_running(db, str(op.id))
+    db.flush()
+
+    try:
+        result = send_connection_request(db, ont_id)
+        try:
+            if result.success:
+                network_operations.mark_succeeded(
+                    db, str(op.id), output_payload=result.data
+                )
+            else:
+                network_operations.mark_failed(db, str(op.id), result.message)
+        except Exception as track_err:
+            logger.error("Failed to record operation outcome for %s: %s", op.id, track_err)
+        return result
+    except Exception as exc:
+        try:
+            network_operations.mark_failed(db, str(op.id), str(exc))
+        except Exception as track_err:
+            logger.error(
+                "Failed to record operation failure for %s: %s (original: %s)",
+                op.id, track_err, exc,
+            )
+            db.rollback()
+        raise
 
 
 def set_pppoe_credentials(

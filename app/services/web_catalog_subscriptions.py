@@ -536,13 +536,9 @@ def _generated_service_password(subscriber: Subscriber) -> str:
     return str(subscriber.id)
 
 
-def _pppoe_auto_generate_enabled(db: Session) -> bool:
-    return (
-        settings_spec.resolve_value(
-            db, SettingDomain.radius, "pppoe_auto_generate_enabled"
-        )
-        is True
-    )
+def _pppoe_auto_generate_enabled(db: Session) -> bool:  # noqa: ARG001
+    """PPPoE auto-generation is always enabled — credentials are mandatory."""
+    return True
 
 
 def _pool_allows_network_broadcast(pool: IpPool | None) -> bool:
@@ -1635,14 +1631,10 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str) -> str:
         subscriber = subscriber_service.subscribers.get(
             db=db, subscriber_id=subscriber_id
         )
-        if subscriber.organization:
-            label = str(subscriber.organization.name or "")
-        else:
-            label = (
-                f"{subscriber.first_name} {subscriber.last_name}".strip()
-                or subscriber.display_name
-                or "Subscriber"
-            )
+        label = (
+            str(getattr(subscriber, "name", "") or "").strip()
+            or "Subscriber"
+        )
         if subscriber.subscriber_number:
             label = f"{label} ({subscriber.subscriber_number})"
         return str(label)

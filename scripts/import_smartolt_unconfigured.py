@@ -44,7 +44,16 @@ if str(ROOT) not in sys.path:
 
 from app.db import SessionLocal
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
-from app.models.network import GponChannel, OLTDevice, OnuOnlineStatus, OntAssignment, OntUnit, PonPort, PonType, WanMode
+from app.models.network import (
+    GponChannel,
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+    OnuOnlineStatus,
+    PonPort,
+    PonType,
+    WanMode,
+)
 from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber
 from app.services.credential_crypto import encrypt_credential

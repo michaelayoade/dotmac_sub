@@ -1112,6 +1112,10 @@
 
     {# ===================== ACTIVITY TAB ===================== #}
     <div x-show="activeTab === 'activity'" x-transition x-cloak>
+        {% call card("Network Operations", color="blue") %}
+        {% include "admin/network/_operations_history.html" %}
+        {% endcall %}
+
         {% call card("Recent Activity", color="slate") %}
         {% if activities %}
         <div class="space-y-3">

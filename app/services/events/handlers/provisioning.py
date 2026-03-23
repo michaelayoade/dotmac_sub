@@ -46,6 +46,8 @@ class ProvisioningHandler:
         self._push_nas_provisioning(db, str(subscription_id))
         # Step 4: Auto-provision assigned ONT if subscriber has one
         self._auto_provision_ont(db, str(subscription_id))
+        # Step 5: Mark related service orders as active (completed)
+        self._complete_service_orders(db, str(subscription_id))
 
     def _sync_radius_on_activation(self, db: Session, subscription_id: str) -> None:
         """Reconcile RADIUS state for the activated subscription."""
@@ -243,6 +245,39 @@ class ProvisioningHandler:
         except Exception as exc:
             logger.warning(
                 "ONT auto-provisioning error for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+    def _complete_service_orders(self, db: Session, subscription_id: str) -> None:
+        """Mark pending service orders as active when subscription activates."""
+        try:
+            from app.models.provisioning import ServiceOrder, ServiceOrderStatus
+
+            orders = (
+                db.query(ServiceOrder)
+                .filter(
+                    ServiceOrder.subscription_id == coerce_uuid(subscription_id),
+                    ServiceOrder.status.in_([
+                        ServiceOrderStatus.submitted,
+                        ServiceOrderStatus.scheduled,
+                        ServiceOrderStatus.provisioning,
+                    ]),
+                )
+                .all()
+            )
+            for order in orders:
+                order.status = ServiceOrderStatus.active
+            if orders:
+                db.flush()
+                logger.info(
+                    "Completed %d service order(s) for subscription %s",
+                    len(orders),
+                    subscription_id,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to complete service orders for subscription %s: %s",
                 subscription_id,
                 exc,
             )

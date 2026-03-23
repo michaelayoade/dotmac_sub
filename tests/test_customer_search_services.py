@@ -1,7 +1,7 @@
 """Tests for customer_search service."""
 
 
-from app.models.subscriber import Organization
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services import customer_search as customer_search_service
 
 
@@ -44,9 +44,15 @@ class TestSearch:
         result = customer_search_service.search(db_session, person.email.split("@")[0])
         assert len(result) >= 1
 
-    def test_finds_organization_by_name(self, db_session):
-        """Test finds organization by name."""
-        org = Organization(name="Acme Corporation")
+    def test_finds_business_by_name(self, db_session):
+        """Test finds business customer by name."""
+        org = Subscriber(
+            first_name="Acme",
+            last_name="Business",
+            email="billing@acme.example.com",
+            company_name="Acme Corporation",
+        )
+        org.category = SubscriberCategory.business
         db_session.add(org)
         db_session.commit()
 
@@ -54,12 +60,19 @@ class TestSearch:
         assert len(result) >= 1
         org_result = next((r for r in result if r["id"] == org.id), None)
         assert org_result is not None
-        assert org_result["type"] == "organization"
-        assert org_result["ref"] == f"organization:{org.id}"
+        assert org_result["type"] == "business"
+        assert org_result["ref"] == f"business:{org.id}"
 
-    def test_finds_organization_by_domain(self, db_session):
-        """Test finds organization by domain."""
-        org = Organization(name="Test Corp", domain="testcorp.com")
+    def test_finds_business_by_domain(self, db_session):
+        """Test finds business customer by domain."""
+        org = Subscriber(
+            first_name="Test",
+            last_name="Business",
+            email="billing@testcorp.example.com",
+            company_name="Test Corp",
+            domain="testcorp.com",
+        )
+        org.category = SubscriberCategory.business
         db_session.add(org)
         db_session.commit()
 
@@ -83,8 +96,20 @@ class TestSearch:
 
     def test_results_are_sorted_alphabetically(self, db_session):
         """Test results are sorted alphabetically by label."""
-        org1 = Organization(name="Zebra Corp")
-        org2 = Organization(name="Alpha Inc")
+        org1 = Subscriber(
+            first_name="Zebra",
+            last_name="Business",
+            email="zebra@example.com",
+            company_name="Zebra Corp",
+        )
+        org1.category = SubscriberCategory.business
+        org2 = Subscriber(
+            first_name="Alpha",
+            last_name="Business",
+            email="alpha@example.com",
+            company_name="Alpha Inc",
+        )
+        org2.category = SubscriberCategory.business
         db_session.add_all([org1, org2])
         db_session.commit()
 

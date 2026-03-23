@@ -165,7 +165,7 @@
                         <td class="whitespace-nowrap px-6 py-4">
                             {% if entry.account_id %}
                             <a href="/admin/billing/accounts/{{ entry.account_id }}" class="text-sm text-slate-600 hover:text-emerald-600 dark:text-slate-400 dark:hover:text-emerald-400 transition-colors">
-                                {{ entry.account.organization.name if entry.account and entry.account.organization else entry.account.full_name if entry.account and entry.account.full_name else entry.account.display_name if entry.account and entry.account.display_name else entry.account.account_number if entry.account and entry.account.account_number else 'Account' }}
+                                {{ entry.account.name if entry.account else 'Account' }}
                             </a>
                             {% else %}
                             <span class="text-sm text-slate-400 dark:text-slate-500">&mdash;</span>

@@ -112,6 +112,10 @@ from app.models.domain_settings import (  # noqa: F401
     DomainSetting,
     SettingDomain,
 )
+from app.models.enforcement_lock import (  # noqa: F401
+    EnforcementLock,
+    EnforcementReason,
+)
 from app.models.event_store import (  # noqa: F401
     EventStatus,
     EventStore,
@@ -279,6 +283,12 @@ from app.models.network_monitoring import (  # noqa: F401
 from app.models.network_monitoring import (  # noqa: F401
     DeviceType as MonitoringDeviceType,
 )
+from app.models.network_operation import (  # noqa: F401
+    NetworkOperation,
+    NetworkOperationStatus,
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.models.notification import (  # noqa: F401
     AlertNotificationLog,
     AlertNotificationPolicy,
@@ -391,7 +401,6 @@ from app.models.subscriber import (  # noqa: F401
     ChannelType,
     ContactMethod,
     Gender,
-    Organization,
     Reseller,
     Subscriber,
     SubscriberChannel,

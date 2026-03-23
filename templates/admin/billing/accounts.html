@@ -122,11 +122,11 @@
                             </span>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4">
-                            <a href="/admin/customers/{{ 'organization/' ~ account.organization_id if account.organization_id else 'person/' ~ account.id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
+                            <a href="/admin/customers/{{ 'business/' ~ account.id if account.is_business else 'person/' ~ account.id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
                                 {% if account.person %}
                                     {{ account.first_name }} {{ account.last_name }}
-                                {% elif account.organization %}
-                                    {{ account.organization.name }}
+                                {% elif account.is_business %}
+                                    {{ account.name }}
                                 {% else %}
                                     {{ (account.first_name ~ ' ' ~ account.last_name)|trim or 'Subscriber' }}
                                 {% endif %}

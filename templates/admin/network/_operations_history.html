@@ -1,0 +1,54 @@
+{#
+  Network Operations History partial.
+
+  Expects `operations` list in context (from build_operation_history()).
+  Each entry has: id, title, status, status_value, status_class, is_running,
+  is_waiting, is_failed, message, initiated_by, occurred_at, duration,
+  can_retry, operation_type, target_type, target_id.
+#}
+
+{% if operations %}
+<div class="space-y-2">
+    {% for op in operations %}
+    <div class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
+        <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+                <p class="text-sm font-medium text-slate-900 dark:text-white">{{ op.title }}</p>
+                <span class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold {{ op.status_class }}">
+                    {% if op.is_running %}
+                    <span class="relative flex h-1.5 w-1.5">
+                        <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-blue-400 opacity-75"></span>
+                        <span class="relative inline-flex h-1.5 w-1.5 rounded-full bg-blue-500"></span>
+                    </span>
+                    {% elif op.is_waiting %}
+                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    {% elif op.is_failed %}
+                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    {% elif op.status_value == 'succeeded' %}
+                    <svg class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    {% endif %}
+                    {{ op.status }}
+                </span>
+            </div>
+            {% if op.message %}
+            <p class="mt-1 truncate text-xs {% if op.is_failed %}text-rose-600 dark:text-rose-400{% else %}text-slate-500 dark:text-slate-400{% endif %}" title="{{ op.message }}">{{ op.message }}</p>
+            {% endif %}
+            {% if op.initiated_by or op.duration %}
+            <p class="mt-0.5 text-xs text-slate-400 dark:text-slate-500">
+                {% if op.initiated_by %}{{ op.initiated_by }}{% endif %}
+                {% if op.initiated_by and op.duration %} &middot; {% endif %}
+                {% if op.duration %}{{ op.duration }}{% endif %}
+            </p>
+            {% endif %}
+        </div>
+        <div class="flex flex-shrink-0 items-center gap-2">
+            {% if op.occurred_at %}
+            <span class="text-xs text-slate-400 dark:text-slate-500">{{ op.occurred_at.strftime('%b %d, %Y at %H:%M') }}</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="py-6 text-center text-sm text-slate-500 dark:text-slate-400">No operations recorded yet.</p>
+{% endif %}

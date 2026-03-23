@@ -16,14 +16,14 @@ class StoredFile(Base):
     __tablename__ = "stored_files"
     __table_args__ = (
         Index("ix_stored_files_entity", "entity_type", "entity_id"),
-        Index("ix_stored_files_org_active", "organization_id", "is_deleted"),
+        Index("ix_stored_files_owner_active", "owner_subscriber_id", "is_deleted"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    organization_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id")
+    owner_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(100), nullable=False)

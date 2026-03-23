@@ -15,8 +15,8 @@ from app.models.catalog import CatalogOffer, PriceType, SubscriptionStatus
 from app.models.provisioning import InstallAppointment, ServiceOrder
 from app.models.subscriber import (
     AccountStatus,
-    Organization,
     Subscriber,
+    SubscriberCategory,
     SubscriberStatus,
 )
 from app.models.support import Ticket, TicketStatus
@@ -61,12 +61,10 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     user_name = session.get("username") or "Customer"
     user = {"first_name": user_name}
     if subscriber:
-        if subscriber.first_name:
+        if subscriber.category == SubscriberCategory.business:
+            user = {"first_name": subscriber.company_name or subscriber.display_name or subscriber.first_name}
+        elif subscriber.first_name:
             user = {"first_name": subscriber.first_name}
-        elif subscriber.organization_id:
-            organization = db.get(Organization, subscriber.organization_id)
-            if organization and organization.name:
-                user = {"first_name": organization.name}
 
     invoices = []
     if account_id:
@@ -175,6 +173,28 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         except Exception:
             open_count = 0
 
+    # Billing mode and prepaid balance
+    billing_mode = "postpaid"
+    prepaid_balance = 0.0
+    if subscriber and hasattr(subscriber, "billing_mode") and subscriber.billing_mode:
+        billing_mode = subscriber.billing_mode.value
+    if billing_mode == "prepaid" and account_id:
+        try:
+            from app.services.collections._core import (
+                _resolve_prepaid_available_balance,
+            )
+
+            prepaid_balance = float(
+                _resolve_prepaid_available_balance(db, str(account_id))
+            )
+        except Exception:
+            logger.warning(
+                "Failed to resolve prepaid balance for account %s",
+                account_id,
+                exc_info=True,
+            )
+            prepaid_balance = 0.0
+
     return {
         "user": SimpleNamespace(**user),
         "account": account,
@@ -182,6 +202,8 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         "services": services,
         "tickets": SimpleNamespace(open_count=open_count),
         "recent_activity": [],
+        "billing_mode": billing_mode,
+        "prepaid_balance": prepaid_balance,
     }
 
 
@@ -235,7 +257,13 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         return {"restricted": True, "account_status": "Unknown"}
 
     user_name = session.get("username") or "Customer"
-    if subscriber.first_name:
+    if subscriber.category == SubscriberCategory.business:
+        user_name = (
+            subscriber.company_name
+            or subscriber.display_name
+            or user_name
+        )
+    elif subscriber.first_name:
         user_name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
 
     # Outstanding balance from invoices
@@ -388,27 +416,23 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
 
     if account:
         billing_name = (
-            account.display_name or f"{account.first_name} {account.last_name}".strip()
+            account.company_name
+            if account.category == SubscriberCategory.business
+            else account.display_name or f"{account.first_name} {account.last_name}".strip()
         )
         billing_email = account.email
-        if account.organization_id:
-            organization = db.get(Organization, account.organization_id)
-            if organization:
-                billing_name = organization.name
 
     subscriber_id = customer.get("subscriber_id")
     subscriber = db.get(Subscriber, subscriber_id) if subscriber_id else None
 
     if not billing_name and subscriber:
         billing_name = (
-            subscriber.display_name
+            subscriber.company_name
+            if subscriber.category == SubscriberCategory.business
+            else subscriber.display_name
             or f"{subscriber.first_name} {subscriber.last_name}".strip()
         )
         billing_email = billing_email or subscriber.email
-        if subscriber.organization_id:
-            organization = db.get(Organization, subscriber.organization_id)
-            if organization:
-                billing_name = organization.name
 
     current_user = customer.get("current_user") if isinstance(customer, dict) else None
     if current_user:

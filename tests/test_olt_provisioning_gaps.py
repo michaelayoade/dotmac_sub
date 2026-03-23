@@ -34,7 +34,7 @@ from app.models.network import (
     PppoePasswordMode,
     VlanMode,
 )
-from app.models.subscriber import Organization
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.events.types import EventType
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -57,13 +57,19 @@ from app.services.network.vlan_chain import (
 )
 
 
-def _create_org(db_session) -> Organization:
-    """Create a minimal Organization for FK constraints."""
-    org = Organization(name=f"Test Org {uuid.uuid4().hex[:8]}")
-    db_session.add(org)
+def _create_business_subscriber(db_session) -> Subscriber:
+    """Create a minimal business subscriber for ownership constraints."""
+    subscriber = Subscriber(
+        first_name="Test",
+        last_name="Business",
+        email=f"business-{uuid.uuid4().hex[:8]}@example.test",
+        company_name=f"Test Org {uuid.uuid4().hex[:8]}",
+    )
+    subscriber.category = SubscriberCategory.business
+    db_session.add(subscriber)
     db_session.commit()
-    db_session.refresh(org)
-    return org
+    db_session.refresh(subscriber)
+    return subscriber
 
 
 def test_reference_ont_options_include_huawei_dotted_external_ids(db_session) -> None:
@@ -675,9 +681,9 @@ class TestProvisioningOrchestrator:
         db_session.commit()
         db_session.refresh(ont)
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Test Profile",
         )
         db_session.add(profile)
@@ -745,9 +751,9 @@ class TestProvisioningOrchestrator:
         db_session.add(assignment)
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Dry Run Profile",
             mgmt_vlan_tag=100,
         )
@@ -814,9 +820,9 @@ class TestProvisioningOrchestrator:
         db_session.add(assignment)
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Dual WAN Profile",
         )
         db_session.add(profile)
@@ -889,9 +895,9 @@ class TestProvisioningOrchestrator:
         db_session.add(assignment)
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Timeout Profile",
         )
         db_session.add(profile)
@@ -944,9 +950,9 @@ class TestProvisioningOrchestrator:
         db_session.add(OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True))
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="OLT Only Profile",
         )
         db_session.add(profile)
@@ -1011,9 +1017,9 @@ class TestProvisioningOrchestrator:
         )
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="PPPoE Credential Profile",
         )
         db_session.add(profile)
@@ -1099,9 +1105,9 @@ class TestProvisioningOrchestrator:
         )
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="PPPoE Generate Profile",
         )
         db_session.add(profile)
@@ -1191,9 +1197,9 @@ class TestProvisioningOrchestrator:
         )
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="PPPoE Multi Profile",
         )
         db_session.add(profile)
@@ -1293,9 +1299,9 @@ class TestProvisioningOrchestrator:
         )
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="PPPoE Partial Profile",
         )
         db_session.add(profile)
@@ -1411,9 +1417,9 @@ class TestProvisioningOrchestrator:
         db_session.add(assignment)
         db_session.commit()
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         profile = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Reprovision Fail Profile",
         )
         db_session.add(profile)
@@ -1783,14 +1789,14 @@ class TestGetProvisioningProfiles:
     def test_get_provisioning_profiles_returns_active_only(self, db_session) -> None:
         from app.services.web_network_onts import get_provisioning_profiles
 
-        org = _create_org(db_session)
+        org = _create_business_subscriber(db_session)
         active = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Active Profile Test",
             is_active=True,
         )
         inactive = OntProvisioningProfile(
-            organization_id=org.id,
+            owner_subscriber_id=org.id,
             name="Inactive Profile Test",
             is_active=False,
         )

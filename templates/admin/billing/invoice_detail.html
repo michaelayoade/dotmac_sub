@@ -85,12 +85,10 @@
                 {% call info_grid() %}
                     {% call info_row("Billed To") %}
                         {% if invoice.account and invoice.account.subscriber %}
-                            {% if invoice.account.subscriber.person %}
-                                <a href="/admin/customers/person/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.first_name }} {{ invoice.account.last_name }}</a>
-                            {% elif invoice.account.subscriber.organization %}
-                                <a href="/admin/customers/organization/{{ invoice.account.subscriber.organization_id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.subscriber.organization.name }}</a>
+                            {% if invoice.account.subscriber.is_business %}
+                                <a href="/admin/customers/business/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.subscriber.company_name or invoice.account.subscriber.display_name or invoice.account.subscriber.full_name }}</a>
                             {% else %}
-                                Account
+                                <a href="/admin/customers/person/{{ invoice.account.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.account.first_name }} {{ invoice.account.last_name }}</a>
                             {% endif %}
                         {% else %}
                             Account

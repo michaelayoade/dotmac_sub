@@ -16,6 +16,9 @@
       .replace(/'/g, "&#039;");
   }
 
+  // Table keys that support bulk selection
+  const BULK_ENABLED_TABLES = new Set(["customers", "subscribers"]);
+
   class DynamicTableConfig {
     constructor(root) {
       this.root = root;
@@ -34,17 +37,16 @@
       this.sortDir = "desc";
       this.isLoading = false;
       this.dragIndex = null;
+      this.bulkEnabled = BULK_ENABLED_TABLES.has(this.tableKey);
     }
 
     getDetailUrl(row) {
-      const id = row.id;
-      if (!id) return null;
+      if (!row.id) return null;
       if (this.tableKey === "customers") {
-        const type = row.customer_type === "organization" ? "organization" : "person";
-        return `/admin/customers/${type}/${id}`;
+        return `/admin/customers/person/${row.id}`;
       }
       if (this.tableKey === "subscribers") {
-        return `/admin/subscribers/${id}`;
+        return `/admin/subscribers/${row.id}`;
       }
       return null;
     }
@@ -343,6 +345,10 @@
         subscription_name: "14%",
       };
 
+      const selectAllHead = this.bulkEnabled
+        ? '<th style="width:3%" class="px-3 py-3"><input type="checkbox" data-select-all class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:ring-offset-slate-800" /></th>'
+        : "";
+
       const head = visibleColumns
         .map((column) => {
           const sortIcon =
@@ -366,13 +372,17 @@
 
       const colspan =
         Math.max(1, visibleColumns.length) +
-        (this.tableKey === "customers" || this.tableKey === "subscribers" ? 1 : 0);
+        (this.tableKey === "customers" || this.tableKey === "subscribers" ? 1 : 0) +
+        (this.bulkEnabled ? 1 : 0);
 
       const body = this.rows.length
         ? this.rows
             .map((row) => {
               const detailUrl = this.getDetailUrl(row);
-              const customerType = row.customer_type === "organization" ? "organization" : "person";
+              const customerType = row.customer_type === "business" ? "business" : "person";
+              const checkboxCell = this.bulkEnabled
+                ? `<td class="px-3 py-3"><input type="checkbox" data-customer-checkbox data-id="${escapeHtml(row.id)}" data-type="${escapeHtml(customerType)}" class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700 dark:ring-offset-slate-800" /></td>`
+                : "";
               const cells = visibleColumns
                 .map((column, index) => {
                   const value = this.formatValue(row[column.column_key]);
@@ -438,7 +448,7 @@
                   if (index === 0 && detailUrl) {
                     const icon =
                       this.tableKey === "customers"
-                        ? customerType === "organization"
+                        ? customerType === "business"
                           ? '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5"/></svg>'
                           : '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>'
                         : '<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>';
@@ -479,16 +489,17 @@
               const rowAttrs = detailUrl
                 ? `data-row-url="${escapeHtml(detailUrl)}" class="group cursor-pointer transition-colors duration-200 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10"`
                 : `class="group transition-colors duration-200 hover:bg-indigo-50/50 dark:hover:bg-indigo-900/10"`;
-              return `<tr ${rowAttrs}>${cells}${actionsCell}</tr>`;
+              return `<tr ${rowAttrs}>${checkboxCell}${cells}${actionsCell}</tr>`;
             })
             .join("")
         : `<tr><td class="px-5 py-12 text-center text-sm text-slate-500" colspan="${colspan}">No records found</td></tr>`;
 
       // Table content is built from server-provided data that has already been
       // escaped via the escapeHtml() helper used in all cell renderers above.
+      // Checkbox cells use only row.id and customerType which are also escaped.
       qs(this.root, '[data-role="table-wrap"]').innerHTML = `
         <table class="w-full table-fixed divide-y divide-slate-200/60 dark:divide-slate-700/60">
-          <thead><tr class="bg-slate-50/80 dark:bg-slate-800/50">${head}${actionsHead}</tr></thead>
+          <thead><tr class="bg-slate-50/80 dark:bg-slate-800/50">${selectAllHead}${head}${actionsHead}</tr></thead>
           <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">${body}</tbody>
         </table>
       `;
@@ -521,7 +532,56 @@
         });
       });
 
+      // Bind bulk-select checkboxes
+      if (this.bulkEnabled) {
+        this._bindBulkCheckboxes();
+      }
+
       this.renderPager();
+    }
+
+    _bindBulkCheckboxes() {
+      const selectAll = qs(this.root, "[data-select-all]");
+      const rowCheckboxes = qsa(this.root, "[data-customer-checkbox]");
+
+      if (selectAll) {
+        selectAll.addEventListener("change", (event) => {
+          const checked = event.target.checked;
+          const customers = [];
+          rowCheckboxes.forEach((cb) => {
+            cb.checked = checked;
+            if (checked) {
+              customers.push({ id: cb.dataset.id, type: cb.dataset.type });
+            }
+          });
+          document.dispatchEvent(
+            new CustomEvent("customers-select-all", {
+              detail: { customers, checked },
+            })
+          );
+        });
+      }
+
+      rowCheckboxes.forEach((cb) => {
+        cb.addEventListener("change", (event) => {
+          document.dispatchEvent(
+            new CustomEvent("customer-selected", {
+              detail: {
+                id: event.target.dataset.id,
+                type: event.target.dataset.type,
+                checked: event.target.checked,
+              },
+            })
+          );
+          // Update select-all indeterminate state
+          const allChecked = rowCheckboxes.every((c) => c.checked);
+          const someChecked = rowCheckboxes.some((c) => c.checked);
+          if (selectAll) {
+            selectAll.checked = allChecked;
+            selectAll.indeterminate = !allChecked && someChecked;
+          }
+        });
+      });
     }
 
     renderPager() {

@@ -16,7 +16,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.file_upload import MAGIC_BYTES
 from app.services.object_storage import (
     ObjectNotFoundError,
@@ -171,10 +171,10 @@ def _safe_segment(value: str) -> str:
     return value
 
 
-def _tenant_segment(organization_id: uuid.UUID | None) -> str:
-    if organization_id is None:
+def _tenant_segment(owner_subscriber_id: uuid.UUID | None) -> str:
+    if owner_subscriber_id is None:
         return "public"
-    return f"org-{organization_id}"
+    return f"acct-{owner_subscriber_id}"
 
 
 def _magic_valid(data: bytes, ext: str, content_type: str | None) -> bool:
@@ -213,13 +213,15 @@ class UnifiedFileUploadService:
         except KeyError as exc:
             raise FileValidationError(f"Unknown upload domain: {domain}") from exc
 
-    def resolve_user_organization(
+    def resolve_user_owner_subscriber(
         self, db: Session, subscriber_id: str
     ) -> uuid.UUID | None:
         subscriber = db.get(Subscriber, subscriber_id)
         if not subscriber:
             return None
-        return subscriber.organization_id
+        if subscriber.category == SubscriberCategory.business:
+            return subscriber.id
+        return None
 
     def validate(
         self,
@@ -253,7 +255,7 @@ class UnifiedFileUploadService:
         self,
         *,
         prefix: str,
-        organization_id: uuid.UUID | None,
+        owner_subscriber_id: uuid.UUID | None,
         entity_type: str,
         entity_id: str,
         file_bytes: bytes,
@@ -264,7 +266,7 @@ class UnifiedFileUploadService:
         checksum = hashlib.sha256(file_bytes).hexdigest()
         generated_filename = f"{checksum[:24]}{extension.lower()}"
         return (
-            f"{prefix}/{_tenant_segment(organization_id)}/"
+            f"{prefix}/{_tenant_segment(owner_subscriber_id)}/"
             f"{entity_segment}/{entity_id_segment}/{generated_filename}"
         )
 
@@ -279,7 +281,7 @@ class UnifiedFileUploadService:
         content_type: str | None,
         data: bytes,
         uploaded_by: str | None,
-        organization_id: uuid.UUID | None = None,
+        owner_subscriber_id: uuid.UUID | None = None,
     ) -> StoredFile:
         config = self.get_domain_config(domain)
         safe_name, final_content_type = self.validate(
@@ -291,7 +293,7 @@ class UnifiedFileUploadService:
         ext = Path(safe_name).suffix.lower()
         storage_key = self.generate_storage_key(
             prefix=config.prefix,
-            organization_id=organization_id,
+            owner_subscriber_id=owner_subscriber_id,
             entity_type=entity_type,
             entity_id=entity_id,
             file_bytes=data,
@@ -302,7 +304,7 @@ class UnifiedFileUploadService:
         checksum = hashlib.sha256(data).hexdigest() if config.compute_checksum else None
 
         record = StoredFile(
-            organization_id=organization_id,
+            owner_subscriber_id=owner_subscriber_id,
             entity_type=entity_type,
             entity_id=entity_id,
             original_filename=safe_name,
@@ -339,17 +341,17 @@ class UnifiedFileUploadService:
             .first()
         )
 
-    def assert_tenant_access(
-        self, file: StoredFile, current_org_id: uuid.UUID | None
+    def assert_owner_access(
+        self, file: StoredFile, current_owner_subscriber_id: uuid.UUID | None
     ) -> None:
-        if file.organization_id is None:
+        if file.owner_subscriber_id is None:
             return
-        if current_org_id != file.organization_id:
+        if current_owner_subscriber_id != file.owner_subscriber_id:
             logger.warning(
-                "file_access_denied file_id=%s org=%s request_org=%s",
+                "file_access_denied file_id=%s owner=%s request_owner=%s",
                 file.id,
-                file.organization_id,
-                current_org_id,
+                file.owner_subscriber_id,
+                current_owner_subscriber_id,
             )
             raise HTTPException(status_code=404, detail="File not found")
 

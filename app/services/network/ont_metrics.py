@@ -7,10 +7,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
 import httpx
+
+from app.services.genieacs import normalize_tr069_serial
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +104,40 @@ def _result_to_series(result: dict, label: str) -> ChartSeries:
     return ChartSeries(label=label, timestamps=timestamps, values=values)
 
 
-def get_signal_history(ont_serial: str, time_range: str = "24h") -> ChartData:
+def _serial_candidates(ont_serial: str) -> list[str]:
+    raw = str(ont_serial or "").strip()
+    if not raw:
+        return []
+    candidates = {raw, raw.upper(), raw.lower()}
+    normalized = normalize_tr069_serial(raw)
+    if normalized:
+        candidates.add(normalized)
+    compact = re.sub(r"[^0-9A-Za-z]", "", raw)
+    if compact:
+        candidates.add(compact)
+        candidates.add(compact.upper())
+    return [candidate for candidate in candidates if candidate]
+
+
+def _build_label_selector(*, ont_serial: str, ont_id: str | None = None) -> str:
+    selectors: list[str] = []
+    if ont_id:
+        selectors.append(f'ont_id="{ont_id}"')
+    serial_candidates = _serial_candidates(ont_serial)
+    if serial_candidates:
+        if len(serial_candidates) == 1:
+            selectors.append(f'ont_serial="{serial_candidates[0]}"')
+        else:
+            escaped = "|".join(
+                re.escape(candidate) for candidate in sorted(serial_candidates)
+            )
+            selectors.append(f'ont_serial=~"{escaped}"')
+    return ",".join(selectors)
+
+
+def get_signal_history(
+    ont_serial: str, time_range: str = "24h", *, ont_id: str | None = None
+) -> ChartData:
     """Query signal level history for an ONT.
 
     Args:
@@ -113,8 +149,16 @@ def get_signal_history(ont_serial: str, time_range: str = "24h") -> ChartData:
     """
     start, end, step = _parse_range(time_range)
 
-    onu_query = f'ont_onu_rx_dbm{{ont_serial="{ont_serial}"}}'
-    olt_query = f'ont_olt_rx_dbm{{ont_serial="{ont_serial}"}}'
+    label_selector = _build_label_selector(ont_serial=ont_serial, ont_id=ont_id)
+    if not label_selector:
+        return ChartData(
+            time_range=time_range,
+            available=False,
+            error="No signal history data available for this ONT.",
+        )
+
+    onu_query = f"ont_onu_rx_dbm{{{label_selector}}}"
+    olt_query = f"ont_olt_rx_dbm{{{label_selector}}}"
 
     onu_results = _query_range_sync(onu_query, start, end, step)
     olt_results = _query_range_sync(olt_query, start, end, step)
@@ -135,7 +179,9 @@ def get_signal_history(ont_serial: str, time_range: str = "24h") -> ChartData:
     return ChartData(series=series, time_range=time_range, available=True)
 
 
-def get_traffic_history(ont_serial: str, time_range: str = "24h") -> ChartData:
+def get_traffic_history(
+    ont_serial: str, time_range: str = "24h", *, ont_id: str | None = None
+) -> ChartData:
     """Query traffic history for an ONT.
 
     Uses RADIUS accounting or SNMP-derived traffic counters if available.
@@ -149,8 +195,16 @@ def get_traffic_history(ont_serial: str, time_range: str = "24h") -> ChartData:
     """
     start, end, step = _parse_range(time_range)
 
-    rx_query = f'rate(ont_rx_bytes_total{{ont_serial="{ont_serial}"}}[5m]) * 8'
-    tx_query = f'rate(ont_tx_bytes_total{{ont_serial="{ont_serial}"}}[5m]) * 8'
+    label_selector = _build_label_selector(ont_serial=ont_serial, ont_id=ont_id)
+    if not label_selector:
+        return ChartData(
+            time_range=time_range,
+            available=False,
+            error="No traffic history data available for this ONT.",
+        )
+
+    rx_query = f"rate(ont_rx_bytes_total{{{label_selector}}}[5m]) * 8"
+    tx_query = f"rate(ont_tx_bytes_total{{{label_selector}}}[5m]) * 8"
 
     rx_results = _query_range_sync(rx_query, start, end, step)
     tx_results = _query_range_sync(tx_query, start, end, step)

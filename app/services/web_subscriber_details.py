@@ -18,7 +18,7 @@ from app.models.network import (
     OntAssignment,
 )
 from app.models.network_monitoring import SpeedTestResult
-from app.models.subscriber import Address, Subscriber, SubscriberChannel
+from app.models.subscriber import Address, Subscriber, SubscriberCategory, SubscriberChannel
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import audit as audit_service
 from app.services import billing as billing_service
@@ -77,14 +77,9 @@ def build_subscriber_map_data(db: Session, subscriber, primary_address):
     customer_lat = float(primary_address.latitude)
     customer_lon = float(primary_address.longitude)
 
-    customer_name = "Customer"
-    if getattr(subscriber, "organization", None):
-        customer_name = subscriber.organization.name or "Customer"
-    else:
-        full_name = f"{getattr(subscriber, 'first_name', '')} {getattr(subscriber, 'last_name', '')}".strip()
-        customer_name = (
-            full_name or getattr(subscriber, "display_name", None) or "Customer"
-        )
+    customer_name = (
+        str(getattr(subscriber, "name", "") or "").strip() or "Customer"
+    )
 
     features = [
         {
@@ -543,26 +538,19 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
         )
 
     organization_members = []
-    if subscriber.organization_id:
-        members = (
-            db.query(Subscriber)
-            .filter(Subscriber.organization_id == subscriber.organization_id)
-            .order_by(Subscriber.is_active.desc(), Subscriber.created_at.asc())
-            .limit(25)
-            .all()
+    if subscriber.category == SubscriberCategory.business:
+        organization_members.append(
+            {
+                "id": str(subscriber.id),
+                "name": subscriber.company_name
+                or subscriber.display_name
+                or f"{subscriber.first_name} {subscriber.last_name}".strip()
+                or subscriber.email,
+                "email": subscriber.email,
+                "is_active": bool(subscriber.is_active),
+                "is_current": True,
+            }
         )
-        for member in members:
-            organization_members.append(
-                {
-                    "id": str(member.id),
-                    "name": member.display_name
-                    or f"{member.first_name} {member.last_name}".strip()
-                    or member.email,
-                    "email": member.email,
-                    "is_active": bool(member.is_active),
-                    "is_current": str(member.id) == str(subscriber.id),
-                }
-            )
 
     map_data = build_subscriber_map_data(db, subscriber, primary_address)
     geocode_target = build_subscriber_geocode_target(primary_address)

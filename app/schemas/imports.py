@@ -84,7 +84,7 @@ class CPEDeviceImportRow(CSVRowModel):
     account_id: UUID
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
-    device_type: DeviceType = DeviceType.ont
+    device_type: DeviceType = DeviceType.router
     status: DeviceStatus = DeviceStatus.active
     serial_number: str | None = None
     model: str | None = None

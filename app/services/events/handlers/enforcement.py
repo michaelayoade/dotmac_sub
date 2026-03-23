@@ -60,21 +60,23 @@ class EnforcementHandler:
         elif event.event_type == EventType.invoice_overdue:
             self._handle_invoice_overdue(db, event)
 
-    def _handle_subscription_block(
-        self, db: Session, event: Event, reason: str
+    def _enforce_subscription_block(
+        self,
+        db: Session,
+        subscription_id: str,
+        *,
+        reason: str = "suspended",
+        reject_reason: str = "blocked",
     ) -> None:
-        subscription_id = event.subscription_id or event.payload.get("subscription_id")
-        if not subscription_id:
-            logger.warning("Skipping session disconnect: missing subscription_id.")
-            return
+        """Apply RADIUS reject, remove credentials, disconnect sessions, and
+        add address-list block for a single subscription.  Callable both from
+        the event-driven path and directly after ``emit=False`` lifecycle calls.
+        Each step is individually guarded so one failure does not prevent the
+        remaining enforcement actions."""
+        subscription = db.get(Subscription, subscription_id)
+
+        # RADIUS reject IP
         try:
-            subscription = db.get(Subscription, subscription_id)
-            if subscription:
-                subscriber = db.get(Subscriber, subscription.subscriber_id)
-                if subscriber and subscriber.status != AccountStatus.suspended:
-                    subscriber.status = AccountStatus.suspended
-                    db.flush()
-            reject_reason = _reject_reason_from_event_payload(event.payload)
             ip_result = radius_reject_service.enforce_subscription_reject_ip(
                 db, str(subscription_id), reject_reason=reject_reason
             )
@@ -82,11 +84,28 @@ class EnforcementHandler:
                 radius_service.reconcile_subscription_connectivity(
                     db, str(subscription_id)
                 )
-            # Remove credentials from external RADIUS so subscriber cannot re-authenticate
-            if subscription:
+        except Exception as exc:
+            logger.error(
+                "Failed to apply RADIUS reject for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+        # Remove external RADIUS credentials
+        if subscription:
+            try:
                 radius_service.remove_external_radius_credentials(
                     db, str(subscription.subscriber_id)
                 )
+            except Exception as exc:
+                logger.error(
+                    "Failed to remove RADIUS credentials for subscriber %s: %s",
+                    subscription.subscriber_id,
+                    exc,
+                )
+
+        # Disconnect sessions and apply address list block
+        try:
             disconnect_subscription_sessions(db, str(subscription_id), reason=reason)
             apply_subscription_address_list_block(db, str(subscription_id))
         except Exception as exc:
@@ -96,10 +115,48 @@ class EnforcementHandler:
                 exc,
             )
 
+    def _handle_subscription_block(
+        self, db: Session, event: Event, reason: str
+    ) -> None:
+        from app.services.account_lifecycle import compute_account_status
+
+        subscription_id = event.subscription_id or event.payload.get("subscription_id")
+        if not subscription_id:
+            logger.warning("Skipping session disconnect: missing subscription_id.")
+            return
+
+        subscription = db.get(Subscription, subscription_id)
+
+        # Recompute account status (defensive — lifecycle already called this,
+        # but non-migrated callers may emit events without lifecycle).
+        if subscription:
+            try:
+                compute_account_status(db, str(subscription.subscriber_id))
+            except ValueError:
+                logger.error(
+                    "Subscriber not found for subscription %s", subscription_id
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to recompute account status for subscription %s: %s",
+                    subscription_id,
+                    exc,
+                )
+
+        reject_reason = _reject_reason_from_event_payload(event.payload)
+        self._enforce_subscription_block(
+            db,
+            str(subscription_id),
+            reason=reason,
+            reject_reason=reject_reason,
+        )
+
     def _handle_subscription_cancel(self, db: Session, event: Event) -> None:
         self._handle_subscription_block(db, event, "canceled")
 
     def _handle_subscription_restore(self, db: Session, event: Event) -> None:
+        from app.services.account_lifecycle import compute_account_status
+
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             return
@@ -107,13 +164,26 @@ class EnforcementHandler:
             db, SettingDomain.radius, "refresh_sessions_on_profile_change"
         )
         refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
+
+        subscription = db.get(Subscription, subscription_id)
+
+        # Recompute account status
+        if subscription:
+            try:
+                compute_account_status(db, str(subscription.subscriber_id))
+            except ValueError:
+                logger.error(
+                    "Subscriber not found for subscription %s", subscription_id
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to recompute account status for subscription %s: %s",
+                    subscription_id,
+                    exc,
+                )
+
+        # Clear RADIUS reject and reconcile connectivity
         try:
-            subscription = db.get(Subscription, subscription_id)
-            if subscription:
-                subscriber = db.get(Subscriber, subscription.subscriber_id)
-                if subscriber and subscriber.status != AccountStatus.active:
-                    subscriber.status = AccountStatus.active
-                    db.flush()
             ip_result = radius_reject_service.enforce_subscription_reject_ip(
                 db, str(subscription_id)
             )
@@ -121,14 +191,23 @@ class EnforcementHandler:
                 radius_service.reconcile_subscription_connectivity(
                     db, str(subscription_id)
                 )
+        except Exception as exc:
+            logger.error(
+                "Failed to clear RADIUS reject for subscription %s: %s",
+                subscription_id,
+                exc,
+            )
+
+        # Refresh sessions and remove address block
+        try:
             if refresh_enabled:
                 disconnect_subscription_sessions(
                     db, str(subscription_id), reason="restore"
                 )
             remove_subscription_address_list_block(db, str(subscription_id))
         except Exception as exc:
-            logger.warning(
-                "Failed to refresh sessions for subscription %s: %s",
+            logger.error(
+                "Failed to restore sessions for subscription %s: %s",
                 subscription_id,
                 exc,
             )
@@ -221,23 +300,22 @@ class EnforcementHandler:
                 )
             return
         if action == "suspend":
-            subscription = db.get(Subscription, subscription_id)
-            if not subscription:
-                return
-            if subscription.status == SubscriptionStatus.active:
-                subscription.status = SubscriptionStatus.suspended
-                db.flush()  # Use flush, not commit - let dispatcher manage transaction
-                emit_event(
+            from app.models.enforcement_lock import EnforcementReason
+            from app.services.account_lifecycle import suspend_subscription
+
+            fup_source = f"fup_rule:{rule_id}" if rule_id else "fup_exhausted"
+            try:
+                suspend_subscription(
                     db,
-                    EventType.subscription_suspended,
-                    {
-                        "subscription_id": str(subscription.id),
-                        "from_status": "active",
-                        "to_status": "suspended",
-                        "reason": "fup_exhausted",
-                    },
-                    subscription_id=subscription.id,
-                    account_id=subscription.subscriber_id,
+                    str(subscription_id),
+                    reason=EnforcementReason.fup,
+                    source=fup_source,
+                    emit=False,  # prevent re-entrant dispatch
+                )
+                # Apply RADIUS enforcement directly (emit=False skips the
+                # event-driven path that would normally do this).
+                self._enforce_subscription_block(
+                    db, str(subscription_id), reason="fup_suspend"
                 )
                 self._persist_fup_state(
                     db,
@@ -247,6 +325,18 @@ class EnforcementHandler:
                     action_status="blocked",
                     cap_resets_at=cap_resets_at_raw,
                     notes="FUP suspension applied",
+                )
+            except ValueError as e:
+                logger.info(
+                    "Skipped FUP suspension for subscription %s: %s",
+                    subscription_id,
+                    e,
+                )
+            except Exception as exc:
+                logger.error(
+                    "Failed to apply FUP suspension for subscription %s: %s",
+                    subscription_id,
+                    exc,
                 )
             return
         throttle_profile_id = settings_spec.resolve_value(
@@ -371,7 +461,7 @@ class EnforcementHandler:
                     account_id,
                 )
         except Exception as exc:
-            logger.warning(
+            logger.error(
                 "Failed to auto-restore account %s after payment: %s",
                 account_id,
                 exc,
@@ -446,37 +536,74 @@ class EnforcementHandler:
                         )
                         return
 
-            # Past grace period — proceed with suspension
+            # Past grace period — suspend via lifecycle enforcement locks.
+            # Use emit=False to prevent re-entrant event dispatch (this handler
+            # already handles the enforcement side effects directly).
+            from app.models.enforcement_lock import EnforcementReason
+            from app.services.account_lifecycle import (
+                compute_account_status,
+                suspend_subscription,
+            )
+
+            invoice_source = (
+                f"invoice:{invoice_id}" if invoice_id else "invoice_overdue"
+            )
+            # Include suspended subscriptions so overdue locks are created
+            # even when a subscription is already suspended by another reason
+            # (e.g., FUP). The lock won't change status but tracks the debt.
             subscriptions = (
                 db.query(Subscription)
                 .filter(
                     Subscription.subscriber_id == subscriber.id,
-                    Subscription.status == SubscriptionStatus.active,
+                    Subscription.status.in_([
+                        SubscriptionStatus.active,
+                        SubscriptionStatus.suspended,
+                    ]),
                 )
                 .all()
             )
+            lock_count = 0
+            newly_suspended_ids: list[str] = []
             for sub in subscriptions:
-                sub.status = SubscriptionStatus.suspended
-                db.flush()
-                emit_event(
-                    db,
-                    EventType.subscription_suspended,
-                    {
-                        "subscription_id": str(sub.id),
-                        "from_status": "active",
-                        "to_status": "suspended",
-                        "reason": "invoice_overdue",
-                    },
-                    subscription_id=sub.id,
-                    account_id=sub.subscriber_id,
-                )
+                was_active = sub.status == SubscriptionStatus.active
+                try:
+                    suspend_subscription(
+                        db,
+                        str(sub.id),
+                        reason=EnforcementReason.overdue,
+                        source=invoice_source,
+                        emit=False,
+                    )
+                    lock_count += 1
+                    # Only apply RADIUS enforcement for subs that were
+                    # actually active — already-suspended subs are already
+                    # blocked at the network level.
+                    if was_active:
+                        newly_suspended_ids.append(str(sub.id))
+                except ValueError as e:
+                    logger.info(
+                        "Skipped suspending subscription %s: %s", sub.id, e
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "Failed to suspend subscription %s for overdue invoice: %s",
+                        sub.id,
+                        exc,
+                    )
 
-            if subscriptions:
-                subscriber.status = AccountStatus.suspended
-                db.flush()
+            if lock_count:
+                compute_account_status(db, str(subscriber.id))
+                # Apply RADIUS enforcement only for newly suspended subs
+                # (already-suspended subs are already blocked).
+                for sid in newly_suspended_ids:
+                    self._enforce_subscription_block(
+                        db, sid, reason="overdue", reject_reason="negative"
+                    )
                 logger.info(
-                    "Auto-suspended %d subscription(s) for account %s due to overdue invoice",
-                    len(subscriptions),
+                    "Overdue enforcement: %d lock(s) created, %d newly suspended "
+                    "for account %s",
+                    lock_count,
+                    len(newly_suspended_ids),
                     account_id,
                 )
         except Exception as exc:

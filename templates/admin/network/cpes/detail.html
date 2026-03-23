@@ -13,7 +13,7 @@
 {% set display_serial = identity.get('display_serial') or cpe.serial_number or 'CPE Device' %}
 {% set display_vendor = (tr069.system.get('Manufacturer') if tr069 else none) or identity.get('vendor') or cpe.vendor or '-' %}
 {% set display_model = (tr069.system.get('Model') if tr069 else none) or identity.get('model') or cpe.model %}
-{% set display_mac = (tr069.system.get('MAC Address') if tr069 else none) or identity.get('mac_address') or cpe.mac_address %}
+{% set display_mac = identity.get('mac_address') or (tr069.system.get('MAC Address') if tr069 else none) or cpe.mac_address %}
 {% set display_wan_ip = tr069.wan.get('WAN IP') if tr069 else none %}
 {% set display_firmware = tr069.system.get('Firmware') if tr069 else none %}
 {% set display_hardware = tr069.system.get('Hardware') if tr069 else none %}
@@ -166,7 +166,7 @@
                                 <dt class="text-xs font-semibold uppercase tracking-wide text-slate-500">Subscriber</dt>
                                 <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                     {% if cpe.subscriber %}
-                                    <a href="/admin/customers/{{ 'organization/' ~ cpe.subscriber.organization_id if cpe.subscriber.organization_id else 'person/' ~ cpe.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700">{{ cpe.subscriber.full_name }}</a>
+                                    <a href="/admin/customers/{{ 'business/' ~ cpe.subscriber.id if cpe.subscriber.is_business else 'person/' ~ cpe.subscriber.id }}" class="text-emerald-600 hover:text-emerald-700">{{ cpe.subscriber.name }}</a>
                                     {% if cpe.subscriber.account_number %}<span class="text-slate-500"> ({{ cpe.subscriber.account_number }})</span>{% endif %}
                                     {% else %}
                                     -
@@ -280,6 +280,17 @@
                             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500">API User</p>
                             <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ meta.get('api_user') or '-' }}</p>
                         </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if operations %}
+                <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                    <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
+                        <h2 class="font-semibold text-slate-900 dark:text-white">Network Operations</h2>
+                    </div>
+                    <div class="p-4">
+                        {% include "admin/network/_operations_history.html" %}
                     </div>
                 </div>
                 {% endif %}

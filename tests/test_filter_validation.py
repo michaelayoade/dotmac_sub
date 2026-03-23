@@ -43,11 +43,10 @@ def test_subscriber_list_invalid_type(db_session):
             db_session,
             subscriber_type="not_a_type",
             person_id=None,
-            organization_id=None,
+            business_account_id=None,
             order_by="created_at",
             order_dir="desc",
             limit=10,
             offset=0,
         )
     assert exc.value.status_code == 400
-

@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit, WanMode
 from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.network._common import normalize_mac_address
 from app.services.network._resolve import resolve_genieacs
 
 logger = logging.getLogger(__name__)
@@ -54,9 +55,10 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
             f"{_IGD}.DeviceInfo.MemoryStatus.Free",
         ],
         "MAC Address": [
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.MACAddress",
+            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress",
             f"{_DEV}.Ethernet.Interface.1.MACAddress",
             f"{_IGD}.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress",
-            f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress",
         ],
     },
     "wan": {
@@ -421,6 +423,21 @@ class OntTR069:
         return None
 
     @staticmethod
+    def _choose_mac_address(summary: TR069Summary) -> str | None:
+        candidates: list[str] = []
+        if summary.system:
+            system_mac = normalize_mac_address(summary.system.get("MAC Address"))
+            if system_mac:
+                candidates.append(system_mac)
+        for port in summary.ethernet_ports or []:
+            port_mac = normalize_mac_address((port or {}).get("MACAddress"))
+            if port_mac:
+                candidates.append(port_mac)
+        if not candidates:
+            return None
+        return sorted(set(candidates))[-1]
+
+    @staticmethod
     def _persist_observed_runtime(
         db: Session, ont: OntUnit, summary: TR069Summary
     ) -> None:
@@ -443,17 +460,7 @@ class OntTR069:
             ):
                 ont.serial_number = tr069_serial[:120]
 
-        mac_address = (
-            str(summary.system.get("MAC Address") or "").strip()
-            if summary.system
-            else ""
-        )
-        if not mac_address and summary.ethernet_ports:
-            for port in summary.ethernet_ports:
-                mac = str((port or {}).get("MACAddress") or "").strip()
-                if mac:
-                    mac_address = mac
-                    break
+        mac_address = OntTR069._choose_mac_address(summary)
 
         wan_ip = str(summary.wan.get("WAN IP") or "").strip() if summary.wan else ""
         pppoe_user = (
@@ -537,6 +544,10 @@ class OntTR069:
         db.add(ont)
         db.commit()
         db.refresh(ont)
+        if getattr(ont, "is_active", False):
+            from app.services.network.cpe import ensure_cpe_for_ont
+
+            ensure_cpe_for_ont(db, ont)
 
     @staticmethod
     def get_lan_hosts(db: Session, ont_id: str) -> list[dict[str, Any]]:

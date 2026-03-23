@@ -7,7 +7,7 @@ from starlette.datastructures import FormData
 from app.models.catalog import NasVendor, SubscriptionStatus
 from app.models.network import NetworkZone
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Address, Organization, Reseller
+from app.models.subscriber import Address, Reseller, Subscriber, SubscriberCategory
 from app.schemas.catalog import NasDeviceCreate, SubscriptionCreate
 from app.services import catalog as catalog_service
 from app.services import nas as nas_service
@@ -156,17 +156,25 @@ def test_pop_site_contact_lifecycle_helpers(db_session, pop_site):
     assert len(payload["contacts"]) == 0
 
 
-def test_resolve_site_relationships_assigns_zone_org_and_partner(db_session):
+def test_resolve_site_relationships_assigns_zone_business_account_and_partner(
+    db_session,
+):
     zone = NetworkZone(name="Abuja Core", is_active=True)
-    organization = Organization(name="Acme Fiber")
+    business = Subscriber(
+        first_name="Acme",
+        last_name="Ops",
+        email="ops@acme.test",
+        company_name="Acme Fiber",
+    )
+    business.category = SubscriberCategory.business
     reseller = Reseller(name="Metro Partner", is_active=True)
-    db_session.add_all([zone, organization, reseller])
+    db_session.add_all([zone, business, reseller])
     db_session.commit()
 
     values = {
         "name": "POP Main",
         "zone_id_raw": str(zone.id),
-        "organization_id_raw": str(organization.id),
+        "owner_subscriber_id_raw": str(business.id),
         "reseller_id_raw": str(reseller.id),
     }
 
@@ -174,7 +182,7 @@ def test_resolve_site_relationships_assigns_zone_org_and_partner(db_session):
     assert error is None
     assert normalized is not None
     assert normalized["zone_id"] == zone.id
-    assert normalized["organization_id"] == organization.id
+    assert normalized["owner_subscriber_id"] == business.id
     assert normalized["reseller_id"] == reseller.id
 
 
@@ -182,12 +190,33 @@ def test_resolve_site_relationships_rejects_unknown_ids(db_session):
     values = {
         "name": "POP Main",
         "zone_id_raw": str(uuid.uuid4()),
-        "organization_id_raw": "",
+        "owner_subscriber_id_raw": "",
         "reseller_id_raw": "",
     }
     normalized, error = pop_sites_service.resolve_site_relationships(db_session, values)
     assert normalized is None
     assert error == "Selected location reference was not found."
+
+
+def test_resolve_site_relationships_rejects_non_business_account(db_session):
+    subscriber = Subscriber(
+        first_name="Jane",
+        last_name="Doe",
+        email="jane@example.test",
+    )
+    db_session.add(subscriber)
+    db_session.commit()
+
+    values = {
+        "name": "POP Main",
+        "zone_id_raw": "",
+        "owner_subscriber_id_raw": str(subscriber.id),
+        "reseller_id_raw": "",
+    }
+
+    normalized, error = pop_sites_service.resolve_site_relationships(db_session, values)
+    assert normalized is None
+    assert error == "Selected business account was not found."
 
 
 def test_parse_mast_form_supports_add_mast_toggle():

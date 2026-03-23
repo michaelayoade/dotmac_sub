@@ -68,7 +68,7 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
     if not subscriber:
         return "Account"
     # Backwards-compat: older code treats SubscriberAccount as having a `.person`
-    # relationship (and optionally organization via that person).
+    # relationship.
     person = getattr(subscriber, "person", None)
     base = person or subscriber
 
@@ -77,14 +77,12 @@ def _subscriber_label(subscriber: Subscriber | None) -> str:
             return value.strip()
         return ""
 
-    organization = getattr(base, "organization", None)
-    if organization:
-        legal_name = _clean_str(getattr(organization, "legal_name", None))
-        name = _clean_str(getattr(organization, "name", None))
-        if legal_name:
-            return legal_name
-        if name:
-            return name
+    legal_name = _clean_str(getattr(base, "legal_name", None))
+    company_name = _clean_str(getattr(base, "company_name", None))
+    if legal_name:
+        return legal_name
+    if company_name:
+        return company_name
     first = _clean_str(getattr(base, "first_name", None))
     last = _clean_str(getattr(base, "last_name", None))
     display = f"{first} {last}".strip()
@@ -360,11 +358,7 @@ def list_accounts(
     offset: int,
     search: str | None = None,
 ) -> list[dict]:
-    query = (
-        db.query(Subscriber)
-        .options(selectinload(Subscriber.organization))
-        .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
-    )
+    query = db.query(Subscriber).filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
     if search:
         pattern = f"%{search.strip()}%"
         query = query.filter(

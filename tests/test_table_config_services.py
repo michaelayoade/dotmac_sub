@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.models.subscriber import Subscriber, SubscriberStatus, UserType
+from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus, UserType
 from app.schemas.table_config import TableColumnPreference
 from app.services.table_config import TableConfigurationService, TableRegistry
 
@@ -186,3 +186,38 @@ def test_user_configuration_is_isolated_per_user(db_session):
     assert email_a.is_visible is False
     assert email_a.display_order == 1
     assert email_b.display_order != 1
+
+
+def test_customers_table_returns_business_account_id_meta_for_org_rows(db_session):
+    user = _subscriber(db_session, "table-org-user@example.com")
+    org_subscriber = Subscriber(
+        first_name="Org",
+        last_name="Member",
+        email="org.member@example.com",
+        company_name="Acme Ltd",
+        status=SubscriberStatus.active,
+        is_active=True,
+        user_type=UserType.customer,
+        billing_enabled=True,
+        marketing_opt_in=False,
+    )
+    org_subscriber.category = SubscriberCategory.business
+    db_session.add(org_subscriber)
+    db_session.commit()
+
+    _, items, _ = TableConfigurationService.apply_query_config(
+        db_session,
+        user.id,
+        "customers",
+        {
+            "limit": "20",
+            "offset": "0",
+            "customer_type": "business",
+            "sort_by": "created_at",
+            "sort_dir": "desc",
+        },
+    )
+
+    org_item = next(item for item in items if item["id"] == str(org_subscriber.id))
+    assert org_item["customer_type"] == "business"
+    assert org_item["business_account_id"] == str(org_subscriber.id)

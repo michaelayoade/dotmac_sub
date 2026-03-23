@@ -1,15 +1,22 @@
 import logging
 
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.models.subscriber import Organization, Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.response import list_response
 
 logger = logging.getLogger(__name__)
 
 _MAX_SEARCH_LIMIT = 50
+
+
+def _business_clause():
+    return (
+        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        == SubscriberCategory.business.value
+    )
 
 
 def _escape_like(term: str) -> str:
@@ -31,6 +38,9 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
     conditions: list[ColumnElement[bool]] = [
         Subscriber.first_name.ilike(like_term),
         Subscriber.last_name.ilike(like_term),
+        Subscriber.company_name.ilike(like_term),
+        Subscriber.legal_name.ilike(like_term),
+        Subscriber.domain.ilike(like_term),
         Subscriber.email.ilike(like_term),
         Subscriber.account_number.ilike(like_term),
         Subscriber.subscriber_number.ilike(like_term),
@@ -58,20 +68,21 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
         .limit(limit)
         .all()
     )
-    organizations = (
-        db.query(Organization)
-        .filter(
-            or_(
-                Organization.name.ilike(like_term),
-                Organization.domain.ilike(like_term),
-            )
-        )
-        .order_by(Organization.name)
-        .limit(limit)
-        .all()
-    )
     items: list[dict] = []
     for subscriber in people:
+        if subscriber.category == SubscriberCategory.business:
+            label = subscriber.company_name or subscriber.display_name or subscriber.full_name
+            if subscriber.domain:
+                label = f"{label} ({subscriber.domain})"
+            items.append(
+                {
+                    "id": subscriber.id,
+                    "type": "business",
+                    "label": label,
+                    "ref": f"business:{subscriber.id}",
+                }
+            )
+            continue
         label = f"{subscriber.first_name} {subscriber.last_name}"
         if subscriber.email:
             label = f"{label} ({subscriber.email})"
@@ -83,18 +94,6 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
                 "type": "person",
                 "label": label,
                 "ref": f"person:{subscriber.id}",
-            }
-        )
-    for org in organizations:
-        label = org.name
-        if org.domain:
-            label = f"{label} ({org.domain})"
-        items.append(
-            {
-                "id": org.id,
-                "type": "organization",
-                "label": label,
-                "ref": f"organization:{org.id}",
             }
         )
     items.sort(key=lambda item: item["label"].lower())

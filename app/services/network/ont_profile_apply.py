@@ -75,7 +75,7 @@ def resolve_profile_for_ont(
     Resolution chain:
     1. Directly assigned profile on OntUnit.provisioning_profile_id
     2. Default profile from the linked CatalogOffer (via subscription → offer)
-    3. Organization default profile (is_default=True)
+    3. Business account default profile (is_default=True)
     4. None
     """
     ont = db.get(OntUnit, coerce_uuid(ont_id))
@@ -122,19 +122,20 @@ def resolve_profile_for_ont(
                 if profile:
                     return profile
 
-    # 3. Organization default (need org from assignment subscriber)
+    # 3. Business account default (need business subscriber from assignment)
     if active_assignment and active_assignment.subscriber_id:
         from app.models.subscriber import Subscriber
 
         subscriber = db.get(Subscriber, active_assignment.subscriber_id)
-        if subscriber:
-            org_id = getattr(subscriber, "organization_id", None)
-            if org_id:
+        if subscriber and getattr(subscriber, "is_business", False):
+            owner_subscriber_id = getattr(subscriber, "id", None)
+            if owner_subscriber_id:
                 stmt = (
                     select(OntProvisioningProfile)
                     .options(selectinload(OntProvisioningProfile.wan_services))
                     .where(
-                        OntProvisioningProfile.organization_id == org_id,
+                        OntProvisioningProfile.owner_subscriber_id
+                        == owner_subscriber_id,
                         OntProvisioningProfile.is_default.is_(True),
                         OntProvisioningProfile.is_active.is_(True),
                     )
@@ -242,7 +243,7 @@ def detect_drift(db: Session, ont_id: str) -> DriftReport | None:
 def detect_drift_batch(
     db: Session,
     *,
-    organization_id: str | None = None,
+    owner_subscriber_id: str | None = None,
     limit: int = 500,
 ) -> list[DriftReport]:
     """Batch drift detection for all ONTs with assigned profiles.
@@ -258,11 +259,25 @@ def detect_drift_batch(
         .limit(limit)
     )
 
-    # Filter by organization if provided (via assignment → subscriber)
+    # Filter by business account if provided. This is applied after loading
+    # because the assignment/subscriber join is not part of the base query.
     onts = list(db.scalars(stmt).all())
     drift_reports: list[DriftReport] = []
 
     for ont in onts:
+        if owner_subscriber_id:
+            from app.models.network import OntAssignment
+
+            active_assignment = db.scalars(
+                select(OntAssignment).where(
+                    OntAssignment.ont_unit_id == ont.id,
+                    OntAssignment.active.is_(True),
+                )
+            ).first()
+            if not active_assignment or str(active_assignment.subscriber_id) != str(
+                owner_subscriber_id
+            ):
+                continue
         report = detect_drift(db, str(ont.id))
         if report and report.has_drift:
             # Mark drift on the ONT

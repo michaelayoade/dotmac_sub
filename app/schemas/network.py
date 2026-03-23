@@ -27,7 +27,7 @@ class CPEDeviceBase(BaseModel):
     )
     subscription_id: UUID | None = None
     service_address_id: UUID | None = None
-    device_type: DeviceType = DeviceType.ont
+    device_type: DeviceType = DeviceType.router
     status: DeviceStatus = DeviceStatus.active
     serial_number: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
@@ -466,7 +466,7 @@ class OntUnitBase(BaseModel):
     firmware_version: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     is_active: bool = True
-    # SmartOLT fields
+    # Imported / external provisioning fields
     onu_type_id: UUID | None = None
     olt_device_id: UUID | None = None
     pon_type: str | None = None
@@ -499,7 +499,7 @@ class OntUnitUpdate(BaseModel):
     firmware_version: str | None = Field(default=None, max_length=120)
     notes: str | None = None
     is_active: bool | None = None
-    # SmartOLT fields
+    # Imported / external provisioning fields
     onu_type_id: UUID | None = None
     olt_device_id: UUID | None = None
     pon_type: str | None = None

@@ -9,26 +9,34 @@
     <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         {% call card("Retention Periods", color="slate") %}
-        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div class="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
             {% set fields = [("admin_logs_months","Admin Audit Logs"),("api_logs_months","API Request Logs"),("internal_logs_months","Internal System Logs"),("portal_logs_months","Portal Access Logs"),("usage_stats_months","Subscriber Usage Stats"),("task_logs_months","Background Task Logs"),("task_results_months","Task Result Files")] %}
             {% for key, label in fields %}
-            <div>
-                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">{{ label }}</label>
-                <div class="mt-1 flex gap-2">
-                    <select name="{{ key }}" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        {% for v, l in [("1","1 month"),("3","3 months"),("6","6 months"),("12","1 year"),("24","2 years"),("36","3 years"),("60","5 years"),("0","Indefinite")] %}
-                        <option value="{{ v }}" {% if retention[key] == v %}selected{% endif %}>{{ l }}</option>
-                        {% endfor %}
-                    </select>
+            <div class="rounded-xl border border-slate-200/80 bg-slate-50/70 p-4 shadow-sm dark:border-slate-700/70 dark:bg-slate-800/60">
+                <label class="block text-sm font-semibold text-slate-800 dark:text-slate-200">{{ label }}</label>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose how long this data should be kept before cleanup runs.</p>
+                <div class="mt-3 flex items-center gap-2">
+                    <div class="relative flex-1">
+                        <select name="{{ key }}" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                            {% for v, l in [("1","1 month"),("3","3 months"),("6","6 months"),("12","1 year"),("24","2 years"),("36","3 years"),("60","5 years"),("0","Indefinite")] %}
+                            <option value="{{ v }}" {% if retention[key] == v %}selected{% endif %}>{{ l }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                            <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/>
+                            </svg>
+                        </div>
+                    </div>
                     {% if retention[key] != retention_defaults.get(key, '') %}
-                    <span class="flex items-center text-xs text-amber-600 dark:text-amber-400" title="Modified from default ({{ retention_defaults.get(key, '') }} months)">Modified</span>
+                    <span class="inline-flex shrink-0 items-center rounded-full bg-amber-100 px-2.5 py-1 text-[11px] font-semibold text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Modified from default ({{ retention_defaults.get(key, '') }} months)">Modified</span>
                     {% endif %}
                 </div>
             </div>
             {% endfor %}
         </div>
         {% endcall %}
-        <div class="flex justify-end"><button type="submit" class="rounded-lg bg-slate-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700 transition">Save Retention Policy</button></div>
+        <div class="flex justify-end"><button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">Save Retention Policy</button></div>
     </form>
 </div>
 {{ animation_styles() }}

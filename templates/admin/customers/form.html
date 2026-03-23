@@ -7,7 +7,20 @@
 {% block title %}{{ 'Edit' if customer else 'New' }} {{ title_subject }} - Admin{% endblock %}
 
 {% block content %}
-<div x-data="customerForm()" class="space-y-6">
+<style>
+    .dark #customer-form-shell input:focus,
+    .dark #customer-form-shell select:focus,
+    .dark #customer-form-shell textarea:focus {
+        background-color: rgb(15 23 42);
+        color: rgb(255 255 255);
+    }
+
+    .dark #customer-form-shell option {
+        background-color: rgb(15 23 42);
+        color: rgb(255 255 255);
+    }
+</style>
+<div id="customer-form-shell" x-data="customerForm()" class="space-y-6">
     <!-- Ambient Background -->
     <div class="fixed inset-0 pointer-events-none opacity-20 dark:opacity-10" aria-hidden="true">
         <div class="absolute inset-0 bg-gradient-to-br from-amber-500/10 via-transparent to-slate-500/5"></div>
@@ -87,9 +100,9 @@
                     </div>
                 </label>
 
-                <!-- Organization Card -->
+                <!-- Business Card -->
                 <label class="relative cursor-pointer group">
-                    <input type="radio" name="customer_type" value="organization" class="sr-only peer" x-model="customerType" {% if customer_type == 'organization' %}checked{% endif %}>
+                    <input type="radio" name="customer_type" value="business" class="sr-only peer" x-model="customerType" {% if customer_type == 'business' %}checked{% endif %}>
                     <div class="rounded-2xl border-2 p-5 transition-all duration-200
                                 peer-checked:border-purple-500 peer-checked:bg-purple-50/50 peer-checked:shadow-lg peer-checked:shadow-purple-500/10
                                 border-slate-200 hover:border-slate-300 bg-white
@@ -103,8 +116,8 @@
                                 <svg class="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
                             </div>
                             <div class="flex-1">
-                                <h3 class="text-base font-semibold text-slate-900 dark:text-white">Organization</h3>
-                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">A business, company, or organization</p>
+                                <h3 class="text-base font-semibold text-slate-900 dark:text-white">Business</h3>
+                                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">A business or company account</p>
                             </div>
                             <div class="flex h-6 w-6 items-center justify-center rounded-full border-2 transition-all duration-200
                                         border-slate-300 dark:border-slate-600
@@ -149,14 +162,14 @@
                                     First Name <span class="text-red-500">*</span>
                                 </label>
                                 <input type="text" name="first_name" id="first_name" :required="customerType === 'person'" value="{{ customer.first_name if customer and customer_type == 'person' else '' }}" placeholder="John"
-                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900 dark:focus:text-white dark:placeholder:text-slate-500" />
                             </div>
                             <div>
                                 <label for="last_name" class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
                                     Last Name <span class="text-red-500">*</span>
                                 </label>
                                 <input type="text" name="last_name" id="last_name" :required="customerType === 'person'" value="{{ customer.last_name if customer and customer_type == 'person' else '' }}" placeholder="Doe"
-                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900 dark:focus:text-white dark:placeholder:text-slate-500" />
                             </div>
                         </div>
 
@@ -167,7 +180,7 @@
                                     Email <span class="text-red-500">*</span>
                                 </label>
                                 <input type="email" name="email" id="email" :required="customerType === 'person'" value="{{ customer.email if customer and customer_type == 'person' else '' }}" placeholder="john@example.com"
-                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900 dark:focus:text-white dark:placeholder:text-slate-500" />
                             </div>
                             <div>
                                 <label for="phone" class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
@@ -175,7 +188,7 @@
                                     Phone
                                 </label>
                                 <input type="tel" name="phone" id="phone" value="{{ customer.phone if customer and customer_type == 'person' else '' }}" placeholder="+234 800 000 0000"
-                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
+                                       class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900 dark:focus:text-white dark:placeholder:text-slate-500" />
                             </div>
                         </div>
 
@@ -462,9 +475,9 @@
             </div>
         </div>
 
-        <!-- Organization Form Fields -->
-        <div x-show="customerType === 'organization'" x-cloak class="space-y-6">
-            <!-- Organization Information Section -->
+        <!-- Business Form Fields -->
+        <div x-show="customerType === 'business'" x-cloak class="space-y-6">
+            <!-- Business Information Section -->
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden">
                 <button type="button" @click="sections.orgBasic = !sections.orgBasic"
                         class="flex w-full items-center justify-between px-6 py-4 text-left transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
@@ -473,7 +486,7 @@
                             <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
                         </div>
                         <div>
-                            <h2 class="text-base font-semibold text-slate-900 dark:text-white">Organization Details</h2>
+                            <h2 class="text-base font-semibold text-slate-900 dark:text-white">Business Details</h2>
                             <p class="text-sm text-slate-500 dark:text-slate-400">Company name, legal info, and website</p>
                         </div>
                     </div>
@@ -483,21 +496,21 @@
                     <div class="p-6 space-y-5">
                         <div>
                             <label for="name" class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-                                Organization Name <span class="text-red-500">*</span>
+                                Business Name <span class="text-red-500">*</span>
                             </label>
-                            <input type="text" name="name" id="name" :required="customerType === 'organization'" value="{{ customer.name if customer and customer_type == 'organization' else '' }}" placeholder="Acme Corporation"
+                            <input type="text" name="name" id="name" :required="customerType === 'business'" value="{{ customer.company_name if customer and customer_type == 'business' else '' }}" placeholder="Acme Corporation"
                                    class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                         </div>
 
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                             <div>
                                 <label for="legal_name" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Legal Name</label>
-                                <input type="text" name="legal_name" id="legal_name" value="{{ customer.legal_name if customer and customer_type == 'organization' else '' }}" placeholder="Acme Corporation Ltd."
+                                <input type="text" name="legal_name" id="legal_name" value="{{ customer.legal_name if customer and customer_type == 'business' else '' }}" placeholder="Acme Corporation Ltd."
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                             <div>
                                 <label for="tax_id" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Tax ID / Registration Number</label>
-                                <input type="text" name="tax_id" id="tax_id" value="{{ customer.tax_id if customer and customer_type == 'organization' else '' }}" placeholder="RC-123456"
+                                <input type="text" name="tax_id" id="tax_id" value="{{ customer.tax_id if customer and customer_type == 'business' else '' }}" placeholder="RC-123456"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                         </div>
@@ -508,7 +521,7 @@
                                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
                                     Domain
                                 </label>
-                                <input type="text" name="domain" id="domain" value="{{ customer.domain if customer and customer_type == 'organization' else '' }}" placeholder="acme.com"
+                                <input type="text" name="domain" id="domain" value="{{ customer.domain if customer and customer_type == 'business' else '' }}" placeholder="acme.com"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                             <div>
@@ -516,7 +529,7 @@
                                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
                                     Website
                                 </label>
-                                <input type="url" name="website" id="website" value="{{ customer.website if customer and customer_type == 'organization' else '' }}" placeholder="https://www.acme.com"
+                                <input type="url" name="website" id="website" value="{{ customer.website if customer and customer_type == 'business' else '' }}" placeholder="https://www.acme.com"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                         </div>
@@ -531,8 +544,8 @@
 
                         <div>
                             <label for="org_notes" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Notes</label>
-                            <textarea name="org_notes" id="org_notes" rows="3" placeholder="Internal notes about this organization..."
-                                      class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition resize-none dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500">{{ customer.notes if customer and customer_type == 'organization' else '' }}</textarea>
+                            <textarea name="org_notes" id="org_notes" rows="3" placeholder="Internal notes about this business..."
+                                      class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition resize-none dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500">{{ customer.notes if customer and customer_type == 'business' else '' }}</textarea>
                         </div>
                     </div>
                 </div>
@@ -555,12 +568,12 @@
                 <div x-show="sections.orgBilling" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6 space-y-5">
                         <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
-                            If linked accounts currently have mixed billing overrides, the fields below start blank. Saving will standardize them across the organization.
+                            If linked accounts currently have mixed billing overrides, the fields below start blank. Saving will standardize them across the business account.
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 gap-5">
                             <div>
                                 <label for="org_billing_enabled_override" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Enabled</label>
-                                <select name="billing_enabled_override" id="org_billing_enabled_override" :disabled="customerType !== 'organization'"
+                                <select name="billing_enabled_override" id="org_billing_enabled_override" :disabled="customerType !== 'business'"
                                         class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
                                     <option value="" {% if not billing_form or not billing_form.billing_enabled_override %}selected{% endif %}>Inherit global default</option>
                                     <option value="true" {% if billing_form and billing_form.billing_enabled_override == 'true' %}selected{% endif %}>Enabled</option>
@@ -569,35 +582,35 @@
                             </div>
                             <div>
                                 <label for="org_payment_method" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Method</label>
-                                <input type="text" name="payment_method" id="org_payment_method" :disabled="customerType !== 'organization'" value="{{ billing_form.payment_method if billing_form else '' }}" placeholder="transfer, cash, card"
+                                <input type="text" name="payment_method" id="org_payment_method" :disabled="customerType !== 'business'" value="{{ billing_form.payment_method if billing_form else '' }}" placeholder="transfer, cash, card"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                         </div>
                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
                             <div>
                                 <label for="org_billing_day" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Billing Day</label>
-                                <input type="number" min="1" max="28" name="billing_day" id="org_billing_day" :disabled="customerType !== 'organization'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
+                                <input type="number" min="1" max="28" name="billing_day" id="org_billing_day" :disabled="customerType !== 'business'" value="{{ billing_form.billing_day if billing_form else '' }}" placeholder="Inherit"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                             <div>
                                 <label for="org_payment_due_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Payment Due Days</label>
-                                <input type="number" min="0" name="payment_due_days" id="org_payment_due_days" :disabled="customerType !== 'organization'" value="{{ billing_form.payment_due_days if billing_form else '' }}" placeholder="Inherit"
+                                <input type="number" min="0" name="payment_due_days" id="org_payment_due_days" :disabled="customerType !== 'business'" value="{{ billing_form.payment_due_days if billing_form else '' }}" placeholder="Inherit"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                             <div>
                                 <label for="org_grace_period_days" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Grace Period Days</label>
-                                <input type="number" min="0" name="grace_period_days" id="org_grace_period_days" :disabled="customerType !== 'organization'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Not set"
+                                <input type="number" min="0" name="grace_period_days" id="org_grace_period_days" :disabled="customerType !== 'business'" value="{{ billing_form.grace_period_days if billing_form else '' }}" placeholder="Not set"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                             <div>
                                 <label for="org_min_balance" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Minimum Balance</label>
-                                <input type="number" step="0.01" name="min_balance" id="org_min_balance" :disabled="customerType !== 'organization'" value="{{ billing_form.min_balance if billing_form else '' }}" placeholder="Inherit"
+                                <input type="number" step="0.01" name="min_balance" id="org_min_balance" :disabled="customerType !== 'business'" value="{{ billing_form.min_balance if billing_form else '' }}" placeholder="Inherit"
                                        class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 placeholder:text-slate-400 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:placeholder:text-slate-500" />
                             </div>
                         </div>
                         <div>
                             <label for="org_tax_rate_id" class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2 block">Tax Rate</label>
-                            <select name="tax_rate_id" id="org_tax_rate_id" :disabled="customerType !== 'organization'"
+                            <select name="tax_rate_id" id="org_tax_rate_id" :disabled="customerType !== 'business'"
                                     class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-amber-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
                                 <option value="" {% if not billing_form or not billing_form.tax_rate_id %}selected{% endif %}>No customer override</option>
                                 {% for rate in tax_rates | default([]) %}
@@ -609,7 +622,7 @@
                 </div>
             </div>
 
-            <!-- Additional Contacts Section (only for new organizations) -->
+            <!-- Additional Contacts Section (only for new business accounts) -->
             {% if not customer %}
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 overflow-hidden" data-contact-section>
                 <button type="button" @click="sections.contacts = !sections.contacts"
@@ -620,7 +633,7 @@
                         </div>
                         <div>
                             <h2 class="text-base font-semibold text-slate-900 dark:text-white">Contacts</h2>
-                            <p class="text-sm text-slate-500 dark:text-slate-400">Add contact persons for this organization</p>
+                            <p class="text-sm text-slate-500 dark:text-slate-400">Add contact persons for this business account</p>
                         </div>
                     </div>
                     <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="sections.contacts ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
@@ -628,7 +641,7 @@
                 <div x-show="sections.contacts" x-collapse class="border-t border-slate-100 dark:border-slate-700">
                     <div class="p-6">
                         <div class="flex items-center justify-between mb-4">
-                            <p class="text-sm text-slate-500 dark:text-slate-400">Add key contact persons who will be associated with this organization.</p>
+                            <p class="text-sm text-slate-500 dark:text-slate-400">Add key contact persons who will be associated with this business account.</p>
                             <button type="button" data-add-contact class="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 transition dark:border-amber-800 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50">
                                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
                                 Add Contact
@@ -690,7 +703,7 @@
                                     <input type="hidden" name="contact_is_primary" value="{{ 'true' if row.is_primary else 'false' }}" data-contact-primary-value />
                                     <label class="flex items-center gap-2 text-xs font-medium text-slate-600 dark:text-slate-400 cursor-pointer">
                                         <input type="checkbox" {% if row.is_primary %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-700" data-contact-primary-toggle />
-                                        Primary contact for this organization
+                                        Primary contact for this business account
                                     </label>
                                 </div>
                             </div>
@@ -760,7 +773,7 @@
                 {% if form_mode == 'subscriber' %}
                 {{ 'Update' if customer else 'Create' }} Subscriber
                 {% else %}
-                {{ 'Update' if customer else 'Create' }} <span x-text="customerType === 'person' ? 'Person' : 'Organization'">{{ customer_type | title }}</span>
+                {{ 'Update' if customer else 'Create' }} <span x-text="customerType === 'person' ? 'Person' : 'Business'">{{ customer_type | title }}</span>
                 {% endif %}
             </button>
         </div>

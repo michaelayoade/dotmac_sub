@@ -6,9 +6,10 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, selectinload
 
@@ -23,6 +24,7 @@ from app.models.subscriber import (
     ChannelType,
     Reseller,
     Subscriber,
+    SubscriberCategory,
     SubscriberChannel,
 )
 from app.models.support import Ticket, TicketStatus
@@ -970,12 +972,35 @@ def _build_network_access_cards(subscriptions: list) -> list[dict]:
     return cards
 
 
-def build_person_detail_snapshot(db: Session, customer_id: str):
+def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
+    """Build unified customer detail snapshot.
+
+    Every customer is a subscriber. Business accounts store their
+    company identity directly on the subscriber row.
+    """
     customer = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    customer_name = (
+        customer.company_name
+        or customer.display_name
+        or f"{customer.first_name or ''} {customer.last_name or ''}".strip()
+    )
+    organization = None
+    if customer.category == SubscriberCategory.business:
+        organization = SimpleNamespace(
+            name=customer.company_name or customer_name,
+            legal_name=customer.legal_name,
+            tax_id=customer.tax_id,
+            domain=customer.domain,
+            website=customer.website,
+            notes=customer.notes,
+        )
+
     subscribers = [customer]
-    addresses = []
+
+    # Load addresses and contacts for all subscriber accounts
+    addresses: list[Any] = []
     contacts: list[dict[str, object]] = []
-    accounts = []
+    accounts: list[Subscriber] = []
     for sub in subscribers:
         try:
             sub_addresses = subscriber_service.addresses.list(
@@ -989,17 +1014,26 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
             addresses.extend(sub_addresses)
         except Exception:
             logger.debug(
-                "Failed to load addresses for subscriber %s in person snapshot",
+                "Failed to load addresses for subscriber %s",
                 sub.id,
                 exc_info=True,
             )
         accounts.append(sub)
+        channels = (
+            db.query(SubscriberChannel)
+            .filter(SubscriberChannel.subscriber_id == sub.id)
+            .order_by(SubscriberChannel.created_at.desc())
+            .limit(50)
+            .all()
+        )
+        contacts.extend(_format_contact_channel(sub, channel) for channel in channels)
 
     accounts = _dedupe_accounts(accounts)
     subscriptions = _list_subscriptions_for_accounts(db, accounts)
     account_lookup = {str(account.id): account for account in accounts}
     account_ids = [account.id for account in accounts]
 
+    # Financials & relationships
     finance_data = _build_common_financials(db, account_ids)
     invoices = finance_data["invoices"]
     payments = finance_data["payments"]
@@ -1016,6 +1050,7 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     financials["monthly_recurring"] = monthly_recurring
     relationship_data = _build_relationship_data(db, account_ids)
 
+    # Address resolution with fallback
     if not addresses:
         addresses = _build_person_fallback_address(db, customer)
 
@@ -1033,28 +1068,25 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
             ),
         ),
     )
-    map_data, geocode_target = _build_map_payload(
-        primary_address,
-        f"{customer.first_name or ''} {customer.last_name or ''}".strip(),
-    )
+    map_data, geocode_target = _build_map_payload(primary_address, customer_name)
 
+    sub_filter = Subscriber.id == customer.id
     active_subscribers = (
         db.query(Subscriber)
-        .filter(Subscriber.id == customer.id)
-        .filter(Subscriber.is_active.is_(True))
+        .filter(sub_filter, Subscriber.is_active.is_(True))
         .count()
     )
-    total_subscribers = (
-        db.query(Subscriber).filter(Subscriber.id == customer.id).count()
-    )
+    total_subscribers = db.query(Subscriber).filter(sub_filter).count()
 
-    notifications = []
+    # Notifications — gather recipients from all accounts
+    notifications: list[Any] = []
     try:
-        recipients = []
-        if customer.email:
-            recipients.append(customer.email)
-        if customer.phone:
-            recipients.append(customer.phone)
+        recipients: list[str] = []
+        for sub in subscribers:
+            if sub.email:
+                recipients.append(sub.email)
+            if sub.phone:
+                recipients.append(sub.phone)
         if recipients:
             all_notifications = notification_service.Notifications.list(
                 db=db,
@@ -1116,7 +1148,8 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     return {
         "customer": customer,
         "customer_type": "person",
-        "customer_name": f"{customer.first_name} {customer.last_name}",
+        "customer_name": customer_name,
+        "organization": organization,
         "subscribers": subscribers,
         "accounts": accounts,
         "subscriptions": subscriptions,
@@ -1141,175 +1174,14 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     }
 
 
-def build_organization_detail_snapshot(db: Session, customer_id: str):
-    customer = subscriber_service.organizations.get(db=db, organization_id=customer_id)
-    org_uuid = UUID(customer_id)
-    subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .order_by(Subscriber.created_at.desc())
-        .limit(10)
-        .all()
-    )
-    addresses = []
-    contacts: list[dict[str, object]] = []
-    accounts = []
-    for sub in subscribers:
-        try:
-            sub_addresses = subscriber_service.addresses.list(
-                db=db,
-                subscriber_id=str(sub.id),
-                order_by="created_at",
-                order_dir="desc",
-                limit=50,
-                offset=0,
-            )
-            addresses.extend(sub_addresses)
-        except Exception:
-            logger.debug(
-                "Failed to load addresses for subscriber %s in organization snapshot",
-                sub.id,
-                exc_info=True,
-            )
-        accounts.append(sub)
-        channels = (
-            db.query(SubscriberChannel)
-            .filter(SubscriberChannel.subscriber_id == sub.id)
-            .order_by(SubscriberChannel.created_at.desc())
-            .limit(50)
-            .all()
-        )
-        contacts.extend(_format_contact_channel(sub, channel) for channel in channels)
+def build_person_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
+    """Backwards-compatible wrapper — delegates to unified snapshot."""
+    return build_customer_detail_snapshot(db, customer_id)
 
-    accounts = _dedupe_accounts(accounts)
-    subscriptions = _list_subscriptions_for_accounts(db, accounts)
-    account_lookup = {str(account.id): account for account in accounts}
-    account_ids = [account.id for account in accounts]
 
-    finance_data = _build_common_financials(db, account_ids)
-    invoices = finance_data["invoices"]
-    payments = finance_data["payments"]
-    balance_due = finance_data["balance_due"]
-    financials = finance_data["financials"]
-    active_subscriptions = sum(
-        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
-    )
-    monthly_recurring = sum(
-        float(getattr(sub, "unit_price", 0) or 0)
-        for sub in subscriptions
-        if sub.status == SubscriptionStatus.active
-    )
-    financials["monthly_recurring"] = monthly_recurring
-    relationship_data = _build_relationship_data(db, account_ids)
-
-    primary_address = next(
-        (a for a in addresses if getattr(a, "is_primary", False)),
-        addresses[0] if addresses else None,
-    )
-    map_data, geocode_target = _build_map_payload(primary_address, customer.name)
-
-    active_subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .filter(Subscriber.is_active.is_(True))
-        .count()
-    )
-    total_subscribers = (
-        db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).count()
-    )
-
-    notifications = []
-    try:
-        recipients = []
-        org_people = (
-            db.query(Subscriber)
-            .filter(Subscriber.organization_id == org_uuid)
-            .limit(10)
-            .all()
-        )
-        for person in org_people:
-            if person.email:
-                recipients.append(person.email)
-            if person.phone:
-                recipients.append(person.phone)
-        if recipients:
-            all_notifications = notification_service.Notifications.list(
-                db=db,
-                channel=None,
-                status=None,
-                is_active=True,
-                order_by="created_at",
-                order_dir="desc",
-                limit=100,
-                offset=0,
-            )
-            notifications = [n for n in all_notifications if n.recipient in recipients][
-                :5
-            ]
-    except Exception:
-        notifications = []
-
-    activity_items = _build_activity_items(
-        db,
-        "organization",
-        str(customer_id),
-        account_ids,
-        subscriptions,
-    )
-    relationship_summary = cast(
-        dict[str, int],
-        relationship_data["relationship_summary"],
-    )
-    stats = {
-        "total_subscribers": len(subscribers),
-        "total_subscriptions": len(subscriptions),
-        "active_subscriptions": active_subscriptions,
-        "balance_due": balance_due,
-        "total_addresses": len(addresses),
-        "total_contacts": len(contacts),
-        "open_tickets": relationship_summary["open_tickets"],
-        "active_service_orders": relationship_summary["active_service_orders"],
-        "service_orders": relationship_summary["active_service_orders"],
-        "active_credentials": relationship_summary["active_credentials"],
-        "active_network_assets": (
-            relationship_summary["active_cpes"]
-            + relationship_summary["active_onts"]
-            + relationship_summary["active_ip_assignments"]
-        ),
-    }
-    try:
-        customer_user_access = (
-            web_customer_user_access_service.build_customer_user_access_state(
-                db,
-                customer_type="organization",
-                customer_id=customer_id,
-            )
-        )
-    except Exception as exc:
-        customer_user_access = {"error": str(exc)}
-
-    return {
-        "customer": customer,
-        "customer_type": "organization",
-        "customer_name": customer.name,
-        "subscribers": subscribers,
-        "accounts": accounts,
-        "subscriptions": subscriptions,
-        "account_lookup": account_lookup,
-        "addresses": addresses,
-        "primary_address": primary_address,
-        "map_data": map_data,
-        "geocode_target": geocode_target,
-        "contacts": contacts,
-        "invoices": invoices,
-        "payments": payments,
-        "notifications": notifications,
-        "stats": stats,
-        "financials": financials,
-        "has_active_subscribers": active_subscribers > 0,
-        "has_any_subscribers": total_subscribers > 0,
-        "activity_items": activity_items,
-        "customer_user_access": customer_user_access,
-        "billing_policy": _billing_policy_snapshot(db, accounts),
-        **relationship_data,
-    }
+def build_business_detail_snapshot(db: Session, customer_id: str) -> dict[str, Any]:
+    """Business-customer wrapper for business URLs."""
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    if subscriber.category != SubscriberCategory.business:
+        raise HTTPException(status_code=404, detail="Business customer not found")
+    return build_customer_detail_snapshot(db, str(subscriber.id))

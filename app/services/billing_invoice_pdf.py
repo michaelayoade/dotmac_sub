@@ -25,7 +25,7 @@ from app.db import SessionLocal
 from app.models.billing import Invoice, InvoicePdfExport, InvoicePdfExportStatus
 from app.models.domain_settings import SettingDomain
 from app.models.stored_file import StoredFile
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import branding_storage as branding_storage_service
@@ -61,14 +61,9 @@ def _display_account_name(invoice: Invoice) -> str:
     account = getattr(invoice, "account", None)
     if not account:
         return "Account"
-    person = getattr(account, "person", None)
-    if person:
-        full_name = f"{(person.first_name or '').strip()} {(person.last_name or '').strip()}".strip()
-        if full_name:
-            return full_name
-    organization = getattr(account, "organization", None)
-    if organization and organization.name:
-        return organization.name
+    account_name = str(getattr(account, "name", "") or "").strip()
+    if account_name:
+        return account_name
     return "Account"
 
 
@@ -1100,9 +1095,15 @@ def download_filename(invoice: Invoice) -> str:
     return f"invoice-{_safe_invoice_number(invoice)}.pdf"
 
 
-def _invoice_org_id(invoice: Invoice):
+def _invoice_owner_subscriber_id(invoice: Invoice):
     account = getattr(invoice, "account", None)
-    return getattr(account, "organization_id", None) if account else None
+    if not account:
+        return None
+    return (
+        getattr(account, "id", None)
+        if getattr(account, "category", None) == SubscriberCategory.business
+        else None
+    )
 
 
 def _build_pdf_bytes(db: Session, invoice: Invoice) -> bytes:
@@ -1201,7 +1202,7 @@ def process_export(export_id: str) -> dict[str, Any]:
             content_type="application/pdf",
             data=pdf_bytes,
             uploaded_by=str(export.requested_by_id) if export.requested_by_id else None,
-            organization_id=_invoice_org_id(invoice),
+            owner_subscriber_id=_invoice_owner_subscriber_id(invoice),
         )
 
         export.status = InvoicePdfExportStatus.completed

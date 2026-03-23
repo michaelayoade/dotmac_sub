@@ -143,9 +143,7 @@
                         <td class="px-6 py-3 font-medium text-emerald-600 dark:text-emerald-400">{{ invoice.invoice_number|default('Invoice') }}</td>
                         <td class="px-6 py-3 text-slate-900 dark:text-white">
                             {% if invoice.account %}
-                                {% if invoice.account.organization %}{{ invoice.account.organization.name }}
-                                {% elif invoice.account.first_name %}{{ invoice.account.first_name or '' }} {{ invoice.account.last_name or '' }}
-                                {% else %}Account{% endif %}
+                                {{ invoice.account.name }}
                             {% else %}Account{% endif %}
                         </td>
                         <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">₦{{ "{:,.2f}".format(invoice.total|default(0)) }}</td>

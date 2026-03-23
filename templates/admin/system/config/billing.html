@@ -9,34 +9,156 @@
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         {% call card("Recurring Billing", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Enabled</label><select name="billing_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.billing_enabled == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.billing_enabled != 'true' %}selected{% endif %}>Disabled</option></select></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Period</label><select name="payment_period" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="monthly" {% if billing.payment_period == 'monthly' %}selected{% endif %}>Monthly</option><option value="quarterly" {% if billing.payment_period == 'quarterly' %}selected{% endif %}>Quarterly</option><option value="annual" {% if billing.payment_period == 'annual' %}selected{% endif %}>Annual</option></select></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Day (1-28)</label><input type="number" name="billing_day" min="1" max="28" value="{{ billing.billing_day or '1' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Use Customer Creation Date</label><select name="use_creation_date" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.use_creation_date == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing.use_creation_date != 'true' %}selected{% endif %}>No</option></select></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Due (days after invoice)</label><input type="number" name="payment_due_days" value="{{ billing.payment_due_days or '14' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auto-Suspend on Overdue</label><select name="auto_suspend_on_overdue" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.auto_suspend_on_overdue == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.auto_suspend_on_overdue != 'true' %}selected{% endif %}>Disabled</option></select><p class="mt-1 text-xs text-slate-500">Suspend active subscriptions automatically when invoices become overdue.</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Suspension Grace Period (hours)</label><input type="number" min="0" name="suspension_grace_hours" value="{{ billing.suspension_grace_hours or '48' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">Send a warning before auto-suspending overdue accounts.</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Expiry Reminder Days</label><input type="number" min="0" name="expiry_reminder_days" value="{{ billing.expiry_reminder_days or '7' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">Days before subscription expiry to notify the customer.</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Reminder Days</label><input type="text" name="invoice_reminder_days" value="{{ billing.invoice_reminder_days or '7,1' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">Comma-separated days before due date, for example <span class="font-mono">7,1</span>.</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Dunning Escalation Days</label><input type="text" name="dunning_escalation_days" value="{{ billing.dunning_escalation_days or '3,7,14,30' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">Comma-separated overdue day offsets for repeated escalation notices.</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Blocking Period (days after due)</label><input type="number" name="blocking_period_days" value="{{ billing.blocking_period_days or '0' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Deactivation Period (days)</label><input type="number" name="deactivation_period_days" value="{{ billing.deactivation_period_days or '0' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">0 = disabled</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Minimum Balance</label><input type="number" step="0.01" name="minimum_balance" value="{{ billing.minimum_balance or '0' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Send Billing Notifications</label><select name="send_billing_notifications" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.send_billing_notifications == 'true' %}selected{% endif %}>Yes</option><option value="false" {% if billing.send_billing_notifications != 'true' %}selected{% endif %}>No</option></select></div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Enabled</label>
+                <div class="relative mt-1">
+                    <select name="billing_enabled" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.billing_enabled == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if billing.billing_enabled != 'true' %}selected{% endif %}>Disabled</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Period</label>
+                <div class="relative mt-1">
+                    <select name="payment_period" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="monthly" {% if billing.payment_period == 'monthly' %}selected{% endif %}>Monthly</option>
+                        <option value="quarterly" {% if billing.payment_period == 'quarterly' %}selected{% endif %}>Quarterly</option>
+                        <option value="annual" {% if billing.payment_period == 'annual' %}selected{% endif %}>Annual</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Billing Day (1-28)</label>
+                <input type="number" name="billing_day" min="1" max="28" value="{{ billing.billing_day or '1' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Use Customer Creation Date</label>
+                <div class="relative mt-1">
+                    <select name="use_creation_date" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.use_creation_date == 'true' %}selected{% endif %}>Yes</option>
+                        <option value="false" {% if billing.use_creation_date != 'true' %}selected{% endif %}>No</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Payment Due (days after invoice)</label>
+                <input type="number" name="payment_due_days" value="{{ billing.payment_due_days or '14' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Auto-Suspend on Overdue</label>
+                <div class="relative mt-1">
+                    <select name="auto_suspend_on_overdue" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.auto_suspend_on_overdue == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if billing.auto_suspend_on_overdue != 'true' %}selected{% endif %}>Disabled</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+                <p class="mt-1 text-xs text-slate-500">Suspend active subscriptions automatically when invoices become overdue.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Suspension Grace Period (hours)</label>
+                <input type="number" min="0" name="suspension_grace_hours" value="{{ billing.suspension_grace_hours or '48' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <p class="mt-1 text-xs text-slate-500">Send a warning before auto-suspending overdue accounts.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Expiry Reminder Days</label>
+                <input type="number" min="0" name="expiry_reminder_days" value="{{ billing.expiry_reminder_days or '7' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <p class="mt-1 text-xs text-slate-500">Days before subscription expiry to notify the customer.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Reminder Days</label>
+                <input type="text" name="invoice_reminder_days" value="{{ billing.invoice_reminder_days or '7,1' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <p class="mt-1 text-xs text-slate-500">Comma-separated days before due date, for example <span class="font-mono">7,1</span>.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Dunning Escalation Days</label>
+                <input type="text" name="dunning_escalation_days" value="{{ billing.dunning_escalation_days or '3,7,14,30' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <p class="mt-1 text-xs text-slate-500">Comma-separated overdue day offsets for repeated escalation notices.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Blocking Period (days after due)</label>
+                <input type="number" name="blocking_period_days" value="{{ billing.blocking_period_days or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Deactivation Period (days)</label>
+                <input type="number" name="deactivation_period_days" value="{{ billing.deactivation_period_days or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                <p class="mt-1 text-xs text-slate-500">0 = disabled</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Minimum Balance</label>
+                <input type="number" step="0.01" name="minimum_balance" value="{{ billing.minimum_balance or '0' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Send Billing Notifications</label>
+                <div class="relative mt-1">
+                    <select name="send_billing_notifications" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.send_billing_notifications == 'true' %}selected{% endif %}>Yes</option>
+                        <option value="false" {% if billing.send_billing_notifications != 'true' %}selected{% endif %}>No</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
         </div>
         {% endcall %}
         {% call card("Document Numbering", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2">
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Number Format</label><input type="text" name="invoice_number_format" value="{{ billing.invoice_number_format or 'INV{year}{month}{next|6}' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"><p class="mt-1 text-xs text-slate-500">Variables: {year}, {month}, {day}, {next}, {next|N} for zero-padded</p></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Receipt Number Format</label><input type="text" name="receipt_number_format" value="{{ billing.receipt_number_format or 'RCP{year}{next|6}' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Credit Note Format</label><input type="text" name="credit_note_format" value="{{ billing.credit_note_format or 'CN{year}{next|6}' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice Number Format</label><input type="text" name="invoice_number_format" value="{{ billing.invoice_number_format or 'INV{year}{month}{next|6}' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm font-mono text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900"><p class="mt-1 text-xs text-slate-500">Variables: {year}, {month}, {day}, {next}, {next|N} for zero-padded</p></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Receipt Number Format</label><input type="text" name="receipt_number_format" value="{{ billing.receipt_number_format or 'RCP{year}{next|6}' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm font-mono text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900"></div>
+            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Credit Note Format</label><input type="text" name="credit_note_format" value="{{ billing.credit_note_format or 'CN{year}{next|6}' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm font-mono text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900"></div>
         </div>
         {% endcall %}
         {% call card("Proforma & Options", color="emerald") %}
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Proforma Invoices</label><select name="proforma_enabled" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.proforma_enabled == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.proforma_enabled != 'true' %}selected{% endif %}>Disabled</option></select></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zero-Total Invoices</label><select name="zero_total_invoices" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.zero_total_invoices == 'true' %}selected{% endif %}>Allow</option><option value="false" {% if billing.zero_total_invoices != 'true' %}selected{% endif %}>Prevent</option></select></div>
-            <div><label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice PDF Caching</label><select name="invoice_caching" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"><option value="true" {% if billing.invoice_caching == 'true' %}selected{% endif %}>Enabled</option><option value="false" {% if billing.invoice_caching != 'true' %}selected{% endif %}>Disabled</option></select></div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Proforma Invoices</label>
+                <div class="relative mt-1">
+                    <select name="proforma_enabled" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.proforma_enabled == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if billing.proforma_enabled != 'true' %}selected{% endif %}>Disabled</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Zero-Total Invoices</label>
+                <div class="relative mt-1">
+                    <select name="zero_total_invoices" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.zero_total_invoices == 'true' %}selected{% endif %}>Allow</option>
+                        <option value="false" {% if billing.zero_total_invoices != 'true' %}selected{% endif %}>Prevent</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice PDF Caching</label>
+                <div class="relative mt-1">
+                    <select name="invoice_caching" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if billing.invoice_caching == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if billing.invoice_caching != 'true' %}selected{% endif %}>Disabled</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/></svg>
+                    </div>
+                </div>
+            </div>
         </div>
         {% endcall %}
         <div class="flex justify-end"><button type="submit" class="rounded-lg bg-emerald-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-emerald-700 transition">Save Billing Settings</button></div>

@@ -110,6 +110,9 @@ class DnsThreatAction(enum.Enum):
 
 class PopSite(Base):
     __tablename__ = "pop_sites"
+    __table_args__ = (
+        Index("ix_pop_sites_owner_subscriber_id", "owner_subscriber_id"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -128,8 +131,8 @@ class PopSite(Base):
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("network_zones.id")
     )
-    organization_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("organizations.id")
+    owner_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     reseller_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("resellers.id")
@@ -155,7 +158,7 @@ class PopSite(Base):
         order_by="PopSiteContact.created_at.desc()",
     )
     zone = relationship("NetworkZone")
-    organization = relationship("Organization")
+    owner_subscriber = relationship("Subscriber", foreign_keys=[owner_subscriber_id])
     reseller = relationship("Reseller")
 
 

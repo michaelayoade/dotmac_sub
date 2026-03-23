@@ -1,7 +1,20 @@
 from decimal import Decimal
 
 from app.models.billing import TaxRate
-from app.models.subscriber import Organization, Subscriber
+from app.models.auth import UserCredential
+from app.models.catalog import (
+    AccessType,
+    BillingMode,
+    CatalogOffer,
+    OfferStatus,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
+from app.models.enforcement_lock import EnforcementReason
+from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
+from app.services.account_lifecycle import has_active_lock
 from app.services import web_customer_actions as actions
 
 
@@ -58,17 +71,20 @@ def test_update_person_customer_persists_billing_overrides(db_session, subscribe
     assert updated.payment_method == "transfer"
 
 
-def test_update_organization_customer_applies_billing_overrides_to_linked_subscribers(db_session):
+def test_update_business_customer_applies_billing_overrides_to_linked_subscribers(db_session):
     tax_rate = TaxRate(name="Reduced VAT", rate=Decimal("0.050"))
-    organization = Organization(name="Acme Corp")
+    organization = Subscriber(
+        first_name="Acme",
+        last_name="Business",
+        email="billing@acme.example.com",
+        company_name="Acme Corp",
+    )
+    organization.category = SubscriberCategory.business
     db_session.add_all([tax_rate, organization])
     db_session.flush()
-    first = Subscriber(first_name="A", last_name="One", email="a.one@example.com", organization_id=organization.id)
-    second = Subscriber(first_name="B", last_name="Two", email="b.two@example.com", organization_id=organization.id)
-    db_session.add_all([first, second])
     db_session.commit()
 
-    actions.update_organization_customer(
+    actions.update_business_customer(
         db=db_session,
         customer_id=str(organization.id),
         name="Acme Corp",
@@ -88,18 +104,114 @@ def test_update_organization_customer_applies_billing_overrides_to_linked_subscr
         payment_method="cash",
     )
 
-    refreshed = (
-        db_session.query(Subscriber)
-        .filter(Subscriber.organization_id == organization.id)
-        .order_by(Subscriber.email.asc())
-        .all()
+    refreshed = db_session.get(Subscriber, organization.id)
+    assert refreshed is not None
+    assert refreshed.company_name == "Acme Corp"
+    assert refreshed.billing_enabled is True
+    assert refreshed.billing_day == 12
+    assert refreshed.payment_due_days == 9
+    assert refreshed.grace_period_days == 4
+    assert refreshed.min_balance == Decimal("75.00")
+    assert refreshed.tax_rate_id == tax_rate.id
+    assert refreshed.payment_method == "cash"
+
+
+def test_deactivate_business_customer_suspends_member_subscriptions(db_session):
+    offer = CatalogOffer(
+        name="Business Fiber",
+        service_type=ServiceType.business,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        status=OfferStatus.active,
+        is_active=True,
     )
-    assert len(refreshed) == 2
-    for subscriber in refreshed:
-        assert subscriber.billing_enabled is True
-        assert subscriber.billing_day == 12
-        assert subscriber.payment_due_days == 9
-        assert subscriber.grace_period_days == 4
-        assert subscriber.min_balance == Decimal("75.00")
-        assert subscriber.tax_rate_id == tax_rate.id
-        assert subscriber.payment_method == "cash"
+    db_session.add(offer)
+    db_session.flush()
+
+    subscriber = Subscriber(
+        first_name="Acme",
+        last_name="Business",
+        email="org.member@example.com",
+        company_name="Acme Corp",
+        status=SubscriberStatus.active,
+    )
+    subscriber.category = SubscriberCategory.business
+    db_session.add(subscriber)
+    db_session.flush()
+
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+    )
+    db_session.add(subscription)
+    db_session.add(
+        UserCredential(
+            subscriber_id=subscriber.id,
+            username="org.member@example.com",
+            password_hash="hash",
+        )
+    )
+    db_session.commit()
+
+    actions.deactivate_business_customer(db_session, str(subscriber.id))
+    db_session.refresh(subscriber)
+    db_session.refresh(subscription)
+
+    assert subscriber.is_active is False
+    assert subscriber.status == SubscriberStatus.suspended
+    assert subscription.status == SubscriptionStatus.suspended
+    assert has_active_lock(
+        db_session, str(subscription.id), EnforcementReason.admin
+    )
+
+
+def test_bulk_activate_business_restores_admin_locked_member(db_session):
+    offer = CatalogOffer(
+        name="Business Fiber",
+        service_type=ServiceType.business,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        status=OfferStatus.active,
+        is_active=True,
+    )
+    db_session.add(offer)
+    db_session.flush()
+
+    subscriber = Subscriber(
+        first_name="Beta",
+        last_name="Business",
+        email="beta.member@example.com",
+        company_name="Beta Corp",
+        status=SubscriberStatus.active,
+        is_active=True,
+    )
+    subscriber.category = SubscriberCategory.business
+    db_session.add(subscriber)
+    db_session.flush()
+
+    subscription = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.prepaid,
+    )
+    db_session.add(subscription)
+    db_session.commit()
+
+    actions.deactivate_business_customer(db_session, str(subscriber.id))
+    result = actions.bulk_update_customer_status(
+        db_session, [{"id": str(subscriber.id), "type": "business"}], True
+    )
+
+    db_session.refresh(subscriber)
+    db_session.refresh(subscription)
+
+    assert result["errors"] == []
+    assert subscriber.is_active is True
+    assert subscriber.status == SubscriberStatus.active
+    assert subscription.status == SubscriptionStatus.active
+    assert not has_active_lock(
+        db_session, str(subscription.id), EnforcementReason.admin
+    )
