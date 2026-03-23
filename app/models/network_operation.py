@@ -33,7 +33,7 @@ class NetworkOperationStatus(enum.Enum):
 
     pending = "pending"
     running = "running"
-    waiting = "waiting"      # Waiting on external system (device inform, reboot)
+    waiting = "waiting"  # Waiting on external system (device inform, reboot)
     succeeded = "succeeded"
     failed = "failed"
     canceled = "canceled"
@@ -118,9 +118,7 @@ class NetworkOperation(Base):
         ),
         nullable=False,
     )
-    target_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
-    )
+    target_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     parent_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("network_operations.id", ondelete="CASCADE"),

@@ -757,9 +757,7 @@ def get_suspend_page(
 
     max_suspend_days = resolve_value(db, SettingDomain.catalog, "max_suspend_days")
     max_days = (
-        int(max_suspend_days)
-        if isinstance(max_suspend_days, (str, int, float))
-        else 30
+        int(max_suspend_days) if isinstance(max_suspend_days, (str, int, float)) else 30
     )
 
     account_id = customer.get("account_id")
@@ -774,7 +772,9 @@ def get_suspend_page(
     return {
         "subscription": subscription,
         "offer_name": offer.name if offer else "Service",
-        "billing_mode": subscription.billing_mode.value if subscription.billing_mode else "postpaid",
+        "billing_mode": subscription.billing_mode.value
+        if subscription.billing_mode
+        else "postpaid",
         "max_days": max_days,
     }
 
@@ -797,9 +797,7 @@ def apply_service_suspend(
 
     max_suspend_days = resolve_value(db, SettingDomain.catalog, "max_suspend_days")
     max_days = (
-        int(max_suspend_days)
-        if isinstance(max_suspend_days, (str, int, float))
-        else 30
+        int(max_suspend_days) if isinstance(max_suspend_days, (str, int, float)) else 30
     )
     if days < 1 or days > max_days:
         raise ValueError(f"Suspension must be between 1 and {max_days} days")

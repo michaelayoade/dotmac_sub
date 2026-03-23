@@ -93,9 +93,7 @@ def build_operation_history(
     except ValueError:
         logger.warning("Unknown target_type %r for operation history", target_type)
         return []
-    ops = network_operations.list_for_device(
-        db, target_enum, target_id, limit=limit
-    )
+    ops = network_operations.list_for_device(db, target_enum, target_id, limit=limit)
 
     result: list[dict[str, Any]] = []
     for op in ops:

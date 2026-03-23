@@ -242,7 +242,9 @@ def execute_push_tr069_wan_config(
             if ont_error:
                 return ProvisioningResult(status="failed", detail=ont_error.message)
             if ont_resolved is None:
-                return ProvisioningResult(status="failed", detail="ONT resolution failed.")
+                return ProvisioningResult(
+                    status="failed", detail="ONT resolution failed."
+                )
             ont, client, device_id = ont_resolved
             root = detect_data_model_root(db, ont, client, device_id)
         elif cpe_device_id:
@@ -255,7 +257,9 @@ def execute_push_tr069_wan_config(
             if cpe_error:
                 return ProvisioningResult(status="failed", detail=cpe_error.message)
             if cpe_resolved is None:
-                return ProvisioningResult(status="failed", detail="CPE resolution failed.")
+                return ProvisioningResult(
+                    status="failed", detail="CPE resolution failed."
+                )
             cpe, client, device_id = cpe_resolved
             root = detect_data_model_root(db, cpe, client, device_id)
         else:

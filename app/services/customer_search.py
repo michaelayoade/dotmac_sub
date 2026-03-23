@@ -14,7 +14,9 @@ _MAX_SEARCH_LIMIT = 50
 
 def _business_clause():
     return (
-        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        func.lower(
+            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+        )
         == SubscriberCategory.business.value
     )
 
@@ -71,7 +73,11 @@ def search(db: Session, query: str, limit: int = 20) -> list[dict]:
     items: list[dict] = []
     for subscriber in people:
         if subscriber.category == SubscriberCategory.business:
-            label = subscriber.company_name or subscriber.display_name or subscriber.full_name
+            label = (
+                subscriber.company_name
+                or subscriber.display_name
+                or subscriber.full_name
+            )
             if subscriber.domain:
                 label = f"{label} ({subscriber.domain})"
             items.append(

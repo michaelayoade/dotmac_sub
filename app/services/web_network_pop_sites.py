@@ -210,7 +210,10 @@ def resolve_site_relationships(
         return None, "Selected location reference was not found."
     if owner_subscriber_id:
         owner_subscriber = db.get(Subscriber, owner_subscriber_id)
-        if not owner_subscriber or owner_subscriber.category != SubscriberCategory.business:
+        if (
+            not owner_subscriber
+            or owner_subscriber.category != SubscriberCategory.business
+        ):
             return None, "Selected business account was not found."
     if reseller_id and not db.get(Reseller, reseller_id):
         return None, "Selected partner was not found."
@@ -238,7 +241,9 @@ def form_reference_data(db: Session) -> dict[str, object]:
                 )
                 == SubscriberCategory.business.value
             )
-            .order_by(Subscriber.company_name, Subscriber.display_name, Subscriber.last_name)
+            .order_by(
+                Subscriber.company_name, Subscriber.display_name, Subscriber.last_name
+            )
         ).all(),
         "resellers": db.scalars(
             select(Reseller).where(Reseller.is_active.is_(True)).order_by(Reseller.name)

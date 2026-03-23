@@ -45,7 +45,11 @@ def customer_label(db: Session, customer_ref: str | None) -> str | None:
         if kind == "business":
             subscriber = db.get(Subscriber, ref_id)
             if subscriber and subscriber.category == SubscriberCategory.business:
-                return subscriber.company_name or subscriber.display_name or subscriber.full_name
+                return (
+                    subscriber.company_name
+                    or subscriber.display_name
+                    or subscriber.full_name
+                )
         else:
             subscriber = db.get(Subscriber, ref_id)
             if subscriber:

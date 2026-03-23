@@ -555,10 +555,12 @@ class EnforcementHandler:
                 db.query(Subscription)
                 .filter(
                     Subscription.subscriber_id == subscriber.id,
-                    Subscription.status.in_([
-                        SubscriptionStatus.active,
-                        SubscriptionStatus.suspended,
-                    ]),
+                    Subscription.status.in_(
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.suspended,
+                        ]
+                    ),
                 )
                 .all()
             )
@@ -581,9 +583,7 @@ class EnforcementHandler:
                     if was_active:
                         newly_suspended_ids.append(str(sub.id))
                 except ValueError as e:
-                    logger.info(
-                        "Skipped suspending subscription %s: %s", sub.id, e
-                    )
+                    logger.info("Skipped suspending subscription %s: %s", sub.id, e)
                 except Exception as exc:
                     logger.error(
                         "Failed to suspend subscription %s for overdue invoice: %s",

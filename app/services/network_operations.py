@@ -38,11 +38,13 @@ _ACTIVE_STATUSES = (
 )
 
 # Terminal statuses — no further transitions allowed
-_TERMINAL_STATUSES = frozenset({
-    NetworkOperationStatus.succeeded,
-    NetworkOperationStatus.failed,
-    NetworkOperationStatus.canceled,
-})
+_TERMINAL_STATUSES = frozenset(
+    {
+        NetworkOperationStatus.succeeded,
+        NetworkOperationStatus.failed,
+        NetworkOperationStatus.canceled,
+    }
+)
 
 
 def _get_operation(db: Session, operation_id: str) -> NetworkOperation:
@@ -343,9 +345,7 @@ def tracked_operation(
     manager will rollback the session and retry. Callers should be aware that
     uncommitted work in the session may be lost on exception.
     """
-    op = network_operations.start(
-        db, operation_type, target_type, target_id, **kwargs
-    )
+    op = network_operations.start(db, operation_type, target_type, target_id, **kwargs)
     network_operations.mark_running(db, str(op.id))
     db.flush()
     try:
@@ -366,8 +366,7 @@ def tracked_operation(
                 db.flush()
         except Exception as record_err:
             logger.error(
-                "Failed to record operation failure for %s: %s "
-                "(original error: %s)",
+                "Failed to record operation failure for %s: %s (original error: %s)",
                 op.id,
                 record_err,
                 exc,
@@ -443,7 +442,9 @@ def run_tracked_action(
                     db, str(op.id), getattr(result, "message", "Unknown error")
                 )
         except Exception as track_err:
-            logger.error("Failed to record operation outcome for %s: %s", op.id, track_err)
+            logger.error(
+                "Failed to record operation outcome for %s: %s", op.id, track_err
+            )
         return result
     except Exception as exc:
         try:
@@ -451,7 +452,9 @@ def run_tracked_action(
         except Exception as track_err:
             logger.error(
                 "Failed to record operation failure for %s: %s (original: %s)",
-                op.id, track_err, exc,
+                op.id,
+                track_err,
+                exc,
             )
             try:
                 db.rollback()

@@ -499,7 +499,8 @@ class OntProvisioningOrchestrator:
                 logger.warning(
                     "Operation tracking unavailable (HTTP %s: %s) — "
                     "provisioning will proceed untracked",
-                    exc.status_code, exc.detail,
+                    exc.status_code,
+                    exc.detail,
                 )
                 op = None
             except Exception as track_err:
@@ -512,8 +513,13 @@ class OntProvisioningOrchestrator:
 
         try:
             return OntProvisioningOrchestrator._execute_steps(
-                db, ont_id, profile_id, dry_run, tr069_olt_profile_id,
-                result, op,
+                db,
+                ont_id,
+                profile_id,
+                dry_run,
+                tr069_olt_profile_id,
+                result,
+                op,
             )
         except Exception as exc:
             result.success = False

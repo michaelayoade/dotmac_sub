@@ -314,9 +314,7 @@ def verify_and_record_topup(
     try:
         from app.services import collections as collections_service
 
-        restored = collections_service.restore_account_services(
-            db, str(account_id)
-        )
+        restored = collections_service.restore_account_services(db, str(account_id))
         if restored:
             logger.info(
                 "Restored %d subscription(s) after prepaid top-up for account %s",

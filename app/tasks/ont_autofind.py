@@ -29,7 +29,9 @@ def discover_all_olt_autofind() -> dict[str, int]:
             ).scalar()
         )
         if not lock_acquired:
-            logger.warning("Skipping OLT autofind discovery: previous run still in progress.")
+            logger.warning(
+                "Skipping OLT autofind discovery: previous run still in progress."
+            )
             return {
                 "olts_scanned": 0,
                 "candidates_created": 0,

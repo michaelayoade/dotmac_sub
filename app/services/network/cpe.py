@@ -208,9 +208,7 @@ def ensure_cpe_for_ont(
     if assignment and getattr(assignment, "subscriber_id", None) is not None:
         existing.subscriber_id = cast("UUID", assignment.subscriber_id)
         existing.subscription_id = cast("UUID | None", assignment.subscription_id)
-        existing.service_address_id = cast(
-            "UUID | None", assignment.service_address_id
-        )
+        existing.service_address_id = cast("UUID | None", assignment.service_address_id)
         if existing.installed_at is None and assignment.assigned_at is not None:
             existing.installed_at = assignment.assigned_at
     if data.get("serial_number"):

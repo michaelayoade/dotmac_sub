@@ -363,10 +363,14 @@ def build_network_map_context(db: Session) -> dict:
     for addr in customer_addresses:
         is_business = str(addr.subscriber_category or "").lower() == "business"
         subscriber_name = (
-            (addr.company_name or "").strip()
-            if is_business
-            else f"{addr.first_name or ''} {addr.last_name or ''}".strip()
-        ) or (addr.display_name or "").strip() or "Unknown Customer"
+            (
+                (addr.company_name or "").strip()
+                if is_business
+                else f"{addr.first_name or ''} {addr.last_name or ''}".strip()
+            )
+            or (addr.display_name or "").strip()
+            or "Unknown Customer"
+        )
         is_online = bool(addr.is_online)
         features.append(
             {

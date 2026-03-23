@@ -1237,7 +1237,9 @@ def list_people(db: Session, *, limit: int = 500) -> list[dict[str, str]]:
                 "label": label,
                 "email": row.email or "",
                 "phone": row.phone or "",
-                "organization": row.company_name if getattr(row, "is_business", False) else "",
+                "organization": row.company_name
+                if getattr(row, "is_business", False)
+                else "",
                 "address": ", ".join(
                     [p for p in [row.address_line1, row.city, row.region] if p]
                 ),

@@ -450,9 +450,7 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
             or "Subscriber"
         )
         subscriber_type = (
-            "organization"
-            if sub.category == SubscriberCategory.business
-            else "person"
+            "organization" if sub.category == SubscriberCategory.business else "person"
         )
         writer.writerow(
             [

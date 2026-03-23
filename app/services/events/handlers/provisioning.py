@@ -258,11 +258,13 @@ class ProvisioningHandler:
                 db.query(ServiceOrder)
                 .filter(
                     ServiceOrder.subscription_id == coerce_uuid(subscription_id),
-                    ServiceOrder.status.in_([
-                        ServiceOrderStatus.submitted,
-                        ServiceOrderStatus.scheduled,
-                        ServiceOrderStatus.provisioning,
-                    ]),
+                    ServiceOrder.status.in_(
+                        [
+                            ServiceOrderStatus.submitted,
+                            ServiceOrderStatus.scheduled,
+                            ServiceOrderStatus.provisioning,
+                        ]
+                    ),
                 )
                 .all()
             )

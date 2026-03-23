@@ -42,9 +42,7 @@ from app.services.response import ListResponseMixin, list_response
 logger = logging.getLogger(__name__)
 
 
-def subscriber_locations_geojson(
-    db: Session, *, limit: int = 500
-) -> dict[str, object]:
+def subscriber_locations_geojson(db: Session, *, limit: int = 500) -> dict[str, object]:
     """Return subscriber locations as a GeoJSON feature collection."""
     from app.models.subscriber import Address, Subscriber
 

@@ -114,7 +114,7 @@ def get_email_config_context(db: Session) -> dict:
     settings = _read_settings(db, SettingDomain.comms, EMAIL_KEYS)
     # Mask password
     if settings.get("smtp_password"):
-        settings["smtp_password_display"] = "********"  # nosec
+        settings["smtp_password_display"] = "********"  # noqa: S105
     else:
         settings["smtp_password_display"] = ""  # nosec
     return {"email": settings}

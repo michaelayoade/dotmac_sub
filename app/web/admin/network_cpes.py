@@ -287,7 +287,9 @@ def cpe_test_api(cpe_id: str, db: Session = Depends(get_db)) -> RedirectResponse
             status_code=303,
         )
     except Exception as exc:
-        logger.error("Failed to load CPE %s for API test: %s", cpe_id, exc, exc_info=True)
+        logger.error(
+            "Failed to load CPE %s for API test: %s", cpe_id, exc, exc_info=True
+        )
         message = quote_plus("Failed to load CPE")
         return RedirectResponse(
             f"/admin/network/cpes/{cpe_id}?test_status=error&test_message={message}",
@@ -348,7 +350,9 @@ def cpe_detail(
             db, "cpe", str(cpe_id), limit=10
         )
     except Exception:
-        logger.error("Failed to load operation history for CPE %s", cpe_id, exc_info=True)
+        logger.error(
+            "Failed to load operation history for CPE %s", cpe_id, exc_info=True
+        )
         operations = []
     context = _base_context(request, db, active_page="cpes")
     context.update(

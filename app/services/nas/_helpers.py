@@ -279,7 +279,10 @@ def resolve_partner_org_names(db: Session, device: NasDevice) -> list[str]:
     if not valid_ids:
         return []
     accounts = list_business_accounts(db, ids=valid_ids, limit=500)
-    return [str(account.company_name or account.display_name or account.full_name) for account in accounts]
+    return [
+        str(account.company_name or account.display_name or account.full_name)
+        for account in accounts
+    ]
 
 
 def pop_site_label(device: NasDevice | None) -> str | None:

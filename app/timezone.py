@@ -176,8 +176,8 @@ def install_template_timezone_localization() -> None:
                 )
                 name = args[0]
                 context = args[1] if len(args) > 1 else kwargs.get("context", {})
-                status_code = args[2] if len(args) > 2 else kwargs.get(
-                    "status_code", 200
+                status_code = (
+                    args[2] if len(args) > 2 else kwargs.get("status_code", 200)
                 )
                 headers = args[3] if len(args) > 3 else kwargs.get("headers")
                 media_type = args[4] if len(args) > 4 else kwargs.get("media_type")
@@ -189,8 +189,8 @@ def install_template_timezone_localization() -> None:
                 request = args[0]
                 name = args[1] if len(args) > 1 else kwargs["name"]
                 context = args[2] if len(args) > 2 else kwargs.get("context", {})
-                status_code = args[3] if len(args) > 3 else kwargs.get(
-                    "status_code", 200
+                status_code = (
+                    args[3] if len(args) > 3 else kwargs.get("status_code", 200)
                 )
                 headers = args[4] if len(args) > 4 else kwargs.get("headers")
                 media_type = args[5] if len(args) > 5 else kwargs.get("media_type")

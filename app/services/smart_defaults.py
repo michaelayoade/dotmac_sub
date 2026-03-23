@@ -54,9 +54,7 @@ class SmartDefaultsService:
             SettingsCache.set(domain.value, key, default)
         return default
 
-    def get_invoice_defaults(
-        self, subscriber: object | None = None
-    ) -> dict[str, Any]:
+    def get_invoice_defaults(self, subscriber: object | None = None) -> dict[str, Any]:
         """
         Get default values for creating a new invoice.
 

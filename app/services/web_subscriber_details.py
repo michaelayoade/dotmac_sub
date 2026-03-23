@@ -82,9 +82,7 @@ def build_subscriber_map_data(db: Session, subscriber, primary_address):
     customer_lat = float(primary_address.latitude)
     customer_lon = float(primary_address.longitude)
 
-    customer_name = (
-        str(getattr(subscriber, "name", "") or "").strip() or "Customer"
-    )
+    customer_name = str(getattr(subscriber, "name", "") or "").strip() or "Customer"
 
     features = [
         {

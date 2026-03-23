@@ -62,7 +62,11 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     user = {"first_name": user_name}
     if subscriber:
         if subscriber.category == SubscriberCategory.business:
-            user = {"first_name": subscriber.company_name or subscriber.display_name or subscriber.first_name}
+            user = {
+                "first_name": subscriber.company_name
+                or subscriber.display_name
+                or subscriber.first_name
+            }
         elif subscriber.first_name:
             user = {"first_name": subscriber.first_name}
 
@@ -258,11 +262,7 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
 
     user_name = session.get("username") or "Customer"
     if subscriber.category == SubscriberCategory.business:
-        user_name = (
-            subscriber.company_name
-            or subscriber.display_name
-            or user_name
-        )
+        user_name = subscriber.company_name or subscriber.display_name or user_name
     elif subscriber.first_name:
         user_name = f"{subscriber.first_name} {subscriber.last_name or ''}".strip()
 
@@ -418,7 +418,8 @@ def get_invoice_billing_contact(db: Session, invoice, customer: dict) -> dict:
         billing_name = (
             account.company_name
             if account.category == SubscriberCategory.business
-            else account.display_name or f"{account.first_name} {account.last_name}".strip()
+            else account.display_name
+            or f"{account.first_name} {account.last_name}".strip()
         )
         billing_email = account.email
 

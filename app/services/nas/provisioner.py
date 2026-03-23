@@ -256,7 +256,7 @@ class DeviceProvisioner:
 
         client = paramiko.SSHClient()
         if device.ssh_verify_host_key is False:
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # noqa: S507
         else:
             client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())

@@ -154,7 +154,9 @@ def get_provisioning_profiles(db: Session) -> list[Any]:
     return list(db.scalars(stmt).all())
 
 
-def ont_form_dependencies(db: Session, ont: OntUnit | Any | None = None) -> dict[str, Any]:
+def ont_form_dependencies(
+    db: Session, ont: OntUnit | Any | None = None
+) -> dict[str, Any]:
     """Build all dropdown data needed by the ONT provisioning form."""
     return {
         "onu_types": get_onu_types(db),

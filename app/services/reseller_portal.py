@@ -358,7 +358,9 @@ def list_accounts(
     offset: int,
     search: str | None = None,
 ) -> list[dict]:
-    query = db.query(Subscriber).filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
+    query = db.query(Subscriber).filter(
+        Subscriber.reseller_id == coerce_uuid(reseller_id)
+    )
     if search:
         pattern = f"%{search.strip()}%"
         query = query.filter(

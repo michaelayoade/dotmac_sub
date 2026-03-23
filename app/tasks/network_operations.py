@@ -43,19 +43,23 @@ def cleanup_old_operations() -> dict[str, int]:
         has_active_children = exists(
             select(ChildOp.id).where(
                 ChildOp.parent_id == NetworkOperation.id,
-                ChildOp.status.in_([
-                    NetworkOperationStatus.running,
-                    NetworkOperationStatus.pending,
-                    NetworkOperationStatus.waiting,
-                ]),
+                ChildOp.status.in_(
+                    [
+                        NetworkOperationStatus.running,
+                        NetworkOperationStatus.pending,
+                        NetworkOperationStatus.waiting,
+                    ]
+                ),
             )
         )
         purge_stmt = delete(NetworkOperation).where(
-            NetworkOperation.status.in_([
-                NetworkOperationStatus.succeeded,
-                NetworkOperationStatus.failed,
-                NetworkOperationStatus.canceled,
-            ]),
+            NetworkOperation.status.in_(
+                [
+                    NetworkOperationStatus.succeeded,
+                    NetworkOperationStatus.failed,
+                    NetworkOperationStatus.canceled,
+                ]
+            ),
             NetworkOperation.completed_at < cutoff,
             ~has_active_children,
         )
@@ -67,11 +71,13 @@ def cleanup_old_operations() -> dict[str, int]:
         # only non-terminal statuses are selected, so _check_not_terminal
         # is redundant. We skip the service layer for batch efficiency.
         stale_stmt = select(NetworkOperation).where(
-            NetworkOperation.status.in_([
-                NetworkOperationStatus.running,
-                NetworkOperationStatus.pending,
-                NetworkOperationStatus.waiting,
-            ]),
+            NetworkOperation.status.in_(
+                [
+                    NetworkOperationStatus.running,
+                    NetworkOperationStatus.pending,
+                    NetworkOperationStatus.waiting,
+                ]
+            ),
             NetworkOperation.created_at < stale_cutoff,
         )
         stale_ops = list(db.scalars(stale_stmt).all())

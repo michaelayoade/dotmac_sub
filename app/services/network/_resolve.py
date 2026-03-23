@@ -177,9 +177,7 @@ def resolve_genieacs_with_reason(
     if olt_server:
         client = GenieACSClient(olt_server.base_url)
         try:
-            olt_device_id = _resolve_device_id_from_server(
-                client, ont.serial_number
-            )
+            olt_device_id = _resolve_device_id_from_server(client, ont.serial_number)
             if olt_device_id:
                 return (client, olt_device_id), "resolved_via_olt_acs"
         except GenieACSError:
@@ -192,9 +190,7 @@ def resolve_genieacs_with_reason(
     if ont_server:
         client = GenieACSClient(ont_server.base_url)
         try:
-            ont_device_id = _resolve_device_id_from_server(
-                client, ont.serial_number
-            )
+            ont_device_id = _resolve_device_id_from_server(client, ont.serial_number)
             if ont_device_id:
                 return (client, ont_device_id), "resolved_via_ont_acs"
         except GenieACSError:

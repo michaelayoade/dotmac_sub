@@ -56,7 +56,7 @@ def _get_vpn_tunnel_status() -> list[dict]:
     """Read WireGuard peer status from wg show."""
     tunnels = []
     try:
-        result = subprocess.run(  # nosec
+        result = subprocess.run(  # noqa: S603
             [WG_BIN, "show", "wg0", "dump"],
             capture_output=True,
             text=True,

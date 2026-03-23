@@ -373,7 +373,9 @@ def olt_detail(
             db, "olt", str(olt_id)
         )
     except Exception:
-        logger.error("Failed to load operation history for OLT %s", olt_id, exc_info=True)
+        logger.error(
+            "Failed to load operation history for OLT %s", olt_id, exc_info=True
+        )
         operations = []
     available_olt_firmware = web_network_olts_service.get_olt_firmware_images(
         db, olt_id
@@ -1550,7 +1552,9 @@ def ont_detail(
             db, "ont", str(ont_id)
         )
     except Exception:
-        logger.error("Failed to load operation history for ONT %s", ont_id, exc_info=True)
+        logger.error(
+            "Failed to load operation history for ONT %s", ont_id, exc_info=True
+        )
         operations = []
     profiles = web_network_onts_service.get_provisioning_profiles(db)
 
@@ -2732,8 +2736,8 @@ def ont_iphost_config(
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     ok, msg, config = web_network_ont_actions_service.fetch_iphost_config(db, ont_id)
     vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    tr069_profiles, tr069_profiles_error = web_network_onts_service.get_tr069_profiles_for_ont(
-        db, ont
+    tr069_profiles, tr069_profiles_error = (
+        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
     )
     context = _base_context(request, db, active_page="onts")
     context.update(

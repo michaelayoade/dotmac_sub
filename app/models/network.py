@@ -1801,7 +1801,9 @@ class OntProvisioningProfile(Base):
 
     # Relationships
     owner_subscriber = relationship(
-        "Subscriber", backref="ont_provisioning_profiles", foreign_keys=[owner_subscriber_id]
+        "Subscriber",
+        backref="ont_provisioning_profiles",
+        foreign_keys=[owner_subscriber_id],
     )
     download_speed_profile = relationship(
         "SpeedProfile", foreign_keys=[download_speed_profile_id]

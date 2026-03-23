@@ -54,7 +54,7 @@ def snmp_get(
     ]
 
     try:
-        result = subprocess.run(  # nosec
+        result = subprocess.run(  # noqa: S603
             args,
             capture_output=True,
             text=True,

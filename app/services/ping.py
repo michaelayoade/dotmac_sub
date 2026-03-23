@@ -58,7 +58,7 @@ def parse_latency_ms(output: str) -> float | None:
 def run_ping(host: str, *, timeout_seconds: int = 4) -> tuple[bool, float | None]:
     """Execute ping and return (success, latency_ms)."""
     try:
-        result = subprocess.run(  # nosec
+        result = subprocess.run(  # noqa: S603
             build_ping_command(host),
             capture_output=True,
             text=True,

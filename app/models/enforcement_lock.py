@@ -32,13 +32,13 @@ from app.db import Base
 class EnforcementReason(enum.Enum):
     """Why a subscription was suspended."""
 
-    overdue = "overdue"             # Non-payment / dunning
-    fup = "fup"                     # Fair usage policy exhausted
-    prepaid = "prepaid"             # Prepaid balance depleted
-    admin = "admin"                 # Manual admin suspension
-    customer_hold = "customer_hold" # Customer-initiated vacation hold
-    fraud = "fraud"                 # Fraud / abuse investigation
-    system = "system"               # System-level (migration, maintenance)
+    overdue = "overdue"  # Non-payment / dunning
+    fup = "fup"  # Fair usage policy exhausted
+    prepaid = "prepaid"  # Prepaid balance depleted
+    admin = "admin"  # Manual admin suspension
+    customer_hold = "customer_hold"  # Customer-initiated vacation hold
+    fraud = "fraud"  # Fraud / abuse investigation
+    system = "system"  # System-level (migration, maintenance)
 
 
 class EnforcementLock(Base):

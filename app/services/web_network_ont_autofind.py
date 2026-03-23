@@ -63,7 +63,8 @@ def sync_olt_autofind_candidates(
         ).all()
     )
     by_key = {
-        (item.fsp, _normalize_serial(item.serial_number)): item for item in active_entries
+        (item.fsp, _normalize_serial(item.serial_number)): item
+        for item in active_entries
     }
     seen_keys: set[tuple[str, str]] = set()
     created = 0
@@ -105,7 +106,9 @@ def sync_olt_autofind_candidates(
             db.add(candidate)
             created += 1
         else:
-            candidate.ont_unit_id = matched_ont.id if matched_ont else candidate.ont_unit_id
+            candidate.ont_unit_id = (
+                matched_ont.id if matched_ont else candidate.ont_unit_id
+            )
             candidate.serial_hex = entry.serial_hex
             candidate.vendor_id = entry.vendor_id
             candidate.model = entry.model
@@ -190,13 +193,11 @@ def build_unconfigured_onts_page_data(
             )
         )
 
-    rows = (
-        query.order_by(
-            OltAutofindCandidate.last_seen_at.desc(),
-            OLTDevice.name.asc(),
-            OltAutofindCandidate.fsp.asc(),
-        ).all()
-    )
+    rows = query.order_by(
+        OltAutofindCandidate.last_seen_at.desc(),
+        OLTDevice.name.asc(),
+        OltAutofindCandidate.fsp.asc(),
+    ).all()
     entries = [
         {
             "id": str(candidate.id),
@@ -214,11 +215,14 @@ def build_unconfigured_onts_page_data(
         }
         for candidate, olt in rows
     ]
-    active_total = db.scalar(
-        select(func.count()).select_from(OltAutofindCandidate).where(
-            OltAutofindCandidate.is_active.is_(True)
+    active_total = (
+        db.scalar(
+            select(func.count())
+            .select_from(OltAutofindCandidate)
+            .where(OltAutofindCandidate.is_active.is_(True))
         )
-    ) or 0
+        or 0
+    )
     last_seen = db.scalar(
         select(func.max(OltAutofindCandidate.last_seen_at)).where(
             OltAutofindCandidate.is_active.is_(True)
@@ -226,7 +230,9 @@ def build_unconfigured_onts_page_data(
     )
     olts = list(
         db.scalars(
-            select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name.asc())
+            select(OLTDevice)
+            .where(OLTDevice.is_active.is_(True))
+            .order_by(OLTDevice.name.asc())
         ).all()
     )
     return {

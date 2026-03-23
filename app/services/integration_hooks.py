@@ -440,7 +440,7 @@ def _execute_cli_hook(
     command = str(hook.command or "").strip()
     if not command:
         raise ValueError("CLI hook command is empty")
-    result = subprocess.run(  # nosec
+    result = subprocess.run(  # noqa: S603
         shlex.split(command),
         capture_output=True,
         text=True,

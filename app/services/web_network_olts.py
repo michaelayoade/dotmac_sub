@@ -1226,7 +1226,7 @@ def _run_simple_v2c_walk(
 
     cmd = "snmpbulkwalk" if bulk else "snmpwalk"
     args = [cmd, "-v2c", "-c", community, host, oid]
-    result = subprocess.run(  # nosec
+    result = subprocess.run(  # noqa: S603
         args,
         capture_output=True,
         text=True,
@@ -1688,7 +1688,9 @@ def sync_onts_from_olt_snmp_tracked(
                     db, str(op.id), message, output_payload=dict(stats)
                 )
         except Exception as track_err:
-            logger.error("Failed to record operation outcome for %s: %s", op.id, track_err)
+            logger.error(
+                "Failed to record operation outcome for %s: %s", op.id, track_err
+            )
         return success, message, stats
     except Exception as exc:
         try:
@@ -1696,7 +1698,9 @@ def sync_onts_from_olt_snmp_tracked(
         except Exception as track_err:
             logger.error(
                 "Failed to record operation failure for %s: %s (original: %s)",
-                op.id, track_err, exc,
+                op.id,
+                track_err,
+                exc,
             )
             db.rollback()
         raise

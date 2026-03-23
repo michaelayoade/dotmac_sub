@@ -45,14 +45,18 @@ def _customer_display_identifier(*values: str | None) -> str | None:
 
 def _business_customer_clause():
     return (
-        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        func.lower(
+            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+        )
         == SubscriberCategory.business.value
     )
 
 
 def _individual_customer_clause():
     return (
-        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        func.lower(
+            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+        )
         != SubscriberCategory.business.value
     )
 

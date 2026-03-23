@@ -297,7 +297,9 @@ def send_connection_request_tracked(
             else:
                 network_operations.mark_failed(db, str(op.id), result.message)
         except Exception as track_err:
-            logger.error("Failed to record operation outcome for %s: %s", op.id, track_err)
+            logger.error(
+                "Failed to record operation outcome for %s: %s", op.id, track_err
+            )
         return result
     except Exception as exc:
         try:
@@ -305,7 +307,9 @@ def send_connection_request_tracked(
         except Exception as track_err:
             logger.error(
                 "Failed to record operation failure for %s: %s (original: %s)",
-                op.id, track_err, exc,
+                op.id,
+                track_err,
+                exc,
             )
             db.rollback()
         raise

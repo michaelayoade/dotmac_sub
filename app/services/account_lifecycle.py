@@ -68,9 +68,7 @@ ALLOWED_RESTORERS: dict[EnforcementReason, set[str]] = {
 # Verify ALLOWED_RESTORERS covers every enum member at import time
 _missing_restorers = set(EnforcementReason) - set(ALLOWED_RESTORERS.keys())
 if _missing_restorers:
-    raise RuntimeError(
-        f"ALLOWED_RESTORERS missing reasons: {_missing_restorers}"
-    )
+    raise RuntimeError(f"ALLOWED_RESTORERS missing reasons: {_missing_restorers}")
 
 # Statuses that can be suspended
 _SUSPENDABLE = {
@@ -135,9 +133,7 @@ def suspend_subscription(
     """
     # Lock the subscription row to prevent concurrent mutations
     subscription = db.execute(
-        select(Subscription)
-        .where(Subscription.id == subscription_id)
-        .with_for_update()
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
     ).scalar_one_or_none()
     if not subscription:
         raise ValueError(f"Subscription {subscription_id} not found")
@@ -256,9 +252,7 @@ def restore_subscription(
     """
     # Lock the subscription row to prevent concurrent restore races
     subscription = db.execute(
-        select(Subscription)
-        .where(Subscription.id == subscription_id)
-        .with_for_update()
+        select(Subscription).where(Subscription.id == subscription_id).with_for_update()
     ).scalar_one_or_none()
     if not subscription:
         raise ValueError(f"Subscription {subscription_id} not found")
@@ -523,16 +517,12 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     """
     subscriber = db.get(Subscriber, subscriber_id)
     if not subscriber:
-        logger.error(
-            "compute_account_status: subscriber %s not found", subscriber_id
-        )
+        logger.error("compute_account_status: subscriber %s not found", subscriber_id)
         raise ValueError(f"Subscriber {subscriber_id} not found")
 
     subs = list(
         db.scalars(
-            select(Subscription).where(
-                Subscription.subscriber_id == subscriber.id
-            )
+            select(Subscription).where(Subscription.subscriber_id == subscriber.id)
         ).all()
     )
 
@@ -687,9 +677,7 @@ def resolve_locks_for_trigger(
     return resolved_count, remaining
 
 
-def resolve_all_locks(
-    db: Session, subscription: Subscription, resolved_by: str
-) -> int:
+def resolve_all_locks(db: Session, subscription: Subscription, resolved_by: str) -> int:
     """Resolve all active locks on a subscription (for terminal transitions).
 
     Used internally by ``expire_subscription`` and ``cancel_subscription``,

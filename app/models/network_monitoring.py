@@ -110,9 +110,7 @@ class DnsThreatAction(enum.Enum):
 
 class PopSite(Base):
     __tablename__ = "pop_sites"
-    __table_args__ = (
-        Index("ix_pop_sites_owner_subscriber_id", "owner_subscriber_id"),
-    )
+    __table_args__ = (Index("ix_pop_sites_owner_subscriber_id", "owner_subscriber_id"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

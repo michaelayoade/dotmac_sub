@@ -7,8 +7,8 @@ from starlette.responses import Response
 
 from app.config import settings
 
-CSRF_TOKEN_NAME = "csrf_token"  # nosec
-CSRF_COOKIE_NAME = "csrf_token"  # nosec
+CSRF_TOKEN_NAME = "csrf_token"  # noqa: S105
+CSRF_COOKIE_NAME = "csrf_token"  # noqa: S105
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_TOKEN_LENGTH = 32
 

@@ -421,7 +421,7 @@ def _run_olt_snmpwalk(
         host,
         oid,
     ]
-    result = subprocess.run(  # nosec
+    result = subprocess.run(  # noqa: S603
         args,
         capture_output=True,
         text=True,
@@ -1029,7 +1029,7 @@ def _snmpget_value(host: str, oid: str, community: str) -> str | None:
         host,
         oid,
     ]
-    result = subprocess.run(  # nosec
+    result = subprocess.run(  # noqa: S603
         args, capture_output=True, text=True, check=False, timeout=15
     )
     if result.returncode != 0:

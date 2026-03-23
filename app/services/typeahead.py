@@ -51,7 +51,9 @@ def _invoice_label(invoice: Invoice) -> str:
 
 def _business_clause():
     return (
-        func.lower(func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), ""))
+        func.lower(
+            func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+        )
         == SubscriberCategory.business.value
     )
 

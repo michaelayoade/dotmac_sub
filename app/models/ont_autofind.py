@@ -43,10 +43,14 @@ class OltAutofindCandidate(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     olt_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="CASCADE"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
     )
     ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("ont_units.id", ondelete="SET NULL"), nullable=True
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="SET NULL"),
+        nullable=True,
     )
     fsp: Mapped[str] = mapped_column(String(32), nullable=False)
     serial_number: Mapped[str] = mapped_column(String(120), nullable=False)

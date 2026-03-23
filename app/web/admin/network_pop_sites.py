@@ -393,9 +393,7 @@ def pop_site_photo_upload(
     current_user = get_current_user(request) or {}
     actor_id = current_user.get("subscriber_id")
     owner_subscriber_id = (
-        file_uploads.resolve_user_owner_subscriber(db, actor_id)
-        if actor_id
-        else None
+        file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
     )
     file_uploads.upload(
         db=db,
@@ -447,9 +445,7 @@ def pop_site_document_upload(
     current_user = get_current_user(request) or {}
     actor_id = current_user.get("subscriber_id")
     owner_subscriber_id = (
-        file_uploads.resolve_user_owner_subscriber(db, actor_id)
-        if actor_id
-        else None
+        file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
     )
     file_uploads.upload(
         db=db,

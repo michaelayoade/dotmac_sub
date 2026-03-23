@@ -120,7 +120,7 @@ def _run_snmpbulkwalk(device: NetworkDevice, oid: str, timeout: int = 20) -> lis
 
 
 def _run_snmp_command(args: list[str], timeout: int) -> list[str]:
-    result = subprocess.run(  # nosec
+    result = subprocess.run(  # noqa: S603
         args,
         capture_output=True,
         text=True,

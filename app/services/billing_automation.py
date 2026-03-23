@@ -578,9 +578,11 @@ def run_invoice_cycle(
         if not invoice:
             # Use subscriber-level payment_due_days if set, else global
             account = db.get(Subscriber, subscription.subscriber_id)
-            due_days = resolve_payment_due_days(
-                db, subscriber=account
-            ) if account else global_due_days
+            due_days = (
+                resolve_payment_due_days(db, subscriber=account)
+                if account
+                else global_due_days
+            )
             invoice = Invoice(
                 account_id=subscription.subscriber_id,
                 status=InvoiceStatus.issued,
@@ -914,9 +916,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
         db.query(Invoice)
         .filter(Invoice.is_active.is_(True))
         .filter(
-            Invoice.status.in_(
-                [InvoiceStatus.issued, InvoiceStatus.partially_paid]
-            )
+            Invoice.status.in_([InvoiceStatus.issued, InvoiceStatus.partially_paid])
         )
         .filter(Invoice.due_at.is_not(None))
         .filter(Invoice.due_at <= now)
@@ -959,9 +959,7 @@ def mark_overdue_invoices(db: Session) -> dict[str, int]:
             _mark_invoice_metadata_flag(invoice, "overdue_event_sent")
             marked += 1
         except Exception as exc:
-            logger.error(
-                "Failed to process overdue invoice %s: %s", invoice.id, exc
-            )
+            logger.error("Failed to process overdue invoice %s: %s", invoice.id, exc)
             errors += 1
 
     if marked:
@@ -1032,7 +1030,9 @@ def generate_cancellation_credit(
             period_start = period_start.replace(year=period_start.year - 1)
         else:  # monthly
             month = period_start.month - 1 or 12
-            year = period_start.year if period_start.month > 1 else period_start.year - 1
+            year = (
+                period_start.year if period_start.month > 1 else period_start.year - 1
+            )
             day = min(period_start.day, monthrange(year, month)[1])
             period_start = period_start.replace(year=year, month=month, day=day)
 

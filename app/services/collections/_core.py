@@ -268,9 +268,7 @@ def _suspend_account(
             if "Cannot suspend" in str(e):
                 logger.info("Skipped suspending subscription %s: %s", sub.id, e)
             else:
-                logger.error(
-                    "Failed to suspend subscription %s: %s", sub.id, e
-                )
+                logger.error("Failed to suspend subscription %s: %s", sub.id, e)
                 raise
 
     if suspended_count:
@@ -784,9 +782,7 @@ def _deactivate_prepaid_subscriptions(
             if "already canceled" in str(e):
                 logger.info("Skipped canceling subscription %s: %s", sub.id, e)
             else:
-                logger.error(
-                    "Failed to cancel subscription %s: %s", sub.id, e
-                )
+                logger.error("Failed to cancel subscription %s: %s", sub.id, e)
                 raise
 
     # Always recompute account status — handles edge case where all
@@ -794,9 +790,7 @@ def _deactivate_prepaid_subscriptions(
     try:
         compute_account_status(db, account_id)
     except ValueError:
-        logger.warning(
-            "Could not compute account status for %s", account_id
-        )
+        logger.warning("Could not compute account status for %s", account_id)
 
     _create_prepaid_deactivation_notification(db, account_id)
     return canceled_count

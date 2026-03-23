@@ -299,7 +299,11 @@ class Subscriber(Base):
 
     @property
     def name(self) -> str:
-        return self.business_name if self.is_business else (self.full_name.strip() or self.email)
+        return (
+            self.business_name
+            if self.is_business
+            else (self.full_name.strip() or self.email)
+        )
 
     @property
     def category(self) -> SubscriberCategory:

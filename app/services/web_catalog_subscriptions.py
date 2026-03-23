@@ -1638,10 +1638,7 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str) -> str:
         subscriber = subscriber_service.subscribers.get(
             db=db, subscriber_id=subscriber_id
         )
-        label = (
-            str(getattr(subscriber, "name", "") or "").strip()
-            or "Subscriber"
-        )
+        label = str(getattr(subscriber, "name", "") or "").strip() or "Subscriber"
         if subscriber.subscriber_number:
             label = f"{label} ({subscriber.subscriber_number})"
         return str(label)

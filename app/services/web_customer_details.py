@@ -1072,9 +1072,7 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
 
     sub_filter = Subscriber.id == customer.id
     active_subscribers = (
-        db.query(Subscriber)
-        .filter(sub_filter, Subscriber.is_active.is_(True))
-        .count()
+        db.query(Subscriber).filter(sub_filter, Subscriber.is_active.is_(True)).count()
     )
     total_subscribers = db.query(Subscriber).filter(sub_filter).count()
 

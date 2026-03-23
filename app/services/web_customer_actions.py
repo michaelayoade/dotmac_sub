@@ -159,9 +159,7 @@ def _apply_subscriber_activation_state(
 
     subscriber.is_active = is_active
     subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == subscriber.id)
-        .all()
+        db.query(Subscription).filter(Subscription.subscriber_id == subscriber.id).all()
     )
 
     if is_active:
@@ -1086,7 +1084,9 @@ def export_customers_csv(
         if customer_type != "business":
             people_query = db.query(Subscriber).filter(
                 func.lower(
-                    func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+                    func.coalesce(
+                        Subscriber.metadata_["subscriber_category"].as_string(), ""
+                    )
                 )
                 != SubscriberCategory.business.value
             )
@@ -1112,12 +1112,16 @@ def export_customers_csv(
         if customer_type != "person":
             orgs_query = db.query(Subscriber).filter(
                 func.lower(
-                    func.coalesce(Subscriber.metadata_["subscriber_category"].as_string(), "")
+                    func.coalesce(
+                        Subscriber.metadata_["subscriber_category"].as_string(), ""
+                    )
                 )
                 == SubscriberCategory.business.value
             )
             if search:
-                orgs_query = orgs_query.filter(Subscriber.company_name.ilike(f"%{search}%"))
+                orgs_query = orgs_query.filter(
+                    Subscriber.company_name.ilike(f"%{search}%")
+                )
             orgs = orgs_query.order_by(Subscriber.company_name.asc()).all()
             for org in orgs:
                 customers.append(
@@ -1159,14 +1163,14 @@ def export_customers_csv(
                         }
                     )
                 elif ctype == "business":
-                    org = subscriber_service.subscribers.get(
-                        db=db, subscriber_id=cid
-                    )
+                    org = subscriber_service.subscribers.get(db=db, subscriber_id=cid)
                     customers.append(
                         {
                             "id": str(org.id),
                             "type": "business",
-                            "name": org.company_name or org.display_name or org.full_name,
+                            "name": org.company_name
+                            or org.display_name
+                            or org.full_name,
                             "email": org.email,
                             "phone": org.phone or "",
                             "is_active": "Active" if org.is_active else "Inactive",
