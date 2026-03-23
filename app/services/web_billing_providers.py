@@ -44,7 +44,9 @@ def parse_supported_provider_type(raw_value: str) -> PaymentProviderType:
         if provider_type.value == normalized:
             return provider_type
     allowed = ", ".join(supported_provider_type_values())
-    raise ValueError(f"Unsupported payment provider type '{raw_value}'. Allowed: {allowed}")
+    raise ValueError(
+        f"Unsupported payment provider type '{raw_value}'. Allowed: {allowed}"
+    )
 
 
 def _resolve_setting_value(db: Session, key: str) -> Any:
@@ -68,7 +70,9 @@ def _resolve_str_setting(db: Session, key: str, default: str) -> str:
     return value or default
 
 
-def _credentials_for_provider(db: Session, provider_type: PaymentProviderType) -> dict[str, str]:
+def _credentials_for_provider(
+    db: Session, provider_type: PaymentProviderType
+) -> dict[str, str]:
     if provider_type == PaymentProviderType.paystack:
         return {
             "secret_key": _resolve_str_setting(db, "paystack_secret_key", ""),
@@ -112,7 +116,9 @@ def _provider_health_rows(db: Session) -> list[dict[str, Any]]:
             failed_events = (
                 db.query(func.count(PaymentProviderEvent.id))
                 .filter(PaymentProviderEvent.provider_id == provider.id)
-                .filter(PaymentProviderEvent.status == PaymentProviderEventStatus.failed)
+                .filter(
+                    PaymentProviderEvent.status == PaymentProviderEventStatus.failed
+                )
                 .scalar()
                 or 0
             )
@@ -124,7 +130,9 @@ def _provider_health_rows(db: Session) -> list[dict[str, Any]]:
         rows.append(
             {
                 "provider_type": provider_type.value,
-                "provider_name": provider.name if provider else provider_type.value.title(),
+                "provider_name": provider.name
+                if provider
+                else provider_type.value.title(),
                 "configured": bool(provider),
                 "active": bool(provider and provider.is_active),
                 "has_required_credentials": has_required_credentials,
@@ -139,8 +147,12 @@ def _provider_health_rows(db: Session) -> list[dict[str, Any]]:
 
 def get_failover_state(db: Session) -> dict[str, Any]:
     primary = _resolve_str_setting(db, "payment_gateway_primary_provider", "paystack")
-    secondary = _resolve_str_setting(db, "payment_gateway_secondary_provider", "flutterwave")
-    failover_enabled = _resolve_bool_setting(db, "payment_gateway_failover_enabled", True)
+    secondary = _resolve_str_setting(
+        db, "payment_gateway_secondary_provider", "flutterwave"
+    )
+    failover_enabled = _resolve_bool_setting(
+        db, "payment_gateway_failover_enabled", True
+    )
     primary_type = parse_supported_provider_type(primary)
     secondary_type = parse_supported_provider_type(secondary)
     if primary_type == secondary_type:
@@ -158,7 +170,11 @@ def get_failover_state(db: Session) -> dict[str, Any]:
 
 
 def update_failover_config(
-    db: Session, *, failover_enabled: bool, primary_provider: str, secondary_provider: str
+    db: Session,
+    *,
+    failover_enabled: bool,
+    primary_provider: str,
+    secondary_provider: str,
 ) -> None:
     primary = parse_supported_provider_type(primary_provider)
     secondary = parse_supported_provider_type(secondary_provider)
@@ -271,7 +287,10 @@ def trigger_failover_if_needed(db: Session) -> tuple[bool, str]:
         primary_provider=secondary,
         secondary_provider=primary,
     )
-    return True, f"Failed over traffic to {secondary.title()} as the new primary gateway"
+    return (
+        True,
+        f"Failed over traffic to {secondary.title()} as the new primary gateway",
+    )
 
 
 def build_gateway_reconciliation(db: Session) -> dict[str, Any]:
@@ -320,10 +339,16 @@ def build_gateway_reconciliation(db: Session) -> dict[str, Any]:
         missing_in_gateway = len(payment_refs - event_refs)
         missing_in_dotmac = len(event_refs - payment_refs)
         payments_missing_reference = len(
-            [item for item in payments if not str(getattr(item, "external_id", "") or "").strip()]
+            [
+                item
+                for item in payments
+                if not str(getattr(item, "external_id", "") or "").strip()
+            ]
         )
         matched_count = len(payment_refs & event_refs)
-        total_amount = sum(Decimal(str(getattr(item, "amount", 0) or 0)) for item in payments)
+        total_amount = sum(
+            Decimal(str(getattr(item, "amount", 0) or 0)) for item in payments
+        )
 
         total_missing_gateway += missing_in_gateway
         total_missing_dotmac += missing_in_dotmac
@@ -361,7 +386,9 @@ def list_data(db: Session, *, show_inactive: bool) -> dict[str, object]:
         limit=500,
         offset=0,
     )
-    providers = [item for item in providers if item.provider_type in SUPPORTED_PROVIDER_TYPES]
+    providers = [
+        item for item in providers if item.provider_type in SUPPORTED_PROVIDER_TYPES
+    ]
     health_rows = _provider_health_rows(db)
     failover = get_failover_state(db)
     reconciliation = build_gateway_reconciliation(db)

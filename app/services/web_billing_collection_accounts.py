@@ -9,6 +9,7 @@ from app.services import billing as billing_service
 
 logger = logging.getLogger(__name__)
 
+
 def list_data(db, *, show_inactive: bool) -> dict[str, object]:
     accounts = billing_service.collection_accounts.list(
         db=db,

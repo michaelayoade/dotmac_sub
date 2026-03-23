@@ -29,8 +29,11 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog", tags=["web-admin-catalog"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "catalog") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "catalog"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -42,6 +45,7 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
 
 def _get_actor_id(request: Request) -> str | None:
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     return str(current_user.get("subscriber_id")) if current_user else None
 
@@ -49,7 +53,9 @@ def _get_actor_id(request: Request) -> str | None:
 def _customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
     subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
     if subscriber.organization_id:
-        return f"/admin/customers/organization/{subscriber.organization_id}#subscriptions"
+        return (
+            f"/admin/customers/organization/{subscriber.organization_id}#subscriptions"
+        )
     return f"/admin/customers/person/{subscriber.id}#subscriptions"
 
 
@@ -116,7 +122,9 @@ def catalog_offers(
 
 
 @router.get("/offers/create", response_class=HTMLResponse)
-def catalog_offers_create(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_offers_create(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     offer = web_catalog_offers_service.default_offer_form()
     context = _base_context(request, db, active_page="catalog")
     context.update(web_catalog_offers_service.offer_form_context(db, offer))
@@ -161,7 +169,9 @@ def catalog_offers_create_post(
 
 
 @router.get("/offers/{offer_id}", response_class=HTMLResponse)
-def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_offer_detail(
+    request: Request, offer_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     try:
         offer = catalog_service.offers.get(db=db, offer_id=offer_id)
     except Exception:
@@ -192,10 +202,12 @@ def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(
         limit=50,
         offset=0,
     )
-    plan_meta, cleaned_description = web_catalog_offers_service.parse_offer_description_metadata(
-        offer.description
+    plan_meta, cleaned_description = (
+        web_catalog_offers_service.parse_offer_description_metadata(offer.description)
     )
-    plan_kind = str(plan_meta.get("plan_kind") or web_catalog_offers_service.PLAN_KIND_STANDARD)
+    plan_kind = str(
+        plan_meta.get("plan_kind") or web_catalog_offers_service.PLAN_KIND_STANDARD
+    )
     ip_block_size = plan_meta.get("ip_block_size")
     fup_policy_rel = getattr(offer, "fup_policy", None)
     if isinstance(fup_policy_rel, list):
@@ -205,24 +217,30 @@ def catalog_offer_detail(request: Request, offer_id: str, db: Session = Depends(
     fup_rules_count = len(getattr(fup_policy_obj, "rules", []) or [])
 
     context = _base_context(request, db, active_page="catalog")
-    context.update({
-        "offer": offer,
-        "offer_clean_description": cleaned_description,
-        "offer_plan_kind": plan_kind,
-        "offer_ip_block_size": ip_block_size,
-        "fup_rules_count": fup_rules_count,
-        "fup_return_to": f"/admin/catalog/offers/{offer_id}#plan-fup",
-        "prices": prices,
-        "subscriptions": subscriptions,
-        "activities": build_audit_activities(db, "catalog_offer", str(offer_id), limit=10),
-    })
+    context.update(
+        {
+            "offer": offer,
+            "offer_clean_description": cleaned_description,
+            "offer_plan_kind": plan_kind,
+            "offer_ip_block_size": ip_block_size,
+            "fup_rules_count": fup_rules_count,
+            "fup_return_to": f"/admin/catalog/offers/{offer_id}#plan-fup",
+            "prices": prices,
+            "subscriptions": subscriptions,
+            "activities": build_audit_activities(
+                db, "catalog_offer", str(offer_id), limit=10
+            ),
+        }
+    )
     context.update(web_fup_service.fup_context(request, db, offer_id))
     context.update(web_catalog_offers_service.get_offer_availability(db, str(offer.id)))
     return templates.TemplateResponse("admin/catalog/offer_detail.html", context)
 
 
 @router.get("/offers/{offer_id}/edit", response_class=HTMLResponse)
-def catalog_offer_edit(request: Request, offer_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_offer_edit(
+    request: Request, offer_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     try:
         offer = catalog_service.offers.get(db=db, offer_id=offer_id)
     except Exception:
@@ -269,7 +287,9 @@ def catalog_offer_edit_post(
     error = web_catalog_offers_service.validate_offer_form(offer_data)
     if error:
         context = _base_context(request, db, active_page="catalog")
-        context.update(web_catalog_offers_service.offer_form_context(db, offer_data, error))
+        context.update(
+            web_catalog_offers_service.offer_form_context(db, offer_data, error)
+        )
         context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
         return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
@@ -325,7 +345,9 @@ def offer_fup_settings_update(
     """Update FUP policy accounting settings."""
     form = parse_form_data_sync(request)
     web_fup_service.handle_policy_update(db, offer_id, form)
-    return RedirectResponse(url=_redirect_to_fup_context(form, offer_id), status_code=303)
+    return RedirectResponse(
+        url=_redirect_to_fup_context(form, offer_id), status_code=303
+    )
 
 
 @router.post(
@@ -339,7 +361,9 @@ def offer_fup_add_rule(
     """Add a new FUP rule."""
     form = parse_form_data_sync(request)
     web_fup_service.handle_add_rule(db, offer_id, form)
-    return RedirectResponse(url=_redirect_to_fup_context(form, offer_id), status_code=303)
+    return RedirectResponse(
+        url=_redirect_to_fup_context(form, offer_id), status_code=303
+    )
 
 
 @router.post(
@@ -353,7 +377,9 @@ def offer_fup_update_rule(
     """Update an existing FUP rule."""
     form = parse_form_data_sync(request)
     web_fup_service.handle_update_rule(db, rule_id, form)
-    return RedirectResponse(url=_redirect_to_fup_context(form, offer_id), status_code=303)
+    return RedirectResponse(
+        url=_redirect_to_fup_context(form, offer_id), status_code=303
+    )
 
 
 @router.post(
@@ -367,7 +393,9 @@ def offer_fup_delete_rule(
     """Delete an FUP rule."""
     form = parse_form_data_sync(request)
     web_fup_service.handle_delete_rule(db, rule_id)
-    return RedirectResponse(url=_redirect_to_fup_context(form, offer_id), status_code=303)
+    return RedirectResponse(
+        url=_redirect_to_fup_context(form, offer_id), status_code=303
+    )
 
 
 @router.post(
@@ -382,16 +410,16 @@ def offer_fup_clone_rules(
     form = parse_form_data_sync(request)
     source_offer_id = str(form.get("source_offer_id", ""))
     web_fup_service.handle_clone_rules(db, source_offer_id, offer_id)
-    return RedirectResponse(url=_redirect_to_fup_context(form, offer_id), status_code=303)
+    return RedirectResponse(
+        url=_redirect_to_fup_context(form, offer_id), status_code=303
+    )
 
 
 @router.post(
     "/offers/{offer_id}/fup/simulate",
     dependencies=[Depends(require_permission("catalog:read"))],
 )
-def offer_fup_simulate(
-    offer_id: str, request: Request, db: Session = Depends(get_db)
-):
+def offer_fup_simulate(offer_id: str, request: Request, db: Session = Depends(get_db)):
     """Simulate FUP rules for a given usage scenario. Returns JSON for HTMX."""
     from app.services.fup import simulate_fup
 
@@ -409,6 +437,7 @@ def offer_fup_simulate(
         cycle_days = int(_form_scalar("billing_cycle_days", "30"))
     except (ValueError, TypeError):
         from fastapi.responses import JSONResponse
+
         return JSONResponse({"error": "Invalid parameters"}, status_code=400)
 
     from datetime import UTC, datetime
@@ -426,6 +455,7 @@ def offer_fup_simulate(
     )
 
     from fastapi.responses import JSONResponse
+
     return JSONResponse(result)
 
 
@@ -459,9 +489,7 @@ def offer_usage_graph_modal(
         "offer_id": offer_id,
         "graph": graph_data,
     }
-    return templates.TemplateResponse(
-        "admin/catalog/_plan_graph_modal.html", context
-    )
+    return templates.TemplateResponse("admin/catalog/_plan_graph_modal.html", context)
 
 
 @router.get(
@@ -500,14 +528,18 @@ def catalog_subscriptions(
 
 
 @router.get("/subscriptions/new", response_class=HTMLResponse)
-def catalog_subscription_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+def catalog_subscription_new(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
     account_id = request.query_params.get("account_id", "").strip()
     subscriber_id = request.query_params.get("subscriber_id", "").strip()
     subscription = web_catalog_subscriptions_service.default_subscription_form(
         account_id, subscriber_id
     )
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(web_catalog_subscriptions_service.subscription_form_context(db, subscription))
+    context.update(
+        web_catalog_subscriptions_service.subscription_form_context(db, subscription)
+    )
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -527,17 +559,29 @@ def catalog_subscription_create(
         try:
             web_catalog_subscriptions_service.ensure_ipv4_blocks_allocatable(
                 db,
-                [str(value).strip() for value in form.getlist("ipv4_block_ids") if str(value).strip()],
-                [str(value).strip() for value in form.getlist("ipv4_addresses") if str(value).strip()],
+                [
+                    str(value).strip()
+                    for value in form.getlist("ipv4_block_ids")
+                    if str(value).strip()
+                ],
+                [
+                    str(value).strip()
+                    for value in form.getlist("ipv4_addresses")
+                    if str(value).strip()
+                ],
             )
         except Exception as exc:
             error = web_catalog_subscriptions_service.error_message(exc)
     if error:
         context = _base_context(request, db, active_page="catalog-subscriptions")
         context.update(
-            web_catalog_subscriptions_service.subscription_form_context(db, subscription, error)
+            web_catalog_subscriptions_service.subscription_form_context(
+                db, subscription, error
+            )
         )
-        return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+        return templates.TemplateResponse(
+            "admin/catalog/subscription_form.html", context
+        )
 
     subscriber_id = str(
         subscription.get("subscriber_id") or subscription.get("account_id") or ""
@@ -589,10 +633,16 @@ def catalog_subscription_edit(
             status_code=404,
         )
 
-    subscription = web_catalog_subscriptions_service.edit_form_data(db, subscription_obj)
+    subscription = web_catalog_subscriptions_service.edit_form_data(
+        db, subscription_obj
+    )
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(web_catalog_subscriptions_service.subscription_form_context(db, subscription))
-    context["activities"] = build_audit_activities(db, "subscription", str(subscription_id))
+    context.update(
+        web_catalog_subscriptions_service.subscription_form_context(db, subscription)
+    )
+    context["activities"] = build_audit_activities(
+        db, "subscription", str(subscription_id)
+    )
     context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
     context["notice"] = request.query_params.get("notice")
     context["error"] = request.query_params.get("error") or context.get("error")
@@ -620,10 +670,14 @@ def catalog_subscription_detail(
     context.update(
         {
             "subscription": subscription,
-            "activities": build_audit_activities(db, "subscription", str(subscription_id)),
+            "activities": build_audit_activities(
+                db, "subscription", str(subscription_id)
+            ),
         }
     )
-    context.update(web_catalog_subscriptions_service.subscription_detail_context(db, subscription))
+    context.update(
+        web_catalog_subscriptions_service.subscription_detail_context(db, subscription)
+    )
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 
@@ -643,10 +697,14 @@ def catalog_subscription_update(
     if error:
         context = _base_context(request, db, active_page="catalog-subscriptions")
         context.update(
-            web_catalog_subscriptions_service.subscription_form_context(db, subscription, error)
+            web_catalog_subscriptions_service.subscription_form_context(
+                db, subscription, error
+            )
         )
         context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
-        return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
+        return templates.TemplateResponse(
+            "admin/catalog/subscription_form.html", context
+        )
 
     payload_data = web_catalog_subscriptions_service.build_payload_data(subscription)
 
@@ -712,14 +770,19 @@ def catalog_subscription_send_credentials(
             status_code=303,
         )
     except Exception as exc:
-        logger.error("Failed to send credentials for subscription %s: %s", subscription_id, exc)
+        logger.error(
+            "Failed to send credentials for subscription %s: %s", subscription_id, exc
+        )
         return RedirectResponse(
             f"/admin/catalog/subscriptions/{subscription_id}/edit?error={quote_plus(str(exc))}",
             status_code=303,
         )
 
 
-@router.post("/subscriptions/bulk/activate", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/activate",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_activate(
     request: Request,
     subscription_ids: str = Form(...),
@@ -738,7 +801,10 @@ def subscription_bulk_activate(
     return JSONResponse({"message": f"Activated {count} subscriptions", "count": count})
 
 
-@router.post("/subscriptions/bulk/suspend", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/suspend",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_suspend(
     request: Request,
     subscription_ids: str = Form(...),
@@ -757,7 +823,10 @@ def subscription_bulk_suspend(
     return JSONResponse({"message": f"Suspended {count} subscriptions", "count": count})
 
 
-@router.post("/subscriptions/bulk/cancel", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/cancel",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_cancel(
     request: Request,
     subscription_ids: str = Form(...),
@@ -780,7 +849,10 @@ def subscription_bulk_cancel(
     return JSONResponse({"message": f"Canceled {count} subscriptions", "count": count})
 
 
-@router.post("/subscriptions/bulk/change-plan", dependencies=[Depends(require_permission("catalog:write"))])
+@router.post(
+    "/subscriptions/bulk/change-plan",
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def subscription_bulk_change_plan(
     request: Request,
     subscription_ids: str = Form(...),
@@ -796,7 +868,9 @@ def subscription_bulk_change_plan(
         request=request,
         actor_id=actor_id,
     )
-    return JSONResponse({"message": f"Changed plan for {count} subscriptions", "count": count})
+    return JSONResponse(
+        {"message": f"Changed plan for {count} subscriptions", "count": count}
+    )
 
 
 @router.get("/calculator", response_class=HTMLResponse)
@@ -824,9 +898,7 @@ def bulk_tariff_change_page(
     """Bulk tariff change wizard."""
     context = _base_context(request, db, active_page="catalog")
     context.update(web_bulk_tariff_change_service.page_context(request, db))
-    return templates.TemplateResponse(
-        "admin/catalog/bulk_tariff_change.html", context
-    )
+    return templates.TemplateResponse("admin/catalog/bulk_tariff_change.html", context)
 
 
 @router.post(
@@ -841,12 +913,8 @@ def bulk_tariff_change_preview(
 ) -> HTMLResponse:
     """Preview bulk tariff change results."""
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_bulk_tariff_change_service.preview_context(request, db, form)
-    )
-    return templates.TemplateResponse(
-        "admin/catalog/bulk_tariff_change.html", context
-    )
+    context.update(web_bulk_tariff_change_service.preview_context(request, db, form))
+    return templates.TemplateResponse("admin/catalog/bulk_tariff_change.html", context)
 
 
 @router.post(
@@ -861,9 +929,5 @@ def bulk_tariff_change_execute(
 ) -> HTMLResponse:
     """Execute the bulk tariff change."""
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_bulk_tariff_change_service.execute_context(request, db, form)
-    )
-    return templates.TemplateResponse(
-        "admin/catalog/bulk_tariff_change.html", context
-    )
+    context.update(web_bulk_tariff_change_service.execute_context(request, db, form))
+    return templates.TemplateResponse("admin/catalog/bulk_tariff_change.html", context)

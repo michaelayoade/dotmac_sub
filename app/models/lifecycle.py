@@ -36,7 +36,9 @@ class SubscriptionLifecycleEvent(Base):
     from_status: Mapped[SubscriptionStatus | None] = mapped_column(
         Enum(SubscriptionStatus)
     )
-    to_status: Mapped[SubscriptionStatus | None] = mapped_column(Enum(SubscriptionStatus))
+    to_status: Mapped[SubscriptionStatus | None] = mapped_column(
+        Enum(SubscriptionStatus)
+    )
     reason: Mapped[str | None] = mapped_column(String(200))
     notes: Mapped[str | None] = mapped_column(Text)
     metadata_: Mapped[dict | None] = mapped_column("metadata", JSON)

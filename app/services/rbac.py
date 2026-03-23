@@ -31,6 +31,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class Roles(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: RoleCreate):
@@ -322,7 +323,9 @@ class SubscriberPermissions(ListResponseMixin):
     def get(db: Session, link_id: str):
         link = db.get(SubscriberPermission, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Subscriber permission not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber permission not found"
+            )
         return link
 
     @staticmethod
@@ -337,7 +340,9 @@ class SubscriberPermissions(ListResponseMixin):
     ):
         query = db.query(SubscriberPermission)
         if subscriber_id:
-            query = query.filter(SubscriberPermission.subscriber_id == coerce_uuid(subscriber_id))
+            query = query.filter(
+                SubscriberPermission.subscriber_id == coerce_uuid(subscriber_id)
+            )
         if permission_id:
             query = query.filter(
                 SubscriberPermission.permission_id == coerce_uuid(permission_id)
@@ -351,7 +356,9 @@ class SubscriberPermissions(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def list_for_subscriber(db: Session, subscriber_id: str) -> builtins.list[SubscriberPermission]:
+    def list_for_subscriber(
+        db: Session, subscriber_id: str
+    ) -> builtins.list[SubscriberPermission]:
         """Get all direct permissions for a subscriber."""
         return (
             db.query(SubscriberPermission)
@@ -363,7 +370,9 @@ class SubscriberPermissions(ListResponseMixin):
     def update(db: Session, link_id: str, payload: SubscriberPermissionUpdate):
         link = db.get(SubscriberPermission, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Subscriber permission not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber permission not found"
+            )
         data = payload.model_dump(exclude_unset=True)
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
@@ -383,7 +392,9 @@ class SubscriberPermissions(ListResponseMixin):
     def delete(db: Session, link_id: str):
         link = db.get(SubscriberPermission, coerce_uuid(link_id))
         if not link:
-            raise HTTPException(status_code=404, detail="Subscriber permission not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber permission not found"
+            )
         db.delete(link)
         db.commit()
 

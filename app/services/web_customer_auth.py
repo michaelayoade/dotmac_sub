@@ -111,7 +111,9 @@ def customer_login_submit(
                     db, SettingDomain.auth, "customer_lockout_minutes", 15
                 )
                 if local_credential.failed_login_attempts >= max_attempts:
-                    local_credential.locked_until = now + timedelta(minutes=lockout_minutes)
+                    local_credential.locked_until = now + timedelta(
+                        minutes=lockout_minutes
+                    )
                 db.commit()
                 raise ValueError("Invalid username or password")
 
@@ -133,7 +135,9 @@ def customer_login_submit(
             # Try RADIUS server authentication first
             radius_authenticated = False
             try:
-                radius_auth.authenticate(db=db, username=normalized_username, password=password)
+                radius_auth.authenticate(
+                    db=db, username=normalized_username, password=password
+                )
                 radius_authenticated = True
             except Exception:
                 logger.debug(
@@ -155,6 +159,7 @@ def customer_login_submit(
                     subscriber_id = radius_user.subscriber_id
                     if radius_user.subscription_id and not subscriber_id:
                         from app.models.catalog import Subscription
+
                         subscription = db.get(Subscription, radius_user.subscription_id)
                         if subscription and subscription.subscriber_id:
                             subscriber_id = subscription.subscriber_id
@@ -217,7 +222,11 @@ def customer_login_submit(
         redirect_url = _safe_next(next_url)
         response = RedirectResponse(url=redirect_url, status_code=303)
 
-        max_age = customer_portal.get_remember_max_age(db) if remember else customer_portal.get_session_max_age(db)
+        max_age = (
+            customer_portal.get_remember_max_age(db)
+            if remember
+            else customer_portal.get_session_max_age(db)
+        )
         response.set_cookie(
             key=customer_portal.SESSION_COOKIE_NAME,
             value=session_token,
@@ -233,7 +242,12 @@ def customer_login_submit(
         error_msg = "Session service unavailable. Please try again."
         return templates.TemplateResponse(
             "customer/auth/login.html",
-            {"request": request, "error": error_msg, "next": next_url, "username": username},
+            {
+                "request": request,
+                "error": error_msg,
+                "next": next_url,
+                "username": username,
+            },
             status_code=503,
         )
     except Exception as exc:
@@ -254,7 +268,12 @@ def customer_login_submit(
 
         return templates.TemplateResponse(
             "customer/auth/login.html",
-            {"request": request, "error": error_msg, "next": next_url, "username": username},
+            {
+                "request": request,
+                "error": error_msg,
+                "next": next_url,
+                "username": username,
+            },
             status_code=401,
         )
 
@@ -319,7 +338,11 @@ def customer_refresh(request: Request, db: Session):
     if not session:
         return Response(status_code=401)
 
-    max_age = customer_portal.get_remember_max_age(db) if session.get("remember") else customer_portal.get_session_max_age(db)
+    max_age = (
+        customer_portal.get_remember_max_age(db)
+        if session.get("remember")
+        else customer_portal.get_session_max_age(db)
+    )
 
     response = Response(status_code=204)
     response.set_cookie(

@@ -11,6 +11,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class AuditEvents(ListResponseMixin):
     @staticmethod
     def parse_actor_type(value: str | None) -> AuditActorType | None:

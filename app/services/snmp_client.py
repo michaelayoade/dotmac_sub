@@ -40,17 +40,21 @@ def snmp_get(
     """
     args = [
         "snmpget",
-        "-v", version,
-        "-c", community,
-        "-Oqv",          # quiet, value-only output
-        "-t", str(timeout),
-        "-r", str(retries),
+        "-v",
+        version,
+        "-c",
+        community,
+        "-Oqv",  # quiet, value-only output
+        "-t",
+        str(timeout),
+        "-r",
+        str(retries),
         host,
         oid,
     ]
 
     try:
-        result = subprocess.run(
+        result = subprocess.run(  # noqa: S603 - SNMP command is executed with a fixed argv list
             args,
             capture_output=True,
             text=True,

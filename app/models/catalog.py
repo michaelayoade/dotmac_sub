@@ -146,20 +146,22 @@ class SubscriptionStatus(enum.Enum):
       archived  — generic archive (non-Splynx origin)
       expired   — contract/prepaid period ended
     """
-    pending = "pending"       # Awaiting activation / provisioning
-    active = "active"         # Service running, subscriber can connect
-    blocked = "blocked"       # Temporarily blocked (Splynx: blocked)
-    suspended = "suspended"   # Generic suspension (DotMac-native)
-    stopped = "stopped"       # Manually paused by admin (Splynx: stopped)
-    disabled = "disabled"     # Terminated by admin (Splynx: disabled)
-    hidden = "hidden"         # Not visible to customer (Splynx: hidden)
-    archived = "archived"     # Generic archive (DotMac-native)
-    canceled = "canceled"     # Soft-deleted / fully terminated
-    expired = "expired"       # Contract/prepaid period ended
+
+    pending = "pending"  # Awaiting activation / provisioning
+    active = "active"  # Service running, subscriber can connect
+    blocked = "blocked"  # Temporarily blocked (Splynx: blocked)
+    suspended = "suspended"  # Generic suspension (DotMac-native)
+    stopped = "stopped"  # Manually paused by admin (Splynx: stopped)
+    disabled = "disabled"  # Terminated by admin (Splynx: disabled)
+    hidden = "hidden"  # Not visible to customer (Splynx: hidden)
+    archived = "archived"  # Generic archive (DotMac-native)
+    canceled = "canceled"  # Soft-deleted / fully terminated
+    expired = "expired"  # Contract/prepaid period ended
 
 
 class NasVendor(enum.Enum):
     """Supported NAS device vendors."""
+
     mikrotik = "mikrotik"
     huawei = "huawei"
     ubiquiti = "ubiquiti"
@@ -173,15 +175,17 @@ class NasVendor(enum.Enum):
 
 class ConnectionType(enum.Enum):
     """Network connection/authentication protocol type."""
-    pppoe = "pppoe"          # Point-to-Point Protocol over Ethernet
-    dhcp = "dhcp"            # Dynamic Host Configuration Protocol (no auth)
-    ipoe = "ipoe"            # IP over Ethernet (DHCP + RADIUS Option 82)
-    static = "static"        # Static IP assignment
-    hotspot = "hotspot"      # Web portal login (MikroTik specific)
+
+    pppoe = "pppoe"  # Point-to-Point Protocol over Ethernet
+    dhcp = "dhcp"  # Dynamic Host Configuration Protocol (no auth)
+    ipoe = "ipoe"  # IP over Ethernet (DHCP + RADIUS Option 82)
+    static = "static"  # Static IP assignment
+    hotspot = "hotspot"  # Web portal login (MikroTik specific)
 
 
 class NasDeviceStatus(enum.Enum):
     """NAS device operational status."""
+
     active = "active"
     maintenance = "maintenance"
     offline = "offline"
@@ -218,6 +222,7 @@ class DiscountType(enum.Enum):
 
 class ConfigBackupMethod(enum.Enum):
     """Methods for backing up device configuration."""
+
     ssh = "ssh"
     api = "api"
     tftp = "tftp"
@@ -227,6 +232,7 @@ class ConfigBackupMethod(enum.Enum):
 
 class ProvisioningAction(enum.Enum):
     """Types of provisioning actions."""
+
     create_user = "create_user"
     delete_user = "delete_user"
     suspend_user = "suspend_user"
@@ -254,7 +260,9 @@ class RegionZone(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offers = relationship("CatalogOffer", back_populates="region_zone")
@@ -289,7 +297,9 @@ class PolicySet(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     dunning_steps = relationship("PolicyDunningStep", back_populates="policy_set")
@@ -329,7 +339,9 @@ class UsageAllowance(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offers = relationship("CatalogOffer", back_populates="usage_allowance")
@@ -353,7 +365,9 @@ class SlaProfile(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offers = relationship("CatalogOffer", back_populates="sla_profile")
@@ -376,7 +390,9 @@ class AddOn(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offer_links = relationship("OfferAddOn", back_populates="add_on")
@@ -455,7 +471,9 @@ class CatalogOffer(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     region_zone = relationship("RegionZone", back_populates="offers")
@@ -537,7 +555,9 @@ class OfferVersion(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offer = relationship("CatalogOffer", back_populates="versions")
@@ -572,7 +592,9 @@ class OfferVersionPrice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offer_version = relationship("OfferVersion", back_populates="prices")
@@ -621,7 +643,9 @@ class OfferPrice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     offer = relationship("CatalogOffer", back_populates="prices")
@@ -650,7 +674,9 @@ class AddOnPrice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     add_on = relationship("AddOn", back_populates="prices")
@@ -726,7 +752,9 @@ class Subscription(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="subscriptions")
@@ -777,6 +805,7 @@ class NasDevice(Base):
     - Enforce bandwidth/QoS profiles
     - Can be provisioned with subscriber credentials
     """
+
     __tablename__ = "nas_devices"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -788,7 +817,7 @@ class NasDevice(Base):
     code: Mapped[str | None] = mapped_column(String(60), unique=True)
     vendor: Mapped[NasVendor] = mapped_column(
         Enum(NasVendor, values_callable=lambda x: [e.value for e in x]),
-        default=NasVendor.other
+        default=NasVendor.other,
     )
     model: Mapped[str | None] = mapped_column(String(120))
     serial_number: Mapped[str | None] = mapped_column(String(120))
@@ -802,7 +831,9 @@ class NasDevice(Base):
     rack_position: Mapped[str | None] = mapped_column(String(40))
 
     # Network Configuration (renamed from ip_address for clarity)
-    ip_address: Mapped[str | None] = mapped_column(String(64))  # Keep for backward compat
+    ip_address: Mapped[str | None] = mapped_column(
+        String(64)
+    )  # Keep for backward compat
     management_ip: Mapped[str | None] = mapped_column(String(64))
     management_port: Mapped[int | None] = mapped_column(Integer, default=120)
     nas_ip: Mapped[str | None] = mapped_column(String(64))  # IP used in RADIUS requests
@@ -846,7 +877,7 @@ class NasDevice(Base):
     # Status
     status: Mapped[NasDeviceStatus] = mapped_column(
         Enum(NasDeviceStatus, values_callable=lambda x: [e.value for e in x]),
-        default=NasDeviceStatus.active
+        default=NasDeviceStatus.active,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -860,7 +891,9 @@ class NasDevice(Base):
         Enum(HealthStatus, values_callable=lambda x: [e.value for e in x]),
         default=HealthStatus.unknown,
     )
-    last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_health_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     # Metadata
     notes: Mapped[str | None] = mapped_column(Text)
@@ -875,7 +908,9 @@ class NasDevice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships
@@ -884,7 +919,9 @@ class NasDevice(Base):
     radius_clients = relationship("RadiusClient", back_populates="nas_device")
     config_backups = relationship("NasConfigBackup", back_populates="nas_device")
     provisioning_logs = relationship("ProvisioningLog", back_populates="nas_device")
-    subscriptions = relationship("Subscription", back_populates="provisioning_nas_device")
+    subscriptions = relationship(
+        "Subscription", back_populates="provisioning_nas_device"
+    )
     connection_rules = relationship(
         "NasConnectionRule",
         back_populates="nas_device",
@@ -898,7 +935,9 @@ class NasConnectionRule(Base):
 
     __tablename__ = "nas_connection_rules"
     __table_args__ = (
-        UniqueConstraint("nas_device_id", "name", name="uq_nas_connection_rules_device_name"),
+        UniqueConstraint(
+            "nas_device_id", "name", name="uq_nas_connection_rules_device_name"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -922,7 +961,9 @@ class NasConnectionRule(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     nas_device = relationship("NasDevice", back_populates="connection_rules")
@@ -935,6 +976,7 @@ class RadiusProfile(Base):
     Profiles define speed limits, VLAN assignments, and other settings
     sent to NAS devices via RADIUS reply attributes.
     """
+
     __tablename__ = "radius_profiles"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -944,7 +986,7 @@ class RadiusProfile(Base):
     code: Mapped[str | None] = mapped_column(String(80), unique=True)
     vendor: Mapped[NasVendor] = mapped_column(
         Enum(NasVendor, values_callable=lambda x: [e.value for e in x]),
-        default=NasVendor.other
+        default=NasVendor.other,
     )
     connection_type: Mapped[ConnectionType | None] = mapped_column(
         Enum(ConnectionType, values_callable=lambda x: [e.value for e in x])
@@ -953,15 +995,15 @@ class RadiusProfile(Base):
 
     # Bandwidth Settings (in Kbps)
     download_speed: Mapped[int | None] = mapped_column(Integer)  # Kbps
-    upload_speed: Mapped[int | None] = mapped_column(Integer)    # Kbps
+    upload_speed: Mapped[int | None] = mapped_column(Integer)  # Kbps
     burst_download: Mapped[int | None] = mapped_column(Integer)
     burst_upload: Mapped[int | None] = mapped_column(Integer)
     burst_threshold: Mapped[int | None] = mapped_column(Integer)
-    burst_time: Mapped[int | None] = mapped_column(Integer)      # seconds
+    burst_time: Mapped[int | None] = mapped_column(Integer)  # seconds
 
     # VLAN Settings
     vlan_id: Mapped[int | None] = mapped_column(Integer)
-    inner_vlan_id: Mapped[int | None] = mapped_column(Integer)   # QinQ
+    inner_vlan_id: Mapped[int | None] = mapped_column(Integer)  # QinQ
 
     # IP Pool Settings
     ip_pool_name: Mapped[str | None] = mapped_column(String(120))
@@ -982,12 +1024,16 @@ class RadiusProfile(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     attributes = relationship("RadiusAttribute", back_populates="profile")
     offer_links = relationship("OfferRadiusProfile", back_populates="profile")
-    access_credentials = relationship("AccessCredential", back_populates="radius_profile")
+    access_credentials = relationship(
+        "AccessCredential", back_populates="radius_profile"
+    )
     subscriptions = relationship("Subscription", back_populates="radius_profile")
 
 
@@ -1026,7 +1072,9 @@ class OfferRadiusProfile(Base):
 
 class AccessCredential(Base):
     __tablename__ = "access_credentials"
-    __table_args__ = (UniqueConstraint("username", name="uq_access_credentials_username"),)
+    __table_args__ = (
+        UniqueConstraint("username", name="uq_access_credentials_username"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1053,7 +1101,9 @@ class AccessCredential(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="access_credentials")
@@ -1065,6 +1115,7 @@ class AccessCredential(Base):
 # NAS CONFIGURATION BACKUP
 # =============================================================================
 
+
 class NasConfigBackup(Base):
     """
     Configuration backup for a NAS device.
@@ -1072,6 +1123,7 @@ class NasConfigBackup(Base):
     Stores full device configuration with version tracking
     for diff comparison and rollback capability.
     """
+
     __tablename__ = "nas_config_backups"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1116,6 +1168,7 @@ class NasConfigBackup(Base):
 # PROVISIONING TEMPLATE
 # =============================================================================
 
+
 class ProvisioningTemplate(Base):
     """
     Provisioning script templates for different vendors and actions.
@@ -1123,6 +1176,7 @@ class ProvisioningTemplate(Base):
     Templates use placeholders like {{username}}, {{password}}, {{speed_down}}
     that are replaced with actual values during provisioning.
     """
+
     __tablename__ = "provisioning_templates"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1133,16 +1187,15 @@ class ProvisioningTemplate(Base):
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     code: Mapped[str | None] = mapped_column(String(80), unique=True)
     vendor: Mapped[NasVendor] = mapped_column(
-        Enum(NasVendor, values_callable=lambda x: [e.value for e in x]),
-        nullable=False
+        Enum(NasVendor, values_callable=lambda x: [e.value for e in x]), nullable=False
     )
     connection_type: Mapped[ConnectionType] = mapped_column(
         Enum(ConnectionType, values_callable=lambda x: [e.value for e in x]),
-        nullable=False
+        nullable=False,
     )
     action: Mapped[ProvisioningAction] = mapped_column(
         Enum(ProvisioningAction, values_callable=lambda x: [e.value for e in x]),
-        nullable=False
+        nullable=False,
     )
 
     # Template Content
@@ -1170,7 +1223,7 @@ class ProvisioningTemplate(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC)
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -1178,12 +1231,14 @@ class ProvisioningTemplate(Base):
 # PROVISIONING LOG
 # =============================================================================
 
+
 class ProvisioningLog(Base):
     """
     Log of all provisioning actions executed on NAS devices.
 
     Provides audit trail and troubleshooting capability.
     """
+
     __tablename__ = "provisioning_logs"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1206,7 +1261,7 @@ class ProvisioningLog(Base):
     # Action Details
     action: Mapped[ProvisioningAction] = mapped_column(
         Enum(ProvisioningAction, values_callable=lambda x: [e.value for e in x]),
-        nullable=False
+        nullable=False,
     )
     command_sent: Mapped[str | None] = mapped_column(Text)
     response_received: Mapped[str | None] = mapped_column(Text)

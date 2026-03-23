@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -43,7 +44,9 @@ def create_geo_location(payload: GeoLocationCreate, db: Session = Depends(get_db
 )
 def find_nearby_locations(
     latitude: float = Query(..., ge=-90, le=90, description="Center point latitude"),
-    longitude: float = Query(..., ge=-180, le=180, description="Center point longitude"),
+    longitude: float = Query(
+        ..., ge=-180, le=180, description="Center point longitude"
+    ),
     radius: float = Query(..., gt=0, le=100000, description="Search radius in meters"),
     location_type: str | None = None,
     limit: int = Query(default=100, ge=1, le=500),
@@ -193,7 +196,9 @@ def list_geo_areas(
     response_model=GeoAreaRead,
     tags=["gis-areas"],
 )
-def update_geo_area(area_id: UUID, payload: GeoAreaUpdate, db: Session = Depends(get_db)):
+def update_geo_area(
+    area_id: UUID, payload: GeoAreaUpdate, db: Session = Depends(get_db)
+):
     return gis_service.geo_areas.update(db, str(area_id), payload)
 
 
@@ -219,7 +224,12 @@ def check_area_contains_point(
 ):
     """Check if a point is contained within a GeoArea polygon."""
     result = gis_service.geo_areas.contains_point(db, str(area_id), latitude, longitude)
-    return {"area_id": area_id, "latitude": latitude, "longitude": longitude, "contained": result}
+    return {
+        "area_id": area_id,
+        "latitude": latitude,
+        "longitude": longitude,
+        "contained": result,
+    }
 
 
 @router.get(
@@ -300,7 +310,9 @@ def list_geo_layers(
     response_model=GeoLayerRead,
     tags=["gis-layers"],
 )
-def update_geo_layer(layer_id: UUID, payload: GeoLayerUpdate, db: Session = Depends(get_db)):
+def update_geo_layer(
+    layer_id: UUID, payload: GeoLayerUpdate, db: Session = Depends(get_db)
+):
     return gis_service.geo_layers.update(db, str(layer_id), payload)
 
 
@@ -416,7 +428,8 @@ def coverage_check(
         areas = [
             area
             for area in areas
-            if area.area_type in {gis_service.GeoAreaType.coverage, gis_service.GeoAreaType.service_area}
+            if area.area_type
+            in {gis_service.GeoAreaType.coverage, gis_service.GeoAreaType.service_area}
         ]
     return {
         "covered": len(areas) > 0,
@@ -426,7 +439,9 @@ def coverage_check(
             {
                 "id": str(a.id),
                 "name": a.name,
-                "area_type": a.area_type.value if hasattr(a.area_type, "value") else str(a.area_type),
+                "area_type": a.area_type.value
+                if hasattr(a.area_type, "value")
+                else str(a.area_type),
             }
             for a in areas
         ],
@@ -447,12 +462,10 @@ def subscriber_locations(
 
     Returns GeoJSON-compatible list of subscriber address points.
     """
-    import sqlalchemy as sa
-
     from app.models.subscriber import Address, Subscriber
 
     stmt = (
-        getattr(sa, "select")(
+        select(
             Subscriber.id,
             (Subscriber.first_name + " " + Subscriber.last_name).label("name"),
             Subscriber.status,
@@ -468,7 +481,7 @@ def subscriber_locations(
         .order_by(Subscriber.created_at.desc())
         .limit(limit)
     )
-    rows = getattr(db, "execute")(stmt).all()
+    rows = db.execute(stmt).all()
     return {
         "type": "FeatureCollection",
         "features": [
@@ -481,7 +494,9 @@ def subscriber_locations(
                 "properties": {
                     "id": str(r.id),
                     "name": r.name or "",
-                    "status": r.status.value if hasattr(r.status, "value") else str(r.status or ""),
+                    "status": r.status.value
+                    if hasattr(r.status, "value")
+                    else str(r.status or ""),
                     "city": r.city or "",
                 },
             }

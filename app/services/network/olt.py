@@ -132,7 +132,10 @@ class PonPorts(CRUDManager[PonPort]):
                 raise HTTPException(status_code=404, detail="OLT card port not found")
         elif payload.card_id:
             if payload.port_number is None:
-                raise HTTPException(status_code=400, detail="port_number is required when card_id is provided")
+                raise HTTPException(
+                    status_code=400,
+                    detail="port_number is required when card_id is provided",
+                )
             card = db.get(OltCard, payload.card_id)
             if not card:
                 raise HTTPException(status_code=404, detail="OLT card not found")
@@ -212,10 +215,9 @@ class PonPorts(CRUDManager[PonPort]):
             total_stmt = total_stmt.where(PonPort.olt_id == olt_id)
         total_ports = db.scalar(total_stmt) or 0
 
-        assigned_stmt = (
-            select(func.count(func.distinct(OntAssignment.pon_port_id)))
-            .where(OntAssignment.active.is_(True))
-        )
+        assigned_stmt = select(
+            func.count(func.distinct(OntAssignment.pon_port_id))
+        ).where(OntAssignment.active.is_(True))
         if olt_id:
             assigned_stmt = assigned_stmt.where(
                 OntAssignment.pon_port_id.in_(
@@ -287,14 +289,16 @@ class OntUnits(CRUDManager[OntUnit]):
         if pon_port_id:
             stmt = stmt.join(
                 OntAssignment,
-                (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
+                (OntAssignment.ont_unit_id == OntUnit.id)
+                & (OntAssignment.active.is_(True)),
             )
             stmt = stmt.where(OntAssignment.pon_port_id == coerce_uuid(pon_port_id))
         elif olt_id:
             # Include ONTs linked by assignment->pon_port and ONTs directly linked to OLT.
             stmt = stmt.outerjoin(
                 OntAssignment,
-                (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
+                (OntAssignment.ont_unit_id == OntUnit.id)
+                & (OntAssignment.active.is_(True)),
             ).outerjoin(PonPort, PonPort.id == OntAssignment.pon_port_id)
             olt_uuid = coerce_uuid(olt_id)
             stmt = stmt.where(
@@ -350,9 +354,14 @@ class OntUnits(CRUDManager[OntUnit]):
                     (search_assignment.ont_unit_id == OntUnit.id)
                     & (search_assignment.active.is_(True)),
                 )
-                .outerjoin(search_pon_port, search_pon_port.id == search_assignment.pon_port_id)
+                .outerjoin(
+                    search_pon_port, search_pon_port.id == search_assignment.pon_port_id
+                )
                 .outerjoin(search_olt, search_olt.id == search_pon_port.olt_id)
-                .outerjoin(search_subscriber, search_subscriber.id == search_assignment.subscriber_id)
+                .outerjoin(
+                    search_subscriber,
+                    search_subscriber.id == search_assignment.subscriber_id,
+                )
                 .where(
                     or_(
                         OntUnit.serial_number.ilike(term),
@@ -465,7 +474,9 @@ class OntAssignments(CRUDManager[OntAssignment]):
         return super().get(db, assignment_id)
 
     @classmethod
-    def update(cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate) -> OntAssignment:
+    def update(
+        cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate
+    ) -> OntAssignment:
         return super().update(db, assignment_id, payload)
 
     @classmethod
@@ -620,13 +631,17 @@ class OltCardPorts(CRUDManager[OltCardPort]):
         stmt = apply_optional_equals(stmt, {OltCardPort.card_id: card_id})
         if port_type:
             stmt = stmt.filter(
-                OltCardPort.port_type == _validate_enum(port_type, OltPortType, "port_type")
+                OltCardPort.port_type
+                == _validate_enum(port_type, OltPortType, "port_type")
             )
         stmt = _apply_ordering(
             stmt,
             order_by,
             order_dir,
-            {"created_at": OltCardPort.created_at, "port_number": OltCardPort.port_number},
+            {
+                "created_at": OltCardPort.created_at,
+                "port_number": OltCardPort.port_number,
+            },
         )
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
@@ -681,7 +696,9 @@ class OltPowerUnits(CRUDManager[OltPowerUnit]):
         return super().get(db, unit_id)
 
     @classmethod
-    def update(cls, db: Session, unit_id: str, payload: OltPowerUnitUpdate) -> OltPowerUnit:
+    def update(
+        cls, db: Session, unit_id: str, payload: OltPowerUnitUpdate
+    ) -> OltPowerUnit:
         return super().update(db, unit_id, payload)
 
     @classmethod
@@ -715,7 +732,10 @@ class OltSfpModules(CRUDManager[OltSfpModule]):
             stmt,
             order_by,
             order_dir,
-            {"created_at": OltSfpModule.created_at, "serial_number": OltSfpModule.serial_number},
+            {
+                "created_at": OltSfpModule.created_at,
+                "serial_number": OltSfpModule.serial_number,
+            },
         )
         return list(db.scalars(_apply_pagination(stmt, limit, offset)).all())
 
@@ -724,7 +744,9 @@ class OltSfpModules(CRUDManager[OltSfpModule]):
         return super().get(db, module_id)
 
     @classmethod
-    def update(cls, db: Session, module_id: str, payload: OltSfpModuleUpdate) -> OltSfpModule:
+    def update(
+        cls, db: Session, module_id: str, payload: OltSfpModuleUpdate
+    ) -> OltSfpModule:
         return super().update(db, module_id, payload)
 
     @classmethod

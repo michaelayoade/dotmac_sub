@@ -21,7 +21,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _read_settings(db: Session, domain: SettingDomain, keys: list[str]) -> dict[str, str]:
+def _read_settings(
+    db: Session, domain: SettingDomain, keys: list[str]
+) -> dict[str, str]:
     """Read a batch of DomainSettings, returning {key: value_text}."""
     stmt = (
         select(DomainSetting)
@@ -112,7 +114,7 @@ def get_email_config_context(db: Session) -> dict:
     settings = _read_settings(db, SettingDomain.comms, EMAIL_KEYS)
     # Mask password
     if settings.get("smtp_password"):
-        settings["smtp_password_display"] = "********"
+        settings["smtp_password_display"] = "********"  # noqa: S105 - masked placeholder only
     else:
         settings["smtp_password_display"] = ""
     return {"email": settings}
@@ -146,7 +148,11 @@ SUBSCRIBER_KEYS = [
 
 
 def get_subscriber_config_context(db: Session) -> dict:
-    return {"subscriber_settings": _read_settings(db, SettingDomain.subscriber, SUBSCRIBER_KEYS)}
+    return {
+        "subscriber_settings": _read_settings(
+            db, SettingDomain.subscriber, SUBSCRIBER_KEYS
+        )
+    }
 
 
 def save_subscriber_config(db: Session, data: Mapping[str, Any]) -> None:
@@ -241,7 +247,9 @@ FINANCE_AUTO_KEYS = [
 
 
 def get_finance_automation_context(db: Session) -> dict:
-    return {"finance_auto": _read_settings(db, SettingDomain.billing, FINANCE_AUTO_KEYS)}
+    return {
+        "finance_auto": _read_settings(db, SettingDomain.billing, FINANCE_AUTO_KEYS)
+    }
 
 
 def save_finance_automation(db: Session, data: Mapping[str, Any]) -> None:
@@ -306,6 +314,7 @@ def get_payment_methods_context(db: Session) -> dict:
     """List payment methods/providers."""
     try:
         from app.models.billing import PaymentProvider
+
         stmt = select(PaymentProvider).order_by(PaymentProvider.name)
         methods = list(db.scalars(stmt).all())
     except Exception:
@@ -323,6 +332,7 @@ def get_tax_config_context(db: Session) -> dict:
     """List tax rates."""
     try:
         from app.models.billing import TaxRate
+
         stmt = select(TaxRate).order_by(TaxRate.name)
         rates = list(db.scalars(stmt).all())
     except Exception:
@@ -387,7 +397,11 @@ BILLING_NOTIF_KEYS = [
 
 
 def get_billing_notifications_context(db: Session) -> dict:
-    return {"billing_notif": _read_settings(db, SettingDomain.collections, BILLING_NOTIF_KEYS)}
+    return {
+        "billing_notif": _read_settings(
+            db, SettingDomain.collections, BILLING_NOTIF_KEYS
+        )
+    }
 
 
 def save_billing_notifications(db: Session, data: Mapping[str, Any]) -> None:
@@ -425,7 +439,9 @@ def save_plan_change(db: Session, data: Mapping[str, Any]) -> None:
     allowed_booleanish = {"true", "false"}
 
     if refund_policy not in allowed_refund_policies:
-        raise ValueError("Refund Policy must be one of: none, prorated, full_within_days.")
+        raise ValueError(
+            "Refund Policy must be one of: none, prorated, full_within_days."
+        )
     if invoice_timing not in allowed_invoice_timing:
         raise ValueError("Invoice Timing must be either immediate or next_invoice.")
     if prepaid_rollover not in allowed_booleanish:
@@ -433,14 +449,21 @@ def save_plan_change(db: Session, data: Mapping[str, Any]) -> None:
     if discount_transfer not in allowed_booleanish:
         raise ValueError("Discount Transfer must be true or false.")
 
-    for key in ("upgrade_fee", "downgrade_fee", "fee_tax_rate", "minimum_invoice_amount"):
+    for key in (
+        "upgrade_fee",
+        "downgrade_fee",
+        "fee_tax_rate",
+        "minimum_invoice_amount",
+    ):
         value = str(normalized.get(key) or "").strip()
         if not value:
             continue
         try:
             Decimal(value)
         except InvalidOperation as exc:
-            raise ValueError(f"{key.replace('_', ' ').title()} must be a valid decimal value.") from exc
+            raise ValueError(
+                f"{key.replace('_', ' ').title()} must be a valid decimal value."
+            ) from exc
 
     normalized["refund_policy"] = refund_policy
     normalized["invoice_timing"] = invoice_timing
@@ -577,9 +600,13 @@ def get_monitoring_config_context(db: Session) -> dict:
     )
     # Provide defaults for list-type settings
     if not settings.get("monitoring_vendors"):
-        settings["monitoring_vendors"] = "MikroTik,Cisco,Ubiquiti,Huawei,TP-Link,Juniper,D-Link,Ericsson"
+        settings["monitoring_vendors"] = (
+            "MikroTik,Cisco,Ubiquiti,Huawei,TP-Link,Juniper,D-Link,Ericsson"
+        )
     if not settings.get("monitoring_device_types"):
-        settings["monitoring_device_types"] = "Router,Switch,Server,Access Point,CPE,OLT,ONT,Firewall"
+        settings["monitoring_device_types"] = (
+            "Router,Switch,Server,Access Point,CPE,OLT,ONT,Firewall"
+        )
     if not settings.get("monitoring_groups"):
         settings["monitoring_groups"] = "Core Infrastructure,Access Layer,Customer CPE"
     defaults = {
@@ -710,20 +737,90 @@ def save_ipv6_config(db: Session, data: Mapping[str, Any]) -> None:
 # ---------------------------------------------------------------------------
 
 DEFAULT_TEMPLATES = [
-    {"name": "Welcome Email", "category": "Onboarding", "channel": "Email", "description": "Sent when a new subscriber account is activated"},
-    {"name": "Welcome SMS", "category": "Onboarding", "channel": "SMS", "description": "Short welcome message for new subscribers"},
-    {"name": "Payment Received", "category": "Billing", "channel": "Email", "description": "Confirmation when payment is recorded"},
-    {"name": "Invoice Generated", "category": "Billing", "channel": "Email", "description": "Sent when a new invoice is created"},
-    {"name": "Payment Overdue", "category": "Billing", "channel": "Both", "description": "Reminder for overdue invoices"},
-    {"name": "Service Suspension Warning", "category": "Billing", "channel": "Both", "description": "Warning before service is suspended"},
-    {"name": "Service Restored", "category": "Service", "channel": "Email", "description": "Notification when service is restored after payment"},
-    {"name": "Maintenance Scheduled", "category": "Network", "channel": "Email", "description": "Advance notice of planned maintenance"},
-    {"name": "Loss of Signal Alert", "category": "Network", "channel": "Email", "description": "Alert when ONT loses signal"},
-    {"name": "Ticket Acknowledged", "category": "Support", "channel": "Email", "description": "Confirmation that a support ticket was received"},
-    {"name": "Ticket Resolved", "category": "Support", "channel": "Email", "description": "Notification that a support ticket was resolved"},
-    {"name": "Installation Progress", "category": "Provisioning", "channel": "Both", "description": "Update on fiber installation status"},
-    {"name": "Password Reset", "category": "Security", "channel": "Email", "description": "Password reset link for portal access"},
-    {"name": "Two-Factor Code", "category": "Security", "channel": "SMS", "description": "2FA verification code"},
+    {
+        "name": "Welcome Email",
+        "category": "Onboarding",
+        "channel": "Email",
+        "description": "Sent when a new subscriber account is activated",
+    },
+    {
+        "name": "Welcome SMS",
+        "category": "Onboarding",
+        "channel": "SMS",
+        "description": "Short welcome message for new subscribers",
+    },
+    {
+        "name": "Payment Received",
+        "category": "Billing",
+        "channel": "Email",
+        "description": "Confirmation when payment is recorded",
+    },
+    {
+        "name": "Invoice Generated",
+        "category": "Billing",
+        "channel": "Email",
+        "description": "Sent when a new invoice is created",
+    },
+    {
+        "name": "Payment Overdue",
+        "category": "Billing",
+        "channel": "Both",
+        "description": "Reminder for overdue invoices",
+    },
+    {
+        "name": "Service Suspension Warning",
+        "category": "Billing",
+        "channel": "Both",
+        "description": "Warning before service is suspended",
+    },
+    {
+        "name": "Service Restored",
+        "category": "Service",
+        "channel": "Email",
+        "description": "Notification when service is restored after payment",
+    },
+    {
+        "name": "Maintenance Scheduled",
+        "category": "Network",
+        "channel": "Email",
+        "description": "Advance notice of planned maintenance",
+    },
+    {
+        "name": "Loss of Signal Alert",
+        "category": "Network",
+        "channel": "Email",
+        "description": "Alert when ONT loses signal",
+    },
+    {
+        "name": "Ticket Acknowledged",
+        "category": "Support",
+        "channel": "Email",
+        "description": "Confirmation that a support ticket was received",
+    },
+    {
+        "name": "Ticket Resolved",
+        "category": "Support",
+        "channel": "Email",
+        "description": "Notification that a support ticket was resolved",
+    },
+    {
+        "name": "Installation Progress",
+        "category": "Provisioning",
+        "channel": "Both",
+        "description": "Update on fiber installation status",
+    },
+    {
+        "name": "Password Reset",
+        "category": "Security",
+        "channel": "Email",
+        "description": "Password reset link for portal access",
+    },
+    {
+        "name": "Two-Factor Code",
+        "category": "Security",
+        "channel": "SMS",
+        "description": "2FA verification code",
+    },
 ]
 
 
@@ -743,7 +840,10 @@ def get_templates_context(db: Session) -> dict:
 
 def get_ip_categories_context(db: Session) -> dict:
     settings = _read_settings(db, SettingDomain.network, ["ip_network_categories"])
-    raw = settings.get("ip_network_categories") or "Production,Development,Corporate,Management"
+    raw = (
+        settings.get("ip_network_categories")
+        or "Production,Development,Corporate,Management"
+    )
     categories = [c.strip() for c in raw.split(",") if c.strip()]
     return {"ip_categories": categories, "ip_categories_raw": raw}
 

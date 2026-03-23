@@ -46,6 +46,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class Invoices(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: InvoiceCreate):
@@ -63,9 +64,7 @@ class Invoices(ListResponseMixin):
                 db, SettingDomain.billing, "default_invoice_status"
             )
             if default_status:
-                data["status"] = validate_enum(
-                    default_status, InvoiceStatus, "status"
-                )
+                data["status"] = validate_enum(default_status, InvoiceStatus, "status")
         if not data.get("invoice_number"):
             generated = numbering.generate_number(
                 db,
@@ -155,7 +154,9 @@ class Invoices(ListResponseMixin):
 
             tax_rate = db.get(TaxRate, tax_rate_id)
             if tax_rate and tax_rate.rate:
-                tax_total = (amount * Decimal(str(tax_rate.rate)) / Decimal("100")).quantize(Decimal("0.01"))
+                tax_total = (
+                    amount * Decimal(str(tax_rate.rate)) / Decimal("100")
+                ).quantize(Decimal("0.01"))
 
         total = amount + tax_total
 
@@ -287,7 +288,9 @@ class Invoices(ListResponseMixin):
                 detail="Cannot change account on an existing invoice",
             )
         if "currency" in data and data["currency"] != invoice.currency:
-            raise HTTPException(status_code=400, detail="Currency does not match invoice")
+            raise HTTPException(
+                status_code=400, detail="Currency does not match invoice"
+            )
         merged = {
             "subtotal": data.get("subtotal", invoice.subtotal),
             "tax_total": data.get("tax_total", invoice.tax_total),
@@ -433,7 +436,9 @@ class Invoices(ListResponseMixin):
         ids = [coerce_uuid(invoice_id) for invoice_id in payload.invoice_ids]
         invoices = db.query(Invoice).filter(Invoice.id.in_(ids)).all()
         if len(invoices) != len(ids):
-            raise HTTPException(status_code=404, detail="One or more invoices not found")
+            raise HTTPException(
+                status_code=404, detail="One or more invoices not found"
+            )
         updated = 0
         affected_invoices: list[Invoice] = []
         for invoice in invoices:
@@ -462,7 +467,9 @@ class Invoices(ListResponseMixin):
         return updated
 
     @staticmethod
-    def bulk_write_off_response(db: Session, payload: InvoiceBulkWriteOffRequest) -> dict:
+    def bulk_write_off_response(
+        db: Session, payload: InvoiceBulkWriteOffRequest
+    ) -> dict:
         updated = Invoices.bulk_write_off(db, payload)
         return {"updated": updated}
 
@@ -473,7 +480,9 @@ class Invoices(ListResponseMixin):
         ids = [coerce_uuid(invoice_id) for invoice_id in payload.invoice_ids]
         invoices = db.query(Invoice).filter(Invoice.id.in_(ids)).all()
         if len(invoices) != len(ids):
-            raise HTTPException(status_code=404, detail="One or more invoices not found")
+            raise HTTPException(
+                status_code=404, detail="One or more invoices not found"
+            )
         for invoice in invoices:
             # Reverse active debit ledger entries
             active_debits = (
@@ -580,7 +589,9 @@ class InvoiceLines(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Invoice line not found")
         data = payload.model_dump(exclude_unset=True)
         if "tax_rate_id" in data:
-            _resolve_tax_rate(db, str(data["tax_rate_id"]) if data["tax_rate_id"] else None)
+            _resolve_tax_rate(
+                db, str(data["tax_rate_id"]) if data["tax_rate_id"] else None
+            )
         quantity = data.get("quantity", line.quantity)
         unit_price = data.get("unit_price", line.unit_price)
         amount = data.get("amount")

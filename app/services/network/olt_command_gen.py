@@ -310,7 +310,9 @@ class HuaweiCommandGenerator:
         if not spec.pppoe_omci_vlan:
             return []
 
-        pppoe_services = [ws for ws in spec.wan_services if ws.connection_type == "pppoe"]
+        pppoe_services = [
+            ws for ws in spec.wan_services if ws.connection_type == "pppoe"
+        ]
         if not pppoe_services:
             return []
 
@@ -318,7 +320,11 @@ class HuaweiCommandGenerator:
         commands = [enter_cmd]
         for i, ws in enumerate(pppoe_services, start=1):
             username_template = ws.pppoe_username_template or ""
-            username = _render_template(username_template, context) if username_template else ""
+            username = (
+                _render_template(username_template, context)
+                if username_template
+                else ""
+            )
             password = ws.pppoe_password or ""
             if not username or not password:
                 continue
@@ -472,7 +478,11 @@ def build_spec_from_profile(
     # Determine if dual-stack is enabled from profile ip_protocol
     ipv6_enabled = False
     if hasattr(profile, "ip_protocol") and profile.ip_protocol:
-        ip_proto = profile.ip_protocol.value if hasattr(profile.ip_protocol, "value") else str(profile.ip_protocol)
+        ip_proto = (
+            profile.ip_protocol.value
+            if hasattr(profile.ip_protocol, "value")
+            else str(profile.ip_protocol)
+        )
         ipv6_enabled = ip_proto == "dual_stack"
 
     return ProvisioningSpec(

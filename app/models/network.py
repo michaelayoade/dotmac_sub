@@ -262,7 +262,9 @@ class CPEDevice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
@@ -298,7 +300,9 @@ class Port(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     device = relationship(
@@ -324,9 +328,7 @@ class Port(Base):
 
 class Vlan(Base):
     __tablename__ = "vlans"
-    __table_args__ = (
-        UniqueConstraint("region_id", "tag", name="uq_vlans_region_tag"),
-    )
+    __table_args__ = (UniqueConstraint("region_id", "tag", name="uq_vlans_region_tag"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -343,7 +345,9 @@ class Vlan(Base):
     )
     dhcp_snooping: Mapped[bool] = mapped_column(Boolean, default=False)
     olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL"), index=True
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="SET NULL"),
+        index=True,
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -351,7 +355,9 @@ class Vlan(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     port_links = relationship("PortVlan", back_populates="vlan")
@@ -361,7 +367,9 @@ class Vlan(Base):
 
 class PortVlan(Base):
     __tablename__ = "port_vlans"
-    __table_args__ = (UniqueConstraint("port_id", "vlan_id", name="uq_port_vlans_port_vlan"),)
+    __table_args__ = (
+        UniqueConstraint("port_id", "vlan_id", name="uq_port_vlans_port_vlan"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -390,12 +398,8 @@ class PortVlan(Base):
 class IPAssignment(Base):
     __tablename__ = "ip_assignments"
     __table_args__ = (
-        UniqueConstraint(
-            "ipv4_address_id", name="uq_ip_assignments_ipv4_address_id"
-        ),
-        UniqueConstraint(
-            "ipv6_address_id", name="uq_ip_assignments_ipv6_address_id"
-        ),
+        UniqueConstraint("ipv4_address_id", name="uq_ip_assignments_ipv4_address_id"),
+        UniqueConstraint("ipv6_address_id", name="uq_ip_assignments_ipv6_address_id"),
         CheckConstraint(
             "(ip_version = 'ipv4' AND ipv4_address_id IS NOT NULL AND ipv6_address_id IS NULL) OR "
             "(ip_version = 'ipv6' AND ipv6_address_id IS NOT NULL AND ipv4_address_id IS NULL)",
@@ -437,7 +441,9 @@ class IPAssignment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber", back_populates="ip_assignments")
@@ -465,10 +471,14 @@ class IpPool(Base):
     dns_secondary: Mapped[str | None] = mapped_column(String(64))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="SET NULL"), index=True
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="SET NULL"),
+        index=True,
     )
     nas_device_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("nas_devices.id", ondelete="SET NULL"), index=True
+        UUID(as_uuid=True),
+        ForeignKey("nas_devices.id", ondelete="SET NULL"),
+        index=True,
     )
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -476,7 +486,9 @@ class IpPool(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     blocks = relationship("IpBlock", back_populates="pool")
@@ -505,7 +517,9 @@ class IpBlock(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     pool = relationship("IpPool", back_populates="blocks")
@@ -513,9 +527,7 @@ class IpBlock(Base):
 
 class IPv4Address(Base):
     __tablename__ = "ipv4_addresses"
-    __table_args__ = (
-        UniqueConstraint("address", name="uq_ipv4_addresses_address"),
-    )
+    __table_args__ = (UniqueConstraint("address", name="uq_ipv4_addresses_address"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -531,7 +543,9 @@ class IPv4Address(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     assignment = relationship(
@@ -542,9 +556,7 @@ class IPv4Address(Base):
 
 class IPv6Address(Base):
     __tablename__ = "ipv6_addresses"
-    __table_args__ = (
-        UniqueConstraint("address", name="uq_ipv6_addresses_address"),
-    )
+    __table_args__ = (UniqueConstraint("address", name="uq_ipv6_addresses_address"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -560,7 +572,9 @@ class IPv6Address(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     assignment = relationship(
@@ -612,7 +626,9 @@ class OLTDevice(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     pon_ports = relationship("PonPort", back_populates="olt")
@@ -660,7 +676,9 @@ class OltConfigBackup(Base):
 class OltShelf(Base):
     __tablename__ = "olt_shelves"
     __table_args__ = (
-        UniqueConstraint("olt_id", "shelf_number", name="uq_olt_shelves_olt_shelf_number"),
+        UniqueConstraint(
+            "olt_id", "shelf_number", name="uq_olt_shelves_olt_shelf_number"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -678,7 +696,9 @@ class OltShelf(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     olt = relationship("OLTDevice", back_populates="shelves")
@@ -688,7 +708,9 @@ class OltShelf(Base):
 class OltCard(Base):
     __tablename__ = "olt_cards"
     __table_args__ = (
-        UniqueConstraint("shelf_id", "slot_number", name="uq_olt_cards_shelf_slot_number"),
+        UniqueConstraint(
+            "shelf_id", "slot_number", name="uq_olt_cards_shelf_slot_number"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -707,7 +729,9 @@ class OltCard(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     shelf = relationship("OltShelf", back_populates="cards")
@@ -717,7 +741,9 @@ class OltCard(Base):
 class OltCardPort(Base):
     __tablename__ = "olt_card_ports"
     __table_args__ = (
-        UniqueConstraint("card_id", "port_number", name="uq_olt_card_ports_card_port_number"),
+        UniqueConstraint(
+            "card_id", "port_number", name="uq_olt_card_ports_card_port_number"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -738,7 +764,9 @@ class OltCardPort(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     card = relationship("OltCard", back_populates="ports")
@@ -748,9 +776,7 @@ class OltCardPort(Base):
 
 class PonPort(Base):
     __tablename__ = "pon_ports"
-    __table_args__ = (
-        UniqueConstraint("olt_id", "name", name="uq_pon_ports_olt_name"),
-    )
+    __table_args__ = (UniqueConstraint("olt_id", "name", name="uq_pon_ports_olt_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -770,7 +796,9 @@ class PonPort(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     olt = relationship("OLTDevice", back_populates="pon_ports")
@@ -811,7 +839,9 @@ class OltPowerUnit(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     olt = relationship("OLTDevice", back_populates="power_units")
@@ -820,7 +850,9 @@ class OltPowerUnit(Base):
 class OltSfpModule(Base):
     __tablename__ = "olt_sfp_modules"
     __table_args__ = (
-        UniqueConstraint("olt_card_port_id", "serial_number", name="uq_olt_sfp_modules_port_serial"),
+        UniqueConstraint(
+            "olt_card_port_id", "serial_number", name="uq_olt_sfp_modules_port_serial"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -843,7 +875,9 @@ class OltSfpModule(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     olt_card_port = relationship("OltCardPort", back_populates="sfp_modules")
@@ -942,7 +976,9 @@ class OntUnit(Base):
     observed_lan_mode: Mapped[str | None] = mapped_column(String(60))
     observed_wifi_clients: Mapped[int | None] = mapped_column(Integer)
     observed_lan_hosts: Mapped[int | None] = mapped_column(Integer)
-    observed_runtime_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    observed_runtime_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     # Management IP configuration
     tr069_acs_server_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -963,9 +999,13 @@ class OntUnit(Base):
         UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id")
     )
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
-        Enum(OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False),
+        Enum(
+            OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False
+        ),
     )
-    last_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_provisioned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     # TR-069 data model root (detected from GenieACS device record)
     tr069_data_model: Mapped[str | None] = mapped_column(
@@ -980,7 +1020,9 @@ class OntUnit(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     assignments = relationship("OntAssignment", back_populates="ont_unit")
@@ -992,8 +1034,12 @@ class OntUnit(Base):
     mgmt_vlan = relationship("Vlan", foreign_keys=[mgmt_vlan_id])
     splitter = relationship("Splitter")
     splitter_port_rel = relationship("SplitterPort")
-    download_speed_profile = relationship("SpeedProfile", foreign_keys=[download_speed_profile_id])
-    upload_speed_profile = relationship("SpeedProfile", foreign_keys=[upload_speed_profile_id])
+    download_speed_profile = relationship(
+        "SpeedProfile", foreign_keys=[download_speed_profile_id]
+    )
+    upload_speed_profile = relationship(
+        "SpeedProfile", foreign_keys=[upload_speed_profile_id]
+    )
     tr069_acs_server = relationship("Tr069AcsServer")
     provisioning_profile = relationship("OntProvisioningProfile")
 
@@ -1035,7 +1081,9 @@ class OntAssignment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     ont_unit = relationship("OntUnit", back_populates="assignments")
@@ -1049,9 +1097,7 @@ class NetworkZone(Base):
     """Geographic zone for organizing network infrastructure."""
 
     __tablename__ = "network_zones"
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_network_zones_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_network_zones_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1070,10 +1116,14 @@ class NetworkZone(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
-    parent = relationship("NetworkZone", remote_side="NetworkZone.id", backref="children")
+    parent = relationship(
+        "NetworkZone", remote_side="NetworkZone.id", backref="children"
+    )
     ont_units = relationship("OntUnit", back_populates="zone")
     splitters = relationship("Splitter", back_populates="zone")
     fdh_cabinets = relationship("FdhCabinet", back_populates="zone")
@@ -1081,9 +1131,7 @@ class NetworkZone(Base):
 
 class FdhCabinet(Base):
     __tablename__ = "fdh_cabinets"
-    __table_args__ = (
-        UniqueConstraint("code", name="uq_fdh_cabinets_code"),
-    )
+    __table_args__ = (UniqueConstraint("code", name="uq_fdh_cabinets_code"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1106,7 +1154,9 @@ class FdhCabinet(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     splitters = relationship("Splitter", back_populates="fdh")
@@ -1116,9 +1166,7 @@ class FdhCabinet(Base):
 
 class Splitter(Base):
     __tablename__ = "splitters"
-    __table_args__ = (
-        UniqueConstraint("fdh_id", "name", name="uq_splitters_fdh_name"),
-    )
+    __table_args__ = (UniqueConstraint("fdh_id", "name", name="uq_splitters_fdh_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1140,7 +1188,9 @@ class Splitter(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     fdh = relationship("FdhCabinet", back_populates="splitters")
@@ -1151,7 +1201,9 @@ class Splitter(Base):
 class SplitterPort(Base):
     __tablename__ = "splitter_ports"
     __table_args__ = (
-        UniqueConstraint("splitter_id", "port_number", name="uq_splitter_ports_splitter_port_number"),
+        UniqueConstraint(
+            "splitter_id", "port_number", name="uq_splitter_ports_splitter_port_number"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1171,7 +1223,9 @@ class SplitterPort(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     splitter = relationship("Splitter", back_populates="ports")
@@ -1212,7 +1266,9 @@ class SplitterPortAssignment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     splitter_port = relationship("SplitterPort", back_populates="assignments")
@@ -1224,7 +1280,9 @@ class SplitterPortAssignment(Base):
 class FiberStrand(Base):
     __tablename__ = "fiber_strands"
     __table_args__ = (
-        UniqueConstraint("cable_name", "strand_number", name="uq_fiber_strands_cable_strand"),
+        UniqueConstraint(
+            "cable_name", "strand_number", name="uq_fiber_strands_cable_strand"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1236,9 +1294,13 @@ class FiberStrand(Base):
     status: Mapped[FiberStrandStatus] = mapped_column(
         Enum(FiberStrandStatus), default=FiberStrandStatus.available
     )
-    upstream_type: Mapped[FiberEndpointType | None] = mapped_column(Enum(FiberEndpointType))
+    upstream_type: Mapped[FiberEndpointType | None] = mapped_column(
+        Enum(FiberEndpointType)
+    )
     upstream_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
-    downstream_type: Mapped[FiberEndpointType | None] = mapped_column(Enum(FiberEndpointType))
+    downstream_type: Mapped[FiberEndpointType | None] = mapped_column(
+        Enum(FiberEndpointType)
+    )
     downstream_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -1247,14 +1309,20 @@ class FiberStrand(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     splices_from = relationship(
-        "FiberSplice", back_populates="from_strand", foreign_keys="FiberSplice.from_strand_id"
+        "FiberSplice",
+        back_populates="from_strand",
+        foreign_keys="FiberSplice.from_strand_id",
     )
     splices_to = relationship(
-        "FiberSplice", back_populates="to_strand", foreign_keys="FiberSplice.to_strand_id"
+        "FiberSplice",
+        back_populates="to_strand",
+        foreign_keys="FiberSplice.to_strand_id",
     )
     segments = relationship("FiberSegment", back_populates="fiber_strand")
 
@@ -1287,7 +1355,9 @@ class FiberSpliceClosure(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     splices = relationship("FiberSplice", back_populates="closure")
@@ -1320,7 +1390,9 @@ class FiberAccessPoint(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -1346,7 +1418,9 @@ class FiberSpliceTray(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     closure = relationship("FiberSpliceClosure", back_populates="trays")
@@ -1356,7 +1430,9 @@ class FiberSpliceTray(Base):
 class FiberSplice(Base):
     __tablename__ = "fiber_splices"
     __table_args__ = (
-        UniqueConstraint("from_strand_id", "to_strand_id", name="uq_fiber_splices_from_to"),
+        UniqueConstraint(
+            "from_strand_id", "to_strand_id", name="uq_fiber_splices_from_to"
+        ),
         UniqueConstraint("tray_id", "position", name="uq_fiber_splices_tray_position"),
     )
 
@@ -1386,8 +1462,12 @@ class FiberSplice(Base):
 
     closure = relationship("FiberSpliceClosure", back_populates="splices")
     tray = relationship("FiberSpliceTray", back_populates="splices")
-    from_strand = relationship("FiberStrand", back_populates="splices_from", foreign_keys=[from_strand_id])
-    to_strand = relationship("FiberStrand", back_populates="splices_to", foreign_keys=[to_strand_id])
+    from_strand = relationship(
+        "FiberStrand", back_populates="splices_from", foreign_keys=[from_strand_id]
+    )
+    to_strand = relationship(
+        "FiberStrand", back_populates="splices_to", foreign_keys=[to_strand_id]
+    )
 
 
 class FiberTerminationPoint(Base):
@@ -1410,19 +1490,26 @@ class FiberTerminationPoint(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     segments_from = relationship(
-        "FiberSegment", back_populates="from_point", foreign_keys="FiberSegment.from_point_id"
+        "FiberSegment",
+        back_populates="from_point",
+        foreign_keys="FiberSegment.from_point_id",
     )
     segments_to = relationship(
-        "FiberSegment", back_populates="to_point", foreign_keys="FiberSegment.to_point_id"
+        "FiberSegment",
+        back_populates="to_point",
+        foreign_keys="FiberSegment.to_point_id",
     )
 
 
 class FiberCableType(enum.Enum):
     """Types of fiber optic cables."""
+
     single_mode = "single_mode"
     multi_mode = "multi_mode"
     armored = "armored"
@@ -1433,9 +1520,7 @@ class FiberCableType(enum.Enum):
 
 class FiberSegment(Base):
     __tablename__ = "fiber_segments"
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_fiber_segments_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_fiber_segments_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1447,7 +1532,9 @@ class FiberSegment(Base):
     cable_type: Mapped[FiberCableType | None] = mapped_column(
         Enum(FiberCableType), nullable=True
     )
-    fiber_count: Mapped[int | None] = mapped_column(Integer, nullable=True, comment="Number of fiber cores in the cable")
+    fiber_count: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, comment="Number of fiber cores in the cable"
+    )
     from_point_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("fiber_termination_points.id")
     )
@@ -1466,7 +1553,9 @@ class FiberSegment(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     from_point = relationship(
@@ -1504,7 +1593,9 @@ class PonPortSplitterLink(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     pon_port = relationship("PonPort", back_populates="splitter_link")
@@ -1515,9 +1606,7 @@ class OnuType(Base):
     """Hardware catalog entry for ONU/ONT device types."""
 
     __tablename__ = "onu_types"
-    __table_args__ = (
-        UniqueConstraint("name", name="uq_onu_types_name"),
-    )
+    __table_args__ = (UniqueConstraint("name", name="uq_onu_types_name"),)
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -1550,7 +1639,9 @@ class OnuType(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     ont_units = relationship("OntUnit", back_populates="onu_type")
@@ -1569,7 +1660,9 @@ class SpeedProfile(Base):
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     direction: Mapped[SpeedProfileDirection] = mapped_column(
-        Enum(SpeedProfileDirection, name="speedprofiledirection", create_constraint=False),
+        Enum(
+            SpeedProfileDirection, name="speedprofiledirection", create_constraint=False
+        ),
         nullable=False,
     )
     speed_kbps: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -1587,7 +1680,9 @@ class SpeedProfile(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -1601,7 +1696,9 @@ class OntProvisioningProfile(Base):
 
     __tablename__ = "ont_provisioning_profiles"
     __table_args__ = (
-        UniqueConstraint("organization_id", "name", name="uq_ont_prov_profiles_org_name"),
+        UniqueConstraint(
+            "organization_id", "name", name="uq_ont_prov_profiles_org_name"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1631,10 +1728,12 @@ class OntProvisioningProfile(Base):
 
     # Speed profiles (OLT-level enforcement)
     download_speed_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("speed_profiles.id"),
+        UUID(as_uuid=True),
+        ForeignKey("speed_profiles.id"),
     )
     upload_speed_profile_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("speed_profiles.id"),
+        UUID(as_uuid=True),
+        ForeignKey("speed_profiles.id"),
     )
 
     # Management plane (VLAN tag as integer, not FK — profile is region-agnostic)
@@ -1653,13 +1752,18 @@ class OntProvisioningProfile(Base):
 
     # OLT-level provisioning knobs
     internet_config_ip_index: Mapped[int | None] = mapped_column(
-        Integer, default=0, doc="ip-index for ont internet-config command (activates TCP stack)"
+        Integer,
+        default=0,
+        doc="ip-index for ont internet-config command (activates TCP stack)",
     )
     wan_config_profile_id: Mapped[int | None] = mapped_column(
-        Integer, default=0, doc="profile-id for ont wan-config command (sets route+NAT mode)"
+        Integer,
+        default=0,
+        doc="profile-id for ont wan-config command (sets route+NAT mode)",
     )
     pppoe_omci_vlan: Mapped[int | None] = mapped_column(
-        Integer, doc="VLAN for PPPoE-over-OMCI (OLT-side, not TR-069); null = skip OMCI PPPoE"
+        Integer,
+        doc="VLAN for PPPoE-over-OMCI (OLT-side, not TR-069); null = skip OMCI PPPoE",
     )
 
     # Connection request credentials (pushed after TR-069 bootstrap)
@@ -1682,13 +1786,19 @@ class OntProvisioningProfile(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships
     organization = relationship("Organization", backref="ont_provisioning_profiles")
-    download_speed_profile = relationship("SpeedProfile", foreign_keys=[download_speed_profile_id])
-    upload_speed_profile = relationship("SpeedProfile", foreign_keys=[upload_speed_profile_id])
+    download_speed_profile = relationship(
+        "SpeedProfile", foreign_keys=[download_speed_profile_id]
+    )
+    upload_speed_profile = relationship(
+        "SpeedProfile", foreign_keys=[upload_speed_profile_id]
+    )
     wan_services = relationship(
         "OntProfileWanService",
         back_populates="profile",
@@ -1710,7 +1820,8 @@ class OntProfileWanService(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     profile_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id", ondelete="CASCADE"),
+        UUID(as_uuid=True),
+        ForeignKey("ont_provisioning_profiles.id", ondelete="CASCADE"),
         nullable=False,
     )
 
@@ -1771,7 +1882,9 @@ class OntProfileWanService(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships
@@ -1788,7 +1901,9 @@ class VendorModelCapability(Base):
 
     __tablename__ = "vendor_model_capabilities"
     __table_args__ = (
-        UniqueConstraint("vendor", "model", "firmware_pattern", name="uq_vmc_vendor_model_fw"),
+        UniqueConstraint(
+            "vendor", "model", "firmware_pattern", name="uq_vmc_vendor_model_fw"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1818,7 +1933,9 @@ class VendorModelCapability(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships
@@ -1863,7 +1980,9 @@ class Tr069ParameterMap(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships
@@ -1875,7 +1994,9 @@ class OltFirmwareImage(Base):
 
     __tablename__ = "olt_firmware_images"
     __table_args__ = (
-        UniqueConstraint("vendor", "model", "version", name="uq_olt_firmware_vendor_model_version"),
+        UniqueConstraint(
+            "vendor", "model", "version", name="uq_olt_firmware_vendor_model_version"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1897,7 +2018,9 @@ class OltFirmwareImage(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
 
@@ -1906,7 +2029,9 @@ class OntFirmwareImage(Base):
 
     __tablename__ = "ont_firmware_images"
     __table_args__ = (
-        UniqueConstraint("vendor", "model", "version", name="uq_ont_firmware_vendor_model_version"),
+        UniqueConstraint(
+            "vendor", "model", "version", name="uq_ont_firmware_vendor_model_version"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -1926,5 +2051,7 @@ class OntFirmwareImage(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

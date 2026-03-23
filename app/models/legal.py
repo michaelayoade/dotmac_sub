@@ -57,4 +57,6 @@ class LegalDocument(Base):
     )
 
     def __repr__(self) -> str:
-        return f"<LegalDocument {self.document_type.value}: {self.title} v{self.version}>"
+        return (
+            f"<LegalDocument {self.document_type.value}: {self.title} v{self.version}>"
+        )

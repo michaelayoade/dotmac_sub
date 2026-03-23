@@ -390,7 +390,9 @@ class UnifiedFileUploadService:
         db.add(file)
         db.commit()
         db.refresh(file)
-        logger.info("file_deleted file_id=%s hard_object_delete=%s", file.id, hard_delete_object)
+        logger.info(
+            "file_deleted file_id=%s hard_object_delete=%s", file.id, hard_delete_object
+        )
         return file
 
 

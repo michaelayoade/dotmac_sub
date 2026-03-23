@@ -95,8 +95,14 @@ def validate_session_token(
 
     roles = payload.get("roles", [])
     scopes = payload.get("scopes", [])
-    if not isinstance(roles, list) or not isinstance(scopes, list) or (not roles and not scopes):
-        resolved_roles, resolved_scopes = _load_rbac_claims(db, resolved_type or principal_type, str(principal_id))
+    if (
+        not isinstance(roles, list)
+        or not isinstance(scopes, list)
+        or (not roles and not scopes)
+    ):
+        resolved_roles, resolved_scopes = _load_rbac_claims(
+            db, resolved_type or principal_type, str(principal_id)
+        )
         roles = list(resolved_roles)
         scopes = list(resolved_scopes)
 

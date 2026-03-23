@@ -14,6 +14,7 @@ from app.services.audit_helpers import build_changes_metadata
 
 logger = logging.getLogger(__name__)
 
+
 def build_accounts_list_data(
     db,
     *,
@@ -26,9 +27,15 @@ def build_accounts_list_data(
     accounts = []
     total = 0
     if customer_ref:
-        subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(db, customer_ref)
+        subscriber_ids = web_billing_customers_service.subscriber_ids_for_customer(
+            db, customer_ref
+        )
         if subscriber_ids:
-            query = db.query(Subscriber).filter(Subscriber.id.in_(subscriber_ids)).order_by(Subscriber.created_at.desc())
+            query = (
+                db.query(Subscriber)
+                .filter(Subscriber.id.in_(subscriber_ids))
+                .order_by(Subscriber.created_at.desc())
+            )
             total = query.count()
             accounts = query.offset(offset).limit(per_page).all()
     else:
@@ -43,7 +50,9 @@ def build_accounts_list_data(
         )
         total_query = db.query(Subscriber)
         if reseller_id:
-            total_query = total_query.filter(Subscriber.reseller_id == UUID(reseller_id))
+            total_query = total_query.filter(
+                Subscriber.reseller_id == UUID(reseller_id)
+            )
         total = total_query.count()
     total_pages = (total + per_page - 1) // per_page
     return {
@@ -76,7 +85,9 @@ def build_account_form_data(db, *, customer_ref: str | None) -> dict[str, object
             offset=0,
         ),
         "customer_ref": customer_ref,
-        "customer_label": web_billing_customers_service.customer_label(db, customer_ref),
+        "customer_label": web_billing_customers_service.customer_label(
+            db, customer_ref
+        ),
     }
 
 
@@ -93,7 +104,9 @@ def create_account_from_form(
 ):
     resolved_subscriber_id = subscriber_id
     if not resolved_subscriber_id and customer_ref:
-        subscribers = web_billing_customers_service.subscribers_for_customer(db, customer_ref)
+        subscribers = web_billing_customers_service.subscribers_for_customer(
+            db, customer_ref
+        )
         if len(subscribers) == 1:
             resolved_subscriber_id = subscribers[0]["id"]
         elif len(subscribers) > 1:

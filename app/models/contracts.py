@@ -20,6 +20,7 @@ class ContractSignature(Base):
     - Digital fingerprint (ip_address, user_agent)
     - Context (account_id, service_order_id, document_id)
     """
+
     __tablename__ = "contract_signatures"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -45,12 +46,13 @@ class ContractSignature(Base):
 
     # Signature timestamp
     signed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False,
-        default=lambda: datetime.now(UTC)
+        DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
 
     # Digital fingerprint
-    ip_address: Mapped[str] = mapped_column(String(45), nullable=False)  # IPv6 max length
+    ip_address: Mapped[str] = mapped_column(
+        String(45), nullable=False
+    )  # IPv6 max length
     user_agent: Mapped[str | None] = mapped_column(String(500))
 
     # Copy of what was agreed to (for audit trail)
@@ -66,7 +68,7 @@ class ContractSignature(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
-        onupdate=lambda: datetime.now(UTC)
+        onupdate=lambda: datetime.now(UTC),
     )
 
     # Relationships

@@ -92,7 +92,9 @@ def run_scheduled_backups() -> dict[str, int]:
             except Exception as e:
                 logger.error(
                     "Scheduled backup failed for NAS %s (%s): %s",
-                    device.name, device.id, e,
+                    device.name,
+                    device.id,
+                    e,
                 )
                 db.rollback()
                 failed += 1
@@ -118,7 +120,10 @@ def run_scheduled_backups() -> dict[str, int]:
 
         logger.info(
             "Scheduled NAS backups: attempted=%d succeeded=%d failed=%d skipped=%d",
-            attempted, succeeded, failed, skipped,
+            attempted,
+            succeeded,
+            failed,
+            skipped,
         )
         return {
             "attempted": attempted,
@@ -148,21 +153,22 @@ def update_subscriber_counts() -> dict[str, int]:
     db = SessionLocal()
     try:
         devices = list(
-            db.scalars(
-                select(NasDevice).where(NasDevice.is_active.is_(True))
-            ).all()
+            db.scalars(select(NasDevice).where(NasDevice.is_active.is_(True))).all()
         )
 
         updated = 0
         over_capacity = 0
 
         for device in devices:
-            count = db.scalar(
-                select(func.count(Subscription.id)).where(
-                    Subscription.provisioning_nas_device_id == device.id,
-                    Subscription.status == SubscriptionStatus.active,
+            count = (
+                db.scalar(
+                    select(func.count(Subscription.id)).where(
+                        Subscription.provisioning_nas_device_id == device.id,
+                        Subscription.status == SubscriptionStatus.active,
+                    )
                 )
-            ) or 0
+                or 0
+            )
 
             if device.current_subscriber_count != count:
                 device.current_subscriber_count = count
@@ -175,7 +181,10 @@ def update_subscriber_counts() -> dict[str, int]:
                 over_capacity += 1
                 logger.warning(
                     "NAS %s (%s) over capacity: %d/%d subscribers",
-                    device.name, device.id, count, device.max_concurrent_subscribers,
+                    device.name,
+                    device.id,
+                    count,
+                    device.max_concurrent_subscribers,
                 )
 
         if updated:
@@ -183,7 +192,8 @@ def update_subscriber_counts() -> dict[str, int]:
 
         logger.info(
             "NAS subscriber counts: %d devices updated, %d over capacity",
-            updated, over_capacity,
+            updated,
+            over_capacity,
         )
         return {"devices_updated": updated, "over_capacity": over_capacity}
     except Exception:
@@ -212,10 +222,12 @@ def check_nas_health() -> dict[str, int]:
             db.scalars(
                 select(NasDevice).where(
                     NasDevice.is_active.is_(True),
-                    NasDevice.status.in_([
-                        NasDeviceStatus.active,
-                        NasDeviceStatus.maintenance,
-                    ]),
+                    NasDevice.status.in_(
+                        [
+                            NasDeviceStatus.active,
+                            NasDeviceStatus.maintenance,
+                        ]
+                    ),
                 )
             ).all()
         )
@@ -243,22 +255,25 @@ def check_nas_health() -> dict[str, int]:
             else:
                 unreachable += 1
                 # Mark offline if not seen for over 1 hour
-                if (
-                    device.status == NasDeviceStatus.active
-                    and (not device.last_seen_at or device.last_seen_at < offline_cutoff)
+                if device.status == NasDeviceStatus.active and (
+                    not device.last_seen_at or device.last_seen_at < offline_cutoff
                 ):
                     device.status = NasDeviceStatus.offline
                     marked_offline += 1
                     logger.warning(
                         "NAS %s (%s) marked offline — unreachable for >1 hour",
-                        device.name, host,
+                        device.name,
+                        host,
                     )
 
         db.commit()
 
         logger.info(
             "NAS health check: %d total, %d reachable, %d unreachable, %d marked offline",
-            len(devices), reachable, unreachable, marked_offline,
+            len(devices),
+            reachable,
+            unreachable,
+            marked_offline,
         )
         return {
             "total": len(devices),

@@ -27,6 +27,7 @@ def _coerce_int(value: object) -> int:
         return int(value.strip())
     raise TypeError(f"Unsupported int value type: {type(value).__name__}")
 
+
 _GIS_SETTING_KEYS = {
     "sync_enabled",
     "sync_interval_minutes",
@@ -114,7 +115,11 @@ _RADIUS_SETTING_KEYS = {
     "default_sync_nas_clients",
     "default_sync_status",
 }
-_RADIUS_SETTING_INT_KEYS = {"auth_timeout_sec", "default_auth_port", "default_acct_port"}
+_RADIUS_SETTING_INT_KEYS = {
+    "auth_timeout_sec",
+    "default_auth_port",
+    "default_acct_port",
+}
 _RADIUS_SETTING_SECRET_KEYS = {"auth_shared_secret"}
 _RADIUS_SETTING_BOOL_KEYS = {"default_sync_users", "default_sync_nas_clients"}
 _RADIUS_SETTING_STATUS_KEYS = {"default_sync_status"}
@@ -142,14 +147,14 @@ def _normalize_spec_setting(
         raise HTTPException(status_code=400, detail=error)
     if spec.allowed and coerced not in spec.allowed:
         allowed = ", ".join(sorted(spec.allowed))
-        raise HTTPException(
-            status_code=400, detail=f"Value must be one of: {allowed}"
-        )
+        raise HTTPException(status_code=400, detail=f"Value must be one of: {allowed}")
     if spec.value_type == SettingValueType.integer:
         try:
             parsed = _coerce_int(coerced)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if spec.min_value is not None and parsed < spec.min_value:
             raise HTTPException(
                 status_code=400, detail=f"Value must be >= {spec.min_value}"
@@ -193,7 +198,9 @@ def _list_domain_settings_response(
     limit: int,
     offset: int,
 ):
-    items = _list_domain_settings(db, domain, is_active, order_by, order_dir, limit, offset)
+    items = _list_domain_settings(
+        db, domain, is_active, order_by, order_dir, limit, offset
+    )
     return list_response(items, limit, offset)
 
 
@@ -245,7 +252,9 @@ def list_gis_settings_response(
     return list_response(items, limit, offset)
 
 
-def _normalize_gis_setting(key: str, payload: DomainSettingUpdate) -> DomainSettingUpdate:
+def _normalize_gis_setting(
+    key: str, payload: DomainSettingUpdate
+) -> DomainSettingUpdate:
     if key not in _GIS_SETTING_KEYS:
         allowed = ", ".join(sorted(_GIS_SETTING_KEYS))
         raise HTTPException(
@@ -259,7 +268,9 @@ def _normalize_gis_setting(key: str, payload: DomainSettingUpdate) -> DomainSett
         try:
             minutes = _coerce_int(value)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if minutes < 1:
             raise HTTPException(status_code=400, detail="Value must be >= 1")
         data["value_type"] = SettingValueType.integer
@@ -339,7 +350,9 @@ def _normalize_geocoding_setting(
         try:
             parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if parsed < 1:
             raise HTTPException(status_code=400, detail="Value must be >= 1")
         data["value_type"] = SettingValueType.integer
@@ -372,7 +385,9 @@ def _normalize_geocoding_setting(
 
 def upsert_geocoding_setting(db: Session, key: str, payload: DomainSettingUpdate):
     normalized_payload = _normalize_geocoding_setting(key, payload)
-    return settings_service.geocoding_settings.upsert_by_key(db, key, normalized_payload)
+    return settings_service.geocoding_settings.upsert_by_key(
+        db, key, normalized_payload
+    )
 
 
 def get_geocoding_setting(db: Session, key: str):
@@ -410,7 +425,9 @@ def list_radius_settings_response(
     )
 
 
-def _normalize_radius_setting(key: str, payload: DomainSettingUpdate) -> DomainSettingUpdate:
+def _normalize_radius_setting(
+    key: str, payload: DomainSettingUpdate
+) -> DomainSettingUpdate:
     if key not in _RADIUS_SETTING_KEYS:
         allowed = ", ".join(sorted(_RADIUS_SETTING_KEYS))
         raise HTTPException(
@@ -424,7 +441,9 @@ def _normalize_radius_setting(key: str, payload: DomainSettingUpdate) -> DomainS
         try:
             parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if parsed < 1:
             raise HTTPException(status_code=400, detail="Value must be >= 1")
         data["value_type"] = SettingValueType.integer
@@ -501,7 +520,9 @@ def list_auth_settings_response(
     return list_response(items, limit, offset)
 
 
-def _normalize_auth_setting(key: str, payload: DomainSettingUpdate) -> DomainSettingUpdate:
+def _normalize_auth_setting(
+    key: str, payload: DomainSettingUpdate
+) -> DomainSettingUpdate:
     if key not in _AUTH_SETTING_KEYS:
         allowed = ", ".join(sorted(_AUTH_SETTING_KEYS))
         raise HTTPException(
@@ -515,7 +536,9 @@ def _normalize_auth_setting(key: str, payload: DomainSettingUpdate) -> DomainSet
         try:
             parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if parsed < 1:
             raise HTTPException(status_code=400, detail="Value must be >= 1")
         data["value_type"] = SettingValueType.integer
@@ -598,7 +621,9 @@ def list_audit_settings_response(
     return list_response(items, limit, offset)
 
 
-def _normalize_audit_setting(key: str, payload: DomainSettingUpdate) -> DomainSettingUpdate:
+def _normalize_audit_setting(
+    key: str, payload: DomainSettingUpdate
+) -> DomainSettingUpdate:
     if key not in _AUDIT_SETTING_KEYS:
         allowed = ", ".join(sorted(_AUDIT_SETTING_KEYS))
         raise HTTPException(
@@ -631,7 +656,9 @@ def _normalize_audit_setting(key: str, payload: DomainSettingUpdate) -> DomainSe
         elif isinstance(value, list):
             items = [str(item).strip() for item in value if str(item).strip()]
         else:
-            raise HTTPException(status_code=400, detail="Value must be a list or string")
+            raise HTTPException(
+                status_code=400, detail="Value must be a list or string"
+            )
         data["value_type"] = SettingValueType.json
         data["value_text"] = None
         data["value_json"] = items
@@ -742,7 +769,9 @@ def list_notification_settings_response(
     limit: int,
     offset: int,
 ):
-    items = list_notification_settings(db, is_active, order_by, order_dir, limit, offset)
+    items = list_notification_settings(
+        db, is_active, order_by, order_dir, limit, offset
+    )
     return list_response(items, limit, offset)
 
 
@@ -762,7 +791,9 @@ def _normalize_notification_setting(
         try:
             parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if parsed < 0:
             raise HTTPException(status_code=400, detail="Value must be >= 0")
         data["value_type"] = SettingValueType.integer
@@ -848,7 +879,9 @@ def _normalize_scheduler_setting(
         try:
             parsed = _coerce_int(value)
         except (TypeError, ValueError) as exc:
-            raise HTTPException(status_code=400, detail="Value must be an integer") from exc
+            raise HTTPException(
+                status_code=400, detail="Value must be an integer"
+            ) from exc
         if parsed < 1:
             raise HTTPException(status_code=400, detail="Value must be >= 1")
         data["value_type"] = SettingValueType.integer
@@ -865,7 +898,9 @@ def _normalize_scheduler_setting(
 
 def upsert_scheduler_setting(db: Session, key: str, payload: DomainSettingUpdate):
     normalized_payload = _normalize_scheduler_setting(key, payload)
-    return settings_service.scheduler_settings.upsert_by_key(db, key, normalized_payload)
+    return settings_service.scheduler_settings.upsert_by_key(
+        db, key, normalized_payload
+    )
 
 
 def get_scheduler_setting(db: Session, key: str):

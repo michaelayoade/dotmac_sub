@@ -62,9 +62,7 @@ class RadiusAuthError(Base):
 
     username: Mapped[str] = mapped_column(String(120), nullable=False)
     nas_ip_address: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    calling_station_id: Mapped[str | None] = mapped_column(
-        String(64), nullable=True
-    )
+    calling_station_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     error_type: Mapped[RadiusAuthErrorType] = mapped_column(
         Enum(
             RadiusAuthErrorType,

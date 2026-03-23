@@ -23,6 +23,7 @@ from app.services import billing as billing_service
 
 logger = logging.getLogger(__name__)
 
+
 def _parse_bool(value: str | None) -> bool:
     return value in {"on", "true", "1", "yes"}
 

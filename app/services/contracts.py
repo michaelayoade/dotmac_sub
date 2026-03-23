@@ -15,6 +15,7 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+
 class ContractSignatures:
     """Service for managing contract signatures."""
 
@@ -134,7 +135,8 @@ class ContractSignatures:
 
     @staticmethod
     def get_contract_template(
-        db: Session, document_type: LegalDocumentType = LegalDocumentType.terms_of_service
+        db: Session,
+        document_type: LegalDocumentType = LegalDocumentType.terms_of_service,
     ) -> LegalDocument | None:
         """Get the current published contract template.
 
@@ -152,7 +154,6 @@ class ContractSignatures:
             .filter(LegalDocument.is_published.is_(True))
             .first()
         )
-
 
     @staticmethod
     def get_contract_context(

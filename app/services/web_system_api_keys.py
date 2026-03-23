@@ -12,13 +12,20 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
-def list_api_keys_for_subscriber(db: Session, subscriber_id: str | None) -> list[ApiKey]:
+
+def list_api_keys_for_subscriber(
+    db: Session, subscriber_id: str | None
+) -> list[ApiKey]:
     """Return API keys for a subscriber sorted by most recent."""
     if not subscriber_id:
         return []
-    keys = db.execute(
-        select(ApiKey)
-        .where(ApiKey.subscriber_id == coerce_uuid(subscriber_id))
-        .order_by(ApiKey.created_at.desc())
-    ).scalars().all()
+    keys = (
+        db.execute(
+            select(ApiKey)
+            .where(ApiKey.subscriber_id == coerce_uuid(subscriber_id))
+            .order_by(ApiKey.created_at.desc())
+        )
+        .scalars()
+        .all()
+    )
     return list(keys)

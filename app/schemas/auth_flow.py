@@ -17,13 +17,13 @@ class LoginRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     refresh_token: str | None = None
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - OAuth token type label, not a credential
 
 
 class LoginResponse(BaseModel):
     access_token: str | None = None
     refresh_token: str | None = None
-    token_type: str = "bearer"
+    token_type: str = "bearer"  # noqa: S105 - OAuth token type label, not a credential
     mfa_required: bool = False
     mfa_token: str | None = None
 

@@ -49,7 +49,9 @@ def get_encryption_key() -> bytes | None:
 
             session = SessionLocal()
             try:
-                raw = resolve_value(session, SettingDomain.auth, "credential_encryption_key")
+                raw = resolve_value(
+                    session, SettingDomain.auth, "credential_encryption_key"
+                )
                 if isinstance(raw, str):
                     key_str = raw
             finally:
@@ -131,8 +133,7 @@ def encrypt_credential(value: str | None) -> str | None:
     if not encryption_key:
         # No encryption configured - store with plain prefix
         _logger.warning(
-            "CREDENTIAL_ENCRYPTION_KEY not configured "
-            "— storing credential as plaintext"
+            "CREDENTIAL_ENCRYPTION_KEY not configured — storing credential as plaintext"
         )
         return f"plain:{value}"
 
@@ -181,17 +182,19 @@ def decrypt_credential(value: str | None) -> str | None:
 
 
 # Credential field names that should be encrypted
-ENCRYPTED_CREDENTIAL_FIELDS = frozenset({
-    "shared_secret",
-    "ssh_password",
-    "ssh_key",
-    "api_password",
-    "api_token",
-    "snmp_community",
-    "snmp_auth_secret",
-    "snmp_priv_secret",
-    "pppoe_password",
-})
+ENCRYPTED_CREDENTIAL_FIELDS = frozenset(
+    {
+        "shared_secret",
+        "ssh_password",
+        "ssh_key",
+        "api_password",
+        "api_token",
+        "snmp_community",
+        "snmp_auth_secret",
+        "snmp_priv_secret",
+        "pppoe_password",
+    }
+)
 
 
 def encrypt_nas_credentials(data: dict) -> dict:

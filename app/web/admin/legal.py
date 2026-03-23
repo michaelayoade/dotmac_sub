@@ -71,16 +71,18 @@ def legal_documents_list(
     total_pages = (stats["total"] + per_page - 1) // per_page
 
     context = _base_context(request, db)
-    context.update({
-        "documents": documents,
-        "stats": stats,
-        "document_types": [t.value for t in LegalDocumentType],
-        "document_type_filter": document_type,
-        "is_published_filter": is_published,
-        "page": page,
-        "per_page": per_page,
-        "total_pages": total_pages,
-    })
+    context.update(
+        {
+            "documents": documents,
+            "stats": stats,
+            "document_types": [t.value for t in LegalDocumentType],
+            "document_type_filter": document_type,
+            "is_published_filter": is_published,
+            "page": page,
+            "per_page": per_page,
+            "total_pages": total_pages,
+        }
+    )
 
     return templates.TemplateResponse("admin/system/legal/index.html", context)
 
@@ -89,11 +91,15 @@ def legal_documents_list(
 def legal_document_new(request: Request, db: Session = Depends(get_db)):
     """New legal document form."""
     context = _base_context(request, db)
-    context.update({
-        "document": None,
-        "document_types": [(t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType],
-        "action": "create",
-    })
+    context.update(
+        {
+            "document": None,
+            "document_types": [
+                (t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType
+            ],
+            "action": "create",
+        }
+    )
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
@@ -134,12 +140,17 @@ def legal_document_create(
         )
     except Exception as e:
         context = _base_context(request, db)
-        context.update({
-            "document": None,
-            "document_types": [(t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType],
-            "action": "create",
-            "error": str(e),
-        })
+        context.update(
+            {
+                "document": None,
+                "document_types": [
+                    (t.value, t.value.replace("_", " ").title())
+                    for t in LegalDocumentType
+                ],
+                "action": "create",
+                "error": str(e),
+            }
+        )
         return templates.TemplateResponse(
             "admin/system/legal/form.html", context, status_code=400
         )
@@ -177,11 +188,15 @@ def legal_document_edit(
         )
 
     context = _base_context(request, db)
-    context.update({
-        "document": document,
-        "document_types": [(t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType],
-        "action": "edit",
-    })
+    context.update(
+        {
+            "document": document,
+            "document_types": [
+                (t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType
+            ],
+            "action": "edit",
+        }
+    )
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
@@ -232,12 +247,17 @@ def legal_document_update(
     except Exception as e:
         document = legal_service.legal_documents.get(db=db, document_id=document_id)
         context = _base_context(request, db)
-        context.update({
-            "document": document,
-            "document_types": [(t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType],
-            "action": "edit",
-            "error": str(e),
-        })
+        context.update(
+            {
+                "document": document,
+                "document_types": [
+                    (t.value, t.value.replace("_", " ").title())
+                    for t in LegalDocumentType
+                ],
+                "action": "edit",
+                "error": str(e),
+            }
+        )
         return templates.TemplateResponse(
             "admin/system/legal/form.html", context, status_code=400
         )

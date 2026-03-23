@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 def _dns_threat_table_exists(db: Session) -> bool:
     return inspect(db.bind).has_table("dns_threat_events")
 
+
 def _parse_float(raw: str | None) -> float | None:
     text = str(raw or "").strip()
     if not text:
@@ -74,8 +75,15 @@ def validate_event_values(values: dict[str, object]) -> str | None:
 
 
 def event_form_reference_data(db: Session) -> dict[str, object]:
-    subscribers = db.query(Subscriber).order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc()).limit(500).all()
-    devices = db.query(NetworkDevice).order_by(NetworkDevice.name.asc()).limit(500).all()
+    subscribers = (
+        db.query(Subscriber)
+        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+        .limit(500)
+        .all()
+    )
+    devices = (
+        db.query(NetworkDevice).order_by(NetworkDevice.name.asc()).limit(500).all()
+    )
     pop_sites = db.query(PopSite).order_by(PopSite.name.asc()).limit(500).all()
     return {
         "subscribers": subscribers,
@@ -88,14 +96,20 @@ def event_form_reference_data(db: Session) -> dict[str, object]:
 
 def create_event(db: Session, values: dict[str, object]) -> DnsThreatEvent:
     if not _dns_threat_table_exists(db):
-        raise RuntimeError("DNS threat event storage is not available yet. Apply the database migration first.")
+        raise RuntimeError(
+            "DNS threat event storage is not available yet. Apply the database migration first."
+        )
 
     payload = dict(values)
     for field in ("subscriber_id", "network_device_id", "pop_site_id"):
         if payload.get(field):
             payload[field] = coerce_uuid(str(payload[field]))
-    payload["severity"] = validate_enum(str(payload.get("severity") or "medium"), DnsThreatSeverity, "severity")
-    payload["action"] = validate_enum(str(payload.get("action") or "blocked"), DnsThreatAction, "action")
+    payload["severity"] = validate_enum(
+        str(payload.get("severity") or "medium"), DnsThreatSeverity, "severity"
+    )
+    payload["action"] = validate_enum(
+        str(payload.get("action") or "blocked"), DnsThreatAction, "action"
+    )
     event = DnsThreatEvent(**payload)
     db.add(event)
     db.commit()
@@ -136,19 +150,29 @@ def list_page_data(
 
     severity_filter = str(severity or "").strip().lower()
     if severity_filter:
-        query = query.filter(DnsThreatEvent.severity == validate_enum(severity_filter, DnsThreatSeverity, "severity"))
+        query = query.filter(
+            DnsThreatEvent.severity
+            == validate_enum(severity_filter, DnsThreatSeverity, "severity")
+        )
 
     action_filter = str(action or "").strip().lower()
     if action_filter:
-        query = query.filter(DnsThreatEvent.action == validate_enum(action_filter, DnsThreatAction, "action"))
+        query = query.filter(
+            DnsThreatEvent.action
+            == validate_enum(action_filter, DnsThreatAction, "action")
+        )
 
     subscriber_filter = str(subscriber_id or "").strip()
     if subscriber_filter:
-        query = query.filter(DnsThreatEvent.subscriber_id == coerce_uuid(subscriber_filter))
+        query = query.filter(
+            DnsThreatEvent.subscriber_id == coerce_uuid(subscriber_filter)
+        )
 
     device_filter = str(network_device_id or "").strip()
     if device_filter:
-        query = query.filter(DnsThreatEvent.network_device_id == coerce_uuid(device_filter))
+        query = query.filter(
+            DnsThreatEvent.network_device_id == coerce_uuid(device_filter)
+        )
 
     try:
         items = query.limit(1000).all()
@@ -179,7 +203,8 @@ def list_page_data(
         items = [
             item
             for item in items
-            if search_q in " ".join(
+            if search_q
+            in " ".join(
                 [
                     str(item.queried_domain or ""),
                     str(item.threat_category or ""),
@@ -192,9 +217,15 @@ def list_page_data(
         ]
 
     total = len(items)
-    blocked = sum(1 for item in items if item.action.value == DnsThreatAction.blocked.value)
-    critical = sum(1 for item in items if item.severity.value == DnsThreatSeverity.critical.value)
-    high = sum(1 for item in items if item.severity.value == DnsThreatSeverity.high.value)
+    blocked = sum(
+        1 for item in items if item.action.value == DnsThreatAction.blocked.value
+    )
+    critical = sum(
+        1 for item in items if item.severity.value == DnsThreatSeverity.critical.value
+    )
+    high = sum(
+        1 for item in items if item.severity.value == DnsThreatSeverity.high.value
+    )
 
     return {
         "events": items,

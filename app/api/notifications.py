@@ -42,9 +42,7 @@ router = APIRouter()
     status_code=status.HTTP_201_CREATED,
     tags=["notification-templates"],
 )
-def create_template(
-    payload: NotificationTemplateCreate, db: Session = Depends(get_db)
-):
+def create_template(payload: NotificationTemplateCreate, db: Session = Depends(get_db)):
     return notification_service.templates.create(db, payload)
 
 
@@ -186,9 +184,7 @@ def delete_notification(notification_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     tags=["notification-deliveries"],
 )
-def create_delivery(
-    payload: NotificationDeliveryCreate, db: Session = Depends(get_db)
-):
+def create_delivery(payload: NotificationDeliveryCreate, db: Session = Depends(get_db)):
     return notification_service.deliveries.create(db, payload)
 
 
@@ -289,9 +285,13 @@ def list_alert_notification_policies(
     tags=["alert-notification-policies"],
 )
 def update_alert_notification_policy(
-    policy_id: str, payload: AlertNotificationPolicyUpdate, db: Session = Depends(get_db)
+    policy_id: str,
+    payload: AlertNotificationPolicyUpdate,
+    db: Session = Depends(get_db),
 ):
-    return notification_service.alert_notification_policies.update(db, policy_id, payload)
+    return notification_service.alert_notification_policies.update(
+        db, policy_id, payload
+    )
 
 
 @router.delete(
@@ -369,9 +369,13 @@ def list_alert_notification_policy_steps(
     tags=["alert-notification-policy-steps"],
 )
 def update_alert_notification_policy_step(
-    step_id: str, payload: AlertNotificationPolicyStepUpdate, db: Session = Depends(get_db)
+    step_id: str,
+    payload: AlertNotificationPolicyStepUpdate,
+    db: Session = Depends(get_db),
 ):
-    return notification_service.alert_notification_policy_steps.update(db, step_id, payload)
+    return notification_service.alert_notification_policy_steps.update(
+        db, step_id, payload
+    )
 
 
 @router.delete(
@@ -389,7 +393,9 @@ def delete_alert_notification_policy_step(step_id: str, db: Session = Depends(ge
     status_code=status.HTTP_201_CREATED,
     tags=["on-call-rotations"],
 )
-def create_on_call_rotation(payload: OnCallRotationCreate, db: Session = Depends(get_db)):
+def create_on_call_rotation(
+    payload: OnCallRotationCreate, db: Session = Depends(get_db)
+):
     return notification_service.on_call_rotations.create(db, payload)
 
 

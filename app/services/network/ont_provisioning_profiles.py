@@ -127,7 +127,9 @@ class OntProvisioningProfiles:
         )
         profile = db.scalars(stmt).first()
         if not profile:
-            raise HTTPException(status_code=404, detail="Provisioning profile not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning profile not found"
+            )
         return profile
 
     @staticmethod
@@ -198,11 +200,15 @@ class OntProvisioningProfiles:
         return profile
 
     @staticmethod
-    def update(db: Session, profile_id: str, **kwargs: object) -> OntProvisioningProfile:
+    def update(
+        db: Session, profile_id: str, **kwargs: object
+    ) -> OntProvisioningProfile:
         """Update an existing provisioning profile."""
         profile = db.get(OntProvisioningProfile, coerce_uuid(profile_id))
         if not profile:
-            raise HTTPException(status_code=404, detail="Provisioning profile not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning profile not found"
+            )
 
         wifi_ssid = kwargs.get("wifi_ssid_template")
         if wifi_ssid and isinstance(wifi_ssid, str):
@@ -221,7 +227,9 @@ class OntProvisioningProfiles:
         """Soft-delete a provisioning profile by setting is_active=False."""
         profile = db.get(OntProvisioningProfile, coerce_uuid(profile_id))
         if not profile:
-            raise HTTPException(status_code=404, detail="Provisioning profile not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning profile not found"
+            )
         profile.is_active = False
         db.commit()
         logger.info("Soft-deleted provisioning profile %s", profile_id)
@@ -239,9 +247,7 @@ class WanServices:
     """CRUD operations for WAN services within a provisioning profile."""
 
     @staticmethod
-    def list_for_profile(
-        db: Session, profile_id: str
-    ) -> list[OntProfileWanService]:
+    def list_for_profile(db: Session, profile_id: str) -> list[OntProfileWanService]:
         """List all WAN services for a profile."""
         stmt = (
             select(OntProfileWanService)
@@ -319,15 +325,11 @@ class WanServices:
         db.add(service)
         db.commit()
         db.refresh(service)
-        logger.info(
-            "Created WAN service %s for profile %s", service.id, profile_id
-        )
+        logger.info("Created WAN service %s for profile %s", service.id, profile_id)
         return service
 
     @staticmethod
-    def update(
-        db: Session, service_id: str, **kwargs: object
-    ) -> OntProfileWanService:
+    def update(db: Session, service_id: str, **kwargs: object) -> OntProfileWanService:
         """Update an existing WAN service."""
         service = db.get(OntProfileWanService, coerce_uuid(service_id))
         if not service:

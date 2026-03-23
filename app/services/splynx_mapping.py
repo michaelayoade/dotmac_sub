@@ -56,9 +56,7 @@ class SplynxMappingManager:
             db.add(mapping)
             count += 1
         db.flush()
-        logger.info(
-            "Registered %d %s mappings", count, entity_type.value
-        )
+        logger.info("Registered %d %s mappings", count, entity_type.value)
         return count
 
     @staticmethod

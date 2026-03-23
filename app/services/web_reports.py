@@ -20,6 +20,7 @@ from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
 
+
 def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -62,9 +63,7 @@ def _collect_pool_data(
         pool_ip_version = getattr(pool.ip_version, "value", pool.ip_version)
         if pool_ip_version == "ipv6":
             pool_total = (
-                db.query(IPv6Address)
-                .filter(IPv6Address.pool_id == pool.id)
-                .count()
+                db.query(IPv6Address).filter(IPv6Address.pool_id == pool.id).count()
             )
             pool_used = (
                 db.query(IPAssignment)
@@ -75,9 +74,7 @@ def _collect_pool_data(
             )
         else:
             pool_total = (
-                db.query(IPv4Address)
-                .filter(IPv4Address.pool_id == pool.id)
-                .count()
+                db.query(IPv4Address).filter(IPv4Address.pool_id == pool.id).count()
             )
             pool_used = (
                 db.query(IPAssignment)
@@ -192,7 +189,11 @@ def build_network_export_csv(data: dict, hours: int | None = None) -> str:
     writer.writerow([])
     writer.writerow(["pool_name", "cidr", "used_count", "total_count", "usage_percent"])
     for pool in data["pool_data"]:
-        usage = (pool["used_count"] / pool["total_count"] * 100) if pool["total_count"] else 0
+        usage = (
+            (pool["used_count"] / pool["total_count"] * 100)
+            if pool["total_count"]
+            else 0
+        )
         writer.writerow(
             [
                 pool["name"],
@@ -285,15 +286,21 @@ def get_revenue_report_data(db: Session) -> dict:
         InvoiceStatus.partially_paid,
         InvoiceStatus.overdue,
     }
-    outstanding_invoices = [inv for inv in all_invoices if inv.status in outstanding_statuses]
+    outstanding_invoices = [
+        inv for inv in all_invoices if inv.status in outstanding_statuses
+    ]
     outstanding_amount = sum(
-        _invoice_amount_due(inv) for inv in outstanding_invoices if _invoice_amount_due(inv)
+        _invoice_amount_due(inv)
+        for inv in outstanding_invoices
+        if _invoice_amount_due(inv)
     )
     outstanding_count = len(outstanding_invoices)
     total_invoiced = sum(
         _invoice_amount_due(inv) for inv in all_invoices if _invoice_amount_due(inv)
     )
-    collection_rate = (total_revenue / total_invoiced * 100) if total_invoiced > 0 else 0
+    collection_rate = (
+        (total_revenue / total_invoiced * 100) if total_invoiced > 0 else 0
+    )
     recurring_revenue = total_revenue * Decimal("0.85")
     return {
         "total_revenue": total_revenue,
@@ -378,10 +385,15 @@ def get_subscribers_report_data(db: Session) -> dict:
             active_count += 1
         elif status == AccountStatus.suspended:
             suspended_count += 1
-    active_rate = (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
+    active_rate = (
+        (active_count / total_subscribers * 100) if total_subscribers > 0 else 0
+    )
     recent_subscribers = sorted(
         all_subscribers,
-        key=lambda x: subscriber_service.get_effective_created_at(x) or datetime.min.replace(tzinfo=UTC),
+        key=lambda x: (
+            subscriber_service.get_effective_created_at(x)
+            or datetime.min.replace(tzinfo=UTC)
+        ),
         reverse=True,
     )[:10]
     now = datetime.now(UTC)
@@ -390,7 +402,8 @@ def get_subscribers_report_data(db: Session) -> dict:
         [
             sub
             for sub in all_subscribers
-            if (created_at := subscriber_service.get_effective_created_at(sub)) is not None
+            if (created_at := subscriber_service.get_effective_created_at(sub))
+            is not None
             and created_at >= month_start
         ]
     )
@@ -432,7 +445,9 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
         name = (
             sub.organization.name
             if sub.organization
-            else f"{sub.first_name} {sub.last_name}".strip() or sub.display_name or "Subscriber"
+            else f"{sub.first_name} {sub.last_name}".strip()
+            or sub.display_name
+            or "Subscriber"
         )
         subscriber_type = "organization" if sub.organization_id else "person"
         writer.writerow(
@@ -443,7 +458,8 @@ def build_subscribers_export_csv(db: Session, days: int | None = None) -> str:
                 status.value if status else "",
                 (
                     created_at.isoformat()
-                    if (created_at := subscriber_service.get_effective_created_at(sub)) is not None
+                    if (created_at := subscriber_service.get_effective_created_at(sub))
+                    is not None
                     else ""
                 ),
             ]
@@ -474,11 +490,16 @@ def get_churn_report_data(db: Session) -> dict:
         s for s in all_subscribers if s.status == AccountStatus.suspended
     ]
     at_risk_count = len(at_risk_subscribers)
-    churn_rate = (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
+    churn_rate = (
+        (cancelled_count / total_subscribers * 100) if total_subscribers > 0 else 0
+    )
     retention_rate = 100 - churn_rate
     recent_cancellations = sorted(
         cancelled_subscribers,
-        key=lambda x: subscriber_service.get_effective_updated_at(x) or datetime.min.replace(tzinfo=UTC),
+        key=lambda x: (
+            subscriber_service.get_effective_updated_at(x)
+            or datetime.min.replace(tzinfo=UTC)
+        ),
         reverse=True,
     )[:10]
     churn_reasons = {
@@ -514,7 +535,8 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
         all_subscribers = [
             sub
             for sub in all_subscribers
-            if (updated_at := subscriber_service.get_effective_updated_at(sub)) is not None
+            if (updated_at := subscriber_service.get_effective_updated_at(sub))
+            is not None
             and updated_at >= cutoff
         ]
     total_subscribers = len(all_subscribers)
@@ -545,7 +567,9 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
         name = (
             sub.organization.name
             if sub.organization
-            else f"{sub.first_name} {sub.last_name}".strip() or sub.display_name or "Subscriber"
+            else f"{sub.first_name} {sub.last_name}".strip()
+            or sub.display_name
+            or "Subscriber"
         )
         writer.writerow(
             [
@@ -554,7 +578,8 @@ def build_churn_export_csv(db: Session, days: int | None = None) -> str:
                 sub.status.value if sub.status else "",
                 (
                     updated_at.isoformat()
-                    if (updated_at := subscriber_service.get_effective_updated_at(sub)) is not None
+                    if (updated_at := subscriber_service.get_effective_updated_at(sub))
+                    is not None
                     else ""
                 ),
             ]
@@ -634,17 +659,23 @@ def get_technician_report_data(db: Session) -> dict:
         avg_completion_hours = 0.0
 
     # First visit rate from appointments (completed vs no-show/canceled)
-    total_appointments = db.scalar(
-        select(func.count(InstallAppointment.id))
-    ) or 0
-    completed_appointments = db.scalar(
-        select(func.count(InstallAppointment.id))
-        .where(InstallAppointment.status == AppointmentStatus.completed)
-    ) or 0
-    no_show_count = db.scalar(
-        select(func.count(InstallAppointment.id))
-        .where(InstallAppointment.status == AppointmentStatus.no_show)
-    ) or 0
+    total_appointments = db.scalar(select(func.count(InstallAppointment.id))) or 0
+    completed_appointments = (
+        db.scalar(
+            select(func.count(InstallAppointment.id)).where(
+                InstallAppointment.status == AppointmentStatus.completed
+            )
+        )
+        or 0
+    )
+    no_show_count = (
+        db.scalar(
+            select(func.count(InstallAppointment.id)).where(
+                InstallAppointment.status == AppointmentStatus.no_show
+            )
+        )
+        or 0
+    )
     if total_appointments > 0:
         first_visit_rate = round((completed_appointments / total_appointments) * 100, 1)
     else:
@@ -653,24 +684,34 @@ def get_technician_report_data(db: Session) -> dict:
     # Per-technician stats
     technician_stats: list[dict[str, object]] = []
     for tech_name in sorted(tech_names):
-        tech_total = db.scalar(
-            select(func.count(InstallAppointment.id))
-            .where(InstallAppointment.technician == tech_name)
-        ) or 0
-        tech_completed = db.scalar(
-            select(func.count(InstallAppointment.id))
-            .where(
-                InstallAppointment.technician == tech_name,
-                InstallAppointment.status == AppointmentStatus.completed,
+        tech_total = (
+            db.scalar(
+                select(func.count(InstallAppointment.id)).where(
+                    InstallAppointment.technician == tech_name
+                )
             )
-        ) or 0
-        technician_stats.append({
-            "name": tech_name,
-            "total_jobs": tech_total,
-            "completed_jobs": tech_completed,
-            "avg_hours": avg_completion_hours,
-            "rating": round((tech_completed / tech_total * 5) if tech_total > 0 else 0, 1),
-        })
+            or 0
+        )
+        tech_completed = (
+            db.scalar(
+                select(func.count(InstallAppointment.id)).where(
+                    InstallAppointment.technician == tech_name,
+                    InstallAppointment.status == AppointmentStatus.completed,
+                )
+            )
+            or 0
+        )
+        technician_stats.append(
+            {
+                "name": tech_name,
+                "total_jobs": tech_total,
+                "completed_jobs": tech_completed,
+                "avg_hours": avg_completion_hours,
+                "rating": round(
+                    (tech_completed / tech_total * 5) if tech_total > 0 else 0, 1
+                ),
+            }
+        )
 
     job_type_breakdown: dict[str, int] = {}
     for order in all_orders:
@@ -704,9 +745,13 @@ def build_technician_export_csv(db: Session, days: int | None = None) -> str:
     if days:
         cutoff = datetime.now(UTC) - timedelta(days=days)
         all_orders = [
-            order for order in all_orders if order.created_at and order.created_at >= cutoff
+            order
+            for order in all_orders
+            if order.created_at and order.created_at >= cutoff
         ]
-    completed_orders = [order for order in all_orders if order.status == ServiceOrderStatus.active]
+    completed_orders = [
+        order for order in all_orders if order.status == ServiceOrderStatus.active
+    ]
     technician_stats: list[dict[str, object]] = []
     output = io.StringIO()
     writer = csv.writer(output)

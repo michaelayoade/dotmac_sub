@@ -172,26 +172,38 @@ def invalidate_session(session_token: str, db: Session | None = None) -> None:
     session = load_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     delete_session(_RESELLER_SESSION_PREFIX, session_token, _RESELLER_SESSIONS)
     if db and session:
-        _emit_reseller_event(db, "reseller_logout", {
-            "reseller_id": session.get("reseller_id", ""),
-        })
+        _emit_reseller_event(
+            db,
+            "reseller_logout",
+            {
+                "reseller_id": session.get("reseller_id", ""),
+            },
+        )
 
 
-def login(db: Session, username: str, password: str, request: Request, remember: bool) -> dict:
+def login(
+    db: Session, username: str, password: str, request: Request, remember: bool
+) -> dict:
     result = auth_flow_service.auth_flow.login(db, username, password, request, None)
     if result.get("mfa_required"):
         return {"mfa_required": True, "mfa_token": result.get("mfa_token")}
     access_token = result.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials"
+        )
     return _session_from_access_token(db, access_token, username, remember)
 
 
-def verify_mfa(db: Session, mfa_token: str, code: str, request: Request, remember: bool) -> dict:
+def verify_mfa(
+    db: Session, mfa_token: str, code: str, request: Request, remember: bool
+) -> dict:
     result = auth_flow_service.auth_flow.mfa_verify(db, mfa_token, code, request)
     access_token = result.get("access_token")
     if not access_token:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid verification code"
+        )
     return _session_from_access_token(db, access_token, None, remember)
 
 
@@ -205,21 +217,31 @@ def _session_from_access_token(
     subscriber_id = payload.get("sub")
     session_id = payload.get("session_id")
     if not subscriber_id or not session_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
+        )
 
     auth_session = db.get(AuthSession, coerce_uuid(session_id))
     if not auth_session or auth_session.status != SessionStatus.active:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session"
+        )
     if auth_session.expires_at and auth_session.expires_at <= _now():
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="Session expired"
+        )
 
     reseller_user = _get_reseller_user(db, str(subscriber_id))
     if not reseller_user:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="Reseller access required"
+        )
 
     subscriber = db.get(Subscriber, reseller_user.subscriber_id)
     if not subscriber:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber not found"
+        )
 
     session_token = _create_session(
         username=username or subscriber.email,
@@ -228,11 +250,18 @@ def _session_from_access_token(
         remember=remember,
         db=db,
     )
-    _emit_reseller_event(db, "reseller_login", {
+    _emit_reseller_event(
+        db,
+        "reseller_login",
+        {
+            "reseller_id": str(reseller_user.reseller_id),
+            "subscriber_id": str(subscriber.id),
+        },
+    )
+    return {
+        "session_token": session_token,
         "reseller_id": str(reseller_user.reseller_id),
-        "subscriber_id": str(subscriber.id),
-    })
-    return {"session_token": session_token, "reseller_id": str(reseller_user.reseller_id)}
+    }
 
 
 def get_context(db: Session, session_token: str | None) -> dict | None:
@@ -250,7 +279,8 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
         return None
 
     current_user = {
-        "name": subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip(),
+        "name": subscriber.display_name
+        or f"{subscriber.first_name} {subscriber.last_name}".strip(),
         "email": subscriber.email,
         "initials": _initials(subscriber),
     }
@@ -265,7 +295,9 @@ def get_context(db: Session, session_token: str | None) -> dict | None:
     }
 
 
-def refresh_session(session_token: str | None, db: Session | None = None) -> dict | None:
+def refresh_session(
+    session_token: str | None, db: Session | None = None
+) -> dict | None:
     if not session_token:
         return None
     session = _get_session(session_token)
@@ -342,11 +374,7 @@ def list_accounts(
             | (Subscriber.account_number.ilike(pattern))
         )
     accounts = (
-        query
-        .order_by(Subscriber.created_at.desc())
-        .limit(limit)
-        .offset(offset)
-        .all()
+        query.order_by(Subscriber.created_at.desc()).limit(limit).offset(offset).all()
     )
     account_ids = [account.id for account in accounts]
     if not account_ids:
@@ -458,33 +486,43 @@ def get_dashboard_summary(
     suspended_count = (
         db.query(func.count(Subscriber.id))
         .filter(Subscriber.reseller_id == coerce_uuid(reseller_id))
-        .filter(Subscriber.status.in_([SubscriberStatus.suspended, SubscriberStatus.blocked]))
+        .filter(
+            Subscriber.status.in_(
+                [SubscriberStatus.suspended, SubscriberStatus.blocked]
+            )
+        )
         .scalar()
         or 0
     )
 
     alerts = []
     if overdue_count > 0:
-        alerts.append({
-            "level": "warning",
-            "icon": "clock",
-            "message": f"{overdue_count} overdue invoice{'s' if overdue_count != 1 else ''} require attention",
-            "action_url": "/reseller/accounts",
-        })
+        alerts.append(
+            {
+                "level": "warning",
+                "icon": "clock",
+                "message": f"{overdue_count} overdue invoice{'s' if overdue_count != 1 else ''} require attention",
+                "action_url": "/reseller/accounts",
+            }
+        )
     if suspended_count > 0:
-        alerts.append({
-            "level": "danger",
-            "icon": "pause",
-            "message": f"{suspended_count} account{'s' if suspended_count != 1 else ''} suspended",
-            "action_url": "/reseller/accounts",
-        })
+        alerts.append(
+            {
+                "level": "danger",
+                "icon": "pause",
+                "message": f"{suspended_count} account{'s' if suspended_count != 1 else ''} suspended",
+                "action_url": "/reseller/accounts",
+            }
+        )
     if new_this_week > 0:
-        alerts.append({
-            "level": "info",
-            "icon": "user-plus",
-            "message": f"{new_this_week} new account{'s' if new_this_week != 1 else ''} this week",
-            "action_url": "/reseller/accounts",
-        })
+        alerts.append(
+            {
+                "level": "info",
+                "icon": "user-plus",
+                "message": f"{new_this_week} new account{'s' if new_this_week != 1 else ''} this week",
+                "action_url": "/reseller/accounts",
+            }
+        )
 
     return {
         "accounts": accounts,
@@ -523,17 +561,23 @@ def get_account_detail(
     sub_list = []
     for sub in subscriptions:
         offer = db.get(CatalogOffer, sub.offer_id) if sub.offer_id else None
-        sub_list.append({
-            "id": str(sub.id),
-            "offer_name": offer.name if offer else "N/A",
-            "status": sub.status.value if sub.status else "unknown",
-            "start_date": sub.start_at,
-            "end_date": getattr(sub, "end_at", None),
-            "created_at": sub.created_at,
-        })
+        sub_list.append(
+            {
+                "id": str(sub.id),
+                "offer_name": offer.name if offer else "N/A",
+                "status": sub.status.value if sub.status else "unknown",
+                "start_date": sub.start_at,
+                "end_date": getattr(sub, "end_at", None),
+                "created_at": sub.created_at,
+            }
+        )
 
     # Invoice summary
-    open_statuses = {InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue}
+    open_statuses = {
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.overdue,
+    }
     open_balance = (
         db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
         .filter(Invoice.account_id == account.id, Invoice.status.in_(open_statuses))
@@ -585,16 +629,18 @@ def list_account_invoices(
 
     results = []
     for inv in invoices:
-        results.append({
-            "id": str(inv.id),
-            "invoice_number": getattr(inv, "invoice_number", None),
-            "status": inv.status.value if inv.status else "draft",
-            "total_amount": getattr(inv, "total", 0),
-            "balance_due": inv.balance_due or 0,
-            "issued_at": getattr(inv, "issued_at", None),
-            "due_date": getattr(inv, "due_at", None),
-            "created_at": inv.created_at,
-        })
+        results.append(
+            {
+                "id": str(inv.id),
+                "invoice_number": getattr(inv, "invoice_number", None),
+                "status": inv.status.value if inv.status else "draft",
+                "total_amount": getattr(inv, "total", 0),
+                "balance_due": inv.balance_due or 0,
+                "issued_at": getattr(inv, "issued_at", None),
+                "due_date": getattr(inv, "due_at", None),
+                "created_at": inv.created_at,
+            }
+        )
     return results
 
 
@@ -625,12 +671,14 @@ def get_invoice_detail(
     )
     items = []
     for item in line_items:
-        items.append({
-            "description": getattr(item, "description", ""),
-            "quantity": getattr(item, "quantity", 1),
-            "unit_price": getattr(item, "unit_price", 0),
-            "amount": getattr(item, "amount", 0),
-        })
+        items.append(
+            {
+                "description": getattr(item, "description", ""),
+                "quantity": getattr(item, "quantity", 1),
+                "unit_price": getattr(item, "unit_price", 0),
+                "amount": getattr(item, "amount", 0),
+            }
+        )
 
     # Payments via allocations
     allocations = (
@@ -642,13 +690,15 @@ def get_invoice_detail(
     for alloc in allocations:
         pmt = db.get(Payment, alloc.payment_id) if alloc.payment_id else None
         if pmt:
-            payment_list.append({
-                "id": str(pmt.id),
-                "amount": alloc.amount,
-                "status": pmt.status.value if pmt.status else "pending",
-                "paid_at": pmt.paid_at,
-                "method": getattr(pmt, "label", None),
-            })
+            payment_list.append(
+                {
+                    "id": str(pmt.id),
+                    "amount": alloc.amount,
+                    "status": pmt.status.value if pmt.status else "pending",
+                    "paid_at": pmt.paid_at,
+                    "method": getattr(pmt, "label", None),
+                }
+            )
 
     return {
         "id": str(invoice.id),
@@ -688,7 +738,11 @@ def get_revenue_summary(
     ) or 0
 
     # Outstanding balance
-    open_statuses = {InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue}
+    open_statuses = {
+        InvoiceStatus.issued,
+        InvoiceStatus.partially_paid,
+        InvoiceStatus.overdue,
+    }
     total_outstanding = (
         db.query(func.coalesce(func.sum(Invoice.balance_due), 0))
         .join(Subscriber, Invoice.account_id == Subscriber.id)
@@ -709,19 +763,24 @@ def get_revenue_summary(
         .filter(Subscriber.reseller_id == reseller_uuid)
         .filter(Invoice.status == InvoiceStatus.paid)
         .group_by("year", "month")
-        .order_by(extract("year", Invoice.created_at).desc(), extract("month", Invoice.created_at).desc())
+        .order_by(
+            extract("year", Invoice.created_at).desc(),
+            extract("month", Invoice.created_at).desc(),
+        )
         .limit(12)
         .all()
     )
 
     monthly = []
     for row in reversed(monthly_rows):
-        monthly.append({
-            "year": int(row.year),
-            "month": int(row.month),
-            "total": float(row.total),
-            "count": int(row.count),
-        })
+        monthly.append(
+            {
+                "year": int(row.year),
+                "month": int(row.month),
+                "total": float(row.total),
+                "count": int(row.count),
+            }
+        )
 
     # Account count
     account_count = (
@@ -746,7 +805,9 @@ def create_customer_imsubscriberation_session(
 ) -> str:
     account = db.get(Subscriber, coerce_uuid(account_id))
     if not account or str(account.reseller_id) != str(reseller_id):
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Subscriber account not found"
+        )
 
     selected_subscription_id = None
     active_subs = catalog_service.subscriptions.list(
@@ -782,10 +843,14 @@ def create_customer_imsubscriberation_session(
         subscription_id=selected_subscription_id,
         return_to=return_to,
     )
-    _emit_reseller_event(db, "reseller_impersonated", {
-        "reseller_id": reseller_id,
-        "account_id": account_id,
-    })
+    _emit_reseller_event(
+        db,
+        "reseller_impersonated",
+        {
+            "reseller_id": reseller_id,
+            "account_id": account_id,
+        },
+    )
     return session_token
 
 
@@ -796,4 +861,6 @@ def create_customer_impersonation_session(
     return_to: str,
 ) -> str:
     """Backwards-compat wrapper for a historical typo in the function name."""
-    return create_customer_imsubscriberation_session(db, reseller_id, account_id, return_to)
+    return create_customer_imsubscriberation_session(
+        db, reseller_id, account_id, return_to
+    )

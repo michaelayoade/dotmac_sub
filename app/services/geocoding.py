@@ -12,6 +12,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 
 logger = logging.getLogger(__name__)
 
+
 def _setting_value(db: Session, key: str) -> str | None:
     setting = (
         db.query(DomainSetting)
@@ -92,7 +93,9 @@ def _nominatim_search(db: Session, query: str, limit: int) -> list[dict]:
 def _google_search(db: Session, query: str, limit: int) -> list[dict]:
     api_key = _setting_value(db, "google_api_key")
     if not api_key:
-        raise HTTPException(status_code=400, detail="Google geocoding key is not configured")
+        raise HTTPException(
+            status_code=400, detail="Google geocoding key is not configured"
+        )
     timeout_sec = _setting_int(db, "timeout_sec", 5)
     try:
         response = httpx.get(
@@ -133,7 +136,9 @@ def _google_search(db: Session, query: str, limit: int) -> list[dict]:
 def _mapbox_search(db: Session, query: str, limit: int) -> list[dict]:
     token = _setting_value(db, "mapbox_api_key")
     if not token:
-        raise HTTPException(status_code=400, detail="Mapbox geocoding token is not configured")
+        raise HTTPException(
+            status_code=400, detail="Mapbox geocoding token is not configured"
+        )
     timeout_sec = _setting_int(db, "timeout_sec", 5)
     try:
         response = httpx.get(
@@ -159,7 +164,9 @@ def _mapbox_search(db: Session, query: str, limit: int) -> list[dict]:
                 "lat": center[1],
                 "lon": center[0],
                 "class": "mapbox",
-                "type": item.get("place_type", ["geocode"])[0] if isinstance(item.get("place_type"), list) and item.get("place_type") else "geocode",
+                "type": item.get("place_type", ["geocode"])[0]
+                if isinstance(item.get("place_type"), list) and item.get("place_type")
+                else "geocode",
                 "importance": item.get("relevance"),
             }
         )
@@ -191,7 +198,9 @@ def geocode_address(db: Session, data: dict) -> dict:
         data["latitude"] = float(str(first.get("lat") or ""))
         data["longitude"] = float(str(first.get("lon") or ""))
     except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail="Invalid geocoding response") from exc
+        raise HTTPException(
+            status_code=502, detail="Invalid geocoding response"
+        ) from exc
     return data
 
 

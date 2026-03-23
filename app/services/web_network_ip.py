@@ -187,9 +187,7 @@ def _overlapping_pool_error(
         if other_network.version != target_network.version:
             continue
         if target_network.overlaps(other_network):
-            return (
-                f"CIDR {cidr} overlaps existing pool {pool.name} ({pool.cidr})."
-            )
+            return f"CIDR {cidr} overlaps existing pool {pool.name} ({pool.cidr})."
     return None
 
 
@@ -208,7 +206,9 @@ def is_fallback_pool_notes(notes: str | None) -> bool:
     return _FALLBACK_MARKER in str(notes or "").lower()
 
 
-def parse_pool_notes_metadata(notes: str | None) -> tuple[dict[str, str | None], str | None]:
+def parse_pool_notes_metadata(
+    notes: str | None,
+) -> tuple[dict[str, str | None], str | None]:
     text = str(notes or "").strip()
     metadata: dict[str, str | None] = dict.fromkeys(_POOL_META_KEYS)
     if not text:
@@ -222,7 +222,7 @@ def parse_pool_notes_metadata(notes: str | None) -> tuple[dict[str, str | None],
         for key in _POOL_META_KEYS:
             prefix = f"[{key}:"
             if lowered.startswith(prefix) and lowered.endswith("]"):
-                value = stripped[len(prefix):-1].strip()
+                value = stripped[len(prefix) : -1].strip()
                 metadata[key] = value or None
                 matched = True
                 break
@@ -294,7 +294,9 @@ def parse_ip_pool_csv(csv_text: str) -> list[dict[str, str]]:
         return []
     normalized_rows: list[dict[str, str]] = []
     for raw in reader:
-        row: dict[str, str] = {str(k or "").strip().lower(): str(v or "").strip() for k, v in raw.items()}
+        row: dict[str, str] = {
+            str(k or "").strip().lower(): str(v or "").strip() for k, v in raw.items()
+        }
         normalized_rows.append(row)
     return normalized_rows
 
@@ -322,10 +324,7 @@ def _pool_payload_from_import_row(
         inferred_version = "ipv4" if parsed_network.version == 4 else "ipv6"
 
     name = (
-        row.get("name")
-        or row.get("title")
-        or row.get("description")
-        or fallback_name
+        row.get("name") or row.get("title") or row.get("description") or fallback_name
     )
 
     return {
@@ -371,11 +370,20 @@ def import_ip_pools_csv(
         name = str(payload.get("name") or f"Imported {cidr or index}")
         validation_error = validate_ip_pool_values(payload)
         if validation_error:
-            errors.append({"line": index, "name": name, "cidr": cidr, "error": validation_error})
+            errors.append(
+                {"line": index, "name": name, "cidr": cidr, "error": validation_error}
+            )
             continue
         pool, error = create_ip_pool(db, payload)
         if error or pool is None:
-            errors.append({"line": index, "name": name, "cidr": cidr, "error": error or "Unknown error"})
+            errors.append(
+                {
+                    "line": index,
+                    "name": name,
+                    "cidr": cidr,
+                    "error": error or "Unknown error",
+                }
+            )
             continue
         created.append(pool)
 
@@ -388,8 +396,16 @@ def _build_pool_and_block_utilization(
     pools: list[object],
     blocks: list[object],
 ) -> tuple[dict[str, dict[str, int]], dict[str, dict[str, int]]]:
-    ipv4_pools = [pool for pool in pools if _ip_version_value(getattr(pool, "ip_version", None)) == "ipv4"]
-    ipv6_pools = [pool for pool in pools if _ip_version_value(getattr(pool, "ip_version", None)) == "ipv6"]
+    ipv4_pools = [
+        pool
+        for pool in pools
+        if _ip_version_value(getattr(pool, "ip_version", None)) == "ipv4"
+    ]
+    ipv6_pools = [
+        pool
+        for pool in pools
+        if _ip_version_value(getattr(pool, "ip_version", None)) == "ipv6"
+    ]
 
     pool_utilization: dict[str, dict[str, int]] = {}
     block_utilization: dict[str, dict[str, int]] = {}
@@ -431,13 +447,19 @@ def _build_pool_and_block_utilization(
         version = _ip_version_value(getattr(pool, "ip_version", None))
         if version == "ipv4":
             allow_network_broadcast = _pool_allows_network_broadcast(pool)
-            total = _ipv4_capacity_count(str(pool.cidr), allow_network_broadcast=allow_network_broadcast)
+            total = _ipv4_capacity_count(
+                str(pool.cidr), allow_network_broadcast=allow_network_broadcast
+            )
             records = ipv4_by_pool.get(pool_id, [])
         else:
             total = _ipv6_capacity_count(str(pool.cidr))
             records = ipv6_by_pool.get(pool_id, [])
         used = sum(1 for record in records if _active_assignment(record))
-        reserved = sum(1 for record in records if getattr(record, "is_reserved", False) and not _active_assignment(record))
+        reserved = sum(
+            1
+            for record in records
+            if getattr(record, "is_reserved", False) and not _active_assignment(record)
+        )
         available = max(total - used - reserved, 0)
         percent = int(round((used / total) * 100)) if total > 0 else 0
         pool_utilization[pool_id] = {
@@ -454,7 +476,11 @@ def _build_pool_and_block_utilization(
         block_id = str(block.id)
         pool = getattr(block, "pool", None)
         pool_id = str(getattr(block, "pool_id", "") or "")
-        if not pool_id or not pool or _ip_version_value(getattr(pool, "ip_version", None)) != "ipv4":
+        if (
+            not pool_id
+            or not pool
+            or _ip_version_value(getattr(pool, "ip_version", None)) != "ipv4"
+        ):
             block_utilization[block_id] = {
                 "used": 0,
                 "assigned": 0,
@@ -493,7 +519,9 @@ def _build_pool_and_block_utilization(
                 used += 1
             elif getattr(record, "is_reserved", False):
                 reserved += 1
-        total = _ipv4_capacity_count(str(block.cidr), allow_network_broadcast=allow_network_broadcast)
+        total = _ipv4_capacity_count(
+            str(block.cidr), allow_network_broadcast=allow_network_broadcast
+        )
         available = max(total - used - reserved, 0)
         percent = int(round((used / total) * 100)) if total > 0 else 0
         block_utilization[block_id] = {
@@ -517,7 +545,9 @@ def _build_ipv4_range_rows(
     limit: int = 256,
 ) -> dict[str, object] | None:
     metadata, _ = _pool_metadata(pool)
-    allow_network_broadcast = str(metadata.get("allow_network_broadcast") or "").lower() == "true"
+    allow_network_broadcast = (
+        str(metadata.get("allow_network_broadcast") or "").lower() == "true"
+    )
     network = _parse_network(cidr)
     if network is None or network.version != 4:
         return None
@@ -531,7 +561,11 @@ def _build_ipv4_range_rows(
             .all()
         )
     }
-    all_hosts = [str(ip) for ip in network] if allow_network_broadcast else [str(ip) for ip in network.hosts()]
+    all_hosts = (
+        [str(ip) for ip in network]
+        if allow_network_broadcast
+        else [str(ip) for ip in network.hosts()]
+    )
     limited_hosts = all_hosts[:limit] if limit > 0 else all_hosts
 
     rows: list[dict[str, object]] = []
@@ -564,7 +598,9 @@ def _build_ipv4_range_rows(
                     f"{str(getattr(subscriber, 'last_name', '') or '').strip()} "
                     f"{str(getattr(subscriber, 'email', '') or '').strip()} "
                     f"{str(getattr(subscription, 'service_id', '') or '').strip()}"
-                ).strip().lower(),
+                )
+                .strip()
+                .lower(),
                 "subscriber_name": (
                     str(getattr(subscriber, "full_name", "") or "").strip()
                     or (
@@ -576,13 +612,18 @@ def _build_ipv4_range_rows(
                 ),
                 "subscriber_id": str(getattr(subscriber, "id", "") or "") or None,
                 "subscription_id": str(getattr(subscription, "id", "") or "") or None,
-                "service_ref": str(getattr(subscription, "service_id", "") or "").strip() or None,
+                "service_ref": str(
+                    getattr(subscription, "service_id", "") or ""
+                ).strip()
+                or None,
                 "device": str(metadata.get("router") or "").strip() or None,
                 "notes": str(getattr(record, "notes", "") or "").strip() or None,
             }
         )
 
-    total_usable = _ipv4_capacity_count(str(cidr), allow_network_broadcast=allow_network_broadcast)
+    total_usable = _ipv4_capacity_count(
+        str(cidr), allow_network_broadcast=allow_network_broadcast
+    )
     if len(limited_hosts) < total_usable:
         available_count += total_usable - len(limited_hosts)
 
@@ -598,14 +639,17 @@ def _build_ipv4_range_rows(
             "reserved": reserved_count,
             "available": max(total_usable - assigned_count - reserved_count, 0),
             "total_usable": total_usable,
-            "percent_used": int(round((assigned_count / total_usable) * 100)) if total_usable > 0 else 0,
+            "percent_used": int(round((assigned_count / total_usable) * 100))
+            if total_usable > 0
+            else 0,
         },
     }
 
 
 def reconcile_ipv4_pool_memberships(db) -> dict[str, object]:
     pools = [
-        pool for pool in network_service.ip_pools.list(
+        pool
+        for pool in network_service.ip_pools.list(
             db=db,
             ip_version="ipv4",
             is_active=None,
@@ -616,10 +660,7 @@ def reconcile_ipv4_pool_memberships(db) -> dict[str, object]:
         )
         if _parse_network(str(pool.cidr)) is not None
     ]
-    pool_networks = [
-        (pool, _parse_network(str(pool.cidr)))
-        for pool in pools
-    ]
+    pool_networks = [(pool, _parse_network(str(pool.cidr))) for pool in pools]
 
     addresses = db.query(IPv4Address).all()
     updated = 0
@@ -635,7 +676,9 @@ def reconcile_ipv4_pool_memberships(db) -> dict[str, object]:
         except ValueError:
             invalid += 1
             continue
-        matches = [pool for pool, network in pool_networks if network and address in network]
+        matches = [
+            pool for pool, network in pool_networks if network and address in network
+        ]
         if not matches:
             unmatched += 1
             continue
@@ -650,7 +693,13 @@ def reconcile_ipv4_pool_memberships(db) -> dict[str, object]:
         record.pool_id = target_pool.id
         updated += 1
         if len(samples) < 25:
-            samples.append({"address": str(record.address), "pool": target_pool.name, "cidr": target_pool.cidr})
+            samples.append(
+                {
+                    "address": str(record.address),
+                    "pool": target_pool.name,
+                    "cidr": target_pool.cidr,
+                }
+            )
 
     if updated:
         db.commit()
@@ -682,13 +731,23 @@ def _ipv4_address_in_scope(
         return False
     if parsed_ip not in pool_network:
         return False
-    if not _pool_allows_network_broadcast(pool) and parsed_ip not in pool_network.hosts():
+    if (
+        not _pool_allows_network_broadcast(pool)
+        and parsed_ip not in pool_network.hosts()
+    ):
         return False
     if block is not None:
         block_network = _parse_network(str(block.cidr))
-        if block_network is None or block_network.version != 4 or parsed_ip not in block_network:
+        if (
+            block_network is None
+            or block_network.version != 4
+            or parsed_ip not in block_network
+        ):
             return False
-        if not _pool_allows_network_broadcast(pool) and parsed_ip not in block_network.hosts():
+        if (
+            not _pool_allows_network_broadcast(pool)
+            and parsed_ip not in block_network.hosts()
+        ):
             return False
     return True
 
@@ -730,8 +789,12 @@ def build_ipv4_assignment_form_data(
         .first()
     )
     active_assignment = _active_assignment(address_record) if address_record else None
-    subscriber = getattr(active_assignment, "subscriber", None) if active_assignment else None
-    subscription = getattr(active_assignment, "subscription", None) if active_assignment else None
+    subscriber = (
+        getattr(active_assignment, "subscriber", None) if active_assignment else None
+    )
+    subscription = (
+        getattr(active_assignment, "subscription", None) if active_assignment else None
+    )
 
     return {
         "pool": pool,
@@ -796,10 +859,11 @@ def assign_ipv4_address(
     existing_assignment = getattr(address_record, "assignment", None)
     previous_assignment = active_assignment or existing_assignment
     if active_assignment:
-        if (
-            str(getattr(active_assignment, "subscriber_id", "") or "") == normalized_subscriber_id
-            and str(getattr(active_assignment, "subscription_id", "") or "") == str(normalized_subscription_id or "")
-        ):
+        if str(
+            getattr(active_assignment, "subscriber_id", "") or ""
+        ) == normalized_subscriber_id and str(
+            getattr(active_assignment, "subscription_id", "") or ""
+        ) == str(normalized_subscription_id or ""):
             return {
                 "address": address_record,
                 "assignment": active_assignment,
@@ -815,7 +879,11 @@ def assign_ipv4_address(
             )
         except Exception:
             prior_subscription = None
-        if prior_subscription and str(getattr(prior_subscription, "ipv4_address", "") or "").strip() == state["ip_address"]:
+        if (
+            prior_subscription
+            and str(getattr(prior_subscription, "ipv4_address", "") or "").strip()
+            == state["ip_address"]
+        ):
             catalog_service.subscriptions.update(
                 db=db,
                 subscription_id=str(prior_subscription.id),
@@ -824,7 +892,9 @@ def assign_ipv4_address(
 
     assignment_payload = {
         "account_id": UUID(normalized_subscriber_id),
-        "subscription_id": UUID(normalized_subscription_id) if normalized_subscription_id else None,
+        "subscription_id": UUID(normalized_subscription_id)
+        if normalized_subscription_id
+        else None,
         "ip_version": IPVersion.ipv4,
         "ipv4_address_id": address_record.id,
         "is_active": True,
@@ -845,7 +915,9 @@ def assign_ipv4_address(
         catalog_service.subscriptions.update(
             db=db,
             subscription_id=normalized_subscription_id,
-            payload=SubscriptionUpdate.model_validate({"ipv4_address": state["ip_address"]}),
+            payload=SubscriptionUpdate.model_validate(
+                {"ipv4_address": state["ip_address"]}
+            ),
         )
 
     return {
@@ -909,8 +981,18 @@ def build_ip_management_data(
 
     from app.models.network import IPv4Address, IPv6Address
 
-    total_ipv4 = db.execute(select(func.count(IPv4Address.id)).where(IPv4Address.is_reserved == False)).scalar() or 0
-    total_ipv6 = db.execute(select(func.count(IPv6Address.id)).where(IPv6Address.is_reserved == False)).scalar() or 0
+    total_ipv4 = (
+        db.execute(
+            select(func.count(IPv4Address.id)).where(IPv4Address.is_reserved == False)
+        ).scalar()
+        or 0
+    )
+    total_ipv6 = (
+        db.execute(
+            select(func.count(IPv6Address.id)).where(IPv6Address.is_reserved == False)
+        ).scalar()
+        or 0
+    )
 
     # Fetch paginated addresses
     ipv4_addresses = network_service.ipv4_addresses.list(
@@ -934,8 +1016,12 @@ def build_ip_management_data(
 
     # If there's a search term, filter in-memory for better UX (server-side search)
     if search_term:
-        ipv4_addresses = [addr for addr in ipv4_addresses if search_term in str(addr.address).lower()]
-        ipv6_addresses = [addr for addr in ipv6_addresses if search_term in str(addr.address).lower()]
+        ipv4_addresses = [
+            addr for addr in ipv4_addresses if search_term in str(addr.address).lower()
+        ]
+        ipv6_addresses = [
+            addr for addr in ipv6_addresses if search_term in str(addr.address).lower()
+        ]
 
     total_addresses = total_ipv4 + total_ipv6
     total_pages = max(1, (total_addresses + address_limit - 1) // address_limit)
@@ -1117,7 +1203,9 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
     return None
 
 
-def pool_form_snapshot(values: dict[str, object], *, pool_id: str | None = None) -> dict[str, object]:
+def pool_form_snapshot(
+    values: dict[str, object], *, pool_id: str | None = None
+) -> dict[str, object]:
     data = {
         "name": values.get("name"),
         "ip_version": {"value": values.get("ip_version")},
@@ -1157,7 +1245,10 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         "network_type": metadata.get("network_type"),
         "router": metadata.get("router"),
         "usage_type": metadata.get("usage_type"),
-        "allow_network_broadcast": str(metadata.get("allow_network_broadcast") or "").lower() == "true",
+        "allow_network_broadcast": str(
+            metadata.get("allow_network_broadcast") or ""
+        ).lower()
+        == "true",
         "is_fallback": is_fallback_pool_notes(pool.notes),
         "is_active": pool.is_active,
     }
@@ -1243,7 +1334,9 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         payload = IpPoolUpdate.model_validate(normalized)
         effective_cidr = str(payload.cidr or current.cidr)
         effective_version = (
-            payload.ip_version.value if payload.ip_version is not None else current.ip_version.value
+            payload.ip_version.value
+            if payload.ip_version is not None
+            else current.ip_version.value
         )
         overlap_error = _overlapping_pool_error(
             db,
@@ -1295,12 +1388,17 @@ def build_ip_pool_detail_data(db, *, pool_id: str) -> dict[str, object] | None:
             .limit(100)
             .all()
         )
-    pool_utilization, _ = _build_pool_and_block_utilization(db, pools=[pool], blocks=blocks)
+    pool_utilization, _ = _build_pool_and_block_utilization(
+        db, pools=[pool], blocks=blocks
+    )
     return {
         "pool": pool,
         "blocks": blocks,
         "assignments": assignments,
-        "utilization": pool_utilization.get(str(pool.id), {"used": 0, "reserved": 0, "available": 0, "total": 0, "percent": 0}),
+        "utilization": pool_utilization.get(
+            str(pool.id),
+            {"used": 0, "reserved": 0, "available": 0, "total": 0, "percent": 0},
+        ),
     }
 
 
@@ -1373,21 +1471,30 @@ def build_dual_stack_data(
                 str(getattr(address, "city", "") or "").strip(),
                 str(getattr(address, "region", "") or "").strip(),
             ]
-            location = ", ".join(part for part in location_parts if part) or str(
-                getattr(address, "address_line1", "") or ""
-            ).strip()
-            display_name = str(getattr(subscriber, "full_name", "") or "").strip() or (
-                f"{str(getattr(subscriber, 'first_name', '') or '').strip()} "
-                f"{str(getattr(subscriber, 'last_name', '') or '').strip()}"
-            ).strip()
+            location = (
+                ", ".join(part for part in location_parts if part)
+                or str(getattr(address, "address_line1", "") or "").strip()
+            )
+            display_name = (
+                str(getattr(subscriber, "full_name", "") or "").strip()
+                or (
+                    f"{str(getattr(subscriber, 'first_name', '') or '').strip()} "
+                    f"{str(getattr(subscriber, 'last_name', '') or '').strip()}"
+                ).strip()
+            )
             row = {
                 "subscriber_id": subscriber_id or None,
                 "subscriber_name": display_name or "Unknown Subscriber",
-                "account_number": str(getattr(subscriber, "account_number", "") or "").strip() or None,
+                "account_number": str(
+                    getattr(subscriber, "account_number", "") or ""
+                ).strip()
+                or None,
                 "subscription_id": subscription_id or None,
                 "subscription_ref": str(
-                    getattr(getattr(assignment, "subscription", None), "service_id", "") or ""
-                ).strip() or None,
+                    getattr(getattr(assignment, "subscription", None), "service_id", "")
+                    or ""
+                ).strip()
+                or None,
                 "service_address_id": service_address_id or None,
                 "location": location or None,
                 "ipv4_address": None,
@@ -1398,7 +1505,10 @@ def build_dual_stack_data(
             grouped[key] = row
 
         if getattr(assignment, "ipv4_address", None) is not None:
-            row["ipv4_address"] = str(getattr(assignment.ipv4_address, "address", "") or "").strip() or None
+            row["ipv4_address"] = (
+                str(getattr(assignment.ipv4_address, "address", "") or "").strip()
+                or None
+            )
         if getattr(assignment, "ipv6_address", None) is not None:
             address = str(getattr(assignment.ipv6_address, "address", "") or "").strip()
             prefix = getattr(assignment, "prefix_length", None)
@@ -1406,7 +1516,9 @@ def build_dual_stack_data(
 
     rows = list(grouped.values())
     for row in rows:
-        row["is_dual_stack"] = bool(row.get("ipv4_address")) and bool(row.get("ipv6_address"))
+        row["is_dual_stack"] = bool(row.get("ipv4_address")) and bool(
+            row.get("ipv6_address")
+        )
 
     if subscriber_filter:
         rows = [
@@ -1440,8 +1552,12 @@ def build_dual_stack_data(
     stats = {
         "total_records": len(rows),
         "dual_stack_records": sum(1 for row in rows if row.get("is_dual_stack")),
-        "ipv4_only": sum(1 for row in rows if row.get("ipv4_address") and not row.get("ipv6_address")),
-        "ipv6_only": sum(1 for row in rows if row.get("ipv6_address") and not row.get("ipv4_address")),
+        "ipv4_only": sum(
+            1 for row in rows if row.get("ipv4_address") and not row.get("ipv6_address")
+        ),
+        "ipv6_only": sum(
+            1 for row in rows if row.get("ipv6_address") and not row.get("ipv4_address")
+        ),
     }
     return {
         "rows": rows,
@@ -1484,9 +1600,13 @@ def build_ip_addresses_data(db, *, ip_version: str) -> dict[str, object]:
     )
     stats = {
         "total": len(addresses),
-        "reserved": sum(1 for a in addresses if a.is_reserved and not _active_assignment(a)),
+        "reserved": sum(
+            1 for a in addresses if a.is_reserved and not _active_assignment(a)
+        ),
         "assigned": sum(1 for a in addresses if _active_assignment(a)),
-        "available": sum(1 for a in addresses if not a.is_reserved and not _active_assignment(a)),
+        "available": sum(
+            1 for a in addresses if not a.is_reserved and not _active_assignment(a)
+        ),
     }
     return {
         "addresses": addresses,
@@ -1511,7 +1631,9 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         normalized_pool_type = "all"
 
     fallback_pool_ids = {
-        str(pool.id) for pool in pools_all if is_fallback_pool_notes(getattr(pool, "notes", None))
+        str(pool.id)
+        for pool in pools_all
+        if is_fallback_pool_notes(getattr(pool, "notes", None))
     }
     if normalized_pool_type == "fallback":
         pools = [pool for pool in pools_all if str(pool.id) in fallback_pool_ids]
@@ -1531,7 +1653,11 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         offset=0,
     )
     if normalized_pool_type in {"fallback", "standard"}:
-        blocks = [block for block in blocks if str(getattr(block, "pool_id", "")) in selected_pool_ids]
+        blocks = [
+            block
+            for block in blocks
+            if str(getattr(block, "pool_id", "")) in selected_pool_ids
+        ]
     pool_utilization, block_utilization = _build_pool_and_block_utilization(
         db,
         pools=pools,
@@ -1570,7 +1696,9 @@ def build_ipv6_networks_data(
 
     networks: list[dict[str, object]] = []
     for pool in pools:
-        metadata, cleaned_notes = parse_pool_notes_metadata(getattr(pool, "notes", None))
+        metadata, cleaned_notes = parse_pool_notes_metadata(
+            getattr(pool, "notes", None)
+        )
         prefix_length = None
         try:
             prefix_length = ipaddress.ip_network(str(pool.cidr), strict=False).prefixlen
@@ -1580,7 +1708,9 @@ def build_ipv6_networks_data(
             {
                 "pool": pool,
                 "prefix_length": prefix_length,
-                "utilization": pool_utilization.get(str(pool.id), {"used": 0, "total": 0, "percent": 0}),
+                "utilization": pool_utilization.get(
+                    str(pool.id), {"used": 0, "total": 0, "percent": 0}
+                ),
                 "location": metadata.get("location"),
                 "category": metadata.get("category"),
                 "network_type": metadata.get("network_type"),
@@ -1593,16 +1723,30 @@ def build_ipv6_networks_data(
     category_filter = str(category or "").strip().lower()
     if location_filter:
         networks = [
-            item for item in networks if str(item.get("location") or "").strip().lower() == location_filter
+            item
+            for item in networks
+            if str(item.get("location") or "").strip().lower() == location_filter
         ]
     if category_filter:
         networks = [
-            item for item in networks if str(item.get("category") or "").strip().lower() == category_filter
+            item
+            for item in networks
+            if str(item.get("category") or "").strip().lower() == category_filter
         ]
 
     sort_key = str(sort_by or "cidr").strip().lower()
     reverse = str(sort_dir or "asc").strip().lower() == "desc"
-    allowed_sort = {"id", "cidr", "prefix", "title", "location", "category", "network_type", "router", "utilization"}
+    allowed_sort = {
+        "id",
+        "cidr",
+        "prefix",
+        "title",
+        "location",
+        "category",
+        "network_type",
+        "router",
+        "utilization",
+    }
     if sort_key not in allowed_sort:
         sort_key = "cidr"
 
@@ -1631,8 +1775,12 @@ def build_ipv6_networks_data(
 
     networks.sort(key=_sort_value, reverse=reverse)
 
-    locations = sorted({str(item["location"]) for item in networks if item.get("location")})
-    categories = sorted({str(item["category"]) for item in networks if item.get("category")})
+    locations = sorted(
+        {str(item["location"]) for item in networks if item.get("location")}
+    )
+    categories = sorted(
+        {str(item["category"]) for item in networks if item.get("category")}
+    )
 
     return {
         "networks": networks,
@@ -1644,8 +1792,14 @@ def build_ipv6_networks_data(
         "sort_dir": "desc" if reverse else "asc",
         "stats": {
             "total_networks": len(networks),
-            "total_used": sum(int((item.get("utilization") or {}).get("used") or 0) for item in networks),
-            "total_capacity": sum(int((item.get("utilization") or {}).get("total") or 0) for item in networks),
+            "total_used": sum(
+                int((item.get("utilization") or {}).get("used") or 0)
+                for item in networks
+            ),
+            "total_capacity": sum(
+                int((item.get("utilization") or {}).get("total") or 0)
+                for item in networks
+            ),
         },
     }
 
@@ -1670,7 +1824,9 @@ def build_ipv4_networks_data(
 
     networks: list[dict[str, object]] = []
     for pool in pools:
-        metadata, cleaned_notes = parse_pool_notes_metadata(getattr(pool, "notes", None))
+        metadata, cleaned_notes = parse_pool_notes_metadata(
+            getattr(pool, "notes", None)
+        )
         try:
             cidr = ipaddress.ip_network(str(pool.cidr), strict=False)
         except ValueError:
@@ -1687,13 +1843,18 @@ def build_ipv4_networks_data(
                 "subnet_mask": subnet_mask,
                 "total_ips": total_ips,
                 "usable_hosts": usable_hosts,
-                "utilization": pool_utilization.get(str(pool.id), {"used": 0, "total": 0, "percent": 0}),
+                "utilization": pool_utilization.get(
+                    str(pool.id), {"used": 0, "total": 0, "percent": 0}
+                ),
                 "location": metadata.get("location"),
                 "category": metadata.get("category"),
                 "network_type": metadata.get("network_type"),
                 "router": metadata.get("router"),
                 "usage_type": metadata.get("usage_type"),
-                "allow_network_broadcast": str(metadata.get("allow_network_broadcast") or "").lower() == "true",
+                "allow_network_broadcast": str(
+                    metadata.get("allow_network_broadcast") or ""
+                ).lower()
+                == "true",
                 "notes": cleaned_notes,
             }
         )
@@ -1702,12 +1863,23 @@ def build_ipv4_networks_data(
     category_filter = str(category or "").strip().lower()
     network_type_filter = str(network_type or "").strip().lower()
     if location_filter:
-        networks = [item for item in networks if str(item.get("location") or "").strip().lower() == location_filter]
+        networks = [
+            item
+            for item in networks
+            if str(item.get("location") or "").strip().lower() == location_filter
+        ]
     if category_filter:
-        networks = [item for item in networks if str(item.get("category") or "").strip().lower() == category_filter]
+        networks = [
+            item
+            for item in networks
+            if str(item.get("category") or "").strip().lower() == category_filter
+        ]
     if network_type_filter:
         networks = [
-            item for item in networks if str(item.get("network_type") or "").strip().lower() == network_type_filter
+            item
+            for item in networks
+            if str(item.get("network_type") or "").strip().lower()
+            == network_type_filter
         ]
 
     sort_key = str(sort_by or "cidr").strip().lower()
@@ -1754,9 +1926,15 @@ def build_ipv4_networks_data(
 
     networks.sort(key=_sort_value, reverse=reverse)
 
-    locations = sorted({str(item["location"]) for item in networks if item.get("location")})
-    categories = sorted({str(item["category"]) for item in networks if item.get("category")})
-    network_types = sorted({str(item["network_type"]) for item in networks if item.get("network_type")})
+    locations = sorted(
+        {str(item["location"]) for item in networks if item.get("location")}
+    )
+    categories = sorted(
+        {str(item["category"]) for item in networks if item.get("category")}
+    )
+    network_types = sorted(
+        {str(item["network_type"]) for item in networks if item.get("network_type")}
+    )
 
     return {
         "networks": networks,
@@ -1770,8 +1948,14 @@ def build_ipv4_networks_data(
         "sort_dir": "desc" if reverse else "asc",
         "stats": {
             "total_networks": len(networks),
-            "total_used": sum(int((item.get("utilization") or {}).get("used") or 0) for item in networks),
-            "total_capacity": sum(int((item.get("utilization") or {}).get("total") or 0) for item in networks),
+            "total_used": sum(
+                int((item.get("utilization") or {}).get("used") or 0)
+                for item in networks
+            ),
+            "total_capacity": sum(
+                int((item.get("utilization") or {}).get("total") or 0)
+                for item in networks
+            ),
         },
     }
 

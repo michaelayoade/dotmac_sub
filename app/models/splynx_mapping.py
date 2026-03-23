@@ -72,9 +72,7 @@ class SplynxIdMapping(Base):
         nullable=False,
     )
     splynx_id: Mapped[int] = mapped_column(Integer, nullable=False)
-    dotmac_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
-    )
+    dotmac_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
     migrated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),

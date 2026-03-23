@@ -57,7 +57,9 @@ def _link_via_subscriber_fallback(
     if not subscriber:
         raise ValueError("Subscriber not found for reseller linking")
     subscriber.reseller_id = reseller_id
-    subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
+    subscriber.user_type = getattr(
+        type(subscriber.user_type), "reseller", subscriber.user_type
+    )
     db.flush()
     return cast(
         ResellerUser,
@@ -86,13 +88,13 @@ def create_subscriber_credential(
     subscriber = cast(
         Subscriber,
         subscriber_service.subscribers.create(
-        db=db,
-        payload=SubscriberCreate(
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            is_active=True,
-        ),
+            db=db,
+            payload=SubscriberCreate(
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                is_active=True,
+            ),
         ),
     )
     credential_payload = UserCredentialCreate(
@@ -157,7 +159,9 @@ def create_reseller_with_user(
         password=user_payload.get("password"),
         require_password_change=True,
     )
-    subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
+    subscriber.user_type = getattr(
+        type(subscriber.user_type), "reseller", subscriber.user_type
+    )
     subscriber.reseller_id = reseller.id
     if user_payload.get("role"):
         role = get_role_by_name(db, user_payload["role"] or "")
@@ -177,7 +181,9 @@ def create_reseller_with_user(
     db.commit()
     invite_note = send_reseller_portal_invite(db, email=subscriber.email)
     if "could not" in invite_note.lower():
-        logger.warning("Reseller invite issue for %s: %s", subscriber.email, invite_note)
+        logger.warning(
+            "Reseller invite issue for %s: %s", subscriber.email, invite_note
+        )
 
 
 def list_reseller_subscribers(
@@ -197,15 +203,18 @@ def list_reseller_subscribers(
     )
     links: list[ResellerUser] = []
     for subscriber in subscribers:
-        link = cast(ResellerUser, SimpleNamespace(
-            id=subscriber.id,
-            reseller_id=subscriber.reseller_id,
-            subscriber_id=subscriber.id,
-            person_id=subscriber.id,
-            is_active=subscriber.is_active,
-            created_at=subscriber.created_at,
-            person=subscriber,
-        ))
+        link = cast(
+            ResellerUser,
+            SimpleNamespace(
+                id=subscriber.id,
+                reseller_id=subscriber.reseller_id,
+                subscriber_id=subscriber.id,
+                person_id=subscriber.id,
+                is_active=subscriber.is_active,
+                created_at=subscriber.created_at,
+                person=subscriber,
+            ),
+        )
         links.append(link)
     return links
 
@@ -264,15 +273,18 @@ def list_reseller_subscribers_page(
     )
     links: list[ResellerUser] = []
     for subscriber in subscribers:
-        link = cast(ResellerUser, SimpleNamespace(
-            id=subscriber.id,
-            reseller_id=subscriber.reseller_id,
-            subscriber_id=subscriber.id,
-            person_id=subscriber.id,
-            is_active=subscriber.is_active,
-            created_at=subscriber.created_at,
-            person=subscriber,
-        ))
+        link = cast(
+            ResellerUser,
+            SimpleNamespace(
+                id=subscriber.id,
+                reseller_id=subscriber.reseller_id,
+                subscriber_id=subscriber.id,
+                person_id=subscriber.id,
+                is_active=subscriber.is_active,
+                created_at=subscriber.created_at,
+                person=subscriber,
+            ),
+        )
         links.append(link)
     return links
 
@@ -394,29 +406,28 @@ def get_reseller_detail_context(
         )
         recent_subscriptions = list(
             db.query(Subscription)
-            .options(joinedload(Subscription.offer), joinedload(Subscription.subscriber))
+            .options(
+                joinedload(Subscription.offer), joinedload(Subscription.subscriber)
+            )
             .filter(Subscription.subscriber_id.in_(linked_subscriber_ids))
             .order_by(Subscription.created_at.desc())
             .limit(5)
             .all()
         )
 
-        outstanding_balance = (
-            db.scalar(
-                select(func.coalesce(func.sum(Invoice.balance_due), 0))
-                .where(Invoice.account_id.in_(linked_subscriber_ids))
-                .where(
-                    Invoice.status.in_(
-                        [
-                            InvoiceStatus.issued,
-                            InvoiceStatus.partially_paid,
-                            InvoiceStatus.overdue,
-                        ]
-                    )
+        outstanding_balance = db.scalar(
+            select(func.coalesce(func.sum(Invoice.balance_due), 0))
+            .where(Invoice.account_id.in_(linked_subscriber_ids))
+            .where(
+                Invoice.status.in_(
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
                 )
             )
-            or Decimal("0.00")
-        )
+        ) or Decimal("0.00")
         overdue_invoices = int(
             db.scalar(
                 select(func.count(Invoice.id))
@@ -435,15 +446,12 @@ def get_reseller_detail_context(
         )
 
         payments_since = datetime.now(UTC) - timedelta(days=30)
-        payments_30d_total = (
-            db.scalar(
-                select(func.coalesce(func.sum(Payment.amount), 0))
-                .where(Payment.account_id.in_(linked_subscriber_ids))
-                .where(Payment.status == PaymentStatus.succeeded)
-                .where(Payment.created_at >= payments_since)
-            )
-            or Decimal("0.00")
-        )
+        payments_30d_total = db.scalar(
+            select(func.coalesce(func.sum(Payment.amount), 0))
+            .where(Payment.account_id.in_(linked_subscriber_ids))
+            .where(Payment.status == PaymentStatus.succeeded)
+            .where(Payment.created_at >= payments_since)
+        ) or Decimal("0.00")
         payments_30d_count = int(
             db.scalar(
                 select(func.count(Payment.id))
@@ -587,7 +595,9 @@ def create_and_link_reseller_user(
         require_password_change=True,
     )
     reseller_uuid = coerce_uuid(reseller_id)
-    subscriber.user_type = getattr(type(subscriber.user_type), "reseller", subscriber.user_type)
+    subscriber.user_type = getattr(
+        type(subscriber.user_type), "reseller", subscriber.user_type
+    )
     subscriber.reseller_id = reseller_uuid
     create_reseller_user_link(
         db,
@@ -597,7 +607,9 @@ def create_and_link_reseller_user(
     db.commit()
     invite_note = send_reseller_portal_invite(db, email=subscriber.email)
     if "could not" in invite_note.lower():
-        logger.warning("Reseller invite issue for %s: %s", subscriber.email, invite_note)
+        logger.warning(
+            "Reseller invite issue for %s: %s", subscriber.email, invite_note
+        )
 
 
 def send_reseller_portal_invite(db: Session, *, email: str) -> str:

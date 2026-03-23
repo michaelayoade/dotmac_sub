@@ -10,6 +10,7 @@ Provides REST API for:
 - Provisioning Steps CRUD
 - Provisioning Runs listing and execution
 """
+
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
@@ -64,6 +65,7 @@ router = APIRouter(prefix="/provisioning", tags=["provisioning"])
 # =============================================================================
 # SERVICE ORDER ENDPOINTS
 # =============================================================================
+
 
 @router.get(
     "/orders/stats",
@@ -175,6 +177,7 @@ def run_workflow_for_order(
 # INSTALL APPOINTMENT ENDPOINTS
 # =============================================================================
 
+
 @router.get(
     "/appointments",
     response_model=dict,
@@ -258,6 +261,7 @@ def delete_appointment(
 # =============================================================================
 # PROVISIONING TASK ENDPOINTS
 # =============================================================================
+
 
 @router.get(
     "/tasks",
@@ -343,6 +347,7 @@ def delete_task(
 # SERVICE STATE TRANSITION ENDPOINTS
 # =============================================================================
 
+
 @router.get(
     "/transitions",
     response_model=dict,
@@ -411,6 +416,7 @@ def update_transition(
 # =============================================================================
 # PROVISIONING WORKFLOW ENDPOINTS
 # =============================================================================
+
 
 @router.get(
     "/workflows",
@@ -511,6 +517,7 @@ def run_workflow(
 # PROVISIONING STEP ENDPOINTS
 # =============================================================================
 
+
 @router.get(
     "/steps",
     response_model=dict,
@@ -596,6 +603,7 @@ def delete_step(
 # =============================================================================
 # PROVISIONING RUN ENDPOINTS
 # =============================================================================
+
 
 @router.get(
     "/runs",

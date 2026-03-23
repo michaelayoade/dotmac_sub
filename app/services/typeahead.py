@@ -11,6 +11,7 @@ from app.services.response import list_response
 
 logger = logging.getLogger(__name__)
 
+
 def _subscriber_label(subscriber: Subscriber) -> str:
     """Generate label for a subscriber."""
     organization = subscriber.organization
@@ -98,14 +99,18 @@ def reseller_linkable_subscribers(db: Session, query: str, limit: int) -> list[d
     )
     items: list[dict] = []
     for sub in results:
-        full_name = f"{(sub.first_name or '').strip()} {(sub.last_name or '').strip()}".strip()
+        full_name = (
+            f"{(sub.first_name or '').strip()} {(sub.last_name or '').strip()}".strip()
+        )
         base_name = full_name or (sub.display_name or "").strip() or "Subscriber"
         if sub.account_number:
             base_name = f"{base_name} ({sub.account_number})"
         org_name = (sub.organization.name or "").strip() if sub.organization else ""
         email = (sub.email or "").strip()
         suffix_parts = [part for part in [org_name, email] if part]
-        label = f"{base_name} - {' - '.join(suffix_parts)}" if suffix_parts else base_name
+        label = (
+            f"{base_name} - {' - '.join(suffix_parts)}" if suffix_parts else base_name
+        )
         items.append({"id": sub.id, "label": label})
     return items
 
@@ -173,7 +178,9 @@ def people(db: Session, query: str, limit: int) -> list[dict]:
     )
     items = []
     for subscriber in results:
-        label = " ".join(part for part in [subscriber.first_name, subscriber.last_name] if part)
+        label = " ".join(
+            part for part in [subscriber.first_name, subscriber.last_name] if part
+        )
         if subscriber.email:
             label = f"{label} ({subscriber.email})"
         elif subscriber.phone:
@@ -182,7 +189,9 @@ def people(db: Session, query: str, limit: int) -> list[dict]:
     return items
 
 
-def invoices(db: Session, query: str, limit: int, subscriber_id: str | None = None) -> list[dict]:
+def invoices(
+    db: Session, query: str, limit: int, subscriber_id: str | None = None
+) -> list[dict]:
     """Search invoices by number or subscriber details."""
     term = (query or "").strip()
     if not term:
@@ -229,7 +238,9 @@ def contacts_response(db: Session, query: str, limit: int) -> dict:
     return list_response(contacts(db, query, limit), limit, 0)
 
 
-def invoices_response(db: Session, query: str, limit: int, subscriber_id: str | None = None) -> dict:
+def invoices_response(
+    db: Session, query: str, limit: int, subscriber_id: str | None = None
+) -> dict:
     return list_response(invoices(db, query, limit, subscriber_id), limit, 0)
 
 
@@ -463,23 +474,25 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
         .all()
     )
     if customer_results:
-        categories.append({
-            "name": "Customers",
-            "icon": "users",
-            "items": [
-                {
-                    "id": str(sub.id),
-                    "label": _subscriber_label(sub),
-                    "url": (
-                        f"/admin/customers/organization/{sub.organization_id}"
-                        if sub.organization_id
-                        else f"/admin/customers/person/{sub.id}"
-                    ),
-                    "type": "customer",
-                }
-                for sub in customer_results
-            ],
-        })
+        categories.append(
+            {
+                "name": "Customers",
+                "icon": "users",
+                "items": [
+                    {
+                        "id": str(sub.id),
+                        "label": _subscriber_label(sub),
+                        "url": (
+                            f"/admin/customers/organization/{sub.organization_id}"
+                            if sub.organization_id
+                            else f"/admin/customers/person/{sub.id}"
+                        ),
+                        "type": "customer",
+                    }
+                    for sub in customer_results
+                ],
+            }
+        )
 
     # Search invoices
     invoice_results = (
@@ -497,18 +510,20 @@ def global_search(db: Session, query: str, limit_per_type: int = 3) -> dict:
         .all()
     )
     if invoice_results:
-        categories.append({
-            "name": "Invoices",
-            "icon": "document-text",
-            "items": [
-                {
-                    "id": str(inv.id),
-                    "label": _invoice_label(inv),
-                    "url": f"/admin/billing/invoices/{inv.id}",
-                    "type": "invoice",
-                }
-                for inv in invoice_results
-            ],
-        })
+        categories.append(
+            {
+                "name": "Invoices",
+                "icon": "document-text",
+                "items": [
+                    {
+                        "id": str(inv.id),
+                        "label": _invoice_label(inv),
+                        "url": f"/admin/billing/invoices/{inv.id}",
+                        "type": "invoice",
+                    }
+                    for inv in invoice_results
+                ],
+            }
+        )
 
     return {"categories": categories, "query": term}

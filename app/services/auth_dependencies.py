@@ -36,10 +36,14 @@ def _claims_from_payload_or_db(
     roles_value = payload.get("roles")
     scopes_value = payload.get("scopes")
     roles = [str(role) for role in roles_value] if isinstance(roles_value, list) else []
-    scopes = [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
+    scopes = (
+        [str(scope) for scope in scopes_value] if isinstance(scopes_value, list) else []
+    )
     if roles or scopes:
         return roles, scopes
-    resolved_roles, resolved_scopes = _load_rbac_claims(db, principal_type, principal_id)
+    resolved_roles, resolved_scopes = _load_rbac_claims(
+        db, principal_type, principal_id
+    )
     return list(resolved_roles), list(resolved_scopes)
 
 
@@ -101,7 +105,9 @@ def require_audit_auth(
             payload = decode_access_token(db, token)
             principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
             principal_type = str(payload.get("principal_type") or "subscriber")
-            roles, scopes = _claims_from_payload_or_db(db, principal_id, principal_type, payload)
+            roles, scopes = _claims_from_payload_or_db(
+                db, principal_id, principal_type, payload
+            )
             effective_payload = {**payload, "roles": roles, "scopes": scopes}
             if not _has_audit_scope(effective_payload):
                 raise HTTPException(status_code=403, detail="Insufficient scope")
@@ -183,7 +189,9 @@ def require_user_auth(
     session = query.first()
     if not session:
         raise HTTPException(status_code=401, detail="Unauthorized")
-    roles, scopes = _claims_from_payload_or_db(db, str(principal_id), str(principal_type), payload)
+    roles, scopes = _claims_from_payload_or_db(
+        db, str(principal_id), str(principal_type), payload
+    )
     actor_id = str(principal_id)
     if request is not None:
         request.state.actor_id = actor_id
@@ -404,6 +412,7 @@ def require_permission(permission_key: str):
 
 def require_any_permission(*permission_keys: str):
     """Require user to have at least one of the specified permissions."""
+
     def _require_any_permission(
         auth=Depends(require_user_auth),
         db: Session = Depends(_get_db),

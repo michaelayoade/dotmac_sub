@@ -14,6 +14,7 @@ from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 
 logger = logging.getLogger(__name__)
 
+
 def _get_initials(name: str) -> str:
     if not name:
         return "??"
@@ -27,14 +28,20 @@ def get_current_user(request) -> dict:
     """Get current user context from the request state."""
     if hasattr(request.state, "user") and request.state.user:
         user = request.state.user
-        name = f"{user.first_name} {user.last_name}".strip() if hasattr(user, "first_name") else "User"
+        name = (
+            f"{user.first_name} {user.last_name}".strip()
+            if hasattr(user, "first_name")
+            else "User"
+        )
         person_id = getattr(user, "person_id", None)
         subscriber_id = str(person_id if person_id else getattr(user, "id", ""))
         return {
             "id": str(getattr(user, "id", "")),
             "person_id": subscriber_id,
             "subscriber_id": subscriber_id,
-            "principal_type": getattr(request.state, "auth", {}).get("principal_type", "subscriber")
+            "principal_type": getattr(request.state, "auth", {}).get(
+                "principal_type", "subscriber"
+            )
             if hasattr(request.state, "auth")
             else "subscriber",
             "initials": _get_initials(name),
@@ -80,7 +87,11 @@ def _count_unread_notifications(db: Session) -> int:
     return (
         db.query(func.count(Notification.id))
         .filter(Notification.is_active.is_(True))
-        .filter(Notification.status.in_((NotificationStatus.queued, NotificationStatus.sending)))
+        .filter(
+            Notification.status.in_(
+                (NotificationStatus.queued, NotificationStatus.sending)
+            )
+        )
         .scalar()
         or 0
     )
@@ -96,7 +107,10 @@ def get_sidebar_stats(db: Session) -> dict:
 
     now = monotonic()
     with _sidebar_stats_lock:
-        if _sidebar_stats_cache and (now - _sidebar_stats_cached_at) < _SIDEBAR_STATS_TTL_SECONDS:
+        if (
+            _sidebar_stats_cache
+            and (now - _sidebar_stats_cached_at) < _SIDEBAR_STATS_TTL_SECONDS
+        ):
             return dict(_sidebar_stats_cache)
 
     try:
@@ -109,17 +123,23 @@ def get_sidebar_stats(db: Session) -> dict:
         notifications_unread = 0
 
     try:
-        logo_raw = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_url")
+        logo_raw = settings_spec.resolve_value(
+            db, SettingDomain.comms, "sidebar_logo_url"
+        )
         sidebar_logo_url = str(logo_raw).strip() if logo_raw else ""
     except Exception:
         sidebar_logo_url = ""
     try:
-        dark_logo_raw = settings_spec.resolve_value(db, SettingDomain.comms, "sidebar_logo_dark_url")
+        dark_logo_raw = settings_spec.resolve_value(
+            db, SettingDomain.comms, "sidebar_logo_dark_url"
+        )
         sidebar_logo_dark_url = str(dark_logo_raw).strip() if dark_logo_raw else ""
     except Exception:
         sidebar_logo_dark_url = ""
     try:
-        favicon_raw = settings_spec.resolve_value(db, SettingDomain.comms, "favicon_url")
+        favicon_raw = settings_spec.resolve_value(
+            db, SettingDomain.comms, "favicon_url"
+        )
         favicon_url = str(favicon_raw).strip() if favicon_raw else ""
     except Exception:
         favicon_url = ""
@@ -128,7 +148,10 @@ def get_sidebar_stats(db: Session) -> dict:
             web_system_company_info as web_system_company_info_service,
         )
 
-        app_name = (web_system_company_info_service.get_company_info(db).get("company_name") or "").strip()
+        app_name = (
+            web_system_company_info_service.get_company_info(db).get("company_name")
+            or ""
+        ).strip()
     except Exception:
         app_name = ""
     try:

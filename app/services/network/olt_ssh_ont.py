@@ -45,7 +45,9 @@ def configure_ont_iphost(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         if ip_mode == "dhcp":
             cmd = f"ont ipconfig {port_num} {ont_id} ip-index 0 dhcp vlan {vlan_id}"
@@ -63,10 +65,21 @@ def configure_ont_iphost(
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
-            logger.warning("IPHOST config failed for ONT %d on OLT %s: %s", ont_id, olt.name, output.strip()[-150:])
+            logger.warning(
+                "IPHOST config failed for ONT %d on OLT %s: %s",
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
+            )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
-        logger.info("Configured IPHOST for ONT %d on OLT %s (%s VLAN %d)", ont_id, olt.name, ip_mode, vlan_id)
+        logger.info(
+            "Configured IPHOST for ONT %d on OLT %s (%s VLAN %d)",
+            ont_id,
+            olt.name,
+            ip_mode,
+            vlan_id,
+        )
         return True, f"Management IP configured ({ip_mode} on VLAN {vlan_id})"
     except Exception as exc:
         logger.error("Error configuring IPHOST on OLT %s: %s", olt.name, exc)
@@ -143,10 +156,14 @@ def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         channel.send(f"ont reset {port_num} {ont_id}\n")
-        output = core._read_until_prompt(channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10)
+        output = core._read_until_prompt(
+            channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10
+        )
         if "y/n" in output.lower():
             channel.send("y\n")
             output += core._read_until_prompt(channel, config_prompt, timeout_sec=10)
@@ -155,7 +172,12 @@ def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
-            logger.warning("ONT reset failed for %d on OLT %s: %s", ont_id, olt.name, output.strip()[-150:])
+            logger.warning(
+                "ONT reset failed for %d on OLT %s: %s",
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
+            )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info("ONT %d reset via OMCI on OLT %s", ont_id, olt.name)
@@ -199,7 +221,9 @@ def configure_ont_internet_config(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         cmd = f"ont internet-config {port_num} {ont_id} ip-index {ip_index}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
@@ -209,11 +233,18 @@ def configure_ont_internet_config(
         if core.is_error_output(output):
             logger.warning(
                 "internet-config failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-150:],
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
-        logger.info("Configured internet-config for ONT %d on OLT %s (ip-index %d)", ont_id, olt.name, ip_index)
+        logger.info(
+            "Configured internet-config for ONT %d on OLT %s (ip-index %d)",
+            ont_id,
+            olt.name,
+            ip_index,
+        )
         return True, f"Internet config activated (ip-index {ip_index})"
     except Exception as exc:
         logger.error("Error configuring internet-config on OLT %s: %s", olt.name, exc)
@@ -255,7 +286,9 @@ def configure_ont_wan_config(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         cmd = f"ont wan-config {port_num} {ont_id} ip-index {ip_index} profile-id {profile_id}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
@@ -265,15 +298,23 @@ def configure_ont_wan_config(
         if core.is_error_output(output):
             logger.warning(
                 "wan-config failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-150:],
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info(
             "Configured wan-config for ONT %d on OLT %s (ip-index %d, profile-id %d)",
-            ont_id, olt.name, ip_index, profile_id,
+            ont_id,
+            olt.name,
+            ip_index,
+            profile_id,
         )
-        return True, f"WAN route+NAT mode set (ip-index {ip_index}, profile-id {profile_id})"
+        return (
+            True,
+            f"WAN route+NAT mode set (ip-index {ip_index}, profile-id {profile_id})",
+        )
     except Exception as exc:
         logger.error("Error configuring wan-config on OLT %s: %s", olt.name, exc)
         return False, f"Error: {exc}"
@@ -317,7 +358,9 @@ def configure_ont_pppoe_omci(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         cmd = (
             f"ont ipconfig {port_num} {ont_id} ip-index {ip_index} "
@@ -331,13 +374,18 @@ def configure_ont_pppoe_omci(
         if core.is_error_output(output):
             logger.warning(
                 "PPPoE OMCI config failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-150:],
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info(
             "Configured PPPoE via OMCI for ONT %d on OLT %s (VLAN %d, user %s)",
-            ont_id, olt.name, vlan_id, username,
+            ont_id,
+            olt.name,
+            vlan_id,
+            username,
         )
         return True, f"PPPoE configured via OMCI (VLAN {vlan_id}, user {username})"
     except Exception as exc:
@@ -381,7 +429,9 @@ def configure_ont_port_native_vlan(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         cmd = (
             f"ont port native-vlan {port_num} {ont_id} eth {eth_port} "
@@ -394,13 +444,19 @@ def configure_ont_port_native_vlan(
         if core.is_error_output(output):
             logger.warning(
                 "Port native-vlan failed for ONT %d port %d on OLT %s: %s",
-                ont_id, eth_port, olt.name, output.strip()[-150:],
+                ont_id,
+                eth_port,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info(
             "Set native VLAN %d on ONT %d eth %d on OLT %s",
-            vlan_id, ont_id, eth_port, olt.name,
+            vlan_id,
+            ont_id,
+            eth_port,
+            olt.name,
         )
         return True, f"Native VLAN {vlan_id} set on eth port {eth_port}"
     except Exception as exc:
@@ -436,10 +492,14 @@ def factory_reset_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool,
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         channel.send(f"ont factory-setting-restore {port_num} {ont_id}\n")
-        output = core._read_until_prompt(channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10)
+        output = core._read_until_prompt(
+            channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10
+        )
         if "y/n" in output.lower():
             channel.send("y\n")
             output += core._read_until_prompt(channel, config_prompt, timeout_sec=10)
@@ -450,7 +510,9 @@ def factory_reset_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool,
         if core.is_error_output(output):
             logger.warning(
                 "Factory reset failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-150:],
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
@@ -491,7 +553,9 @@ def remote_ping_ont(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         cmd = f"ont remote-ping {port_num} {ont_id} ip-address {ip_address}"
         channel.send(f"{cmd}\n")
@@ -502,11 +566,15 @@ def remote_ping_ont(
         if core.is_error_output(output):
             logger.warning(
                 "Remote ping failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-200:],
+                ont_id,
+                olt.name,
+                output.strip()[-200:],
             )
             return False, f"Ping failed: {output.strip()[-200:]}"
 
-        logger.info("Remote ping from ONT %d on OLT %s to %s", ont_id, olt.name, ip_address)
+        logger.info(
+            "Remote ping from ONT %d on OLT %s to %s", ont_id, olt.name, ip_address
+        )
         return True, f"Remote ping to {ip_address}: {output.strip()[-200:]}"
     except Exception as exc:
         logger.error("Error running remote ping on OLT %s: %s", olt.name, exc)
@@ -543,17 +611,26 @@ def bind_tr069_server_profile(
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
 
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         if core.is_error_output(output):
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            logger.warning("TR-069 profile bind failed for ONT %d on OLT %s: %s", ont_id, olt.name, output.strip()[-150:])
+            logger.warning(
+                "TR-069 profile bind failed for ONT %d on OLT %s: %s",
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
+            )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
-        reset_out = core._run_huawei_cmd(channel, f"ont reset {port_num} {ont_id}", prompt=r"[#)]\s*$|y/n")
+        reset_out = core._run_huawei_cmd(
+            channel, f"ont reset {port_num} {ont_id}", prompt=r"[#)]\s*$|y/n"
+        )
         if "y/n" in reset_out:
             channel.send("y\n")
             reset_out += core._read_until_prompt(channel, config_prompt, timeout_sec=8)
@@ -567,12 +644,23 @@ def bind_tr069_server_profile(
                 olt.name,
                 reset_out.strip()[-150:],
             )
-            return False, f"TR-069 profile bound but reset failed: {reset_out.strip()[-150:]}"
+            return (
+                False,
+                f"TR-069 profile bound but reset failed: {reset_out.strip()[-150:]}",
+            )
 
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        logger.info("Bound TR-069 profile %d to ONT %d on OLT %s (reset triggered)", profile_id, ont_id, olt.name)
-        return True, f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)"
+        logger.info(
+            "Bound TR-069 profile %d to ONT %d on OLT %s (reset triggered)",
+            profile_id,
+            ont_id,
+            olt.name,
+        )
+        return (
+            True,
+            f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)",
+        )
     except Exception as exc:
         logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc)
         return False, f"Error: {exc}"

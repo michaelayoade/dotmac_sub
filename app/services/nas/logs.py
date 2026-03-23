@@ -4,6 +4,7 @@ Provisioning Log Service.
 Manages CRUD operations for NAS provisioning log entries.
 Extracted from the monolithic nas.py service.
 """
+
 import logging
 from typing import cast
 from uuid import UUID

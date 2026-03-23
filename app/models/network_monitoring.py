@@ -141,7 +141,9 @@ class PopSite(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     devices = relationship("NetworkDevice", back_populates="pop_site")
@@ -245,13 +247,17 @@ class NetworkDevice(Base):
         Enum(HealthStatus, values_callable=lambda x: [e.value for e in x]),
         default=HealthStatus.unknown,
     )
-    last_health_check_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_health_check_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     pop_site = relationship("PopSite", back_populates="devices")
@@ -267,11 +273,17 @@ class NetworkDevice(Base):
     interfaces = relationship("DeviceInterface", back_populates="device")
     metrics = relationship("DeviceMetric", back_populates="device")
     snmp_oids = relationship("NetworkDeviceSnmpOid", back_populates="device")
-    bandwidth_graphs = relationship("NetworkDeviceBandwidthGraph", back_populates="device")
-    graph_sources = relationship("NetworkDeviceBandwidthGraphSource", back_populates="source_device")
+    bandwidth_graphs = relationship(
+        "NetworkDeviceBandwidthGraph", back_populates="device"
+    )
+    graph_sources = relationship(
+        "NetworkDeviceBandwidthGraphSource", back_populates="source_device"
+    )
     alerts = relationship("Alert", back_populates="device")
     alert_rules = relationship("AlertRule", back_populates="device")
-    nas_device = relationship("NasDevice", back_populates="network_device", uselist=False)
+    nas_device = relationship(
+        "NasDevice", back_populates="network_device", uselist=False
+    )
 
 
 class DeviceInterface(Base):
@@ -302,7 +314,9 @@ class DeviceInterface(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     device = relationship("NetworkDevice", back_populates="interfaces")
@@ -360,11 +374,15 @@ class NetworkDeviceSnmpOid(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     device = relationship("NetworkDevice", back_populates="snmp_oids")
-    graph_sources = relationship("NetworkDeviceBandwidthGraphSource", back_populates="snmp_oid")
+    graph_sources = relationship(
+        "NetworkDeviceBandwidthGraphSource", back_populates="snmp_oid"
+    )
 
 
 class NetworkDeviceBandwidthGraph(Base):
@@ -386,7 +404,9 @@ class NetworkDeviceBandwidthGraph(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     device = relationship("NetworkDevice", back_populates="bandwidth_graphs")
@@ -404,7 +424,9 @@ class NetworkDeviceBandwidthGraphSource(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     graph_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("network_device_bandwidth_graphs.id"), nullable=False
+        UUID(as_uuid=True),
+        ForeignKey("network_device_bandwidth_graphs.id"),
+        nullable=False,
     )
     source_device_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("network_devices.id"), nullable=False
@@ -423,7 +445,9 @@ class NetworkDeviceBandwidthGraphSource(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     graph = relationship("NetworkDeviceBandwidthGraph", back_populates="sources")
@@ -469,7 +493,9 @@ class SpeedTestResult(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber")
@@ -513,7 +539,9 @@ class DnsThreatEvent(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     subscriber = relationship("Subscriber")
@@ -550,7 +578,9 @@ class AlertRule(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     device = relationship("NetworkDevice", back_populates="alert_rules")
@@ -657,8 +687,10 @@ class NetworkTopologyLink(Base):
     __tablename__ = "network_topology_links"
     __table_args__ = (
         UniqueConstraint(
-            "source_device_id", "source_interface_id",
-            "target_device_id", "target_interface_id",
+            "source_device_id",
+            "source_interface_id",
+            "target_device_id",
+            "target_interface_id",
             name="uq_topology_link_endpoints",
         ),
         Index("ix_topology_link_source_device", "source_device_id"),

@@ -43,9 +43,7 @@ class FiberChangeRequest(Base):
     requested_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    requested_by_vendor_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True)
-    )
+    requested_by_vendor_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     reviewed_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )

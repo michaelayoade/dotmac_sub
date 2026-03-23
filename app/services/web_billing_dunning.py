@@ -10,6 +10,7 @@ from app.services import web_billing_customers as web_billing_customers_service
 
 logger = logging.getLogger(__name__)
 
+
 def build_listing_data(
     db,
     *,
@@ -26,7 +27,9 @@ def build_listing_data(
     if customer_ref:
         account_ids = [
             item["id"]
-            for item in web_billing_customers_service.accounts_for_customer(db, customer_ref)
+            for item in web_billing_customers_service.accounts_for_customer(
+                db, customer_ref
+            )
         ]
 
     if customer_filtered and not account_ids:
@@ -41,10 +44,18 @@ def build_listing_data(
         if account_ids:
             status_query = status_query.filter(DunningCase.account_id.in_(account_ids))
         status_counts = {
-            "open": status_query.filter(DunningCase.status == DunningCaseStatus.open).count(),
-            "paused": status_query.filter(DunningCase.status == DunningCaseStatus.paused).count(),
-            "resolved": status_query.filter(DunningCase.status == DunningCaseStatus.resolved).count(),
-            "closed": status_query.filter(DunningCase.status == DunningCaseStatus.closed).count(),
+            "open": status_query.filter(
+                DunningCase.status == DunningCaseStatus.open
+            ).count(),
+            "paused": status_query.filter(
+                DunningCase.status == DunningCaseStatus.paused
+            ).count(),
+            "resolved": status_query.filter(
+                DunningCase.status == DunningCaseStatus.resolved
+            ).count(),
+            "closed": status_query.filter(
+                DunningCase.status == DunningCaseStatus.closed
+            ).count(),
         }
 
     cases = []
@@ -56,7 +67,12 @@ def build_listing_data(
             query = query.filter(DunningCase.status == status)
         total = query.count()
         total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-        cases = query.order_by(DunningCase.created_at.desc()).offset(offset).limit(per_page).all()
+        cases = (
+            query.order_by(DunningCase.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+            .all()
+        )
     elif not customer_filtered:
         count_query = db.query(DunningCase)
         if status:
@@ -107,6 +123,9 @@ def apply_bulk_action(db, *, case_ids_csv: str, action: str) -> list[str]:
             apply_case_action(db, case_id=case_id, action=action)
             processed.append(case_id)
         except Exception:
+            logger.debug(
+                "Skipping dunning bulk action for case %s", case_id, exc_info=True
+            )
             continue
     return processed
 

@@ -11,6 +11,7 @@ from app.services import web_billing_customers as web_billing_customers_service
 
 logger = logging.getLogger(__name__)
 
+
 def build_credits_list_data(
     db,
     *,
@@ -26,7 +27,9 @@ def build_credits_list_data(
     if customer_ref:
         account_ids = [
             UUID(item["id"])
-            for item in web_billing_customers_service.accounts_for_customer(db, customer_ref)
+            for item in web_billing_customers_service.accounts_for_customer(
+                db, customer_ref
+            )
         ]
 
     if customer_filtered and not account_ids:
@@ -42,11 +45,21 @@ def build_credits_list_data(
         if account_ids:
             status_query = status_query.filter(CreditNote.account_id.in_(account_ids))
         status_counts = {
-            "draft": status_query.filter(CreditNote.status == CreditNoteStatus.draft).count(),
-            "issued": status_query.filter(CreditNote.status == CreditNoteStatus.issued).count(),
-            "partially_applied": status_query.filter(CreditNote.status == CreditNoteStatus.partially_applied).count(),
-            "applied": status_query.filter(CreditNote.status == CreditNoteStatus.applied).count(),
-            "void": status_query.filter(CreditNote.status == CreditNoteStatus.void).count(),
+            "draft": status_query.filter(
+                CreditNote.status == CreditNoteStatus.draft
+            ).count(),
+            "issued": status_query.filter(
+                CreditNote.status == CreditNoteStatus.issued
+            ).count(),
+            "partially_applied": status_query.filter(
+                CreditNote.status == CreditNoteStatus.partially_applied
+            ).count(),
+            "applied": status_query.filter(
+                CreditNote.status == CreditNoteStatus.applied
+            ).count(),
+            "void": status_query.filter(
+                CreditNote.status == CreditNoteStatus.void
+            ).count(),
         }
 
     query = db.query(CreditNote).filter(CreditNote.is_active.is_(True))
@@ -60,7 +73,12 @@ def build_credits_list_data(
             query = query.filter(CreditNote.status == status)
         total = query.count()
         total_pages = (total + per_page - 1) // per_page if total > 0 else 1
-        credits = query.order_by(CreditNote.created_at.desc()).offset(offset).limit(per_page).all()
+        credits = (
+            query.order_by(CreditNote.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+            .all()
+        )
 
     return {
         "credits": credits,

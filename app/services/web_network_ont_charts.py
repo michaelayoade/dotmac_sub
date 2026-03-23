@@ -134,7 +134,9 @@ def _build_traffic_fallback_from_bandwidth_samples(
 
     return ChartData(
         series=[
-            ChartSeries(label="Download (bps)", timestamps=timestamps, values=rx_values),
+            ChartSeries(
+                label="Download (bps)", timestamps=timestamps, values=rx_values
+            ),
             ChartSeries(label="Upload (bps)", timestamps=timestamps, values=tx_values),
         ],
         time_range=time_range,
@@ -143,7 +145,9 @@ def _build_traffic_fallback_from_bandwidth_samples(
     )
 
 
-def _query_vm_range(query: str, start: datetime, end: datetime, step: str) -> list[dict]:
+def _query_vm_range(
+    query: str, start: datetime, end: datetime, step: str
+) -> list[dict]:
     """Execute a PromQL range query against VictoriaMetrics."""
     try:
         with httpx.Client(timeout=15.0) as client:
@@ -276,9 +280,13 @@ def charts_tab_data(
         signal_chart = _build_signal_fallback_from_ont(ont, time_range)
     traffic_chart = get_traffic_history(ont.serial_number, time_range)
     if not traffic_chart.available or not traffic_chart.series:
-        traffic_chart = _build_traffic_from_vm_subscription_aggregates(db, ont, time_range)
+        traffic_chart = _build_traffic_from_vm_subscription_aggregates(
+            db, ont, time_range
+        )
     if not traffic_chart.available or not traffic_chart.series:
-        traffic_chart = _build_traffic_fallback_from_bandwidth_samples(db, ont, time_range)
+        traffic_chart = _build_traffic_fallback_from_bandwidth_samples(
+            db, ont, time_range
+        )
     if not traffic_chart.available:
         existing_error = (traffic_chart.error or "").strip()
         suffix = (

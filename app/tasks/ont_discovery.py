@@ -47,9 +47,7 @@ def discover_all_olt_onts() -> dict[str, int]:
         from app.services.web_network_olts import sync_onts_from_olt_snmp
 
         olts = list(
-            db.scalars(
-                select(OLTDevice).where(OLTDevice.is_active.is_(True))
-            ).all()
+            db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
         )
         logger.info("ONT discovery: found %d active OLTs", len(olts))
 

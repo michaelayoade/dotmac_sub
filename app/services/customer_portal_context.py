@@ -157,7 +157,8 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
                 db.query(func.count(Ticket.id))
                 .filter(Ticket.is_active.is_(True))
                 .filter(
-                    (Ticket.subscriber_id == account_id) | (Ticket.customer_account_id == account_id)
+                    (Ticket.subscriber_id == account_id)
+                    | (Ticket.customer_account_id == account_id)
                 )
                 .filter(
                     Ticket.status.notin_(
@@ -252,7 +253,9 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
             limit=5,
             offset=0,
         )
-        recent_invoices = [inv for inv in invoices if float(inv.balance_due or 0) > 0][:3]
+        recent_invoices = [inv for inv in invoices if float(inv.balance_due or 0) > 0][
+            :3
+        ]
 
     # Subscriptions (all, not just active)
     subscriptions = []
@@ -279,7 +282,9 @@ def get_restricted_dashboard_context(db: Session, session: dict) -> dict:
         "user_name": user_name,
         "subscriber_number": subscriber.subscriber_number or subscriber.account_number,
         "account_status": status_value,
-        "account_status_display": STATUS_DISPLAY.get(status_value, status_value.title()),
+        "account_status_display": STATUS_DISPLAY.get(
+            status_value, status_value.title()
+        ),
         "plan_name": plan_name,
         "outstanding_balance": balance,
         "recent_invoices": recent_invoices,

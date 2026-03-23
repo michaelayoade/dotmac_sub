@@ -17,6 +17,7 @@ from app.web.request_parsing import parse_form_data
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/resellers", tags=["web-admin-resellers"])
 
+
 def _form_str(form: FormData, key: str, default: str = "") -> str:
     value = form.get(key, default)
     return value if isinstance(value, str) else default
@@ -32,6 +33,7 @@ def _form_int(form: FormData, key: str, default: int) -> int:
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -133,7 +135,11 @@ def reseller_create(
             "username": (_form_str(form, "user_email").strip() or None),
             "role": _form_str(form, "user_role").strip() or None,
         }
-        missing = [key for key, value in user_payload.items() if key not in {"role", "username"} and not value]
+        missing = [
+            key
+            for key, value in user_payload.items()
+            if key not in {"role", "username"} and not value
+        ]
         if missing:
             context = _base_context(request, db, active_page="resellers")
             roles = rbac_service.roles.list(
@@ -288,7 +294,9 @@ def reseller_user_link(
 ) -> RedirectResponse:
     page = _form_int(form, "page", 1)
     per_page = _form_int(form, "per_page", 50)
-    subscriber_id = _form_str(form, "subscriber_id").strip() or _form_str(form, "person_id").strip()
+    subscriber_id = (
+        _form_str(form, "subscriber_id").strip() or _form_str(form, "person_id").strip()
+    )
     if subscriber_id:
         try:
             reseller_svc.link_existing_subscriber_to_reseller(

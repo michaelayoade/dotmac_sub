@@ -148,7 +148,8 @@ def parse_profile_form(form: FormData) -> dict[str, object]:
         "config_method": _form_str(form, "config_method") or None,
         "onu_mode": _form_str(form, "onu_mode") or None,
         "ip_protocol": _form_str(form, "ip_protocol") or None,
-        "download_speed_profile_id": _form_str(form, "download_speed_profile_id") or None,
+        "download_speed_profile_id": _form_str(form, "download_speed_profile_id")
+        or None,
         "upload_speed_profile_id": _form_str(form, "upload_speed_profile_id") or None,
         "mgmt_ip_mode": _form_str(form, "mgmt_ip_mode") or None,
         "mgmt_vlan_tag": _form_int(form, "mgmt_vlan_tag"),
@@ -207,26 +208,58 @@ def handle_create(
         organization_id=org_id,
         name=str(form_data["name"]),
         profile_type=OntProfileType(str(form_data["profile_type"])),
-        description=str(form_data["description"]) if form_data.get("description") else None,
-        config_method=ConfigMethod(str(form_data["config_method"])) if form_data.get("config_method") else None,
-        onu_mode=OnuMode(str(form_data["onu_mode"])) if form_data.get("onu_mode") else None,
-        ip_protocol=IpProtocol(str(form_data["ip_protocol"])) if form_data.get("ip_protocol") else None,
-        download_speed_profile_id=str(form_data["download_speed_profile_id"]) if form_data.get("download_speed_profile_id") else None,
-        upload_speed_profile_id=str(form_data["upload_speed_profile_id"]) if form_data.get("upload_speed_profile_id") else None,
-        mgmt_ip_mode=MgmtIpMode(str(form_data["mgmt_ip_mode"])) if form_data.get("mgmt_ip_mode") else None,
-        mgmt_vlan_tag=int(str(form_data["mgmt_vlan_tag"])) if form_data.get("mgmt_vlan_tag") is not None else None,
+        description=str(form_data["description"])
+        if form_data.get("description")
+        else None,
+        config_method=ConfigMethod(str(form_data["config_method"]))
+        if form_data.get("config_method")
+        else None,
+        onu_mode=OnuMode(str(form_data["onu_mode"]))
+        if form_data.get("onu_mode")
+        else None,
+        ip_protocol=IpProtocol(str(form_data["ip_protocol"]))
+        if form_data.get("ip_protocol")
+        else None,
+        download_speed_profile_id=str(form_data["download_speed_profile_id"])
+        if form_data.get("download_speed_profile_id")
+        else None,
+        upload_speed_profile_id=str(form_data["upload_speed_profile_id"])
+        if form_data.get("upload_speed_profile_id")
+        else None,
+        mgmt_ip_mode=MgmtIpMode(str(form_data["mgmt_ip_mode"]))
+        if form_data.get("mgmt_ip_mode")
+        else None,
+        mgmt_vlan_tag=int(str(form_data["mgmt_vlan_tag"]))
+        if form_data.get("mgmt_vlan_tag") is not None
+        else None,
         mgmt_remote_access=bool(form_data.get("mgmt_remote_access")),
         wifi_enabled=bool(form_data.get("wifi_enabled")),
-        wifi_ssid_template=str(form_data["wifi_ssid_template"]) if form_data.get("wifi_ssid_template") else None,
-        wifi_security_mode=str(form_data["wifi_security_mode"]) if form_data.get("wifi_security_mode") else None,
-        wifi_channel=str(form_data["wifi_channel"]) if form_data.get("wifi_channel") else None,
+        wifi_ssid_template=str(form_data["wifi_ssid_template"])
+        if form_data.get("wifi_ssid_template")
+        else None,
+        wifi_security_mode=str(form_data["wifi_security_mode"])
+        if form_data.get("wifi_security_mode")
+        else None,
+        wifi_channel=str(form_data["wifi_channel"])
+        if form_data.get("wifi_channel")
+        else None,
         wifi_band=str(form_data["wifi_band"]) if form_data.get("wifi_band") else None,
         voip_enabled=bool(form_data.get("voip_enabled")),
-        internet_config_ip_index=int(str(form_data["internet_config_ip_index"])) if form_data.get("internet_config_ip_index") is not None else 0,
-        wan_config_profile_id=int(str(form_data["wan_config_profile_id"])) if form_data.get("wan_config_profile_id") is not None else 0,
-        pppoe_omci_vlan=int(str(form_data["pppoe_omci_vlan"])) if form_data.get("pppoe_omci_vlan") is not None else None,
-        cr_username=str(form_data["cr_username"]) if form_data.get("cr_username") else None,
-        cr_password=str(form_data["cr_password"]) if form_data.get("cr_password") else None,
+        internet_config_ip_index=int(str(form_data["internet_config_ip_index"]))
+        if form_data.get("internet_config_ip_index") is not None
+        else 0,
+        wan_config_profile_id=int(str(form_data["wan_config_profile_id"]))
+        if form_data.get("wan_config_profile_id") is not None
+        else 0,
+        pppoe_omci_vlan=int(str(form_data["pppoe_omci_vlan"]))
+        if form_data.get("pppoe_omci_vlan") is not None
+        else None,
+        cr_username=str(form_data["cr_username"])
+        if form_data.get("cr_username")
+        else None,
+        cr_password=str(form_data["cr_password"])
+        if form_data.get("cr_password")
+        else None,
         is_default=bool(form_data.get("is_default")),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
@@ -244,26 +277,58 @@ def handle_update(
         profile_id,
         name=str(form_data["name"]),
         profile_type=OntProfileType(str(form_data["profile_type"])),
-        description=str(form_data["description"]) if form_data.get("description") else None,
-        config_method=ConfigMethod(str(form_data["config_method"])) if form_data.get("config_method") else None,
-        onu_mode=OnuMode(str(form_data["onu_mode"])) if form_data.get("onu_mode") else None,
-        ip_protocol=IpProtocol(str(form_data["ip_protocol"])) if form_data.get("ip_protocol") else None,
-        download_speed_profile_id=str(form_data["download_speed_profile_id"]) if form_data.get("download_speed_profile_id") else None,
-        upload_speed_profile_id=str(form_data["upload_speed_profile_id"]) if form_data.get("upload_speed_profile_id") else None,
-        mgmt_ip_mode=MgmtIpMode(str(form_data["mgmt_ip_mode"])) if form_data.get("mgmt_ip_mode") else None,
-        mgmt_vlan_tag=int(str(form_data["mgmt_vlan_tag"])) if form_data.get("mgmt_vlan_tag") is not None else None,
+        description=str(form_data["description"])
+        if form_data.get("description")
+        else None,
+        config_method=ConfigMethod(str(form_data["config_method"]))
+        if form_data.get("config_method")
+        else None,
+        onu_mode=OnuMode(str(form_data["onu_mode"]))
+        if form_data.get("onu_mode")
+        else None,
+        ip_protocol=IpProtocol(str(form_data["ip_protocol"]))
+        if form_data.get("ip_protocol")
+        else None,
+        download_speed_profile_id=str(form_data["download_speed_profile_id"])
+        if form_data.get("download_speed_profile_id")
+        else None,
+        upload_speed_profile_id=str(form_data["upload_speed_profile_id"])
+        if form_data.get("upload_speed_profile_id")
+        else None,
+        mgmt_ip_mode=MgmtIpMode(str(form_data["mgmt_ip_mode"]))
+        if form_data.get("mgmt_ip_mode")
+        else None,
+        mgmt_vlan_tag=int(str(form_data["mgmt_vlan_tag"]))
+        if form_data.get("mgmt_vlan_tag") is not None
+        else None,
         mgmt_remote_access=bool(form_data.get("mgmt_remote_access")),
         wifi_enabled=bool(form_data.get("wifi_enabled")),
-        wifi_ssid_template=str(form_data["wifi_ssid_template"]) if form_data.get("wifi_ssid_template") else None,
-        wifi_security_mode=str(form_data["wifi_security_mode"]) if form_data.get("wifi_security_mode") else None,
-        wifi_channel=str(form_data["wifi_channel"]) if form_data.get("wifi_channel") else None,
+        wifi_ssid_template=str(form_data["wifi_ssid_template"])
+        if form_data.get("wifi_ssid_template")
+        else None,
+        wifi_security_mode=str(form_data["wifi_security_mode"])
+        if form_data.get("wifi_security_mode")
+        else None,
+        wifi_channel=str(form_data["wifi_channel"])
+        if form_data.get("wifi_channel")
+        else None,
         wifi_band=str(form_data["wifi_band"]) if form_data.get("wifi_band") else None,
         voip_enabled=bool(form_data.get("voip_enabled")),
-        internet_config_ip_index=int(str(form_data["internet_config_ip_index"])) if form_data.get("internet_config_ip_index") is not None else 0,
-        wan_config_profile_id=int(str(form_data["wan_config_profile_id"])) if form_data.get("wan_config_profile_id") is not None else 0,
-        pppoe_omci_vlan=int(str(form_data["pppoe_omci_vlan"])) if form_data.get("pppoe_omci_vlan") is not None else None,
-        cr_username=str(form_data["cr_username"]) if form_data.get("cr_username") else None,
-        cr_password=str(form_data["cr_password"]) if form_data.get("cr_password") else None,
+        internet_config_ip_index=int(str(form_data["internet_config_ip_index"]))
+        if form_data.get("internet_config_ip_index") is not None
+        else 0,
+        wan_config_profile_id=int(str(form_data["wan_config_profile_id"]))
+        if form_data.get("wan_config_profile_id") is not None
+        else 0,
+        pppoe_omci_vlan=int(str(form_data["pppoe_omci_vlan"]))
+        if form_data.get("pppoe_omci_vlan") is not None
+        else None,
+        cr_username=str(form_data["cr_username"])
+        if form_data.get("cr_username")
+        else None,
+        cr_password=str(form_data["cr_password"])
+        if form_data.get("cr_password")
+        else None,
         is_default=bool(form_data.get("is_default")),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
@@ -330,18 +395,38 @@ def handle_wan_service_create(
         name=str(form_data["name"]) if form_data.get("name") else None,
         priority=int(str(form_data.get("priority") or 1)),
         vlan_mode=VlanMode(str(form_data["vlan_mode"])),
-        s_vlan=int(str(form_data["s_vlan"])) if form_data.get("s_vlan") is not None else None,
-        c_vlan=int(str(form_data["c_vlan"])) if form_data.get("c_vlan") is not None else None,
-        cos_priority=int(str(form_data["cos_priority"])) if form_data.get("cos_priority") is not None else None,
+        s_vlan=int(str(form_data["s_vlan"]))
+        if form_data.get("s_vlan") is not None
+        else None,
+        c_vlan=int(str(form_data["c_vlan"]))
+        if form_data.get("c_vlan") is not None
+        else None,
+        cos_priority=int(str(form_data["cos_priority"]))
+        if form_data.get("cos_priority") is not None
+        else None,
         mtu=int(str(form_data.get("mtu") or 1500)),
         connection_type=WanConnectionType(str(form_data["connection_type"])),
         nat_enabled=bool(form_data.get("nat_enabled")),
-        ip_mode=IpProtocol(str(form_data["ip_mode"])) if form_data.get("ip_mode") else None,
-        pppoe_username_template=str(form_data["pppoe_username_template"]) if form_data.get("pppoe_username_template") else None,
-        pppoe_password_mode=PppoePasswordMode(str(form_data["pppoe_password_mode"])) if form_data.get("pppoe_password_mode") else None,
-        pppoe_static_password=str(form_data["pppoe_static_password"]) if form_data.get("pppoe_static_password") else None,
-        static_ip_source=str(form_data["static_ip_source"]) if form_data.get("static_ip_source") else None,
-        gem_port_id=int(str(form_data["gem_port_id"])) if form_data.get("gem_port_id") is not None else None,
-        t_cont_profile=str(form_data["t_cont_profile"]) if form_data.get("t_cont_profile") else None,
+        ip_mode=IpProtocol(str(form_data["ip_mode"]))
+        if form_data.get("ip_mode")
+        else None,
+        pppoe_username_template=str(form_data["pppoe_username_template"])
+        if form_data.get("pppoe_username_template")
+        else None,
+        pppoe_password_mode=PppoePasswordMode(str(form_data["pppoe_password_mode"]))
+        if form_data.get("pppoe_password_mode")
+        else None,
+        pppoe_static_password=str(form_data["pppoe_static_password"])
+        if form_data.get("pppoe_static_password")
+        else None,
+        static_ip_source=str(form_data["static_ip_source"])
+        if form_data.get("static_ip_source")
+        else None,
+        gem_port_id=int(str(form_data["gem_port_id"]))
+        if form_data.get("gem_port_id") is not None
+        else None,
+        t_cont_profile=str(form_data["t_cont_profile"])
+        if form_data.get("t_cont_profile")
+        else None,
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )

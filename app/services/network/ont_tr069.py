@@ -26,15 +26,33 @@ _DEV = "Device"
 
 PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
     "system": {
-        "Manufacturer": [f"{_DEV}.DeviceInfo.Manufacturer", f"{_IGD}.DeviceInfo.Manufacturer"],
+        "Manufacturer": [
+            f"{_DEV}.DeviceInfo.Manufacturer",
+            f"{_IGD}.DeviceInfo.Manufacturer",
+        ],
         "Model": [f"{_DEV}.DeviceInfo.ModelName", f"{_IGD}.DeviceInfo.ModelName"],
-        "Firmware": [f"{_DEV}.DeviceInfo.SoftwareVersion", f"{_IGD}.DeviceInfo.SoftwareVersion"],
-        "Hardware": [f"{_DEV}.DeviceInfo.HardwareVersion", f"{_IGD}.DeviceInfo.HardwareVersion"],
-        "Serial": [f"{_DEV}.DeviceInfo.SerialNumber", f"{_IGD}.DeviceInfo.SerialNumber"],
+        "Firmware": [
+            f"{_DEV}.DeviceInfo.SoftwareVersion",
+            f"{_IGD}.DeviceInfo.SoftwareVersion",
+        ],
+        "Hardware": [
+            f"{_DEV}.DeviceInfo.HardwareVersion",
+            f"{_IGD}.DeviceInfo.HardwareVersion",
+        ],
+        "Serial": [
+            f"{_DEV}.DeviceInfo.SerialNumber",
+            f"{_IGD}.DeviceInfo.SerialNumber",
+        ],
         "Uptime": [f"{_DEV}.DeviceInfo.UpTime", f"{_IGD}.DeviceInfo.UpTime"],
         "CPU Usage": [f"{_DEV}.DeviceInfo.ProcessStatus.CPUUsage"],
-        "Memory Total": [f"{_DEV}.DeviceInfo.MemoryStatus.Total", f"{_IGD}.DeviceInfo.MemoryStatus.Total"],
-        "Memory Free": [f"{_DEV}.DeviceInfo.MemoryStatus.Free", f"{_IGD}.DeviceInfo.MemoryStatus.Free"],
+        "Memory Total": [
+            f"{_DEV}.DeviceInfo.MemoryStatus.Total",
+            f"{_IGD}.DeviceInfo.MemoryStatus.Total",
+        ],
+        "Memory Free": [
+            f"{_DEV}.DeviceInfo.MemoryStatus.Free",
+            f"{_IGD}.DeviceInfo.MemoryStatus.Free",
+        ],
         "MAC Address": [
             f"{_DEV}.Ethernet.Interface.1.MACAddress",
             f"{_IGD}.LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress",
@@ -137,7 +155,9 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
 }
 
 # Ethernet port object paths (we enumerate ports 1-4)
-_ETH_PORT_PATHS_IGD = "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.{i}."
+_ETH_PORT_PATHS_IGD = (
+    "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.{i}."
+)
 _ETH_PORT_PATHS_DEV = "Device.Ethernet.Interface.{i}."
 _ETH_FIELDS = ["Enable", "Status", "MaxBitRate", "DuplexMode", "MACAddress"]
 
@@ -229,7 +249,9 @@ def _extract_group(
     for label, paths in group.items():
         # Try vendor-specific paths from parameter map
         canonical = f"{group_name}.{label.lower().replace(' ', '_')}"
-        custom_paths = _resolve_param_paths_from_capability(db, vendor, model, canonical)
+        custom_paths = _resolve_param_paths_from_capability(
+            db, vendor, model, canonical
+        )
         effective_paths = custom_paths if custom_paths else paths
         result[label] = _extract_first(client, device, effective_paths)
     return result
@@ -317,10 +339,18 @@ class OntTR069:
         ont_model = getattr(ont, "model", None)
 
         summary = TR069Summary(available=True, ont_id=str(ont.id))
-        summary.system = _extract_group(client, device, "system", db=db, vendor=ont_vendor, model=ont_model)
-        summary.wan = _extract_group(client, device, "wan", db=db, vendor=ont_vendor, model=ont_model)
-        summary.lan = _extract_group(client, device, "lan", db=db, vendor=ont_vendor, model=ont_model)
-        summary.wireless = _extract_group(client, device, "wireless", db=db, vendor=ont_vendor, model=ont_model)
+        summary.system = _extract_group(
+            client, device, "system", db=db, vendor=ont_vendor, model=ont_model
+        )
+        summary.wan = _extract_group(
+            client, device, "wan", db=db, vendor=ont_vendor, model=ont_model
+        )
+        summary.lan = _extract_group(
+            client, device, "lan", db=db, vendor=ont_vendor, model=ont_model
+        )
+        summary.wireless = _extract_group(
+            client, device, "wireless", db=db, vendor=ont_vendor, model=ont_model
+        )
 
         # Ethernet ports
         for base_path in [_ETH_PORT_PATHS_IGD, _ETH_PORT_PATHS_DEV]:
@@ -359,7 +389,9 @@ class OntTR069:
                 free = int(mem_free)
                 if total > 0:
                     used_pct = ((total - free) / total) * 100
-                    summary.system["Memory Usage"] = f"{used_pct:.1f}% ({free:,} / {total:,} KB)"
+                    summary.system["Memory Usage"] = (
+                        f"{used_pct:.1f}% ({free:,} / {total:,} KB)"
+                    )
             except (ValueError, TypeError):
                 pass
 
@@ -389,12 +421,16 @@ class OntTR069:
         return None
 
     @staticmethod
-    def _persist_observed_runtime(db: Session, ont: OntUnit, summary: TR069Summary) -> None:
+    def _persist_observed_runtime(
+        db: Session, ont: OntUnit, summary: TR069Summary
+    ) -> None:
         """Persist useful runtime/observed fields back onto OntUnit."""
         if not summary.available:
             return
 
-        tr069_serial = str(summary.system.get("Serial") or "").strip() if summary.system else ""
+        tr069_serial = (
+            str(summary.system.get("Serial") or "").strip() if summary.system else ""
+        )
         if tr069_serial:
             # Replace synthetic SNMP serials with real TR-069 serials when available.
             current_serial = str(getattr(ont, "serial_number", "") or "")
@@ -420,12 +456,20 @@ class OntTR069:
                     break
 
         wan_ip = str(summary.wan.get("WAN IP") or "").strip() if summary.wan else ""
-        pppoe_user = str(summary.wan.get("Username") or "").strip() if summary.wan else ""
-        pppoe_status = str(summary.wan.get("Status") or "").strip() if summary.wan else ""
-        raw_wan_mode = str(summary.wan.get("Connection Type") or "").strip() if summary.wan else ""
+        pppoe_user = (
+            str(summary.wan.get("Username") or "").strip() if summary.wan else ""
+        )
+        pppoe_status = (
+            str(summary.wan.get("Status") or "").strip() if summary.wan else ""
+        )
+        raw_wan_mode = (
+            str(summary.wan.get("Connection Type") or "").strip() if summary.wan else ""
+        )
         wan_mode = ""
         if raw_wan_mode:
-            normalized = raw_wan_mode.lower().replace(" ", "").replace("-", "").replace("_", "")
+            normalized = (
+                raw_wan_mode.lower().replace(" ", "").replace("-", "").replace("_", "")
+            )
             pppoe_mode = WanMode.pppoe.value if hasattr(WanMode, "pppoe") else ""
             dhcp_mode = WanMode.dhcp.value if hasattr(WanMode, "dhcp") else ""
             static_mode = (
@@ -456,11 +500,21 @@ class OntTR069:
         lan_hosts_count = (
             len(summary.lan_hosts)
             if summary.lan_hosts
-            else OntTR069._to_int(summary.lan.get("Connected Hosts") if summary.lan else None)
+            else OntTR069._to_int(
+                summary.lan.get("Connected Hosts") if summary.lan else None
+            )
         )
 
-        dhcp_enabled = OntTR069._to_bool(summary.lan.get("DHCP Enabled") if summary.lan else None)
-        lan_mode = "router" if dhcp_enabled is True else "bridge" if dhcp_enabled is False else None
+        dhcp_enabled = OntTR069._to_bool(
+            summary.lan.get("DHCP Enabled") if summary.lan else None
+        )
+        lan_mode = (
+            "router"
+            if dhcp_enabled is True
+            else "bridge"
+            if dhcp_enabled is False
+            else None
+        )
 
         if mac_address:
             ont.mac_address = mac_address

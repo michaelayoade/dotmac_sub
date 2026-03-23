@@ -94,7 +94,13 @@ def update_me(
     disallowed_fields: set[str]
     if principal_type == "system_user":
         person = _get_system_user_or_404(db, principal_id)
-        disallowed_fields = {"date_of_birth", "gender", "preferred_contact_method", "locale", "timezone"}
+        disallowed_fields = {
+            "date_of_birth",
+            "gender",
+            "preferred_contact_method",
+            "locale",
+            "timezone",
+        }
     else:
         person = _get_subscriber_or_404(db, principal_id)
         disallowed_fields = set()

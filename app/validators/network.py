@@ -35,7 +35,9 @@ def validate_cpe_device_links(
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
         if str(subscription.subscriber_id) != subscriber_id:
-            raise HTTPException(status_code=400, detail="Subscription does not belong to subscriber")
+            raise HTTPException(
+                status_code=400, detail="Subscription does not belong to subscriber"
+            )
     if service_address_id:
         _validate_address_belongs(db, subscriber, service_address_id)
 
@@ -53,9 +55,7 @@ def validate_ip_assignment_links(
     if subscription_add_on_id:
         sub_add_on = db.get(SubscriptionAddOn, subscription_add_on_id)
         if not sub_add_on:
-            raise HTTPException(
-                status_code=404, detail="Subscription add-on not found"
-            )
+            raise HTTPException(status_code=404, detail="Subscription add-on not found")
         if subscription_id and str(sub_add_on.subscription_id) != subscription_id:
             raise HTTPException(
                 status_code=400,
@@ -68,7 +68,9 @@ def validate_ip_assignment_links(
         if not subscription:
             raise HTTPException(status_code=404, detail="Subscription not found")
         if str(subscription.subscriber_id) != subscriber_id:
-            raise HTTPException(status_code=400, detail="Subscription does not belong to subscriber")
+            raise HTTPException(
+                status_code=400, detail="Subscription does not belong to subscriber"
+            )
 
     if service_address_id:
         _validate_address_belongs(db, subscriber, service_address_id)

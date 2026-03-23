@@ -27,9 +27,12 @@ from app.validators import catalog as catalog_validators
 
 logger = logging.getLogger(__name__)
 
+
 class OfferValidation(ListResponseMixin):
     @staticmethod
-    def validate(db: Session, payload: OfferValidationRequest) -> OfferValidationResponse:
+    def validate(
+        db: Session, payload: OfferValidationRequest
+    ) -> OfferValidationResponse:
         errors: list[str] = []
         offer = db.get(CatalogOffer, payload.offer_id)
         if not offer:
@@ -49,11 +52,11 @@ class OfferValidation(ListResponseMixin):
                 errors.append(str(exc.detail))
 
         add_on_links = (
-            db.query(OfferAddOn)
-            .filter(OfferAddOn.offer_id == payload.offer_id)
-            .all()
+            db.query(OfferAddOn).filter(OfferAddOn.offer_id == payload.offer_id).all()
         )
-        required_add_on_ids = {link.add_on_id for link in add_on_links if link.is_required}
+        required_add_on_ids = {
+            link.add_on_id for link in add_on_links if link.is_required
+        }
         provided_add_on_ids = {item.add_on_id for item in payload.add_ons}
         missing_required = required_add_on_ids.difference(provided_add_on_ids)
         if missing_required:
@@ -120,7 +123,10 @@ class OfferValidation(ListResponseMixin):
                 .all()
             )
             for add_on_price in add_on_prices:
-                if add_on_price.billing_cycle and add_on_price.billing_cycle != billing_cycle:
+                if (
+                    add_on_price.billing_cycle
+                    and add_on_price.billing_cycle != billing_cycle
+                ):
                     continue
                 extended = Decimal(str(add_on_price.amount)) * Decimal(add_on.quantity)
                 prices.append(

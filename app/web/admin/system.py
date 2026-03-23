@@ -102,6 +102,7 @@ DB_INSPECTOR_COOKIE = "dbi_confirm"
 
 def _placeholder_context(request: Request, db: Session, title: str, active_page: str):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return {
         "request": request,
         "active_page": active_page,
@@ -120,7 +121,9 @@ def _dbi_principal_id(request: Request) -> str:
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request) or {}
-    principal = str(current_user.get("subscriber_id") or current_user.get("id") or "").strip()
+    principal = str(
+        current_user.get("subscriber_id") or current_user.get("id") or ""
+    ).strip()
     if not principal:
         raise HTTPException(status_code=401, detail="Unable to resolve current user")
     return principal
@@ -145,6 +148,7 @@ def system_health_page(request: Request, db: Session = Depends(get_db)):
 def _workflow_context(request: Request, db: Session, error: str | None = None):
     """Build context for workflow page - simplified after CRM cleanup."""
     from app.web.admin import get_current_user, get_sidebar_stats
+
     context = {
         "request": request,
         "active_page": "workflow",
@@ -156,7 +160,12 @@ def _workflow_context(request: Request, db: Session, error: str | None = None):
         context["error"] = error
     return context
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def system_overview(request: Request, db: Session = Depends(get_db)):
     """System settings overview."""
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -175,7 +184,11 @@ def system_overview(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/modules", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/modules",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def modules_manager_page(request: Request, db: Session = Depends(get_db)):
     """Main module manager with module and feature toggles."""
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -195,7 +208,9 @@ def modules_manager_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/modules", dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/modules", dependencies=[Depends(require_permission("system:settings:write"))]
+)
 def modules_manager_save(request: Request, db: Session = Depends(get_db)):
     """Persist module manager toggles."""
     form = parse_form_data_sync(request)
@@ -203,11 +218,15 @@ def modules_manager_save(request: Request, db: Session = Depends(get_db)):
     feature_payload: dict[str, bool] = {}
 
     for module_name in module_manager_service.MODULE_KEY_MAP:
-        module_payload[module_name] = str(form.get(f"module__{module_name}") or "").lower() == "true"
+        module_payload[module_name] = (
+            str(form.get(f"module__{module_name}") or "").lower() == "true"
+        )
 
     for feature_map in module_manager_service.MODULE_FEATURE_MAP.values():
         for feature_name in feature_map:
-            feature_payload[feature_name] = str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+            feature_payload[feature_name] = (
+                str(form.get(f"feature__{feature_name}") or "").lower() == "true"
+            )
 
     module_manager_service.update_module_flags(db, payload=module_payload)
     module_manager_service.update_feature_flags(db, payload=feature_payload)
@@ -227,7 +246,11 @@ def system_import_wizard(request: Request, db: Session = Depends(get_db)):
     rollback_error = request.query_params.get("rollback_error")
     job_notice = request.query_params.get("job_notice")
     active_job_id = request.query_params.get("job_id")
-    active_job = web_system_import_wizard_service.get_job(db, active_job_id) if active_job_id else None
+    active_job = (
+        web_system_import_wizard_service.get_job(db, active_job_id)
+        if active_job_id
+        else None
+    )
     return templates.TemplateResponse(
         "admin/system/import_wizard.html",
         {
@@ -259,7 +282,9 @@ def system_import_template_csv(
     return StreamingResponse(
         iter([content]),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename=\"import_template_{module}.csv\"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="import_template_{module}.csv"'
+        },
     )
 
 
@@ -311,6 +336,7 @@ def system_import_wizard_submit(
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     current_user = get_current_user(request)
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "").strip()
@@ -321,7 +347,9 @@ def system_import_wizard_submit(
     payload_file = cast(UploadFile | None, form.get("payload_file"))
     file_bytes: bytes | None = None
     if payload_file is not None and payload_file.filename:
-        source_name = source_name if source_name.strip() != "manual" else payload_file.filename
+        source_name = (
+            source_name if source_name.strip() != "manual" else payload_file.filename
+        )
         file_bytes = payload_file.file.read()
     dry_run = form.get("dry_run")
     column_mapping: dict[str, str] = {}
@@ -349,7 +377,9 @@ def system_import_wizard_submit(
                 {
                     "job_id": job_id,
                     "module": module,
-                    "module_label": web_system_import_wizard_service.ENTITY_CONFIG.get(module, {}).get("label", module),
+                    "module_label": web_system_import_wizard_service.ENTITY_CONFIG.get(
+                        module, {}
+                    ).get("label", module),
                     "source_name": source_name,
                     "status": "queued",
                     "queued_at": datetime.now(UTC).isoformat(),
@@ -370,7 +400,9 @@ def system_import_wizard_submit(
                 dry_run=dry_run is not None,
                 column_mapping=column_mapping,
                 csv_delimiter=csv_delimiter,
-                file_bytes_b64=b64encode(file_bytes).decode("ascii") if file_bytes is not None else None,
+                file_bytes_b64=b64encode(file_bytes).decode("ascii")
+                if file_bytes is not None
+                else None,
                 notify_email=(current_user.get("email") or "").strip() or None,
             )
             notice = quote_plus(
@@ -412,7 +444,9 @@ def system_import_wizard_submit(
                 },
                 **state,
             },
-            status_code=200 if result.get("status") in {"success", "dry_run", "partial"} else 400,
+            status_code=200
+            if result.get("status") in {"success", "dry_run", "partial"}
+            else 400,
         )
     except Exception as exc:
         state = web_system_import_wizard_service.build_page_state(db)
@@ -483,11 +517,19 @@ def system_export_tool(
     selected_include_headers = True
 
     if selected_template_id:
-        template_data = web_system_export_tool_service.get_export_template(db, selected_template_id)
+        template_data = web_system_export_tool_service.get_export_template(
+            db, selected_template_id
+        )
         if template_data:
-            config = template_data.get("config") if isinstance(template_data.get("config"), dict) else {}
+            config = (
+                template_data.get("config")
+                if isinstance(template_data.get("config"), dict)
+                else {}
+            )
             selected_module = str(config.get("module") or selected_module).strip()
-            selected_fields = [str(field) for field in config.get("selected_fields") or []]
+            selected_fields = [
+                str(field) for field in config.get("selected_fields") or []
+            ]
             selected_delimiter = str(config.get("delimiter") or ",")
             selected_export_format = str(config.get("export_format") or "csv")
             selected_date_from = str(config.get("date_from") or "").strip() or None
@@ -497,11 +539,15 @@ def system_export_tool(
 
     try:
         available_fields = web_system_export_tool_service.module_fields(selected_module)
-        status_options = web_system_export_tool_service.module_status_options(selected_module)
+        status_options = web_system_export_tool_service.module_status_options(
+            selected_module
+        )
     except Exception:
         selected_module = "subscribers"
         available_fields = web_system_export_tool_service.module_fields(selected_module)
-        status_options = web_system_export_tool_service.module_status_options(selected_module)
+        status_options = web_system_export_tool_service.module_status_options(
+            selected_module
+        )
 
     return templates.TemplateResponse(
         "admin/system/export_tool.html",
@@ -514,14 +560,20 @@ def system_export_tool(
             "module_options": web_system_export_tool_service.module_options(),
             "delimiter_options": web_system_export_tool_service.DELIMITER_OPTIONS,
             "export_format_options": web_system_export_tool_service.EXPORT_FORMAT_OPTIONS,
-            "export_templates": web_system_export_tool_service.list_export_templates(db),
+            "export_templates": web_system_export_tool_service.list_export_templates(
+                db
+            ),
             "selected_template_id": selected_template_id,
             "selected_module": selected_module,
             "available_fields": available_fields,
             "status_options": status_options,
             "frequency_options": web_system_export_tool_service.SCHEDULE_FREQUENCY_OPTIONS,
-            "export_schedules": web_system_export_tool_service.list_export_schedules(db),
-            "export_jobs": web_system_export_tool_service.list_export_jobs(db, limit=20),
+            "export_schedules": web_system_export_tool_service.list_export_schedules(
+                db
+            ),
+            "export_jobs": web_system_export_tool_service.list_export_jobs(
+                db, limit=20
+            ),
             "selected_fields": selected_fields or available_fields,
             "selected_delimiter": selected_delimiter,
             "selected_export_format": selected_export_format,
@@ -546,7 +598,9 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
 
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
-    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    selected_fields = [
+        str(field).strip() for field in form.getlist("fields") if str(field).strip()
+    ]
     delimiter = str(form.get("delimiter") or ",")
     export_format = str(form.get("export_format") or "csv")
     date_from = str(form.get("date_from") or "").strip() or None
@@ -597,18 +651,23 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
             notice = quote_plus(
                 f"Large export queued ({row_count} rows). Download link will be emailed when ready."
             )
-            return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+            return RedirectResponse(
+                f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+                status_code=303,
+            )
 
-        content, media_type, extension, row_count = web_system_export_tool_service.export_content(
-            db,
-            module=module,
-            selected_fields=selected_fields,
-            delimiter=delimiter,
-            export_format=export_format,
-            date_from=date_from,
-            date_to=date_to,
-            status=status,
-            include_headers=include_headers,
+        content, media_type, extension, row_count = (
+            web_system_export_tool_service.export_content(
+                db,
+                module=module,
+                selected_fields=selected_fields,
+                delimiter=delimiter,
+                export_format=export_format,
+                date_from=date_from,
+                date_to=date_to,
+                status=status,
+                include_headers=include_headers,
+            )
         )
         timestamp = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         filename = f"export_{module}_{row_count}_{timestamp}.{extension}"
@@ -634,14 +693,18 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
     except Exception as exc:
         error = quote_plus(str(exc))
         module_q = quote_plus(module)
-        return RedirectResponse(f"/admin/system/export?module={module_q}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={module_q}&error={error}", status_code=303
+        )
 
 
 @router.get(
     "/export/jobs/{job_id}/download",
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def system_export_job_download(request: Request, job_id: str, db: Session = Depends(get_db)):
+def system_export_job_download(
+    request: Request, job_id: str, db: Session = Depends(get_db)
+):
     from fastapi.responses import FileResponse
 
     from app.web.admin import get_current_user
@@ -667,7 +730,9 @@ def system_export_job_download(request: Request, job_id: str, db: Session = Depe
         entity_id=job_id,
         metadata={"filename": filename},
     )
-    return FileResponse(path=file_path, filename=filename, media_type="application/octet-stream")
+    return FileResponse(
+        path=file_path, filename=filename, media_type="application/octet-stream"
+    )
 
 
 @router.post(
@@ -678,7 +743,9 @@ def system_export_create_template(request: Request, db: Session = Depends(get_db
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
     template_name = str(form.get("template_name") or "").strip()
-    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    selected_fields = [
+        str(field).strip() for field in form.getlist("fields") if str(field).strip()
+    ]
     delimiter = str(form.get("delimiter") or ",")
     export_format = str(form.get("export_format") or "csv")
     date_from = str(form.get("date_from") or "").strip() or None
@@ -706,7 +773,10 @@ def system_export_create_template(request: Request, db: Session = Depends(get_db
         )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -721,12 +791,20 @@ def system_export_delete_template(
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
     try:
-        web_system_export_tool_service.delete_export_template(db, template_id=template_id)
+        web_system_export_tool_service.delete_export_template(
+            db, template_id=template_id
+        )
         notice = quote_plus("Export template removed.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -736,7 +814,9 @@ def system_export_delete_template(
 def system_export_create_schedule(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
-    selected_fields = [str(field).strip() for field in form.getlist("fields") if str(field).strip()]
+    selected_fields = [
+        str(field).strip() for field in form.getlist("fields") if str(field).strip()
+    ]
     delimiter = str(form.get("delimiter") or ",")
     export_format = str(form.get("export_format") or "csv").strip().lower()
     date_from = str(form.get("date_from") or "").strip() or None
@@ -747,7 +827,9 @@ def system_export_create_schedule(request: Request, db: Session = Depends(get_db
     recipient_email = str(form.get("recipient_email") or "").strip()
     frequency = str(form.get("frequency") or "weekly").strip().lower()
     custom_interval_raw = str(form.get("custom_interval_hours") or "").strip()
-    custom_interval_hours = int(custom_interval_raw) if custom_interval_raw.isdigit() else None
+    custom_interval_hours = (
+        int(custom_interval_raw) if custom_interval_raw.isdigit() else None
+    )
 
     try:
         web_system_export_tool_service.create_export_schedule(
@@ -766,10 +848,16 @@ def system_export_create_schedule(request: Request, db: Session = Depends(get_db
             custom_interval_hours=custom_interval_hours,
         )
         notice = quote_plus("Scheduled export created.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -791,10 +879,16 @@ def system_export_toggle_schedule(
             enabled=enabled,
         )
         notice = quote_plus("Scheduled export updated.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -809,12 +903,20 @@ def system_export_delete_schedule(
     form = parse_form_data_sync(request)
     module = str(form.get("module") or "subscribers").strip()
     try:
-        web_system_export_tool_service.delete_export_schedule(db, schedule_id=schedule_id)
+        web_system_export_tool_service.delete_export_schedule(
+            db, schedule_id=schedule_id
+        )
         notice = quote_plus("Scheduled export removed.")
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&notice={notice}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&notice={notice}",
+            status_code=303,
+        )
     except Exception as exc:
         error = quote_plus(str(exc))
-        return RedirectResponse(f"/admin/system/export?module={quote_plus(module)}&error={error}", status_code=303)
+        return RedirectResponse(
+            f"/admin/system/export?module={quote_plus(module)}&error={error}",
+            status_code=303,
+        )
 
 
 @router.post(
@@ -826,7 +928,9 @@ def system_import_wizard_rollback(
     db: Session = Depends(get_db),
 ):
     try:
-        result = web_system_import_wizard_service.rollback_import(db, import_id=import_id)
+        result = web_system_import_wizard_service.rollback_import(
+            db, import_id=import_id
+        )
         notice = quote_plus(
             f"Import {import_id} rolled back: {result['rolled_back_rows']} rows removed."
         )
@@ -842,7 +946,11 @@ def system_import_wizard_rollback(
         )
 
 
-@router.get("/users", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def users_list(
     request: Request,
     search: str | None = None,
@@ -887,6 +995,7 @@ def users_list(
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/users/index.html",
         {
@@ -903,7 +1012,11 @@ def users_list(
     )
 
 
-@router.get("/users/search", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users/search",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def users_search(
     request: Request,
     search: str | None = None,
@@ -938,7 +1051,11 @@ def users_search(
     )
 
 
-@router.get("/users/filter", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users/filter",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def users_filter(
     request: Request,
     search: str | None = None,
@@ -1047,7 +1164,9 @@ def user_profile_update(
     return templates.TemplateResponse("admin/system/profile.html", context)
 
 
-@router.post("/users/bulk/user-type", dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/bulk/user-type", dependencies=[Depends(require_permission("rbac:assign"))]
+)
 def users_bulk_set_user_type(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
@@ -1070,7 +1189,9 @@ def users_bulk_set_user_type(
     }
 
 
-@router.post("/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))]
+)
 def users_bulk_delete(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
@@ -1090,7 +1211,9 @@ def users_bulk_delete(
     }
 
 
-@router.post("/users/bulk/invite", dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/bulk/invite", dependencies=[Depends(require_permission("rbac:assign"))]
+)
 def users_bulk_invite(
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
@@ -1110,7 +1233,11 @@ def users_bulk_invite(
     }
 
 
-@router.get("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/users/{user_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1138,7 +1265,11 @@ def user_detail(request: Request, user_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/users/{user_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.get(
+    "/users/{user_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1169,11 +1300,15 @@ def user_edit(request: Request, user_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/users/{user_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_edit_submit(
     request: Request,
     user_id: str,
-    form_data = Depends(parse_form_data),
+    form_data=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -1211,13 +1346,17 @@ def user_edit_submit(
             direct_permission_ids=direct_permission_ids,
             new_password=new_password,
             confirm_password=confirm_password,
-            require_password_change=web_system_common_service.form_bool(require_password_change),
+            require_password_change=web_system_common_service.form_bool(
+                require_password_change
+            ),
             is_admin=web_system_common_service.is_admin_request(request),
             actor_id=getattr(request.state, "actor_id", None),
         )
     except Exception as exc:
         db.rollback()
-        edit_data = web_system_user_edit_service.build_edit_state(db, subscriber=system_user)
+        edit_data = web_system_user_edit_service.build_edit_state(
+            db, subscriber=system_user
+        )
         return templates.TemplateResponse(
             "admin/system/users/edit.html",
             {
@@ -1228,7 +1367,9 @@ def user_edit_submit(
                 "all_permissions": edit_data["all_permissions"],
                 "direct_permission_ids": edit_data["direct_permission_ids"],
                 "user_type_options": web_system_users_service.USER_TYPE_OPTIONS,
-                "can_update_password": web_system_common_service.is_admin_request(request),
+                "can_update_password": web_system_common_service.is_admin_request(
+                    request
+                ),
                 "active_page": "users",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -1240,29 +1381,49 @@ def user_edit_submit(
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/activate", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/activate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_activate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.set_user_active(db, user_id=user_id, is_active=True)
+    web_system_user_mutations_service.set_user_active(
+        db, user_id=user_id, is_active=True
+    )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/deactivate", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/deactivate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.set_user_active(db, user_id=user_id, is_active=False)
+    web_system_user_mutations_service.set_user_active(
+        db, user_id=user_id, is_active=False
+    )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/disable-mfa", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/disable-mfa",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
     web_system_user_mutations_service.disable_user_mfa(db, user_id=user_id)
     return Response(status_code=204)
 
 
-@router.post("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/reset-password",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_reset_password(request: Request, user_id: str, db: Session = Depends(get_db)):
     try:
         note = web_system_user_mutations_service.send_password_reset_link_for_user(
@@ -1285,13 +1446,21 @@ def user_reset_password(request: Request, user_id: str, db: Session = Depends(ge
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.get("/users/{user_id}/reset-password", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.get(
+    "/users/{user_id}/reset-password",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_reset_password_get_fallback(user_id: str):
     """Fallback for auth-refresh GET redirect on reset-password action URLs."""
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users/{user_id}/invite", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users/{user_id}/invite",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_db)):
     try:
         note = web_system_user_mutations_service.send_user_invite_for_user(
@@ -1314,13 +1483,21 @@ def user_send_invite(request: Request, user_id: str, db: Session = Depends(get_d
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.get("/users/{user_id}/invite", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.get(
+    "/users/{user_id}/invite",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_send_invite_get_fallback(user_id: str):
     """Fallback for auth-refresh GET redirect on invite action URLs."""
     return RedirectResponse(url=f"/admin/system/users/{user_id}", status_code=303)
 
 
-@router.post("/users", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.post(
+    "/users",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_create(
     request: Request,
     first_name: str = Form(...),
@@ -1333,17 +1510,21 @@ def user_create(
 ):
     system_user = None
     try:
-        system_user, _ = web_system_user_mutations_service.create_user_with_role_and_password(
-            db,
-            first_name=first_name,
-            last_name=last_name,
-            email=email,
-            role_id=role_id,
-            user_type="system_user",
+        system_user, _ = (
+            web_system_user_mutations_service.create_user_with_role_and_password(
+                db,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                role_id=role_id,
+                user_type="system_user",
+            )
         )
     except IntegrityError as exc:
         db.rollback()
-        return web_system_common_service.error_banner(web_system_common_service.humanize_integrity_error(exc))
+        return web_system_common_service.error_banner(
+            web_system_common_service.humanize_integrity_error(exc)
+        )
 
     note = "User created. Ask the user to reset their password."
     if send_invite and system_user is not None:
@@ -1358,24 +1539,36 @@ def user_create(
     )
 
 
-@router.delete("/users/{user_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:assign"))])
+@router.delete(
+    "/users/{user_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:assign"))],
+)
 def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
     system_user = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
     if not system_user:
         raise HTTPException(status_code=404, detail="User not found")
     if system_user.is_active:
-        return web_system_common_service.blocked_delete_response(request, [], detail="Deactivate user before deleting.")
+        return web_system_common_service.blocked_delete_response(
+            request, [], detail="Deactivate user before deleting."
+        )
     try:
         web_system_user_mutations_service.delete_user_records(db, user_id=user_id)
     except IntegrityError:
         db.rollback()
-        return web_system_common_service.blocked_delete_response(request, [], detail="User cannot be deleted due to linked records.")
+        return web_system_common_service.blocked_delete_response(
+            request, [], detail="User cannot be deleted due to linked records."
+        )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Redirect": "/admin/system/users"})
     return RedirectResponse(url="/admin/system/users", status_code=303)
 
 
-@router.get("/roles", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:read"))])
+@router.get(
+    "/roles",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:read"))],
+)
 def roles_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1390,6 +1583,7 @@ def roles_list(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/roles.html",
         {
@@ -1403,10 +1597,15 @@ def roles_list(
     )
 
 
-@router.get("/roles/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.get(
+    "/roles/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_system_form_views_service.get_role_new_form_context(db)
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/roles_form.html",
         {
@@ -1420,7 +1619,11 @@ def role_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/roles", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.post(
+    "/roles",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_create(
     request: Request,
     name: str = Form(...),
@@ -1447,6 +1650,7 @@ def role_create(
             permission_ids=permission_ids,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/roles_form.html",
             {
@@ -1466,7 +1670,11 @@ def role_create(
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
-@router.get("/roles/{role_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.get(
+    "/roles/{role_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_edit(request: Request, role_id: str, db: Session = Depends(get_db)):
     try:
         form_data = web_system_role_forms_service.get_role_edit_data(db, role_id)
@@ -1477,6 +1685,7 @@ def role_edit(request: Request, role_id: str, db: Session = Depends(get_db)):
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/roles_form.html",
         {
@@ -1495,7 +1704,11 @@ def role_edit(request: Request, role_id: str, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/roles/{role_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:write"))])
+@router.post(
+    "/roles/{role_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:write"))],
+)
 def role_update(
     request: Request,
     role_id: str,
@@ -1524,6 +1737,7 @@ def role_update(
             permission_ids=permission_ids,
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/roles_form.html",
             {
@@ -1543,13 +1757,21 @@ def role_update(
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
-@router.post("/roles/{role_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:roles:delete"))])
+@router.post(
+    "/roles/{role_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:roles:delete"))],
+)
 def role_delete(request: Request, role_id: str, db: Session = Depends(get_db)):
     rbac_service.roles.delete(db, role_id)
     return RedirectResponse(url="/admin/system/roles", status_code=303)
 
 
-@router.get("/permissions", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:read"))])
+@router.get(
+    "/permissions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:read"))],
+)
 def permissions_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1563,6 +1785,7 @@ def permissions_list(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/permissions.html",
         {
@@ -1576,10 +1799,15 @@ def permissions_list(
     )
 
 
-@router.get("/permissions/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
+@router.get(
+    "/permissions/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
 def permission_new(request: Request, db: Session = Depends(get_db)):
     form_context = web_system_form_views_service.get_permission_new_form_context()
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/permissions_form.html",
         {
@@ -1593,7 +1821,11 @@ def permission_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/permissions", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
+@router.post(
+    "/permissions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
 def permission_create(
     request: Request,
     key: str = Form(...),
@@ -1616,6 +1848,7 @@ def permission_create(
             submit_label="Create Permission",
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/permissions_form.html",
             {
@@ -1632,8 +1865,14 @@ def permission_create(
     return RedirectResponse(url="/admin/system/permissions", status_code=303)
 
 
-@router.get("/permissions/{permission_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
-def permission_edit(request: Request, permission_id: str, db: Session = Depends(get_db)):
+@router.get(
+    "/permissions/{permission_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
+def permission_edit(
+    request: Request, permission_id: str, db: Session = Depends(get_db)
+):
     form_context = web_system_form_views_service.get_permission_edit_form_context(
         db,
         permission_id,
@@ -1645,6 +1884,7 @@ def permission_edit(request: Request, permission_id: str, db: Session = Depends(
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/permissions_form.html",
         {
@@ -1658,7 +1898,11 @@ def permission_edit(request: Request, permission_id: str, db: Session = Depends(
     )
 
 
-@router.post("/permissions/{permission_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:write"))])
+@router.post(
+    "/permissions/{permission_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:write"))],
+)
 def permission_update(
     request: Request,
     permission_id: str,
@@ -1682,6 +1926,7 @@ def permission_update(
             submit_label="Save Changes",
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/system/permissions_form.html",
             {
@@ -1698,7 +1943,11 @@ def permission_update(
     return RedirectResponse(url="/admin/system/permissions", status_code=303)
 
 
-@router.post("/permissions/{permission_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("rbac:permissions:delete"))])
+@router.post(
+    "/permissions/{permission_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("rbac:permissions:delete"))],
+)
 def permission_delete(
     request: Request, permission_id: str, db: Session = Depends(get_db)
 ):
@@ -1707,7 +1956,9 @@ def permission_delete(
 
 
 @router.get("/api-keys", response_class=HTMLResponse)
-def api_keys_list(request: Request, new_key: str | None = None, db: Session = Depends(get_db)):
+def api_keys_list(
+    request: Request, new_key: str | None = None, db: Session = Depends(get_db)
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     current_user = get_current_user(request)
@@ -1767,8 +2018,7 @@ def api_key_create(
 
         # Return to list with the new key shown
         return RedirectResponse(
-            url=f"/admin/system/api-keys?new_key={raw_key}",
-            status_code=303
+            url=f"/admin/system/api-keys?new_key={raw_key}", status_code=303
         )
     except Exception as e:
         context = {
@@ -1788,9 +2038,14 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
 
-@router.get("/webhooks", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/webhooks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def webhooks_list(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
+
     page_data = web_system_webhooks_service.get_webhooks_list_data(db)
 
     context = {
@@ -1804,7 +2059,11 @@ def webhooks_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/webhooks.html", context)
 
 
-@router.get("/webhooks/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.get(
+    "/webhooks/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_new(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1820,7 +2079,11 @@ def webhook_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.post("/webhooks", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/webhooks",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_create(
     request: Request,
     name: str = Form(...),
@@ -1855,7 +2118,11 @@ def webhook_create(
         return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.get("/webhooks/{endpoint_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.get(
+    "/webhooks/{endpoint_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -1877,7 +2144,11 @@ def webhook_edit(request: Request, endpoint_id: str, db: Session = Depends(get_d
     return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.post("/webhooks/{endpoint_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/webhooks/{endpoint_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def webhook_update(
     request: Request,
     endpoint_id: str,
@@ -1902,7 +2173,9 @@ def webhook_update(
             return RedirectResponse(url="/admin/system/webhooks", status_code=303)
         return RedirectResponse(url="/admin/system/webhooks", status_code=303)
     except Exception as e:
-        form_data = web_system_webhook_forms_service.get_webhook_form_data(db, endpoint_id)
+        form_data = web_system_webhook_forms_service.get_webhook_form_data(
+            db, endpoint_id
+        )
         context = {
             "request": request,
             "active_page": "webhooks",
@@ -1917,7 +2190,11 @@ def webhook_update(
         return templates.TemplateResponse("admin/system/webhook_form.html", context)
 
 
-@router.get("/audit", response_class=HTMLResponse, dependencies=[Depends(require_permission("audit:read"))])
+@router.get(
+    "/audit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("audit:read"))],
+)
 def audit_log(
     request: Request,
     actor_id: str | None = None,
@@ -1947,6 +2224,7 @@ def audit_log(
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/audit.html",
         {
@@ -1969,7 +2247,11 @@ def audit_log_legacy():
     return RedirectResponse(url="/admin/system/audit", status_code=307)
 
 
-@router.get("/scheduler", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/scheduler",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def scheduler_overview(
     request: Request,
     page: int = Query(1, ge=1),
@@ -1984,6 +2266,7 @@ def scheduler_overview(
     )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/system/scheduler.html",
         {
@@ -1997,12 +2280,20 @@ def scheduler_overview(
     )
 
 
-@router.get("/scheduler/{task_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
-def scheduler_task_detail(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.get(
+    "/scheduler/{task_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def scheduler_task_detail(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """View scheduled task details."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    detail_data = web_system_scheduler_service.get_scheduler_task_detail_data(db, task_id)
+    detail_data = web_system_scheduler_service.get_scheduler_task_detail_data(
+        db, task_id
+    )
     if not detail_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -2025,44 +2316,80 @@ def scheduler_task_detail(request: Request, task_id: str, db: Session = Depends(
     )
 
 
-@router.post("/scheduler/{task_id}/enable", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-def scheduler_task_enable(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/scheduler/{task_id}/enable",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_enable(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """Enable a scheduled task."""
     from app.schemas.scheduler import ScheduledTaskUpdate
-    scheduler_service.scheduled_tasks.update(db, task_id, ScheduledTaskUpdate(enabled=True))
+
+    scheduler_service.scheduled_tasks.update(
+        db, task_id, ScheduledTaskUpdate(enabled=True)
+    )
     return RedirectResponse(url=f"/admin/system/scheduler/{task_id}", status_code=303)
 
 
-@router.post("/scheduler/{task_id}/disable", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-def scheduler_task_disable(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/scheduler/{task_id}/disable",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_disable(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """Disable a scheduled task."""
     from app.schemas.scheduler import ScheduledTaskUpdate
-    scheduler_service.scheduled_tasks.update(db, task_id, ScheduledTaskUpdate(enabled=False))
+
+    scheduler_service.scheduled_tasks.update(
+        db, task_id, ScheduledTaskUpdate(enabled=False)
+    )
     return RedirectResponse(url=f"/admin/system/scheduler/{task_id}", status_code=303)
 
 
-@router.post("/scheduler/{task_id}/run", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/scheduler/{task_id}/run",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def scheduler_task_run(request: Request, task_id: str, db: Session = Depends(get_db)):
     """Manually trigger a scheduled task."""
     scheduler_service.enqueue_by_id(db, task_id)
     return RedirectResponse(url=f"/admin/system/scheduler/{task_id}", status_code=303)
 
 
-@router.post("/scheduler/{task_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
-def scheduler_task_delete(request: Request, task_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/scheduler/{task_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def scheduler_task_delete(
+    request: Request, task_id: str, db: Session = Depends(get_db)
+):
     """Delete a scheduled task."""
     scheduler_service.scheduled_tasks.delete(db, task_id)
     return RedirectResponse(url="/admin/system/scheduler", status_code=303)
 
 
-@router.get("/workflow", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/workflow",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def workflow_overview(request: Request, db: Session = Depends(get_db)):
     """Workflow and SLA configuration overview."""
     context = _workflow_context(request, db)
     return templates.TemplateResponse("admin/system/workflow.html", context)
 
 
-@router.get("/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def settings_overview(
     request: Request,
     domain: str | None = None,
@@ -2074,7 +2401,9 @@ def settings_overview(
     if domain == "notification":
         return RedirectResponse(url="/admin/system/email", status_code=303)
 
-    settings_context = web_system_settings_views_service.build_settings_context(db, domain)
+    settings_context = web_system_settings_views_service.build_settings_context(
+        db, domain
+    )
     context = web_system_settings_views_service.build_settings_page_context(
         request,
         db,
@@ -2086,19 +2415,25 @@ def settings_overview(
     )
 
 
-@router.post("/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:write"))])
+@router.post(
+    "/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def settings_update(
     request: Request,
     domain: str | None = Form(None),
-    form = Depends(parse_form_data),
+    form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     """Update system settings for a domain."""
     domain_value = domain or form.get("domain")
-    settings_context, errors = web_system_settings_forms_service.process_settings_update(
-        db=db,
-        domain_value=domain_value,
-        form=form,
+    settings_context, errors = (
+        web_system_settings_forms_service.process_settings_update(
+            db=db,
+            domain_value=domain_value,
+            form=form,
+        )
     )
     if domain_value == "notification":
         if not errors:
@@ -2295,7 +2630,9 @@ def _smtp_page_context(
     db: Session,
     extra: dict | None = None,
 ) -> dict:
-    settings_context = web_system_settings_views_service.build_settings_context(db, "notification")
+    settings_context = web_system_settings_views_service.build_settings_context(
+        db, "notification"
+    )
     return _config_context(
         request,
         db,
@@ -2381,7 +2718,9 @@ def settings_smtp_sender_delete(sender_key: str, db: Session = Depends(get_db)):
     current_default = email_service.get_default_smtp_sender_key(db)
     if current_default == normalized:
         if remaining:
-            email_service.set_default_smtp_sender_key(db, str(remaining[0].get("sender_key", "default")))
+            email_service.set_default_smtp_sender_key(
+                db, str(remaining[0].get("sender_key", "default"))
+            )
         else:
             email_service.set_default_smtp_sender_key(db, "default")
     return RedirectResponse(url="/admin/system/email#smtp-senders", status_code=303)
@@ -2440,11 +2779,13 @@ def settings_smtp_sender_activities(
 )
 def settings_bank_account_create(
     request: Request,
-    form = Depends(parse_form_data),
+    form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     try:
-        payload = web_system_billing_forms_service.build_bank_account_create_payload(form)
+        payload = web_system_billing_forms_service.build_bank_account_create_payload(
+            form
+        )
         billing_service.bank_accounts.create(db, payload)
         return RedirectResponse(
             url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
@@ -2472,11 +2813,13 @@ def settings_bank_account_create(
 def settings_bank_account_update(
     request: Request,
     bank_account_id: UUID,
-    form = Depends(parse_form_data),
+    form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
     try:
-        payload = web_system_billing_forms_service.build_bank_account_update_payload(form)
+        payload = web_system_billing_forms_service.build_bank_account_update_payload(
+            form
+        )
         billing_service.bank_accounts.update(db, str(bank_account_id), payload)
         return RedirectResponse(
             url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
@@ -2633,7 +2976,11 @@ def restore_tool_restore(
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request) or {}
-    actor_id = str(current_user.get("subscriber_id")) if current_user.get("subscriber_id") else None
+    actor_id = (
+        str(current_user.get("subscriber_id"))
+        if current_user.get("subscriber_id")
+        else None
+    )
 
     result = web_system_restore_tool_service.restore_subscriber(
         db,
@@ -2802,7 +3149,11 @@ def db_inspector_query(
     table = str(form.get("table") or "").strip()
     row_limit_raw = str(form.get("row_limit") or "").strip()
     try:
-        row_limit = int(row_limit_raw) if row_limit_raw else web_system_db_inspector_service.DEFAULT_ROWS
+        row_limit = (
+            int(row_limit_raw)
+            if row_limit_raw
+            else web_system_db_inspector_service.DEFAULT_ROWS
+        )
     except ValueError:
         row_limit = web_system_db_inspector_service.DEFAULT_ROWS
 
@@ -2873,7 +3224,11 @@ def db_inspector_export_csv(
     query_text = str(form.get("query_text") or "")
     row_limit_raw = str(form.get("row_limit") or "").strip()
     try:
-        row_limit = int(row_limit_raw) if row_limit_raw else web_system_db_inspector_service.DEFAULT_ROWS
+        row_limit = (
+            int(row_limit_raw)
+            if row_limit_raw
+            else web_system_db_inspector_service.DEFAULT_ROWS
+        )
     except ValueError:
         row_limit = web_system_db_inspector_service.DEFAULT_ROWS
     result_payload = web_system_db_inspector_service.run_select_query(
@@ -2898,7 +3253,9 @@ def db_inspector_export_csv(
     return StreamingResponse(
         iter([csv_content]),
         media_type="text/csv",
-        headers={"Content-Disposition": 'attachment; filename="db_inspector_query.csv"'},
+        headers={
+            "Content-Disposition": 'attachment; filename="db_inspector_query.csv"'
+        },
     )
 
 
@@ -2935,7 +3292,9 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
             request,
             db,
             {
-                "active_page": "billing-setup" if selected_category == "billing" else "settings-hub",
+                "active_page": "billing-setup"
+                if selected_category == "billing"
+                else "settings-hub",
                 "selected_category": selected_category,
                 **data,
             },
@@ -2943,7 +3302,11 @@ def settings_hub(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/branding", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/branding",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def branding_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_settings_views_service.build_settings_context(
         db, web_system_settings_views_service.BRANDING_DOMAIN
@@ -2954,11 +3317,17 @@ def branding_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.get("/email", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:settings:read"))])
+@router.get(
+    "/email",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def email_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "admin/system/email.html",
-        _smtp_page_context(request, db, {"saved": request.query_params.get("saved") == "1"}),
+        _smtp_page_context(
+            request, db, {"saved": request.query_params.get("saved") == "1"}
+        ),
     )
 
 
@@ -2966,7 +3335,10 @@ def email_page(request: Request, db: Session = Depends(get_db)):
 @router.get("/company-info", response_class=HTMLResponse)
 def company_info_page(request: Request, db: Session = Depends(get_db)):
     info = web_system_company_info_service.get_company_info(db)
-    return templates.TemplateResponse("admin/system/company_info.html", _config_context(request, db, {"active_page": "company-info", "info": info}))
+    return templates.TemplateResponse(
+        "admin/system/company_info.html",
+        _config_context(request, db, {"active_page": "company-info", "info": info}),
+    )
 
 
 @router.post("/company-info", response_class=HTMLResponse)
@@ -2980,95 +3352,139 @@ def company_info_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/about", response_class=HTMLResponse)
 def system_about_page(request: Request, db: Session = Depends(get_db)):
     info = web_system_about_service.get_system_info(db)
-    return templates.TemplateResponse("admin/system/about.html", _config_context(request, db, {"active_page": "system-about", "info": info}))
+    return templates.TemplateResponse(
+        "admin/system/about.html",
+        _config_context(request, db, {"active_page": "system-about", "info": info}),
+    )
 
 
 # ===================================================================
 # Log Center Routes
 # ===================================================================
 
+
 @router.get("/logs", response_class=HTMLResponse)
 def logs_index(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_logs_index_context(db)
-    return templates.TemplateResponse("admin/system/logs/index.html", _config_context(request, db, {"active_page": "logs", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/index.html",
+        _config_context(request, db, {"active_page": "logs", **data}),
+    )
 
 
 @router.get("/logs/api", response_class=HTMLResponse)
 def logs_api(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_api_logs_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-api", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-api", **data}),
+    )
 
 
 @router.get("/logs/operations", response_class=HTMLResponse)
 def logs_operations(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_operations_log_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-operations", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-operations", **data}),
+    )
 
 
 @router.get("/logs/internal", response_class=HTMLResponse)
 def logs_internal(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_internal_log_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-internal", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-internal", **data}),
+    )
 
 
 @router.get("/logs/portal", response_class=HTMLResponse)
 def logs_portal(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_portal_activity_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-portal", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-portal", **data}),
+    )
 
 
 @router.get("/logs/email", response_class=HTMLResponse)
 def logs_email(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_email_log_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-email", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-email", **data}),
+    )
 
 
 @router.get("/logs/sms", response_class=HTMLResponse)
 def logs_sms(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_sms_log_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-sms", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-sms", **data}),
+    )
 
 
 @router.get("/logs/status-changes", response_class=HTMLResponse)
 def logs_status_changes(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_status_changes_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-status-changes", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-status-changes", **data}),
+    )
 
 
 @router.get("/logs/service-changes", response_class=HTMLResponse)
 def logs_service_changes(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_service_changes_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-service-changes", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-service-changes", **data}),
+    )
 
 
 @router.get("/logs/accounting", response_class=HTMLResponse)
 def logs_accounting(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_accounting_sync_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-accounting", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-accounting", **data}),
+    )
 
 
 @router.get("/logs/payment-gateway", response_class=HTMLResponse)
 def logs_payment_gateway(request: Request, db: Session = Depends(get_db)):
     data = web_system_logs_service.build_payment_gateway_log_context(request, db)
-    return templates.TemplateResponse("admin/system/logs/log_page.html", _config_context(request, db, {"active_page": "logs-payment-gateway", **data}))
+    return templates.TemplateResponse(
+        "admin/system/logs/log_page.html",
+        _config_context(request, db, {"active_page": "logs-payment-gateway", **data}),
+    )
 
 
 # ===================================================================
 # Configuration Page Routes (08_config features)
 # ===================================================================
 
+
 # --- 8.4 Notification Templates ---
 @router.get("/config/templates", response_class=HTMLResponse)
 def config_templates_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_templates_context(db)
-    return templates.TemplateResponse("admin/system/config/templates.html", _config_context(request, db, {"active_page": "config-templates", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/templates.html",
+        _config_context(request, db, {"active_page": "config-templates", **data}),
+    )
 
 
 # --- 8.5 System Preferences ---
 @router.get("/config/preferences", response_class=HTMLResponse)
 def config_preferences_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_preferences_context(db)
-    return templates.TemplateResponse("admin/system/config/preferences.html", _config_context(request, db, {"active_page": "config-preferences", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/preferences.html",
+        _config_context(request, db, {"active_page": "config-preferences", **data}),
+    )
 
 
 @router.post("/config/preferences", response_class=HTMLResponse)
@@ -3093,7 +3509,10 @@ def config_email_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/subscribers", response_class=HTMLResponse)
 def config_subscribers_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_subscriber_config_context(db)
-    return templates.TemplateResponse("admin/system/config/subscribers.html", _config_context(request, db, {"active_page": "config-subscribers", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/subscribers.html",
+        _config_context(request, db, {"active_page": "config-subscribers", **data}),
+    )
 
 
 @router.post("/config/subscribers", response_class=HTMLResponse)
@@ -3107,7 +3526,10 @@ def config_subscribers_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/portal", response_class=HTMLResponse)
 def config_portal_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_portal_config_context(db)
-    return templates.TemplateResponse("admin/system/config/portal.html", _config_context(request, db, {"active_page": "config-portal", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/portal.html",
+        _config_context(request, db, {"active_page": "config-portal", **data}),
+    )
 
 
 @router.post("/config/portal", response_class=HTMLResponse)
@@ -3121,7 +3543,10 @@ def config_portal_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/data-retention", response_class=HTMLResponse)
 def config_data_retention_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_retention_context(db)
-    return templates.TemplateResponse("admin/system/config/data_retention.html", _config_context(request, db, {"active_page": "config-data-retention", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/data_retention.html",
+        _config_context(request, db, {"active_page": "config-data-retention", **data}),
+    )
 
 
 @router.post("/config/data-retention", response_class=HTMLResponse)
@@ -3135,21 +3560,29 @@ def config_data_retention_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/finance-automation", response_class=HTMLResponse)
 def config_finance_auto_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_finance_automation_context(db)
-    return templates.TemplateResponse("admin/system/config/finance_automation.html", _config_context(request, db, {"active_page": "config-finance-auto", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/finance_automation.html",
+        _config_context(request, db, {"active_page": "config-finance-auto", **data}),
+    )
 
 
 @router.post("/config/finance-automation", response_class=HTMLResponse)
 def config_finance_auto_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_finance_automation(db, form)
-    return RedirectResponse(url="/admin/system/config/finance-automation", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/config/finance-automation", status_code=303
+    )
 
 
 # --- 8.12 Billing Settings ---
 @router.get("/config/billing", response_class=HTMLResponse)
 def config_billing_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_billing_config_context(db)
-    return templates.TemplateResponse("admin/system/config/billing.html", _config_context(request, db, {"active_page": "config-billing", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/billing.html",
+        _config_context(request, db, {"active_page": "config-billing", **data}),
+    )
 
 
 @router.post("/config/billing", response_class=HTMLResponse)
@@ -3163,21 +3596,30 @@ def config_billing_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/payment-methods", response_class=HTMLResponse)
 def config_payment_methods_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_payment_methods_context(db)
-    return templates.TemplateResponse("admin/system/config/payment_methods.html", _config_context(request, db, {"active_page": "config-payment-methods", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/payment_methods.html",
+        _config_context(request, db, {"active_page": "config-payment-methods", **data}),
+    )
 
 
 # --- 8.18 Tax Configuration ---
 @router.get("/config/tax", response_class=HTMLResponse)
 def config_tax_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_tax_config_context(db)
-    return templates.TemplateResponse("admin/system/config/tax.html", _config_context(request, db, {"active_page": "config-tax", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/tax.html",
+        _config_context(request, db, {"active_page": "config-tax", **data}),
+    )
 
 
 # --- 8.16 Billing Reminders ---
 @router.get("/config/reminders", response_class=HTMLResponse)
 def config_reminders_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_reminders_context(db)
-    return templates.TemplateResponse("admin/system/config/reminders.html", _config_context(request, db, {"active_page": "config-reminders", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/reminders.html",
+        _config_context(request, db, {"active_page": "config-reminders", **data}),
+    )
 
 
 @router.post("/config/reminders", response_class=HTMLResponse)
@@ -3191,21 +3633,29 @@ def config_reminders_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/billing-notifications", response_class=HTMLResponse)
 def config_billing_notif_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_billing_notifications_context(db)
-    return templates.TemplateResponse("admin/system/config/billing_notifications.html", _config_context(request, db, {"active_page": "config-billing-notif", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/billing_notifications.html",
+        _config_context(request, db, {"active_page": "config-billing-notif", **data}),
+    )
 
 
 @router.post("/config/billing-notifications", response_class=HTMLResponse)
 def config_billing_notif_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     web_system_config_service.save_billing_notifications(db, form)
-    return RedirectResponse(url="/admin/system/config/billing-notifications", status_code=303)
+    return RedirectResponse(
+        url="/admin/system/config/billing-notifications", status_code=303
+    )
 
 
 # --- 8.19 Plan Change ---
 @router.get("/config/plan-change", response_class=HTMLResponse)
 def config_plan_change_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_plan_change_context(db)
-    return templates.TemplateResponse("admin/system/config/plan_change.html", _config_context(request, db, {"active_page": "config-plan-change", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/plan_change.html",
+        _config_context(request, db, {"active_page": "config-plan-change", **data}),
+    )
 
 
 @router.post("/config/plan-change", response_class=HTMLResponse)
@@ -3259,7 +3709,9 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
         radius_reject_service.push_reject_rules_once(db)
     except Exception:
         # Do not block settings persistence if router push fails.
-        logger.warning("Failed to push RADIUS reject rules after config save", exc_info=True)
+        logger.warning(
+            "Failed to push RADIUS reject rules after config save", exc_info=True
+        )
     return RedirectResponse(url="/admin/system/config/radius", status_code=303)
 
 
@@ -3278,7 +3730,10 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
 @router.get("/config/cpe", response_class=HTMLResponse)
 def config_cpe_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_cpe_config_context(db)
-    return templates.TemplateResponse("admin/system/config/cpe.html", _config_context(request, db, {"active_page": "config-cpe", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/cpe.html",
+        _config_context(request, db, {"active_page": "config-cpe", **data}),
+    )
 
 
 @router.post("/config/cpe", response_class=HTMLResponse)
@@ -3292,7 +3747,10 @@ def config_cpe_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/monitoring", response_class=HTMLResponse)
 def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_monitoring_config_context(db)
-    return templates.TemplateResponse("admin/system/config/monitoring.html", _config_context(request, db, {"active_page": "config-monitoring", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/monitoring.html",
+        _config_context(request, db, {"active_page": "config-monitoring", **data}),
+    )
 
 
 @router.post("/config/monitoring", response_class=HTMLResponse)
@@ -3306,7 +3764,10 @@ def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/fup", response_class=HTMLResponse)
 def config_fup_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_fup_config_context(db)
-    return templates.TemplateResponse("admin/system/config/fup.html", _config_context(request, db, {"active_page": "config-fup", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/fup.html",
+        _config_context(request, db, {"active_page": "config-fup", **data}),
+    )
 
 
 @router.post("/config/fup", response_class=HTMLResponse)
@@ -3320,14 +3781,20 @@ def config_fup_save(request: Request, db: Session = Depends(get_db)):
 @router.get("/config/nas-types", response_class=HTMLResponse)
 def config_nas_types_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_nas_types_context(db)
-    return templates.TemplateResponse("admin/system/config/nas_types.html", _config_context(request, db, {"active_page": "config-nas-types", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/nas_types.html",
+        _config_context(request, db, {"active_page": "config-nas-types", **data}),
+    )
 
 
 # --- 8.27 IPv6 ---
 @router.get("/config/ipv6", response_class=HTMLResponse)
 def config_ipv6_page(request: Request, db: Session = Depends(get_db)):
     data = web_system_config_service.get_ipv6_config_context(db)
-    return templates.TemplateResponse("admin/system/config/ipv6.html", _config_context(request, db, {"active_page": "config-ipv6", **data}))
+    return templates.TemplateResponse(
+        "admin/system/config/ipv6.html",
+        _config_context(request, db, {"active_page": "config-ipv6", **data}),
+    )
 
 
 @router.post("/config/ipv6", response_class=HTMLResponse)
@@ -3362,22 +3829,26 @@ def secrets_management(
         path_clean = path.rstrip("/")
         meta = read_secret_metadata(path_clean) if available else {}
         fields = read_secret_fields(path_clean) if available else {}
-        secrets_list.append({
-            "path": path_clean,
-            "fields": list(fields.keys()),
-            "field_count": len(fields),
-            "version": meta.get("current_version", "?"),
-            "created_time": meta.get("created_time", ""),
-            "updated_time": meta.get("updated_time", ""),
-        })
+        secrets_list.append(
+            {
+                "path": path_clean,
+                "fields": list(fields.keys()),
+                "field_count": len(fields),
+                "version": meta.get("current_version", "?"),
+                "created_time": meta.get("created_time", ""),
+                "updated_time": meta.get("updated_time", ""),
+            }
+        )
 
     ctx = _placeholder_context(request, db, "Secrets", "secrets")
-    ctx.update({
-        "openbao_available": available,
-        "secrets_list": secrets_list,
-        "status": status,
-        "message": message,
-    })
+    ctx.update(
+        {
+            "openbao_available": available,
+            "secrets_list": secrets_list,
+            "status": status,
+            "message": message,
+        }
+    )
     return templates.TemplateResponse("admin/system/secrets.html", ctx)
 
 
@@ -3391,17 +3862,22 @@ def secrets_edit(request: Request, path: str, db: Session = Depends(get_db)):
     )
 
     if not is_openbao_available():
-        return RedirectResponse("/admin/system/secrets?status=error&message=OpenBao+not+available", status_code=303)
+        return RedirectResponse(
+            "/admin/system/secrets?status=error&message=OpenBao+not+available",
+            status_code=303,
+        )
 
     fields = read_secret_fields(path)
     meta = read_secret_metadata(path)
     ctx = _placeholder_context(request, db, "Secrets", "secrets")
-    ctx.update({
-        "secret_path": path,
-        "fields": fields,
-        "metadata": meta,
-        "error": None,
-    })
+    ctx.update(
+        {
+            "secret_path": path,
+            "fields": fields,
+            "metadata": meta,
+            "error": None,
+        }
+    )
     return templates.TemplateResponse("admin/system/secrets_edit.html", ctx)
 
 
@@ -3439,12 +3915,14 @@ def secrets_save(request: Request, path: str, db: Session = Depends(get_db)):
             status_code=303,
         )
     ctx = _placeholder_context(request, db, "Secrets", "secrets")
-    ctx.update({
-        "secret_path": path,
-        "fields": updated,
-        "metadata": {},
-        "error": "Failed to save secret to OpenBao",
-    })
+    ctx.update(
+        {
+            "secret_path": path,
+            "fields": updated,
+            "metadata": {},
+            "error": "Failed to save secret to OpenBao",
+        }
+    )
     return templates.TemplateResponse("admin/system/secrets_edit.html", ctx)
 
 
@@ -3505,4 +3983,6 @@ def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
         f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+deleted",
         status_code=303,
     )
+
+
 logger = logging.getLogger(__name__)

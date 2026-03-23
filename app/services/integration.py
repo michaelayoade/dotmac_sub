@@ -40,7 +40,9 @@ class IntegrationTargets(ListResponseMixin):
         if payload.connector_config_id:
             config = db.get(ConnectorConfig, payload.connector_config_id)
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         target = IntegrationTarget(**payload.model_dump())
         db.add(target)
         db.commit()
@@ -78,7 +80,10 @@ class IntegrationTargets(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": IntegrationTarget.created_at, "name": IntegrationTarget.name},
+            {
+                "created_at": IntegrationTarget.created_at,
+                "name": IntegrationTarget.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -101,7 +106,10 @@ class IntegrationTargets(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": IntegrationTarget.created_at, "name": IntegrationTarget.name},
+            {
+                "created_at": IntegrationTarget.created_at,
+                "name": IntegrationTarget.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -114,7 +122,9 @@ class IntegrationTargets(ListResponseMixin):
         if "connector_config_id" in data and data["connector_config_id"]:
             config = db.get(ConnectorConfig, data["connector_config_id"])
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         for key, value in data.items():
             setattr(target, key, value)
         db.commit()
@@ -172,7 +182,9 @@ class IntegrationJobs(ListResponseMixin):
         if schedule_type:
             query = query.filter(
                 IntegrationJob.schedule_type
-                == validate_enum(schedule_type, IntegrationScheduleType, "schedule_type")
+                == validate_enum(
+                    schedule_type, IntegrationScheduleType, "schedule_type"
+                )
             )
         if is_active is None:
             query = query.filter(IntegrationJob.is_active.is_(True))
@@ -208,7 +220,9 @@ class IntegrationJobs(ListResponseMixin):
         if schedule_type:
             query = query.filter(
                 IntegrationJob.schedule_type
-                == validate_enum(schedule_type, IntegrationScheduleType, "schedule_type")
+                == validate_enum(
+                    schedule_type, IntegrationScheduleType, "schedule_type"
+                )
             )
         query = apply_ordering(
             query,
@@ -227,7 +241,9 @@ class IntegrationJobs(ListResponseMixin):
         if "target_id" in data:
             target = db.get(IntegrationTarget, data["target_id"])
             if not target:
-                raise HTTPException(status_code=404, detail="Integration target not found")
+                raise HTTPException(
+                    status_code=404, detail="Integration target not found"
+                )
         for key, value in data.items():
             setattr(job, key, value)
         db.commit()

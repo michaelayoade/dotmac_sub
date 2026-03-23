@@ -37,7 +37,8 @@ class IntegrationConnector(Base):
         Enum(IntegrationConnectorType), default=IntegrationConnectorType.custom
     )
     status: Mapped[IntegrationConnectorStatus] = mapped_column(
-        Enum(IntegrationConnectorStatus), default=IntegrationConnectorStatus.not_installed
+        Enum(IntegrationConnectorStatus),
+        default=IntegrationConnectorStatus.not_installed,
     )
     configuration: Mapped[dict | None] = mapped_column(JSON)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -45,5 +46,7 @@ class IntegrationConnector(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )

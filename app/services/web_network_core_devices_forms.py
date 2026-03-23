@@ -142,7 +142,9 @@ def parent_devices_for_forms(
 
 def get_device(db: Session, device_id: str) -> NetworkDevice | None:
     """Return core device by id."""
-    return db.scalars(select(NetworkDevice).where(NetworkDevice.id == device_id)).first()
+    return db.scalars(
+        select(NetworkDevice).where(NetworkDevice.id == device_id)
+    ).first()
 
 
 def build_form_context(
@@ -278,13 +280,18 @@ def validate_values(
             while ancestor and ancestor.id not in visited:
                 visited.add(ancestor.id)
                 if ancestor.id == current_device.id:
-                    return None, "Invalid parent selection: would create a hierarchy cycle"
+                    return (
+                        None,
+                        "Invalid parent selection: would create a hierarchy cycle",
+                    )
                 ancestor = ancestor.parent_device
 
     if hostname:
         hostname_stmt = select(NetworkDevice).where(NetworkDevice.hostname == hostname)
         if current_device:
-            if db.scalars(hostname_stmt.where(NetworkDevice.id != current_device.id)).first():
+            if db.scalars(
+                hostname_stmt.where(NetworkDevice.id != current_device.id)
+            ).first():
                 return None, "Hostname already exists"
         elif db.scalars(hostname_stmt).first():
             return None, "Hostname already exists"
@@ -292,7 +299,9 @@ def validate_values(
     if mgmt_ip:
         mgmt_ip_stmt = select(NetworkDevice).where(NetworkDevice.mgmt_ip == mgmt_ip)
         if current_device:
-            if db.scalars(mgmt_ip_stmt.where(NetworkDevice.id != current_device.id)).first():
+            if db.scalars(
+                mgmt_ip_stmt.where(NetworkDevice.id != current_device.id)
+            ).first():
                 return None, "Management IP already exists"
         elif db.scalars(mgmt_ip_stmt).first():
             return None, "Management IP already exists"
@@ -410,7 +419,9 @@ def create_device(db: Session, values: dict[str, object]) -> CoreDeviceSubmitRes
         ping_enabled=bool(values.get("ping_enabled")),
         snmp_enabled=bool(values.get("snmp_enabled")),
         send_notifications=bool(values.get("send_notifications")),
-        notification_delay_minutes=cast(int, values.get("notification_delay_minutes") or 0),
+        notification_delay_minutes=cast(
+            int, values.get("notification_delay_minutes") or 0
+        ),
         snmp_port=values.get("snmp_port"),
         snmp_version=values.get("snmp_version"),
         snmp_community=values.get("snmp_community"),
@@ -499,7 +510,9 @@ def update_device(
     device.ping_enabled = bool(values.get("ping_enabled"))
     device.snmp_enabled = bool(values.get("snmp_enabled"))
     device.send_notifications = bool(values.get("send_notifications"))
-    device.notification_delay_minutes = cast(int, values.get("notification_delay_minutes") or 0)
+    device.notification_delay_minutes = cast(
+        int, values.get("notification_delay_minutes") or 0
+    )
     device.snmp_port = cast(int | None, values.get("snmp_port"))
     device.snmp_version = cast(str | None, values.get("snmp_version"))
     device.snmp_community = cast(str | None, values.get("snmp_community"))
@@ -546,7 +559,9 @@ def _sync_linked_nas_device_ip_state(
     nas_device.management_ip = normalized_ip
 
     # Keep the NAS IP copy aligned when it was mirroring the core device IP.
-    mirrored_ip_values = {value for value in (previous_mgmt_ip, previous_nas_management_ip) if value}
+    mirrored_ip_values = {
+        value for value in (previous_mgmt_ip, previous_nas_management_ip) if value
+    }
     if previous_nas_ip in mirrored_ip_values or previous_nas_ip is None:
         nas_device.ip_address = normalized_ip
     if previous_nas_radius_ip in mirrored_ip_values or previous_nas_radius_ip is None:
@@ -569,7 +584,9 @@ def _sync_linked_nas_device_ip_state(
         return
 
     radius_clients = list(
-        db.scalars(select(RadiusClient).where(RadiusClient.nas_device_id == nas_device.id)).all()
+        db.scalars(
+            select(RadiusClient).where(RadiusClient.nas_device_id == nas_device.id)
+        ).all()
     )
     for client in radius_clients:
         if client.client_ip in old_radius_ips:
@@ -708,7 +725,9 @@ def list_page_data(
         nas_devices = db.scalars(
             select(NasDevice).where(NasDevice.network_device_id.in_(device_ids))
         ).all()
-        nas_by_network_id = {str(n.network_device_id): n for n in nas_devices if n.network_device_id}
+        nas_by_network_id = {
+            str(n.network_device_id): n for n in nas_devices if n.network_device_id
+        }
         nas_ids = [n.id for n in nas_devices]
         latest_backup_by_nas_id: dict[UUID, NasConfigBackup] = {}
         if nas_ids:
@@ -722,25 +741,31 @@ def list_page_data(
                 .subquery()
             )
             latest_backups = db.scalars(
-                select(NasConfigBackup)
-                .join(
+                select(NasConfigBackup).join(
                     latest_backup_subq,
                     and_(
-                        NasConfigBackup.nas_device_id == latest_backup_subq.c.nas_device_id,
+                        NasConfigBackup.nas_device_id
+                        == latest_backup_subq.c.nas_device_id,
                         NasConfigBackup.created_at == latest_backup_subq.c.latest,
                     ),
                 )
             ).all()
-            latest_backup_by_nas_id = {backup.nas_device_id: backup for backup in latest_backups}
+            latest_backup_by_nas_id = {
+                backup.nas_device_id: backup for backup in latest_backups
+            }
 
         for device in devices:
             device_key = str(device.id)
             nas_device = nas_by_network_id.get(device_key)
-            latest_backup = latest_backup_by_nas_id.get(nas_device.id) if nas_device else None
+            latest_backup = (
+                latest_backup_by_nas_id.get(nas_device.id) if nas_device else None
+            )
             status = "none"
             if latest_backup:
                 notes = (latest_backup.notes or "").lower()
-                status = "failed" if ("fail" in notes or "error" in notes) else "success"
+                status = (
+                    "failed" if ("fail" in notes or "error" in notes) else "success"
+                )
             elif nas_device and nas_device.backup_enabled:
                 status = "stale"
             backup_map[device_key] = {
@@ -828,7 +853,9 @@ def detail_page_data(
                 continue
             descendants_visited.add(child.id)
             if child.parent_device_id:
-                descendants_by_parent.setdefault(child.parent_device_id, []).append(child)
+                descendants_by_parent.setdefault(child.parent_device_id, []).append(
+                    child
+                )
             descendants_frontier.append(child.id)
 
     def _tree(parent_id: UUID, depth: int = 0) -> list[dict[str, object]]:
@@ -944,7 +971,9 @@ def detail_page_data(
     ping_history = [
         {
             "ok": metric.unit == "ping_ms" and metric.value >= 0,
-            "label": f"{metric.value}ms" if (metric.unit == "ping_ms" and metric.value >= 0) else "Timeout",
+            "label": f"{metric.value}ms"
+            if (metric.unit == "ping_ms" and metric.value >= 0)
+            else "Timeout",
             "recorded_at": metric.recorded_at,
         }
         for metric in ping_history_metrics
@@ -1065,7 +1094,9 @@ def create_snmp_oid_for_device(
     return True, "SNMP OID added."
 
 
-def poll_snmp_oid_for_device(db: Session, *, device_id: str, snmp_oid_id: str) -> tuple[bool, str]:
+def poll_snmp_oid_for_device(
+    db: Session, *, device_id: str, snmp_oid_id: str
+) -> tuple[bool, str]:
     device = get_device(db, device_id)
     if not device:
         return False, "Device not found."
@@ -1111,7 +1142,9 @@ def toggle_snmp_oid_for_device(
     return True, "SNMP OID updated."
 
 
-def delete_snmp_oid_for_device(db: Session, *, device_id: str, snmp_oid_id: str) -> tuple[bool, str]:
+def delete_snmp_oid_for_device(
+    db: Session, *, device_id: str, snmp_oid_id: str
+) -> tuple[bool, str]:
     device = get_device(db, device_id)
     if not device:
         return False, "Device not found."
@@ -1134,7 +1167,9 @@ def run_snmp_walk_preview(
     try:
         from app.services.snmp_discovery import _run_snmpbulkwalk
 
-        lines = _run_snmpbulkwalk(device, base_oid.strip() or ".1.3.6.1.2.1", timeout=10)
+        lines = _run_snmpbulkwalk(
+            device, base_oid.strip() or ".1.3.6.1.2.1", timeout=10
+        )
         return lines[:200], None
     except Exception as exc:
         return [], f"SNMP walk failed: {exc!s}"
@@ -1176,7 +1211,9 @@ def _graph_preview_snapshot(
                 continue
             lines = _run_snmpwalk(graph.device, oid_ref.oid, timeout=8)
             numeric = _parse_numeric_value(lines)
-            scaled_value = None if numeric is None else numeric * float(source.factor or 1.0)
+            scaled_value = (
+                None if numeric is None else numeric * float(source.factor or 1.0)
+            )
             rows.append(
                 {
                     "source_id": str(source.id),
@@ -1225,11 +1262,15 @@ def bandwidth_graphs_page_data(
                 ),
             )
             .order_by(NetworkDeviceBandwidthGraph.created_at.desc())
-        ).unique().all()
+        )
+        .unique()
+        .all()
     )
     all_devices = list(
         db.scalars(
-            select(NetworkDevice).where(NetworkDevice.is_active.is_(True)).order_by(NetworkDevice.name)
+            select(NetworkDevice)
+            .where(NetworkDevice.is_active.is_(True))
+            .order_by(NetworkDevice.name)
         ).all()
     )
     all_oids = list(
@@ -1242,7 +1283,9 @@ def bandwidth_graphs_page_data(
     preview_rows: list[dict[str, object]] = []
     preview_for_graph: str | None = None
     if preview_graph_id:
-        graph = next((item for item in graphs if str(item.id) == str(preview_graph_id)), None)
+        graph = next(
+            (item for item in graphs if str(item.id) == str(preview_graph_id)), None
+        )
         if graph:
             preview_rows, preview_error = _graph_preview_snapshot(db, graph)
             preview_for_graph = str(graph.id)
@@ -1328,8 +1371,9 @@ def add_bandwidth_graph_source(
 
     next_order = (
         db.scalar(
-            select(func.coalesce(func.max(NetworkDeviceBandwidthGraphSource.sort_order), 0))
-            .where(NetworkDeviceBandwidthGraphSource.graph_id == graph.id)
+            select(
+                func.coalesce(func.max(NetworkDeviceBandwidthGraphSource.sort_order), 0)
+            ).where(NetworkDeviceBandwidthGraphSource.graph_id == graph.id)
         )
         or 0
     )
@@ -1463,7 +1507,9 @@ def get_public_bandwidth_graph(
 
 
 def _core_mapped_nas_device(db: Session, device: NetworkDevice) -> NasDevice | None:
-    return db.scalars(select(NasDevice).where(NasDevice.network_device_id == device.id)).first()
+    return db.scalars(
+        select(NasDevice).where(NasDevice.network_device_id == device.id)
+    ).first()
 
 
 def _tag_get(tags: list[str] | None, prefix: str) -> str | None:
@@ -1539,14 +1585,16 @@ def backup_page_data(
             item
             for item in backups
             if _ensure_utc(item.created_at)
-            and _ensure_utc(item.created_at) >= datetime.combine(from_d, time.min).replace(tzinfo=UTC)
+            and _ensure_utc(item.created_at)
+            >= datetime.combine(from_d, time.min).replace(tzinfo=UTC)
         ]
     if to_d:
         backups = [
             item
             for item in backups
             if _ensure_utc(item.created_at)
-            and _ensure_utc(item.created_at) <= datetime.combine(to_d, time.max).replace(tzinfo=UTC)
+            and _ensure_utc(item.created_at)
+            <= datetime.combine(to_d, time.max).replace(tzinfo=UTC)
         ]
 
     tags = nas_device.tags or []
@@ -1630,14 +1678,18 @@ def update_backup_settings_for_device(
     return True, "Backup configuration saved."
 
 
-def trigger_backup_for_core_device(db: Session, *, device_id: str, triggered_by: str = "web") -> tuple[bool, str]:
+def trigger_backup_for_core_device(
+    db: Session, *, device_id: str, triggered_by: str = "web"
+) -> tuple[bool, str]:
     device = get_device(db, device_id)
     if not device:
         return False, "Device not found."
     nas_device = _core_mapped_nas_device(db, device)
     if not nas_device:
         return False, "No linked NAS device for this core device."
-    result = nas_service.trigger_backup_for_device(db, device_id=str(nas_device.id), triggered_by=triggered_by)
+    result = nas_service.trigger_backup_for_device(
+        db, device_id=str(nas_device.id), triggered_by=triggered_by
+    )
     if result["ok"]:
         return True, "Backup triggered successfully."
     return False, str(result["error"] or "Backup trigger failed.")
@@ -1700,8 +1752,12 @@ def backup_compare_page_data(
             lineterm="",
         )
     )
-    added_lines = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
-    removed_lines = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+    added_lines = sum(
+        1 for line in diff_lines if line.startswith("+") and not line.startswith("+++")
+    )
+    removed_lines = sum(
+        1 for line in diff_lines if line.startswith("-") and not line.startswith("---")
+    )
 
     return {
         "device": device,
@@ -1718,7 +1774,9 @@ def backup_compare_page_data(
 
 def resolve_device_redirect(db: Session, device_id: str) -> str | None:
     """Find a device across various tables and return its detail URL."""
-    device = db.scalars(select(NetworkDevice).where(NetworkDevice.id == device_id)).first()
+    device = db.scalars(
+        select(NetworkDevice).where(NetworkDevice.id == device_id)
+    ).first()
     if device:
         return f"/admin/network/core-devices/{device_id}"
 

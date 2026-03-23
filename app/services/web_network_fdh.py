@@ -41,21 +41,19 @@ def regions_for_forms(db: Session) -> list:
     return cast(
         list["RegionZone"],
         catalog_service.region_zones.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=500,
-        offset=0,
+            db=db,
+            is_active=True,
+            order_by="name",
+            order_dir="asc",
+            limit=500,
+            offset=0,
         ),
     )
 
 
 def get_cabinet(db: Session, cabinet_id: str) -> FdhCabinet | None:
     """Get FDH cabinet by id."""
-    return db.scalars(
-        select(FdhCabinet).where(FdhCabinet.id == cabinet_id)
-    ).first()
+    return db.scalars(select(FdhCabinet).where(FdhCabinet.id == cabinet_id)).first()
 
 
 def build_form_context(
@@ -96,7 +94,9 @@ def validate_name(name: str) -> str | None:
     return None
 
 
-def parse_coordinates(latitude_raw: str, longitude_raw: str) -> tuple[float | None, float | None]:
+def parse_coordinates(
+    latitude_raw: str, longitude_raw: str
+) -> tuple[float | None, float | None]:
     """Parse optional latitude/longitude strings into floats."""
     try:
         latitude = float(latitude_raw) if latitude_raw else None
@@ -163,7 +163,9 @@ def update_cabinet(cabinet: FdhCabinet, values: dict[str, object]) -> None:
     cabinet.name = cast(str, values["name"])
     cabinet.code = cast(str | None, values.get("code"))
     cabinet.region_id = (
-        coerce_uuid(region_id) if (region_id := cast(str | None, values.get("region_id"))) else None
+        coerce_uuid(region_id)
+        if (region_id := cast(str | None, values.get("region_id")))
+        else None
     )
     cabinet.latitude = latitude
     cabinet.longitude = longitude
@@ -171,7 +173,9 @@ def update_cabinet(cabinet: FdhCabinet, values: dict[str, object]) -> None:
     cabinet.is_active = bool(values.get("is_active"))
 
 
-def commit_cabinet_update(db: Session, cabinet: FdhCabinet, values: dict[str, object]) -> None:
+def commit_cabinet_update(
+    db: Session, cabinet: FdhCabinet, values: dict[str, object]
+) -> None:
     """Apply form values and flush the cabinet update."""
     update_cabinet(cabinet, values)
     db.flush()
@@ -231,16 +235,16 @@ def cabinets_for_splitter_forms(db: Session) -> list[FdhCabinet]:
     """Return active cabinets for splitter form select options."""
     return list(
         db.scalars(
-            select(FdhCabinet).where(FdhCabinet.is_active.is_(True)).order_by(FdhCabinet.name)
+            select(FdhCabinet)
+            .where(FdhCabinet.is_active.is_(True))
+            .order_by(FdhCabinet.name)
         ).all()
     )
 
 
 def get_splitter(db: Session, splitter_id: str) -> Splitter | None:
     """Get splitter by id."""
-    return db.scalars(
-        select(Splitter).where(Splitter.id == splitter_id)
-    ).first()
+    return db.scalars(select(Splitter).where(Splitter.id == splitter_id)).first()
 
 
 def parse_splitter_form_values(form: FormData) -> dict[str, object]:
@@ -262,9 +266,7 @@ def validate_splitter_form(db: Session, values: dict[str, object]) -> str | None
         return "Splitter name is required"
     fdh_id = values.get("fdh_id")
     if fdh_id:
-        cabinet = db.scalars(
-            select(FdhCabinet).where(FdhCabinet.id == fdh_id)
-        ).first()
+        cabinet = db.scalars(select(FdhCabinet).where(FdhCabinet.id == fdh_id)).first()
         if not cabinet:
             return "FDH cabinet not found"
     return None
@@ -366,7 +368,9 @@ def update_splitter(splitter: Splitter, values: dict[str, object]) -> None:
     )
     splitter.name = cast(str, values["name"])
     splitter.fdh_id = (
-        coerce_uuid(fdh_id) if (fdh_id := cast(str | None, values.get("fdh_id"))) else None
+        coerce_uuid(fdh_id)
+        if (fdh_id := cast(str | None, values.get("fdh_id")))
+        else None
     )
     splitter.splitter_ratio = cast(str | None, values.get("splitter_ratio"))
     splitter.input_ports = input_ports
@@ -375,7 +379,9 @@ def update_splitter(splitter: Splitter, values: dict[str, object]) -> None:
     splitter.is_active = bool(values.get("is_active"))
 
 
-def commit_splitter_update(db: Session, splitter: Splitter, values: dict[str, object]) -> None:
+def commit_splitter_update(
+    db: Session, splitter: Splitter, values: dict[str, object]
+) -> None:
     """Apply form values and flush the splitter update."""
     update_splitter(splitter, values)
     db.flush()
@@ -410,7 +416,9 @@ def update_splitter_submission(
     return {"error": None, "form_context": None, "metadata": metadata}
 
 
-def splitter_detail_page_data(db: Session, splitter_id: str) -> dict[str, object] | None:
+def splitter_detail_page_data(
+    db: Session, splitter_id: str
+) -> dict[str, object] | None:
     """Return splitter detail payload including ports."""
     from app.models.network import SplitterPort
 

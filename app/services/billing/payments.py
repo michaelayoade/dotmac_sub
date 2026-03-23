@@ -71,6 +71,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class PaymentMethods(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentMethodCreate):
@@ -128,7 +129,10 @@ class PaymentMethods(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": PaymentMethod.created_at, "method_type": PaymentMethod.method_type},
+            {
+                "created_at": PaymentMethod.created_at,
+                "method_type": PaymentMethod.method_type,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -141,7 +145,10 @@ class PaymentMethods(ListResponseMixin):
         account_id = data.get("account_id", method.account_id)
         _validate_account(db, str(account_id))
         if "payment_channel_id" in data:
-            _validate_payment_channel(db, str(data["payment_channel_id"]) if data["payment_channel_id"] else None)
+            _validate_payment_channel(
+                db,
+                str(data["payment_channel_id"]) if data["payment_channel_id"] else None,
+            )
         if data.get("is_default"):
             db.query(PaymentMethod).filter(
                 PaymentMethod.account_id == account_id,
@@ -248,7 +255,9 @@ class BankAccounts(ListResponseMixin):
         data = payload.model_dump(exclude_unset=True)
         account_id = data.get("account_id", bank_account.account_id)
         _validate_account(db, str(account_id))
-        payment_method_id = data.get("payment_method_id", bank_account.payment_method_id)
+        payment_method_id = data.get(
+            "payment_method_id", bank_account.payment_method_id
+        )
         if payment_method_id:
             method = get_by_id(db, PaymentMethod, payment_method_id)
             if not method:
@@ -384,7 +393,11 @@ class Payments(ListResponseMixin):
             .filter(Invoice.is_active.is_(True))
             .filter(
                 Invoice.status.in_(
-                    [InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue]
+                    [
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    ]
                 )
             )
             .filter(Invoice.balance_due > 0)
@@ -408,7 +421,9 @@ class Payments(ListResponseMixin):
             )
             if existing_allocation:
                 # Allocation already exists - use its amount and skip creating
-                remaining = round_money(remaining - round_money(to_decimal(existing_allocation.amount)))
+                remaining = round_money(
+                    remaining - round_money(to_decimal(existing_allocation.amount))
+                )
                 allocations.append(existing_allocation)
                 continue
 
@@ -500,7 +515,9 @@ class Payments(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentCreate):
         if payload.amount is not None and payload.amount <= 0:
-            raise HTTPException(status_code=400, detail="Payment amount must be greater than 0")
+            raise HTTPException(
+                status_code=400, detail="Payment amount must be greater than 0"
+            )
         data = payload.model_dump(exclude={"allocations"})
         fields_set = payload.model_fields_set
         if "currency" not in fields_set:
@@ -514,16 +531,16 @@ class Payments(ListResponseMixin):
                 db, SettingDomain.billing, "default_payment_status"
             )
             if default_status:
-                data["status"] = validate_enum(
-                    default_status, PaymentStatus, "status"
-                )
+                data["status"] = validate_enum(default_status, PaymentStatus, "status")
         _validate_payment_linkages(
             db,
             str(payload.account_id),
             None,
             str(payload.payment_method_id) if payload.payment_method_id else None,
         )
-        _validate_payment_provider(db, str(payload.provider_id) if payload.provider_id else None)
+        _validate_payment_provider(
+            db, str(payload.provider_id) if payload.provider_id else None
+        )
         channel = _resolve_payment_channel(
             db,
             str(payload.payment_channel_id) if payload.payment_channel_id else None,
@@ -536,7 +553,9 @@ class Payments(ListResponseMixin):
             db,
             channel,
             data.get("currency"),
-            str(payload.collection_account_id) if payload.collection_account_id else None,
+            str(payload.collection_account_id)
+            if payload.collection_account_id
+            else None,
         )
         if collection_account and not payload.collection_account_id:
             data["collection_account_id"] = collection_account.id
@@ -581,6 +600,7 @@ class Payments(ListResponseMixin):
                 _recalculate_invoice_totals(db, invoice)
                 if invoice.status == InvoiceStatus.paid:
                     from app.services import collections as collections_service
+
                     collections_service.restore_account_services(
                         db, str(invoice.account_id), invoice_id=str(invoice.id)
                     )
@@ -628,10 +648,9 @@ class Payments(ListResponseMixin):
         if account_id:
             query = query.filter(Payment.account_id == account_id)
         if invoice_id:
-            query = (
-                query.join(PaymentAllocation, PaymentAllocation.payment_id == Payment.id)
-                .filter(PaymentAllocation.invoice_id == invoice_id)
-            )
+            query = query.join(
+                PaymentAllocation, PaymentAllocation.payment_id == Payment.id
+            ).filter(PaymentAllocation.invoice_id == invoice_id)
         if status:
             query = query.filter(
                 Payment.status == validate_enum(status, PaymentStatus, "status")
@@ -644,7 +663,11 @@ class Payments(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": Payment.created_at, "paid_at": Payment.paid_at, "status": Payment.status},
+            {
+                "created_at": Payment.created_at,
+                "paid_at": Payment.paid_at,
+                "status": Payment.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -657,8 +680,12 @@ class Payments(ListResponseMixin):
         account_id = str(data.get("account_id", payment.account_id))
         payment_method_id = data.get("payment_method_id", payment.payment_method_id)
         explicit_channel = "payment_channel_id" in data
-        payment_channel_id = data.get("payment_channel_id") if explicit_channel else None
-        collection_account_id = data.get("collection_account_id", payment.collection_account_id)
+        payment_channel_id = (
+            data.get("payment_channel_id") if explicit_channel else None
+        )
+        collection_account_id = data.get(
+            "collection_account_id", payment.collection_account_id
+        )
         provider_id = data.get("provider_id", payment.provider_id)
         _validate_payment_linkages(
             db,
@@ -689,9 +716,7 @@ class Payments(ListResponseMixin):
             )
         for key, value in data.items():
             setattr(payment, key, value)
-        invoice_ids = [
-            alloc.invoice_id for alloc in payment.allocations
-        ]
+        invoice_ids = [alloc.invoice_id for alloc in payment.allocations]
         for invoice_id in invoice_ids:
             invoice = get_by_id(db, Invoice, invoice_id)
             if invoice:
@@ -699,6 +724,7 @@ class Payments(ListResponseMixin):
                 _recalculate_invoice_totals(db, invoice)
                 if invoice.status == InvoiceStatus.paid:
                     from app.services import collections as collections_service
+
                     collections_service.restore_account_services(
                         db, str(invoice.account_id), invoice_id=str(invoice.id)
                     )
@@ -791,20 +817,31 @@ class Payments(ListResponseMixin):
 class PaymentAllocations(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentAllocationCreate):
-        payment = db.query(Payment).filter(Payment.id == payload.payment_id).with_for_update().first()
+        payment = (
+            db.query(Payment)
+            .filter(Payment.id == payload.payment_id)
+            .with_for_update()
+            .first()
+        )
         if not payment:
             raise HTTPException(status_code=404, detail="Payment not found")
         invoice = get_by_id(db, Invoice, payload.invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
         if str(invoice.account_id) != str(payment.account_id):
-            raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+            raise HTTPException(
+                status_code=400, detail="Invoice does not belong to account"
+            )
         _validate_invoice_currency(invoice, payment.currency)
         # Idempotency check: return existing allocation for same (payment_id, invoice_id)
-        existing = db.query(PaymentAllocation).filter(
-            PaymentAllocation.payment_id == payment.id,
-            PaymentAllocation.invoice_id == payload.invoice_id,
-        ).first()
+        existing = (
+            db.query(PaymentAllocation)
+            .filter(
+                PaymentAllocation.payment_id == payment.id,
+                PaymentAllocation.invoice_id == payload.invoice_id,
+            )
+            .first()
+        )
         if existing:
             return existing
         allocated_amount = (
@@ -814,7 +851,9 @@ class PaymentAllocations(ListResponseMixin):
             .scalar()
         )
         if payload.amount + allocated_amount > payment.amount:
-            raise HTTPException(status_code=400, detail="Allocation exceeds payment amount")
+            raise HTTPException(
+                status_code=400, detail="Allocation exceeds payment amount"
+            )
         allocation = PaymentAllocation(**payload.model_dump())
         db.add(allocation)
         db.flush()
@@ -822,6 +861,7 @@ class PaymentAllocations(ListResponseMixin):
         _recalculate_invoice_totals(db, invoice)
         if invoice.status == InvoiceStatus.paid:
             from app.services import collections as collections_service
+
             collections_service.restore_account_services(
                 db, str(invoice.account_id), invoice_id=str(invoice.id)
             )
@@ -848,7 +888,10 @@ class PaymentAllocations(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": PaymentAllocation.created_at, "amount": PaymentAllocation.amount},
+            {
+                "created_at": PaymentAllocation.created_at,
+                "amount": PaymentAllocation.amount,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -906,7 +949,10 @@ class CollectionAccounts(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": CollectionAccount.created_at, "name": CollectionAccount.name},
+            {
+                "created_at": CollectionAccount.created_at,
+                "name": CollectionAccount.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -1015,8 +1061,11 @@ class PaymentChannelAccounts(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentChannelAccountCreate):
         channel = _validate_payment_channel(db, str(payload.channel_id))
-        assert channel is not None
-        _validate_collection_account(db, str(payload.collection_account_id), payload.currency)
+        if channel is None:
+            raise HTTPException(status_code=404, detail="Payment channel not found")
+        _validate_collection_account(
+            db, str(payload.collection_account_id), payload.currency
+        )
         if payload.is_default:
             db.query(PaymentChannelAccount).filter(
                 PaymentChannelAccount.channel_id == channel.id,
@@ -1033,7 +1082,9 @@ class PaymentChannelAccounts(ListResponseMixin):
     def get(db: Session, mapping_id: str):
         mapping = get_by_id(db, PaymentChannelAccount, mapping_id)
         if not mapping:
-            raise HTTPException(status_code=404, detail="Channel account mapping not found")
+            raise HTTPException(
+                status_code=404, detail="Channel account mapping not found"
+            )
         return mapping
 
     @staticmethod
@@ -1051,7 +1102,9 @@ class PaymentChannelAccounts(ListResponseMixin):
         if channel_id:
             query = query.filter(PaymentChannelAccount.channel_id == channel_id)
         if collection_account_id:
-            query = query.filter(PaymentChannelAccount.collection_account_id == collection_account_id)
+            query = query.filter(
+                PaymentChannelAccount.collection_account_id == collection_account_id
+            )
         if is_active is None:
             query = query.filter(PaymentChannelAccount.is_active.is_(True))
         else:
@@ -1060,7 +1113,10 @@ class PaymentChannelAccounts(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": PaymentChannelAccount.created_at, "priority": PaymentChannelAccount.priority},
+            {
+                "created_at": PaymentChannelAccount.created_at,
+                "priority": PaymentChannelAccount.priority,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -1068,7 +1124,9 @@ class PaymentChannelAccounts(ListResponseMixin):
     def update(db: Session, mapping_id: str, payload: PaymentChannelAccountUpdate):
         mapping = get_by_id(db, PaymentChannelAccount, mapping_id)
         if not mapping:
-            raise HTTPException(status_code=404, detail="Channel account mapping not found")
+            raise HTTPException(
+                status_code=404, detail="Channel account mapping not found"
+            )
         data = payload.model_dump(exclude_unset=True)
         channel_id = data.get("channel_id", mapping.channel_id)
         currency = data.get("currency", mapping.currency)
@@ -1095,7 +1153,9 @@ class PaymentChannelAccounts(ListResponseMixin):
     def delete(db: Session, mapping_id: str):
         mapping = get_by_id(db, PaymentChannelAccount, mapping_id)
         if not mapping:
-            raise HTTPException(status_code=404, detail="Channel account mapping not found")
+            raise HTTPException(
+                status_code=404, detail="Channel account mapping not found"
+            )
         mapping.is_active = False
         db.commit()
 
@@ -1132,12 +1192,17 @@ class Refunds:
             raise HTTPException(status_code=404, detail="Payment not found")
 
         if payment.status == PaymentStatus.refunded:
-            raise HTTPException(status_code=400, detail="Payment already fully refunded")
+            raise HTTPException(
+                status_code=400, detail="Payment already fully refunded"
+            )
 
-        if payment.status not in (PaymentStatus.succeeded, PaymentStatus.partially_refunded):
+        if payment.status not in (
+            PaymentStatus.succeeded,
+            PaymentStatus.partially_refunded,
+        ):
             raise HTTPException(
                 status_code=400,
-                detail="Only succeeded or partially refunded payments can be refunded"
+                detail="Only succeeded or partially refunded payments can be refunded",
             )
 
         # Calculate already refunded amount from ledger entries
@@ -1155,15 +1220,12 @@ class Refunds:
         if amount_to_refund > refundable_amount:
             raise HTTPException(
                 status_code=400,
-                detail=f"Refund amount exceeds refundable balance ({refundable_amount})"
+                detail=f"Refund amount exceeds refundable balance ({refundable_amount})",
             )
 
         # Create refund ledger entry
         _create_refund_ledger_entry(
-            db,
-            payment,
-            amount_to_refund,
-            reason or f"Refund: {payment_id}"
+            db, payment, amount_to_refund, reason or f"Refund: {payment_id}"
         )
 
         # Update payment status - full refund if this refund exhausts remaining balance
@@ -1283,17 +1345,16 @@ class Refunds:
             raise HTTPException(status_code=404, detail="Payment not found")
 
         if payment.status == PaymentStatus.failed:
-            raise HTTPException(status_code=400, detail="Payment already failed/reversed")
+            raise HTTPException(
+                status_code=400, detail="Payment already failed/reversed"
+            )
 
         previous_status = payment.status
 
         # Create reversal ledger entry if payment was succeeded
         if previous_status == PaymentStatus.succeeded:
             _create_refund_ledger_entry(
-                db,
-                payment,
-                payment.amount,
-                reason or f"Payment reversal: {payment_id}"
+                db, payment, payment.amount, reason or f"Payment reversal: {payment_id}"
             )
 
         # Mark payment as failed

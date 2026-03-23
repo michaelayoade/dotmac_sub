@@ -19,6 +19,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class SubscriptionLifecycleEvents(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriptionLifecycleEventCreate):

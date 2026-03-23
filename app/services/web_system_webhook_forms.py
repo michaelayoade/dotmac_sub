@@ -13,6 +13,7 @@ from app.services.credential_crypto import encrypt_credential
 
 logger = logging.getLogger(__name__)
 
+
 def get_webhook_new_form_context() -> dict:
     """Return default context fragment for webhook create form."""
     return {
@@ -33,7 +34,9 @@ def get_webhook_form_data(db: Session, endpoint_id: str | None = None):
 
     subscribed_events = []
     if endpoint:
-        subscribed_events = [sub.event_type.value for sub in endpoint.subscriptions if sub.is_active]
+        subscribed_events = [
+            sub.event_type.value for sub in endpoint.subscriptions if sub.is_active
+        ]
 
     return {
         "endpoint": endpoint,

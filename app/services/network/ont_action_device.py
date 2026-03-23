@@ -152,7 +152,9 @@ def factory_reset(db: Session, ont_id: str) -> ActionResult:
     client, device_id = resolved
     try:
         result = client.factory_reset(device_id)
-        logger.info("Factory reset sent to ONT %s (device %s)", ont.serial_number, device_id)
+        logger.info(
+            "Factory reset sent to ONT %s (device %s)", ont.serial_number, device_id
+        )
         return ActionResult(
             success=True,
             message=f"Factory reset command sent to {ont.serial_number}.",

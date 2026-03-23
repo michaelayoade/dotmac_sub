@@ -87,7 +87,9 @@ def _resolve_device_id_from_server(
     serial_number: str,
 ) -> str | None:
     for candidate in _serial_search_candidates(serial_number):
-        devices = client.list_devices(query={"_id": {"$regex": f".*-{re.escape(candidate)}$"}})
+        devices = client.list_devices(
+            query={"_id": {"$regex": f".*-{re.escape(candidate)}$"}}
+        )
         if not devices:
             continue
         device_id = str(devices[0].get("_id") or "").strip()
@@ -108,9 +110,7 @@ def _resolve_server_by_id(
     return server
 
 
-def resolve_genieacs(
-    db: Session, ont: OntUnit
-) -> tuple[GenieACSClient, str] | None:
+def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[GenieACSClient, str] | None:
     resolved, _reason = resolve_genieacs_with_reason(db, ont)
     return resolved
 
@@ -149,7 +149,9 @@ def resolve_genieacs_with_reason(
             logger.warning("Failed OLT ACS lookup for ONT %s", ont.serial_number)
 
     # 2) ONT-level ACS server (optional per-device override)
-    ont_server = _resolve_server_by_id(db, str(getattr(ont, "tr069_acs_server_id", "") or ""))
+    ont_server = _resolve_server_by_id(
+        db, str(getattr(ont, "tr069_acs_server_id", "") or "")
+    )
     if ont_server:
         client = GenieACSClient(ont_server.base_url)
         try:
@@ -161,11 +163,17 @@ def resolve_genieacs_with_reason(
 
     # 3) Linked TR-069 device by serial number
     serial_candidates = _serial_search_candidates(ont.serial_number)
-    normalized_candidates = [normalize_tr069_serial(value) for value in serial_candidates]
+    normalized_candidates = [
+        normalize_tr069_serial(value) for value in serial_candidates
+    ]
     normalized_candidates = [value for value in normalized_candidates if value]
     stmt = (
         select(Tr069CpeDevice)
-        .where(_normalized_serial_expr(Tr069CpeDevice.serial_number).in_(normalized_candidates))
+        .where(
+            _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(
+                normalized_candidates
+            )
+        )
         .where(Tr069CpeDevice.is_active.is_(True))
         .limit(1)
     )
@@ -259,18 +267,24 @@ def resolve_genieacs_for_cpe_with_reason(
                     device_id = None
                 if not device_id:
                     device_id = client.build_device_id(
-                        linked.oui or "", linked.product_class or "", linked.serial_number or ""
+                        linked.oui or "",
+                        linked.product_class or "",
+                        linked.serial_number or "",
                     )
                 return (client, device_id), "resolved_via_cpe_device_fk"
 
     # 2) Linked Tr069CpeDevice by normalized serial number match
-    normalized_candidates = [normalize_tr069_serial(value) for value in _serial_search_candidates(serial)]
+    normalized_candidates = [
+        normalize_tr069_serial(value) for value in _serial_search_candidates(serial)
+    ]
     normalized_candidates = [value for value in normalized_candidates if value]
     if normalized_candidates:
         stmt = (
             select(Tr069CpeDevice)
             .where(
-                _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(normalized_candidates)
+                _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(
+                    normalized_candidates
+                )
             )
             .where(Tr069CpeDevice.is_active.is_(True))
             .limit(1)
@@ -308,9 +322,7 @@ def resolve_genieacs_for_cpe_with_reason(
                 if device_id:
                     return (client, device_id), "resolved_via_default_acs"
             except GenieACSError:
-                logger.warning(
-                    "Failed to search GenieACS for CPE %s", serial
-                )
+                logger.warning("Failed to search GenieACS for CPE %s", serial)
 
     if not default_server_id:
         return (

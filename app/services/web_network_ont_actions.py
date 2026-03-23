@@ -41,9 +41,7 @@ def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
     return OntActions.set_wifi_password(db, ont_id, password)
 
 
-def toggle_lan_port(
-    db: Session, ont_id: str, port: int, enabled: bool
-) -> ActionResult:
+def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> ActionResult:
     """Toggle a LAN port and return result."""
     return OntActions.toggle_lan_port(db, ont_id, port, enabled)
 
@@ -62,9 +60,7 @@ def run_ping_diagnostic(
     return OntActions.run_ping_diagnostic(db, ont_id, host, count)
 
 
-def run_traceroute_diagnostic(
-    db: Session, ont_id: str, host: str
-) -> ActionResult:
+def run_traceroute_diagnostic(db: Session, ont_id: str, host: str) -> ActionResult:
     """Run traceroute diagnostic from ONT via TR-069."""
     return OntActions.run_traceroute_diagnostic(db, ont_id, host)
 
@@ -97,9 +93,14 @@ def configure_management_ip(
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
     return configure_ont_iphost(
-        olt, fsp, olt_ont_id,
-        vlan_id=vlan_id, ip_mode=ip_mode,
-        ip_address=ip_address, subnet=subnet, gateway=gateway,
+        olt,
+        fsp,
+        olt_ont_id,
+        vlan_id=vlan_id,
+        ip_mode=ip_mode,
+        ip_address=ip_address,
+        subnet=subnet,
+        gateway=gateway,
     )
 
 
@@ -114,9 +115,7 @@ def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, 
     return get_ont_iphost_config(olt, fsp, olt_ont_id)
 
 
-def bind_tr069_profile(
-    db: Session, ont_id: str, profile_id: int
-) -> tuple[bool, str]:
+def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool, str]:
     """Bind TR-069 server profile to ONT via OLT."""
     from app.services.network.olt_ssh_ont import bind_tr069_server_profile
     from app.services.web_network_service_ports import _resolve_ont_olt_context

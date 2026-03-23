@@ -14,6 +14,7 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+
 def get_api_key_new_form_context() -> dict:
     """Return default context fragment for API key creation form."""
     return {"error": None}

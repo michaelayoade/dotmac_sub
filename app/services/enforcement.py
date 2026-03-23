@@ -78,7 +78,9 @@ def _coa_retries(db: Session) -> int:
 
 
 def _mikrotik_kill_enabled(db: Session) -> bool:
-    return _setting_bool(db, SettingDomain.network, "mikrotik_session_kill_enabled", True)
+    return _setting_bool(
+        db, SettingDomain.network, "mikrotik_session_kill_enabled", True
+    )
 
 
 def _address_list_block_enabled(db: Session) -> bool:
@@ -267,7 +269,9 @@ def _send_coa_update(
         client.SendPacket(req)
         logger.info(
             "CoA update sent for user=%s on NAS %s (profile=%s).",
-            username, nas_device.id, profile.name,
+            username,
+            nas_device.id,
+            profile.name,
         )
         return True
     except Timeout:
@@ -291,7 +295,10 @@ def update_subscription_sessions(
         raise HTTPException(status_code=404, detail="Subscription not found")
     profile = _resolve_effective_profile(db, subscription)
     if not profile:
-        logger.warning("No profile found for subscription %s, skipping CoA update.", subscription_id)
+        logger.warning(
+            "No profile found for subscription %s, skipping CoA update.",
+            subscription_id,
+        )
         return 0
     sessions = (
         db.query(RadiusAccountingSession)
@@ -310,18 +317,24 @@ def update_subscription_sessions(
         framed_ip = subscription.ipv4_address
         session_id = session.session_id
         if nas_device:
-            if _send_coa_update(db, nas_device, username, framed_ip, session_id, profile):
+            if _send_coa_update(
+                db, nas_device, username, framed_ip, session_id, profile
+            ):
                 count += 1
             else:
                 # Fall back to disconnect — subscriber reconnects with new profile
-                if _send_coa_disconnect(db, nas_device, username, framed_ip, session_id):
+                if _send_coa_disconnect(
+                    db, nas_device, username, framed_ip, session_id
+                ):
                     count += 1
                 elif _disconnect_mikrotik_session(db, nas_device, username):
                     count += 1
     if count:
         logger.info(
             "Updated %s active sessions for subscription %s (%s).",
-            count, subscription_id, reason or "profile_change",
+            count,
+            subscription_id,
+            reason or "profile_change",
         )
     return count
 
@@ -491,9 +504,7 @@ def apply_radius_profile_to_account(
     return updated
 
 
-def apply_subscription_address_list_block(
-    db: Session, subscription_id: str
-) -> int:
+def apply_subscription_address_list_block(db: Session, subscription_id: str) -> int:
     if not _address_list_block_enabled(db):
         return 0
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
@@ -531,9 +542,7 @@ def apply_subscription_address_list_block(
     return count
 
 
-def remove_subscription_address_list_block(
-    db: Session, subscription_id: str
-) -> int:
+def remove_subscription_address_list_block(db: Session, subscription_id: str) -> int:
     if not _address_list_block_enabled(db):
         return 0
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
@@ -576,9 +585,7 @@ def remove_subscription_address_list_block(
 # ---------------------------------------------------------------------------
 
 
-def cleanup_subscription_on_cancel(
-    db: Session, subscription_id: str
-) -> dict[str, int]:
+def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[str, int]:
     """Full cleanup when a subscription is canceled.
 
     1. Disconnect all active RADIUS sessions
@@ -609,7 +616,9 @@ def cleanup_subscription_on_cancel(
     # 1. Disconnect active sessions
     try:
         stats["sessions_disconnected"] = disconnect_subscription_sessions(
-            db, subscription_id, reason="canceled",
+            db,
+            subscription_id,
+            reason="canceled",
         )
     except Exception as exc:
         logger.warning("Session disconnect on cancel failed: %s", exc)
@@ -668,9 +677,14 @@ def cleanup_subscription_on_cancel(
                 from app.services.connection_type_provisioning import (
                     build_nas_provisioning_commands,
                 )
+
                 profile = _resolve_effective_profile(db, subscription)
                 commands = build_nas_provisioning_commands(
-                    db, subscription, nas_device, profile=profile, action="delete",
+                    db,
+                    subscription,
+                    nas_device,
+                    profile=profile,
+                    action="delete",
                 )
                 for cmd in commands:
                     try:
@@ -679,7 +693,9 @@ def cleanup_subscription_on_cancel(
                     except Exception as cmd_exc:
                         logger.warning("NAS cleanup command failed: %s", cmd_exc)
             except Exception as exc:
-                logger.warning("NAS cleanup failed for subscription %s: %s", subscription_id, exc)
+                logger.warning(
+                    "NAS cleanup failed for subscription %s: %s", subscription_id, exc
+                )
 
     # 6. Remove address list entries
     try:
@@ -690,7 +706,8 @@ def cleanup_subscription_on_cancel(
     db.flush()
     logger.info(
         "Subscription %s cancellation cleanup: %s",
-        subscription_id, stats,
+        subscription_id,
+        stats,
     )
     return stats
 
@@ -715,6 +732,7 @@ def _remove_credentials_from_external_radius(
     for job in sync_jobs:
         try:
             from app.services.radius import _external_db_config
+
             config = _external_db_config(db, job)
             if not config:
                 continue
@@ -728,7 +746,7 @@ def _delete_users_from_external_radius(
     credentials: list[AccessCredential],
 ) -> None:
     """Delete user entries from an external FreeRADIUS database."""
-    from sqlalchemy import create_engine, text
+    from sqlalchemy import Column, MetaData, String, Table, create_engine, delete
 
     radcheck = config["radcheck_table"]
     radreply = config["radreply_table"]
@@ -736,12 +754,33 @@ def _delete_users_from_external_radius(
     use_group = config["use_group"]
 
     engine = create_engine(config["db_url"])
+    radcheck_table = Table(
+        radcheck,
+        MetaData(),
+        Column("username", String),
+    )
+    radreply_table = Table(
+        radreply,
+        MetaData(),
+        Column("username", String),
+    )
+    radusergroup_table = Table(
+        radusergroup,
+        MetaData(),
+        Column("username", String),
+    )
     with engine.begin() as conn:
         for credential in credentials:
             username = credential.username
-            conn.execute(text(f"DELETE FROM {radcheck} WHERE username = :u"), {"u": username})  # noqa: S608
-            conn.execute(text(f"DELETE FROM {radreply} WHERE username = :u"), {"u": username})  # noqa: S608
+            conn.execute(
+                delete(radcheck_table).where(radcheck_table.c.username == username)
+            )
+            conn.execute(
+                delete(radreply_table).where(radreply_table.c.username == username)
+            )
             if use_group:
                 conn.execute(
-                    text(f"DELETE FROM {radusergroup} WHERE username = :u"), {"u": username}  # noqa: S608
+                    delete(radusergroup_table).where(
+                        radusergroup_table.c.username == username
+                    )
                 )

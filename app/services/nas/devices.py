@@ -1,4 +1,5 @@
 """NAS device CRUD service."""
+
 import logging
 from datetime import UTC, datetime
 from typing import cast
@@ -53,7 +54,9 @@ class NasDevices(ListResponseMixin):
         db.add(device)
         db.commit()
         db.refresh(device)
-        _emit_nas_event(db, "nas_device_created", {"device_id": str(device.id), "name": device.name})
+        _emit_nas_event(
+            db, "nas_device_created", {"device_id": str(device.id), "name": device.name}
+        )
         return device
 
     @staticmethod
@@ -71,7 +74,7 @@ class NasDevices(ListResponseMixin):
         return cast(
             NasDevice | None,
             db.execute(
-            select(NasDevice).where(NasDevice.code == code)
+                select(NasDevice).where(NasDevice.code == code)
             ).scalar_one_or_none(),
         )
 
@@ -115,13 +118,17 @@ class NasDevices(ListResponseMixin):
                 | (NasDevice.management_ip.ilike(search_pattern))
             )
 
-        query = apply_ordering(query, order_by, order_dir, NasDevices.ALLOWED_ORDER_COLUMNS)
+        query = apply_ordering(
+            query, order_by, order_dir, NasDevices.ALLOWED_ORDER_COLUMNS
+        )
         query = apply_pagination(query, limit, offset)
 
         return list(db.execute(query).scalars().all())
 
     @staticmethod
-    def update(db: Session, device_id: str | UUID, payload: NasDeviceUpdate) -> NasDevice:
+    def update(
+        db: Session, device_id: str | UUID, payload: NasDeviceUpdate
+    ) -> NasDevice:
         """Update a NAS device."""
         device = NasDevices.get(db, device_id)
         data = payload.model_dump(exclude_unset=True)
@@ -140,14 +147,18 @@ class NasDevices(ListResponseMixin):
 
         db.commit()
         db.refresh(device)
-        _emit_nas_event(db, "nas_device_updated", {"device_id": str(device.id), "name": device.name})
+        _emit_nas_event(
+            db, "nas_device_updated", {"device_id": str(device.id), "name": device.name}
+        )
         return device
 
     @staticmethod
     def delete(db: Session, device_id: str | UUID) -> None:
         """Delete a NAS device."""
         device = NasDevices.get(db, device_id)
-        _emit_nas_event(db, "nas_device_deleted", {"device_id": str(device.id), "name": device.name})
+        _emit_nas_event(
+            db, "nas_device_deleted", {"device_id": str(device.id), "name": device.name}
+        )
         device.is_active = False
         device.status = NasDeviceStatus.decommissioned
         db.commit()
@@ -204,8 +215,9 @@ class NasDevices(ListResponseMixin):
     def count_by_vendor(db: Session) -> dict[str, int]:
         """Get count of devices grouped by vendor."""
         result = db.execute(
-            select(NasDevice.vendor, func.count(NasDevice.id))
-            .group_by(NasDevice.vendor)
+            select(NasDevice.vendor, func.count(NasDevice.id)).group_by(
+                NasDevice.vendor
+            )
         ).all()
         return {str(vendor.value): count for vendor, count in result}
 
@@ -213,8 +225,9 @@ class NasDevices(ListResponseMixin):
     def count_by_status(db: Session) -> dict[str, int]:
         """Get count of devices grouped by status."""
         result = db.execute(
-            select(NasDevice.status, func.count(NasDevice.id))
-            .group_by(NasDevice.status)
+            select(NasDevice.status, func.count(NasDevice.id)).group_by(
+                NasDevice.status
+            )
         ).all()
         return {str(status.value): count for status, count in result}
 

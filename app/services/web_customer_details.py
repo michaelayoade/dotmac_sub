@@ -6,7 +6,7 @@ import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -69,7 +69,9 @@ def _coerce_setting_int(value: object | None) -> int | None:
     return None
 
 
-def _coerce_setting_bool(value: object | None, default: bool | None = None) -> bool | None:
+def _coerce_setting_bool(
+    value: object | None, default: bool | None = None
+) -> bool | None:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -139,14 +141,20 @@ def _billing_global_defaults(db: Session) -> dict[str, object | None]:
 
 
 def _resolve_tax_labels(db: Session, accounts: list[Subscriber]) -> dict[str, str]:
-    tax_ids = {account.tax_rate_id for account in accounts if getattr(account, "tax_rate_id", None)}
+    tax_ids = {
+        account.tax_rate_id
+        for account in accounts
+        if getattr(account, "tax_rate_id", None)
+    }
     if not tax_ids:
         return {}
     rates = db.query(TaxRate).filter(TaxRate.id.in_(tax_ids)).all()
     return {str(rate.id): rate.name for rate in rates}
 
 
-def _billing_policy_snapshot(db: Session, accounts: list[Subscriber]) -> dict[str, object]:
+def _billing_policy_snapshot(
+    db: Session, accounts: list[Subscriber]
+) -> dict[str, object]:
     global_defaults = _billing_global_defaults(db)
     tax_labels = _resolve_tax_labels(db, accounts)
     fields = [
@@ -167,13 +175,23 @@ def _billing_policy_snapshot(db: Session, accounts: list[Subscriber]) -> dict[st
         effective_values: list[object | None] = []
         for account in accounts:
             if key == "tax_rate":
-                raw = tax_labels.get(str(account.tax_rate_id)) if getattr(account, "tax_rate_id", None) else None
+                raw = (
+                    tax_labels.get(str(account.tax_rate_id))
+                    if getattr(account, "tax_rate_id", None)
+                    else None
+                )
             else:
                 raw = getattr(account, key, None)
             raw_values.append(raw)
-            effective_values.append(raw if raw is not None else (global_defaults.get(key) if uses_global else None))
+            effective_values.append(
+                raw
+                if raw is not None
+                else (global_defaults.get(key) if uses_global else None)
+            )
 
-        unique_effective = {str(value) for value in effective_values if value is not None}
+        unique_effective = {
+            str(value) for value in effective_values if value is not None
+        }
         unique_raw = {str(value) for value in raw_values if value is not None}
         if not accounts:
             source = "Global default" if uses_global else "Not set"
@@ -201,10 +219,16 @@ def _billing_policy_snapshot(db: Session, accounts: list[Subscriber]) -> dict[st
             {
                 "key": key,
                 "label": label,
-                "effective": effective if effective == "Mixed" else _format_billing_value(key, effective),
+                "effective": effective
+                if effective == "Mixed"
+                else _format_billing_value(key, effective),
                 "source": source,
-                "global": _format_billing_value(key, global_defaults.get(key)) if uses_global else "Not set",
-                "override": override if override == "Mixed" else _format_billing_value(key, override),
+                "global": _format_billing_value(key, global_defaults.get(key))
+                if uses_global
+                else "Not set",
+                "override": override
+                if override == "Mixed"
+                else _format_billing_value(key, override),
             }
         )
 
@@ -241,11 +265,18 @@ def _list_subscriptions_for_accounts(db: Session, accounts):
             )
             subscriptions.extend(account_subs)
         except Exception:
+            logger.debug(
+                "Skipping subscriptions for linked account %s",
+                account.id,
+                exc_info=True,
+            )
             continue
     return subscriptions
 
 
-def _format_contact_channel(subscriber: Subscriber, channel: SubscriberChannel) -> dict[str, object]:
+def _format_contact_channel(
+    subscriber: Subscriber, channel: SubscriberChannel
+) -> dict[str, object]:
     return {
         "id": str(channel.id),
         "first_name": subscriber.first_name or "",
@@ -302,12 +333,18 @@ def _build_activity_items(
         limit=10,
         offset=0,
     )
-    actor_ids = {str(event.actor_id) for event in audit_events if getattr(event, "actor_id", None)}
+    actor_ids = {
+        str(event.actor_id)
+        for event in audit_events
+        if getattr(event, "actor_id", None)
+    }
     people = {}
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
     activity_items: list[dict[str, object]] = []
 
@@ -342,7 +379,11 @@ def _build_activity_items(
         communication_logs = (
             db.query(CommunicationLog)
             .filter(CommunicationLog.subscriber_id.in_(account_ids))
-            .order_by(func.coalesce(CommunicationLog.sent_at, CommunicationLog.created_at).desc())
+            .order_by(
+                func.coalesce(
+                    CommunicationLog.sent_at, CommunicationLog.created_at
+                ).desc()
+            )
             .limit(8)
             .all()
         )
@@ -356,7 +397,13 @@ def _build_activity_items(
         dunning_cases = (
             db.query(DunningCase)
             .filter(DunningCase.account_id.in_(account_ids))
-            .order_by(func.coalesce(DunningCase.resolved_at, DunningCase.updated_at, DunningCase.started_at).desc())
+            .order_by(
+                func.coalesce(
+                    DunningCase.resolved_at,
+                    DunningCase.updated_at,
+                    DunningCase.started_at,
+                ).desc()
+            )
             .limit(8)
             .all()
         )
@@ -385,7 +432,9 @@ def _build_activity_items(
         activity_items.append(
             {
                 "type": "payment",
-                "title": "Payment received" if payment.status == PaymentStatus.succeeded else "Payment update",
+                "title": "Payment received"
+                if payment.status == PaymentStatus.succeeded
+                else "Payment update",
                 "description": _enum_label(payment.status),
                 "timestamp": _event_timestamp(payment.paid_at, payment.created_at),
                 "amount": float(payment.amount or 0),
@@ -393,14 +442,20 @@ def _build_activity_items(
         )
 
     for subscription in subscriptions[:8]:
-        account_label = subscription.login or subscription.ipv4_address or subscription.ipv6_address
+        account_label = (
+            subscription.login or subscription.ipv4_address or subscription.ipv6_address
+        )
         description = _enum_label(subscription.status)
         if account_label:
-            description = f"{description} · {account_label}" if description else account_label
+            description = (
+                f"{description} · {account_label}" if description else account_label
+            )
         activity_items.append(
             {
                 "type": "subscription",
-                "title": subscription.offer.name if subscription.offer else "Subscription updated",
+                "title": subscription.offer.name
+                if subscription.offer
+                else "Subscription updated",
                 "description": description,
                 "timestamp": _event_timestamp(
                     subscription.updated_at,
@@ -408,14 +463,18 @@ def _build_activity_items(
                     subscription.start_at,
                     subscription.created_at,
                 ),
-                "amount": float(subscription.unit_price or 0) if subscription.unit_price is not None else None,
+                "amount": float(subscription.unit_price or 0)
+                if subscription.unit_price is not None
+                else None,
                 "link": f"/admin/catalog/subscriptions/{subscription.id}",
             }
         )
 
     for ticket in support_tickets:
         description = " · ".join(
-            part for part in (_enum_label(ticket.status), _enum_label(ticket.priority)) if part
+            part
+            for part in (_enum_label(ticket.status), _enum_label(ticket.priority))
+            if part
         )
         activity_items.append(
             {
@@ -428,7 +487,13 @@ def _build_activity_items(
         )
 
     for log in communication_logs:
-        subject = log.subject or log.recipient or log.sender or _enum_label(log.channel) or "Communication"
+        subject = (
+            log.subject
+            or log.recipient
+            or log.sender
+            or _enum_label(log.channel)
+            or "Communication"
+        )
         description = " · ".join(
             part
             for part in (
@@ -469,13 +534,21 @@ def _build_activity_items(
                 "type": "dunning",
                 "title": "Dunning case",
                 "description": " · ".join(part for part in description_parts if part),
-                "timestamp": _event_timestamp(case.resolved_at, case.updated_at, case.started_at, case.created_at),
+                "timestamp": _event_timestamp(
+                    case.resolved_at, case.updated_at, case.started_at, case.created_at
+                ),
             }
         )
 
     for event in audit_events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        actor = (
+            people.get(str(event.actor_id))
+            if getattr(event, "actor_id", None)
+            else None
+        )
+        actor_name = (
+            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        )
         metadata = getattr(event, "metadata_", None) or {}
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes, max_items=2)
@@ -517,7 +590,8 @@ def _build_common_financials(db: Session, account_ids):
     balance_due = sum(
         float(getattr(inv, "balance_due", 0) or 0)
         for inv in invoices
-        if inv.status in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+        if inv.status
+        in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
     )
 
     total_invoiced = 0
@@ -616,7 +690,9 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
     communication_logs = (
         db.query(CommunicationLog)
         .filter(CommunicationLog.subscriber_id.in_(account_ids))
-        .order_by(func.coalesce(CommunicationLog.sent_at, CommunicationLog.created_at).desc())
+        .order_by(
+            func.coalesce(CommunicationLog.sent_at, CommunicationLog.created_at).desc()
+        )
         .limit(12)
         .all()
     )
@@ -692,14 +768,35 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
     )
 
     relationship_summary: dict[str, int] = {
-        "open_tickets": sum(1 for ticket in support_tickets if ticket.status not in RESOLVED_TICKET_STATUSES),
+        "open_tickets": sum(
+            1
+            for ticket in support_tickets
+            if ticket.status not in RESOLVED_TICKET_STATUSES
+        ),
         "recent_communications": len(communication_logs),
-        "active_service_orders": sum(1 for order in service_orders if order.status in ACTIVE_SERVICE_ORDER_STATUSES),
-        "open_dunning_cases": sum(1 for case in dunning_cases if case.status in {DunningCaseStatus.open, DunningCaseStatus.paused}),
-        "active_credentials": sum(1 for credential in access_credentials if credential.is_active),
-        "active_cpes": sum(1 for cpe in cpe_devices if str(getattr(cpe, "status", "")) == "DeviceStatus.active" or getattr(getattr(cpe, "status", None), "value", None) == "active"),
+        "active_service_orders": sum(
+            1
+            for order in service_orders
+            if order.status in ACTIVE_SERVICE_ORDER_STATUSES
+        ),
+        "open_dunning_cases": sum(
+            1
+            for case in dunning_cases
+            if case.status in {DunningCaseStatus.open, DunningCaseStatus.paused}
+        ),
+        "active_credentials": sum(
+            1 for credential in access_credentials if credential.is_active
+        ),
+        "active_cpes": sum(
+            1
+            for cpe in cpe_devices
+            if str(getattr(cpe, "status", "")) == "DeviceStatus.active"
+            or getattr(getattr(cpe, "status", None), "value", None) == "active"
+        ),
         "active_onts": sum(1 for assignment in ont_assignments if assignment.active),
-        "active_ip_assignments": sum(1 for assignment in ip_assignments if assignment.is_active),
+        "active_ip_assignments": sum(
+            1 for assignment in ip_assignments if assignment.is_active
+        ),
         "linked_resellers": len(linked_resellers),
     }
 
@@ -812,7 +909,10 @@ def _build_map_payload(primary_address, customer_name: str):
                             "type": "Feature",
                             "geometry": {
                                 "type": "Point",
-                                "coordinates": [primary_address.longitude, primary_address.latitude],
+                                "coordinates": [
+                                    primary_address.longitude,
+                                    primary_address.latitude,
+                                ],
                             },
                             "properties": {
                                 "type": "customer",
@@ -853,18 +953,20 @@ def _build_network_access_cards(subscriptions: list) -> list[dict]:
             continue
         nas = getattr(sub, "provisioning_nas_device", None)
         pop_site = getattr(nas, "pop_site", None) if nas else None
-        cards.append({
-            "subscription_id": str(sub.id),
-            "offer_name": sub.offer.name if sub.offer else "Subscription",
-            "status": sub.status.value if sub.status else "unknown",
-            "login": sub.login,
-            "ipv4_address": sub.ipv4_address,
-            "ipv6_address": getattr(sub, "ipv6_address", None),
-            "mac_address": getattr(sub, "mac_address", None),
-            "nas_name": nas.name if nas else None,
-            "nas_id": str(nas.id) if nas else None,
-            "pop_site_name": pop_site.name if pop_site else None,
-        })
+        cards.append(
+            {
+                "subscription_id": str(sub.id),
+                "offer_name": sub.offer.name if sub.offer else "Subscription",
+                "status": sub.status.value if sub.status else "unknown",
+                "login": sub.login,
+                "ipv4_address": sub.ipv4_address,
+                "ipv6_address": getattr(sub, "ipv6_address", None),
+                "mac_address": getattr(sub, "mac_address", None),
+                "nas_name": nas.name if nas else None,
+                "nas_id": str(nas.id) if nas else None,
+                "pop_site_name": pop_site.name if pop_site else None,
+            }
+        )
     return cards
 
 
@@ -903,7 +1005,9 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
     payments = finance_data["payments"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
-    active_subscriptions = sum(1 for sub in subscriptions if sub.status == SubscriptionStatus.active)
+    active_subscriptions = sum(
+        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+    )
     monthly_recurring = sum(
         float(getattr(sub, "unit_price", 0) or 0)
         for sub in subscriptions
@@ -916,10 +1020,17 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         addresses = _build_person_fallback_address(db, customer)
 
     primary_address = next(
-        (a for a in addresses if getattr(a, "is_primary", False) and (a.address_line1 or "").strip()),
+        (
+            a
+            for a in addresses
+            if getattr(a, "is_primary", False) and (a.address_line1 or "").strip()
+        ),
         next(
             (a for a in addresses if getattr(a, "is_primary", False)),
-            next((a for a in addresses if (a.address_line1 or "").strip()), addresses[0] if addresses else None),
+            next(
+                (a for a in addresses if (a.address_line1 or "").strip()),
+                addresses[0] if addresses else None,
+            ),
         ),
     )
     map_data, geocode_target = _build_map_payload(
@@ -934,9 +1045,7 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         .count()
     )
     total_subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.id == customer.id)
-        .count()
+        db.query(Subscriber).filter(Subscriber.id == customer.id).count()
     )
 
     notifications = []
@@ -957,7 +1066,9 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
                 limit=100,
                 offset=0,
             )
-            notifications = [n for n in all_notifications if n.recipient in recipients][:5]
+            notifications = [n for n in all_notifications if n.recipient in recipients][
+                :5
+            ]
     except Exception:
         notifications = []
 
@@ -990,10 +1101,12 @@ def build_person_detail_snapshot(db: Session, customer_id: str):
         ),
     }
     try:
-        customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
-            db,
-            customer_type="person",
-            customer_id=customer_id,
+        customer_user_access = (
+            web_customer_user_access_service.build_customer_user_access_state(
+                db,
+                customer_type="person",
+                customer_id=customer_id,
+            )
         )
     except Exception as exc:
         customer_user_access = {"error": str(exc)}
@@ -1078,7 +1191,9 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
     payments = finance_data["payments"]
     balance_due = finance_data["balance_due"]
     financials = finance_data["financials"]
-    active_subscriptions = sum(1 for sub in subscriptions if sub.status == SubscriptionStatus.active)
+    active_subscriptions = sum(
+        1 for sub in subscriptions if sub.status == SubscriptionStatus.active
+    )
     monthly_recurring = sum(
         float(getattr(sub, "unit_price", 0) or 0)
         for sub in subscriptions
@@ -1100,15 +1215,18 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         .count()
     )
     total_subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.organization_id == org_uuid)
-        .count()
+        db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).count()
     )
 
     notifications = []
     try:
         recipients = []
-        org_people = db.query(Subscriber).filter(Subscriber.organization_id == org_uuid).limit(10).all()
+        org_people = (
+            db.query(Subscriber)
+            .filter(Subscriber.organization_id == org_uuid)
+            .limit(10)
+            .all()
+        )
         for person in org_people:
             if person.email:
                 recipients.append(person.email)
@@ -1125,7 +1243,9 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
                 limit=100,
                 offset=0,
             )
-            notifications = [n for n in all_notifications if n.recipient in recipients][:5]
+            notifications = [n for n in all_notifications if n.recipient in recipients][
+                :5
+            ]
     except Exception:
         notifications = []
 
@@ -1158,10 +1278,12 @@ def build_organization_detail_snapshot(db: Session, customer_id: str):
         ),
     }
     try:
-        customer_user_access = web_customer_user_access_service.build_customer_user_access_state(
-            db,
-            customer_type="organization",
-            customer_id=customer_id,
+        customer_user_access = (
+            web_customer_user_access_service.build_customer_user_access_state(
+                db,
+                customer_type="organization",
+                customer_id=customer_id,
+            )
         )
     except Exception as exc:
         customer_user_access = {"error": str(exc)}

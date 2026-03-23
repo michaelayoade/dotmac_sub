@@ -15,11 +15,15 @@ from uuid import UUID
 
 
 @overload
-def parse_uuid(value: str | None, field: str, *, required: Literal[True] = ...) -> UUID: ...
+def parse_uuid(
+    value: str | None, field: str, *, required: Literal[True] = ...
+) -> UUID: ...
 
 
 @overload
-def parse_uuid(value: str | None, field: str, *, required: Literal[False]) -> UUID | None: ...
+def parse_uuid(
+    value: str | None, field: str, *, required: Literal[False]
+) -> UUID | None: ...
 
 
 def parse_uuid(value: str | None, field: str, *, required: bool = True) -> UUID | None:

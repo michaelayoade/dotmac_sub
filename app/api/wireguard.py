@@ -27,7 +27,9 @@ from app.schemas.wireguard import (
 from app.services import wireguard as wg_service
 
 router = APIRouter(prefix="/wireguard", tags=["wireguard"])
-public_router = APIRouter(prefix="/wireguard-provision", tags=["wireguard-provisioning-public"])
+public_router = APIRouter(
+    prefix="/wireguard-provision", tags=["wireguard-provisioning-public"]
+)
 
 
 # ============== Server Endpoints ==============
@@ -45,7 +47,9 @@ def list_servers(
     db: Session = Depends(get_db),
 ):
     """List all WireGuard servers."""
-    servers = wg_service.wg_servers.list(db, is_active=is_active, limit=limit, offset=offset)
+    servers = wg_service.wg_servers.list(
+        db, is_active=is_active, limit=limit, offset=offset
+    )
     return [wg_service.wg_servers.to_read_schema(s, db) for s in servers]
 
 
@@ -340,10 +344,14 @@ def list_peer_connection_logs(
     response_model=WireGuardPeerConfig,
     tags=["wireguard-provisioning-public"],
 )
-def register_with_token(payload: ProvisionWithTokenRequest, db: Session = Depends(get_db)):
+def register_with_token(
+    payload: ProvisionWithTokenRequest, db: Session = Depends(get_db)
+):
     """Self-register a device using a provisioning token.
 
     The device provides its public key and receives configuration.
     This endpoint does not require authentication.
     """
-    return wg_service.wg_peers.register_with_token(db, payload.token, payload.public_key)
+    return wg_service.wg_peers.register_with_token(
+        db, payload.token, payload.public_key
+    )

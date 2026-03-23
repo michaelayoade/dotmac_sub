@@ -16,9 +16,7 @@ from app.web.auth.dependencies import AuthenticationRequired
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 
-_FRIENDLY_DEFAULT_BAD_REQUEST = (
-    "Some required information is missing or invalid. Please check the form and try again."
-)
+_FRIENDLY_DEFAULT_BAD_REQUEST = "Some required information is missing or invalid. Please check the form and try again."
 _REDIRECT_ERROR_TOKEN_TO_STATUS = {
     "forbidden": 403,
     "access_denied": 403,
@@ -32,7 +30,12 @@ _REDIRECT_ERROR_TOKEN_TO_STATUS = {
 
 
 def _error_payload(code: str, message: str, details: object, request_id: str | None):
-    return {"code": code, "message": message, "details": details, "request_id": request_id}
+    return {
+        "code": code,
+        "message": message,
+        "details": details,
+        "request_id": request_id,
+    }
 
 
 def _is_html_request(request: Request) -> bool:
@@ -62,7 +65,14 @@ def _friendly_bad_request_message(detail: object) -> str:
         lowered = msg.lower()
         if any(
             token in lowered
-            for token in ("validation error", "type_error", "value_error", "traceback", "{", "[")
+            for token in (
+                "validation error",
+                "type_error",
+                "value_error",
+                "traceback",
+                "{",
+                "[",
+            )
         ):
             return _FRIENDLY_DEFAULT_BAD_REQUEST
         return msg
@@ -71,7 +81,10 @@ def _friendly_bad_request_message(detail: object) -> str:
             val = detail.get(key)
             if isinstance(val, str) and val.strip():
                 lowered = val.lower()
-                if any(token in lowered for token in ("type_error", "value_error", "traceback")):
+                if any(
+                    token in lowered
+                    for token in ("type_error", "value_error", "traceback")
+                ):
                     return _FRIENDLY_DEFAULT_BAD_REQUEST
                 return val.strip()
     return _FRIENDLY_DEFAULT_BAD_REQUEST
@@ -134,7 +147,11 @@ class RedirectErrorTemplateMiddleware:
         await self.app(scope, receive, send_wrapper)
 
         start_message = next(
-            (message for message in captured if message["type"] == "http.response.start"),
+            (
+                message
+                for message in captured
+                if message["type"] == "http.response.start"
+            ),
             None,
         )
         if start_message is None:
@@ -148,7 +165,11 @@ class RedirectErrorTemplateMiddleware:
 
         status_code = start_message["status"]
         location = headers.get("location")
-        if status_code not in {301, 302, 303, 307, 308} or not location or "error=" not in location:
+        if (
+            status_code not in {301, 302, 303, 307, 308}
+            or not location
+            or "error=" not in location
+        ):
             for asgi_message in captured:
                 await send(asgi_message)
             return
@@ -186,10 +207,14 @@ def register_error_handlers(app) -> None:
         """Redirect to login page when authentication is required."""
         return RedirectResponse(url=exc.redirect_url, status_code=303)
 
-    async def _handle_http_exception(request: Request, status_code: int, detail: object):
+    async def _handle_http_exception(
+        request: Request, status_code: int, detail: object
+    ):
         if _is_html_request(request):
             if status_code == 401:
-                return RedirectResponse(url=_login_redirect_for_path(request), status_code=303)
+                return RedirectResponse(
+                    url=_login_redirect_for_path(request), status_code=303
+                )
             if status_code == 400:
                 return _template_response(
                     request,
@@ -197,16 +222,28 @@ def register_error_handlers(app) -> None:
                     message=_friendly_bad_request_message(detail),
                 )
             if status_code == 403:
-                message = detail if isinstance(detail, str) else (
-                    "You do not have permission to view this page. "
-                    "If you believe this is a mistake, please contact your administrator."
+                message = (
+                    detail
+                    if isinstance(detail, str)
+                    else (
+                        "You do not have permission to view this page. "
+                        "If you believe this is a mistake, please contact your administrator."
+                    )
                 )
                 return _template_response(request, status_code=403, message=message)
             if status_code == 404:
-                message = detail if isinstance(detail, str) and detail.strip() else "Page not found"
+                message = (
+                    detail
+                    if isinstance(detail, str) and detail.strip()
+                    else "Page not found"
+                )
                 return _template_response(request, status_code=404, message=message)
             if status_code == 409:
-                message = detail if isinstance(detail, str) and detail.strip() else "Request conflict"
+                message = (
+                    detail
+                    if isinstance(detail, str) and detail.strip()
+                    else "Request conflict"
+                )
                 return _template_response(request, status_code=409, message=message)
 
         detail_payload = detail
@@ -231,12 +268,18 @@ def register_error_handlers(app) -> None:
         return await _handle_http_exception(request, exc.status_code, exc.detail)
 
     @app.exception_handler(StarletteHTTPException)
-    async def starlette_http_exception_handler(request: Request, exc: StarletteHTTPException):
-        detail = exc.detail if getattr(exc, "detail", None) is not None else "Request failed"
+    async def starlette_http_exception_handler(
+        request: Request, exc: StarletteHTTPException
+    ):
+        detail = (
+            exc.detail if getattr(exc, "detail", None) is not None else "Request failed"
+        )
         return await _handle_http_exception(request, exc.status_code, detail)
 
     @app.exception_handler(RequestValidationError)
-    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    async def validation_exception_handler(
+        request: Request, exc: RequestValidationError
+    ):
         if _is_html_request(request):
             return _template_response(
                 request,

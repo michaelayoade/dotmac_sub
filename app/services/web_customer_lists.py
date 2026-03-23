@@ -61,17 +61,29 @@ def build_contacts_index_context(
     if status:
         normalized_status = status.strip().lower()
         if normalized_status in {"active", "customer", "subscriber", "lead", "contact"}:
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.active)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.active
+            )
         elif normalized_status == "blocked":
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.blocked)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.blocked
+            )
         elif normalized_status in {"inactive", "suspended"}:
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.suspended)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.suspended
+            )
         elif normalized_status == "disabled":
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.disabled)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.disabled
+            )
         elif normalized_status == "new":
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus.new)
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus.new
+            )
         elif normalized_status in {"delinquent", "canceled"}:
-            people_query = people_query.filter(Subscriber.status == SubscriberStatus(normalized_status))
+            people_query = people_query.filter(
+                Subscriber.status == SubscriberStatus(normalized_status)
+            )
 
     if search:
         search_filter = f"%{search}%"
@@ -94,7 +106,8 @@ def build_contacts_index_context(
         _base_count.filter(Subscriber.status == SubscriberStatus.blocked).scalar() or 0
     )
     suspended_people_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.suspended).scalar() or 0
+        _base_count.filter(Subscriber.status == SubscriberStatus.suspended).scalar()
+        or 0
     )
     disabled_people_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.disabled).scalar() or 0
@@ -103,7 +116,8 @@ def build_contacts_index_context(
         _base_count.filter(Subscriber.status == SubscriberStatus.new).scalar() or 0
     )
     delinquent_people_count = (
-        _base_count.filter(Subscriber.status == SubscriberStatus.delinquent).scalar() or 0
+        _base_count.filter(Subscriber.status == SubscriberStatus.delinquent).scalar()
+        or 0
     )
     canceled_people_count = (
         _base_count.filter(Subscriber.status == SubscriberStatus.canceled).scalar() or 0
@@ -114,7 +128,10 @@ def build_contacts_index_context(
 
     if entity_type != "organization":
         people = (
-            people_query.order_by(Subscriber.created_at.desc()).limit(per_page).offset(offset).all()
+            people_query.order_by(Subscriber.created_at.desc())
+            .limit(per_page)
+            .offset(offset)
+            .all()
         )
         for person in people:
             contacts.append(
@@ -125,7 +142,9 @@ def build_contacts_index_context(
                     "email": person.email,
                     "phone": person.phone,
                     "status": person.status.value if person.status else "active",
-                    "organization": person.organization.name if person.organization else None,
+                    "organization": person.organization.name
+                    if person.organization
+                    else None,
                     "is_active": person.is_active,
                     "created_at": person.created_at,
                     "raw": person,
@@ -136,7 +155,12 @@ def build_contacts_index_context(
         orgs_query = db.query(Organization)
         if search:
             orgs_query = orgs_query.filter(Organization.name.ilike(f"%{search}%"))
-        orgs = orgs_query.order_by(Organization.created_at.desc()).limit(per_page).offset(offset).all()
+        orgs = (
+            orgs_query.order_by(Organization.created_at.desc())
+            .limit(per_page)
+            .offset(offset)
+            .all()
+        )
         for organization in orgs:
             contacts.append(
                 {
@@ -213,7 +237,7 @@ def _build_customer_dict(person: Subscriber) -> dict[str, Any]:
     ipv4 = None
     nas_name = None
     pop_site_name = None
-    for sub in (person.subscriptions or []):
+    for sub in person.subscriptions or []:
         if sub.login:
             pppoe_login = sub.login
         if sub.ipv4_address:
@@ -278,8 +302,13 @@ def build_customers_index_context(
         if normalized == "inactive":
             _status_filter = Subscriber.is_active.is_(False)
         elif normalized in (
-            "active", "blocked", "suspended", "disabled",
-            "canceled", "new", "delinquent",
+            "active",
+            "blocked",
+            "suspended",
+            "disabled",
+            "canceled",
+            "new",
+            "delinquent",
         ):
             _status_filter = Subscriber.status == SubscriberStatus(normalized)
 
@@ -328,7 +357,9 @@ def build_customers_index_context(
             )
         people = (
             people_query.order_by(Subscriber.created_at.desc())
-            .limit(list_limit).offset(list_offset).all()
+            .limit(list_limit)
+            .offset(list_offset)
+            .all()
         )
         for person in people:
             customers.append(_build_customer_dict(person))
@@ -431,11 +462,7 @@ def build_customers_index_context(
         .order_by(NasDevice.name)
         .all()
     )
-    pop_site_options = (
-        db.query(PopSite.id, PopSite.name)
-        .order_by(PopSite.name)
-        .all()
-    )
+    pop_site_options = db.query(PopSite.id, PopSite.name).order_by(PopSite.name).all()
 
     return {
         "customers": customers,

@@ -111,9 +111,7 @@ class PortalOnboardingState(Base):
         nullable=False,
         unique=True,
     )
-    steps_completed: Mapped[int] = mapped_column(
-        default=0, nullable=False
-    )
+    steps_completed: Mapped[int] = mapped_column(default=0, nullable=False)
     is_complete: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

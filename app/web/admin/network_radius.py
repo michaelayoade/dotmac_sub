@@ -28,7 +28,9 @@ router = APIRouter(prefix="/network", tags=["web-admin-network"])
 RADIUS_CLIENT_EXCLUDE_FIELDS = {"shared_secret_hash"}
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -39,7 +41,12 @@ def _base_context(request: Request, db: Session, active_page: str, active_menu: 
         "sidebar_stats": get_sidebar_stats(db),
     }
 
-@router.get("/radius", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+
+@router.get(
+    "/radius",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_page(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
     state = web_network_radius_service.radius_page_data(db)
@@ -48,16 +55,22 @@ def radius_page(request: Request, db: Session = Depends(get_db)):
         ["radius_server", "radius_client", "radius_profile"],
         limit=10,
     )
-    context.update({
-        **state,
-        "activities": activities,
-        "notice": request.query_params.get("notice"),
-        "error": request.query_params.get("error"),
-    })
+    context.update(
+        {
+            **state,
+            "activities": activities,
+            "notice": request.query_params.get("notice"),
+            "error": request.query_params.get("error"),
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/index.html", context)
 
 
-@router.post("/radius/import-credentials", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/radius/import-credentials",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def radius_import_credentials(_request: Request, db: Session = Depends(get_db)):
     try:
         result = radius_service.import_access_credentials_from_external_radius(db)
@@ -79,22 +92,36 @@ def radius_import_credentials(_request: Request, db: Session = Depends(get_db)):
         )
 
 
-@router.get("/radius/servers/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/radius/servers/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_server_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "server": None,
-        "action_url": "/admin/network/radius/servers",
-    })
+    context.update(
+        {
+            "server": None,
+            "action_url": "/admin/network/radius/servers",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/server_form.html", context)
 
 
-@router.get("/radius/servers", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/radius/servers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_servers_redirect():
     return RedirectResponse("/admin/network/radius", status_code=303)
 
 
-@router.get("/radius/servers/{server_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/radius/servers/{server_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_server_edit(request: Request, server_id: str, db: Session = Depends(get_db)):
     try:
         server = radius_service.radius_servers.get(db=db, server_id=server_id)
@@ -108,14 +135,20 @@ def radius_server_edit(request: Request, server_id: str, db: Session = Depends(g
         )
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "server": server,
-        "action_url": f"/admin/network/radius/servers/{server_id}",
-    })
+    context.update(
+        {
+            "server": server,
+            "action_url": f"/admin/network/radius/servers/{server_id}",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/server_form.html", context)
 
 
-@router.post("/radius/servers", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/radius/servers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def radius_server_create(request: Request, db: Session = Depends(get_db)):
     values = web_network_radius_service.parse_server_form(parse_form_data_sync(request))
     error = web_network_radius_service.validate_server_form(values)
@@ -126,17 +159,23 @@ def radius_server_create(request: Request, db: Session = Depends(get_db)):
 
     if error:
         context = _base_context(request, db, active_page="radius")
-        context.update({
-            "server": server_data,
-            "action_url": "/admin/network/radius/servers",
-            "error": error,
-        })
-        return templates.TemplateResponse("admin/network/radius/server_form.html", context)
+        context.update(
+            {
+                "server": server_data,
+                "action_url": "/admin/network/radius/servers",
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/radius/server_form.html", context
+        )
 
     try:
-        assert payload is not None
+        if payload is None:
+            raise ValueError("Please correct the highlighted fields.")
         server = radius_service.radius_servers.create(db=db, payload=payload)
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -154,16 +193,24 @@ def radius_server_create(request: Request, db: Session = Depends(get_db)):
         error = str(exc)
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "server": server_data,
-        "action_url": "/admin/network/radius/servers",
-        "error": error or "Please correct the highlighted fields.",
-    })
+    context.update(
+        {
+            "server": server_data,
+            "action_url": "/admin/network/radius/servers",
+            "error": error or "Please correct the highlighted fields.",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/server_form.html", context)
 
 
-@router.post("/radius/servers/{server_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def radius_server_update(request: Request, server_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/radius/servers/{server_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def radius_server_update(
+    request: Request, server_id: str, db: Session = Depends(get_db)
+):
     try:
         server = radius_service.radius_servers.get(db=db, server_id=server_id)
     except Exception:
@@ -191,15 +238,20 @@ def radius_server_update(request: Request, server_id: str, db: Session = Depends
 
     if error:
         context = _base_context(request, db, active_page="radius")
-        context.update({
-            "server": server_data,
-            "action_url": f"/admin/network/radius/servers/{server_id}",
-            "error": error,
-        })
-        return templates.TemplateResponse("admin/network/radius/server_form.html", context)
+        context.update(
+            {
+                "server": server_data,
+                "action_url": f"/admin/network/radius/servers/{server_id}",
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/radius/server_form.html", context
+        )
 
     try:
-        assert payload is not None
+        if payload is None:
+            raise ValueError("Please correct the highlighted fields.")
         updated_server = radius_service.radius_servers.update(
             db=db,
             server_id=server_id,
@@ -209,6 +261,7 @@ def radius_server_update(request: Request, server_id: str, db: Session = Depends
         changes = diff_dicts(before_snapshot, after_snapshot)
         metadata = {"changes": changes} if changes else None
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -226,28 +279,40 @@ def radius_server_update(request: Request, server_id: str, db: Session = Depends
         error = str(exc)
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "server": server_data,
-        "action_url": f"/admin/network/radius/servers/{server_id}",
-        "error": error or "Please correct the highlighted fields.",
-    })
+    context.update(
+        {
+            "server": server_data,
+            "action_url": f"/admin/network/radius/servers/{server_id}",
+            "error": error or "Please correct the highlighted fields.",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/server_form.html", context)
 
 
-@router.get("/radius/clients/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/radius/clients/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_client_new(request: Request, db: Session = Depends(get_db)):
     servers = web_network_radius_service.active_servers(db)
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "client": None,
-        "servers": servers,
-        "action_url": "/admin/network/radius/clients",
-    })
+    context.update(
+        {
+            "client": None,
+            "servers": servers,
+            "action_url": "/admin/network/radius/clients",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/client_form.html", context)
 
 
-@router.get("/radius/clients/{client_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/radius/clients/{client_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_client_edit(request: Request, client_id: str, db: Session = Depends(get_db)):
     servers = web_network_radius_service.active_servers(db)
 
@@ -263,15 +328,21 @@ def radius_client_edit(request: Request, client_id: str, db: Session = Depends(g
         )
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "client": client,
-        "servers": servers,
-        "action_url": f"/admin/network/radius/clients/{client_id}",
-    })
+    context.update(
+        {
+            "client": client,
+            "servers": servers,
+            "action_url": f"/admin/network/radius/clients/{client_id}",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/client_form.html", context)
 
 
-@router.post("/radius/clients", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/radius/clients",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def radius_client_create(request: Request, db: Session = Depends(get_db)):
     servers = web_network_radius_service.active_servers(db)
     values = web_network_radius_service.parse_client_form(parse_form_data_sync(request))
@@ -280,18 +351,23 @@ def radius_client_create(request: Request, db: Session = Depends(get_db)):
 
     if error:
         context = _base_context(request, db, active_page="radius")
-        context.update({
-            "client": client_data,
-            "servers": servers,
-            "action_url": "/admin/network/radius/clients",
-            "error": error,
-        })
-        return templates.TemplateResponse("admin/network/radius/client_form.html", context)
+        context.update(
+            {
+                "client": client_data,
+                "servers": servers,
+                "action_url": "/admin/network/radius/clients",
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/radius/client_form.html", context
+        )
 
     try:
         payload = web_network_radius_service.build_client_create_payload(values)
         client = radius_service.radius_clients.create(db=db, payload=payload)
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -300,7 +376,10 @@ def radius_client_create(request: Request, db: Session = Depends(get_db)):
             entity_type="radius_client",
             entity_id=str(client.id),
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"client_ip": client.client_ip, "server_id": str(client.server_id)},
+            metadata={
+                "client_ip": client.client_ip,
+                "server_id": str(client.server_id),
+            },
         )
         return RedirectResponse("/admin/network/radius", status_code=303)
     except ValidationError as exc:
@@ -309,17 +388,25 @@ def radius_client_create(request: Request, db: Session = Depends(get_db)):
         error = str(exc)
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "client": client_data,
-        "servers": servers,
-        "action_url": "/admin/network/radius/clients",
-        "error": error or "Please correct the highlighted fields.",
-    })
+    context.update(
+        {
+            "client": client_data,
+            "servers": servers,
+            "action_url": "/admin/network/radius/clients",
+            "error": error or "Please correct the highlighted fields.",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/client_form.html", context)
 
 
-@router.post("/radius/clients/{client_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def radius_client_update(request: Request, client_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/radius/clients/{client_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def radius_client_update(
+    request: Request, client_id: str, db: Session = Depends(get_db)
+):
     servers = web_network_radius_service.active_servers(db)
 
     try:
@@ -335,7 +422,9 @@ def radius_client_update(request: Request, client_id: str, db: Session = Depends
 
     before_snapshot = model_to_dict(client, exclude=RADIUS_CLIENT_EXCLUDE_FIELDS)
     values = web_network_radius_service.parse_client_form(parse_form_data_sync(request))
-    error = web_network_radius_service.validate_client_form(values, require_secret=False)
+    error = web_network_radius_service.validate_client_form(
+        values, require_secret=False
+    )
     client_data = web_network_radius_service.client_form_data(
         values,
         client_id=str(client.id),
@@ -343,13 +432,17 @@ def radius_client_update(request: Request, client_id: str, db: Session = Depends
 
     if error:
         context = _base_context(request, db, active_page="radius")
-        context.update({
-            "client": client_data,
-            "servers": servers,
-            "action_url": f"/admin/network/radius/clients/{client_id}",
-            "error": error,
-        })
-        return templates.TemplateResponse("admin/network/radius/client_form.html", context)
+        context.update(
+            {
+                "client": client_data,
+                "servers": servers,
+                "action_url": f"/admin/network/radius/clients/{client_id}",
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/radius/client_form.html", context
+        )
 
     try:
         payload = web_network_radius_service.build_client_update_payload(values)
@@ -358,10 +451,13 @@ def radius_client_update(request: Request, client_id: str, db: Session = Depends
             client_id=client_id,
             payload=payload,
         )
-        after_snapshot = model_to_dict(updated_client, exclude=RADIUS_CLIENT_EXCLUDE_FIELDS)
+        after_snapshot = model_to_dict(
+            updated_client, exclude=RADIUS_CLIENT_EXCLUDE_FIELDS
+        )
         changes = diff_dicts(before_snapshot, after_snapshot)
         metadata = {"changes": changes} if changes else None
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -379,24 +475,36 @@ def radius_client_update(request: Request, client_id: str, db: Session = Depends
         error = str(exc)
 
     context = _base_context(request, db, active_page="radius")
-    context.update({
-        "client": client_data,
-        "servers": servers,
-        "action_url": f"/admin/network/radius/clients/{client_id}",
-        "error": error or "Please correct the highlighted fields.",
-    })
+    context.update(
+        {
+            "client": client_data,
+            "servers": servers,
+            "action_url": f"/admin/network/radius/clients/{client_id}",
+            "error": error or "Please correct the highlighted fields.",
+        }
+    )
     return templates.TemplateResponse("admin/network/radius/client_form.html", context)
 
 
-@router.get("/radius/profiles/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/radius/profiles/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_profile_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="radius")
     context.update(web_network_radius_service.profile_new_form_data())
     return templates.TemplateResponse("admin/network/radius/profile_form.html", context)
 
 
-@router.get("/radius/profiles/{profile_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def radius_profile_edit(request: Request, profile_id: str, db: Session = Depends(get_db)):
+@router.get(
+    "/radius/profiles/{profile_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def radius_profile_edit(
+    request: Request, profile_id: str, db: Session = Depends(get_db)
+):
     form_data = web_network_radius_service.profile_edit_form_data(db, profile_id)
     if not form_data:
         context = _base_context(request, db, active_page="radius")
@@ -412,25 +520,38 @@ def radius_profile_edit(request: Request, profile_id: str, db: Session = Depends
     return templates.TemplateResponse("admin/network/radius/profile_form.html", context)
 
 
-@router.post("/radius/profiles", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/radius/profiles",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def radius_profile_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    profile_data, attributes, error = web_network_radius_service.parse_profile_form(form)
+    profile_data, attributes, error = web_network_radius_service.parse_profile_form(
+        form
+    )
 
     if error:
         context = _base_context(request, db, active_page="radius")
-        context.update({
-            "profile": profile_data,
-            "attributes": attributes,
-            "vendors": web_network_radius_service.profile_vendors(),
-            "connection_types": web_network_radius_service.profile_connection_types(),
-            "action_url": "/admin/network/radius/profiles",
-            "error": error,
-        })
-        return templates.TemplateResponse("admin/network/radius/profile_form.html", context)
+        context.update(
+            {
+                "profile": profile_data,
+                "attributes": attributes,
+                "vendors": web_network_radius_service.profile_vendors(),
+                "connection_types": web_network_radius_service.profile_connection_types(),
+                "action_url": "/admin/network/radius/profiles",
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/radius/profile_form.html", context
+        )
 
-    profile, metadata = web_network_radius_service.create_profile(db, profile_data, attributes)
+    profile, metadata = web_network_radius_service.create_profile(
+        db, profile_data, attributes
+    )
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -444,9 +565,17 @@ def radius_profile_create(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse("/admin/network/radius", status_code=303)
 
 
-@router.post("/radius/profiles/{profile_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def radius_profile_update(request: Request, profile_id: str, db: Session = Depends(get_db)):
-    profile_form_data = web_network_radius_service.profile_edit_form_data(db, profile_id)
+@router.post(
+    "/radius/profiles/{profile_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def radius_profile_update(
+    request: Request, profile_id: str, db: Session = Depends(get_db)
+):
+    profile_form_data = web_network_radius_service.profile_edit_form_data(
+        db, profile_id
+    )
     if not profile_form_data:
         context = _base_context(request, db, active_page="radius")
         context.update({"message": "RADIUS profile not found"})
@@ -457,19 +586,25 @@ def radius_profile_update(request: Request, profile_id: str, db: Session = Depen
         )
 
     form = parse_form_data_sync(request)
-    profile_data, attributes, error = web_network_radius_service.parse_profile_form(form)
+    profile_data, attributes, error = web_network_radius_service.parse_profile_form(
+        form
+    )
 
     if error:
         context = _base_context(request, db, active_page="radius")
-        context.update({
-            "profile": profile_data,
-            "attributes": attributes,
-            "vendors": web_network_radius_service.profile_vendors(),
-            "connection_types": web_network_radius_service.profile_connection_types(),
-            "action_url": f"/admin/network/radius/profiles/{profile_id}",
-            "error": error,
-        })
-        return templates.TemplateResponse("admin/network/radius/profile_form.html", context)
+        context.update(
+            {
+                "profile": profile_data,
+                "attributes": attributes,
+                "vendors": web_network_radius_service.profile_vendors(),
+                "connection_types": web_network_radius_service.profile_connection_types(),
+                "action_url": f"/admin/network/radius/profiles/{profile_id}",
+                "error": error,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/radius/profile_form.html", context
+        )
 
     updated_profile, metadata = web_network_radius_service.update_profile(
         db=db,
@@ -478,6 +613,7 @@ def radius_profile_update(request: Request, profile_id: str, db: Session = Depen
         attributes=attributes,
     )
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -491,10 +627,14 @@ def radius_profile_update(request: Request, profile_id: str, db: Session = Depen
     return RedirectResponse("/admin/network/radius", status_code=303)
 
 
-
 # --- Active Sessions (Who's Online) ---
 
-@router.get("/sessions", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+
+@router.get(
+    "/sessions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def active_sessions_page(
     request: Request,
     search: str = "",
@@ -515,7 +655,12 @@ def active_sessions_page(
 
 # --- RADIUS Auth Errors ---
 
-@router.get("/radius-errors", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+
+@router.get(
+    "/radius-errors",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def radius_auth_errors_page(
     request: Request,
     error_type: str = "",

@@ -48,6 +48,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 def _severity_rank(severity: AlertSeverity) -> int:
     order = {
         AlertSeverity.info: 0,
@@ -100,7 +101,9 @@ def _setting_int(db: Session, key: str, env_key: str, default: int) -> int:
         return default
 
 
-def _setting_str(db: Session, key: str, env_key: str, default: str | None) -> str | None:
+def _setting_str(
+    db: Session, key: str, env_key: str, default: str | None
+) -> str | None:
     env_value = os.getenv(env_key)
     if env_value is not None and env_value != "":
         return env_value
@@ -150,7 +153,10 @@ class Templates(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": NotificationTemplate.created_at, "name": NotificationTemplate.name},
+            {
+                "created_at": NotificationTemplate.created_at,
+                "name": NotificationTemplate.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -219,7 +225,9 @@ class Notifications(ListResponseMixin):
         return notification
 
     @staticmethod
-    def bulk_create(db: Session, payload: NotificationBulkCreateRequest) -> list[Notification]:
+    def bulk_create(
+        db: Session, payload: NotificationBulkCreateRequest
+    ) -> list[Notification]:
         if not payload.recipients:
             raise HTTPException(status_code=400, detail="Recipients required")
         template = None
@@ -246,7 +254,9 @@ class Notifications(ListResponseMixin):
         return notifications
 
     @staticmethod
-    def bulk_create_response(db: Session, payload: NotificationBulkCreateRequest) -> dict:
+    def bulk_create_response(
+        db: Session, payload: NotificationBulkCreateRequest
+    ) -> dict:
         notifications = Notifications.bulk_create(db, payload)
         return {
             "created": len(notifications),
@@ -385,7 +395,9 @@ class Deliveries(ListResponseMixin):
     ):
         query = db.query(NotificationDelivery)
         if notification_id:
-            query = query.filter(NotificationDelivery.notification_id == notification_id)
+            query = query.filter(
+                NotificationDelivery.notification_id == notification_id
+            )
         if status:
             query = query.filter(
                 NotificationDelivery.status
@@ -435,9 +447,15 @@ class Deliveries(ListResponseMixin):
         if not payload.delivery_ids:
             raise HTTPException(status_code=400, detail="delivery_ids required")
         ids = [delivery_id for delivery_id in payload.delivery_ids]
-        deliveries = db.query(NotificationDelivery).filter(NotificationDelivery.id.in_(ids)).all()
+        deliveries = (
+            db.query(NotificationDelivery)
+            .filter(NotificationDelivery.id.in_(ids))
+            .all()
+        )
         if len(deliveries) != len(ids):
-            raise HTTPException(status_code=404, detail="One or more deliveries not found")
+            raise HTTPException(
+                status_code=404, detail="One or more deliveries not found"
+            )
         data = payload.model_dump(exclude={"delivery_ids"}, exclude_unset=True)
         for delivery in deliveries:
             for key, value in data.items():
@@ -446,7 +464,9 @@ class Deliveries(ListResponseMixin):
         return len(deliveries)
 
     @staticmethod
-    def bulk_update_response(db: Session, payload: NotificationDeliveryBulkUpdateRequest) -> dict:
+    def bulk_update_response(
+        db: Session, payload: NotificationDeliveryBulkUpdateRequest
+    ) -> dict:
         updated = Deliveries.bulk_update(db, payload)
         return {"updated": updated}
 
@@ -472,7 +492,9 @@ class AlertNotificationPolicies(ListResponseMixin):
     def get(db: Session, policy_id: str):
         policy = db.get(AlertNotificationPolicy, policy_id)
         if not policy:
-            raise HTTPException(status_code=404, detail="Alert notification policy not found")
+            raise HTTPException(
+                status_code=404, detail="Alert notification policy not found"
+            )
         return policy
 
     @staticmethod
@@ -511,7 +533,10 @@ class AlertNotificationPolicies(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": AlertNotificationPolicy.created_at, "name": AlertNotificationPolicy.name},
+            {
+                "created_at": AlertNotificationPolicy.created_at,
+                "name": AlertNotificationPolicy.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -519,7 +544,9 @@ class AlertNotificationPolicies(ListResponseMixin):
     def update(db: Session, policy_id: str, payload: AlertNotificationPolicyUpdate):
         policy = db.get(AlertNotificationPolicy, policy_id)
         if not policy:
-            raise HTTPException(status_code=404, detail="Alert notification policy not found")
+            raise HTTPException(
+                status_code=404, detail="Alert notification policy not found"
+            )
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(policy, key, value)
         db.commit()
@@ -530,7 +557,9 @@ class AlertNotificationPolicies(ListResponseMixin):
     def delete(db: Session, policy_id: str):
         policy = db.get(AlertNotificationPolicy, policy_id)
         if not policy:
-            raise HTTPException(status_code=404, detail="Alert notification policy not found")
+            raise HTTPException(
+                status_code=404, detail="Alert notification policy not found"
+            )
         policy.is_active = False
         db.commit()
 
@@ -613,7 +642,9 @@ class AlertNotificationPolicies(ListResponseMixin):
                         recipient=policy.recipient or default_recipient,
                         template_id=policy.template_id
                         or (default_template_id if default_template_id else None),
-                        rotation_id=default_rotation_id if default_rotation_id else None,
+                        rotation_id=default_rotation_id
+                        if default_rotation_id
+                        else None,
                         severity_min=policy.severity_min,
                         status=policy.status,
                         is_active=True,
@@ -748,7 +779,10 @@ class AlertNotificationPolicySteps(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": AlertNotificationPolicyStep.created_at, "step_index": AlertNotificationPolicyStep.step_index},
+            {
+                "created_at": AlertNotificationPolicyStep.created_at,
+                "step_index": AlertNotificationPolicyStep.step_index,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -867,7 +901,10 @@ class OnCallRotationMembers(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": OnCallRotationMember.created_at, "priority": OnCallRotationMember.priority},
+            {
+                "created_at": OnCallRotationMember.created_at,
+                "priority": OnCallRotationMember.priority,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

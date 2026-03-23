@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 
 logger = logging.getLogger(__name__)
 
+
 def is_admin_request(request) -> bool:
     auth = getattr(request.state, "auth", {}) or {}
     roles = auth.get("roles") or []

@@ -22,9 +22,7 @@ def reseller_dashboard(
     per_page: int = Query(10, ge=5, le=50),
     db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_dashboard(
-        request, db, page, per_page
-    )
+    return web_reseller_routes_service.reseller_dashboard(request, db, page, per_page)
 
 
 @router.get("/accounts", response_class=HTMLResponse)
@@ -46,9 +44,7 @@ def reseller_account_detail(
     account_id: str,
     db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_account_detail(
-        request, db, account_id
-    )
+    return web_reseller_routes_service.reseller_account_detail(request, db, account_id)
 
 
 @router.get("/accounts/{account_id}/invoices", response_class=HTMLResponse)
@@ -82,9 +78,7 @@ def reseller_account_view(
     account_id: str,
     db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_account_view(
-        request, db, account_id
-    )
+    return web_reseller_routes_service.reseller_account_view(request, db, account_id)
 
 
 @router.get("/reports/revenue", response_class=HTMLResponse)
@@ -106,7 +100,8 @@ def reseller_profile_update(
     db: Session = Depends(get_db),
 ):
     return web_reseller_routes_service.reseller_profile_update(
-        request, db,
+        request,
+        db,
         contact_email=contact_email or None,
         contact_phone=contact_phone or None,
         notes=notes or None,
@@ -119,9 +114,7 @@ def reseller_account_tickets(
     account_id: str,
     db: Session = Depends(get_db),
 ):
-    return web_reseller_routes_service.reseller_account_tickets(
-        request, db, account_id
-    )
+    return web_reseller_routes_service.reseller_account_tickets(request, db, account_id)
 
 
 @router.get("/fiber-map", response_class=HTMLResponse)

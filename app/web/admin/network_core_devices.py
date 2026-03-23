@@ -58,7 +58,11 @@ def _base_context(
     }
 
 
-@router.get("/network-devices", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/network-devices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def network_devices_consolidated(
     request: Request,
     tab: str = "core",
@@ -93,10 +97,16 @@ def network_devices_consolidated(
     }
     context = _base_context(request, db, active_page="network-devices")
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/network-devices/index.html", context)
+    return templates.TemplateResponse(
+        "admin/network/network-devices/index.html", context
+    )
 
 
-@router.get("/backups", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/backups",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def network_backups_overview(
     request: Request,
     status: str | None = None,
@@ -120,7 +130,11 @@ def network_backups_overview(
     return templates.TemplateResponse("admin/network/backups/index.html", context)
 
 
-@router.get("/core-devices", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_devices_list(
     request: Request,
     role: str | None = None,
@@ -144,7 +158,14 @@ def core_devices_list(
     refresh_summary: dict[str, int] | None = None
     try:
         ping_interval_seconds = int(
-            str(resolve_value(db, SettingDomain.network_monitoring, "core_device_ping_interval_seconds") or 120)
+            str(
+                resolve_value(
+                    db,
+                    SettingDomain.network_monitoring,
+                    "core_device_ping_interval_seconds",
+                )
+                or 120
+            )
         )
     except (TypeError, ValueError):
         ping_interval_seconds = 120
@@ -180,13 +201,19 @@ def core_devices_list(
                 pop_site_id=pop_site_id,
                 search=search,
             )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context["refresh_summary"] = refresh_summary
     context.update(page_data)
     return templates.TemplateResponse("admin/network/core-devices/index.html", context)
 
 
-@router.get("/core-devices/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_new(
     request: Request,
     pop_site_id: str | None = None,
@@ -206,17 +233,25 @@ def core_device_new(
         current_device_id=None,
         action_url="/admin/network/core-devices",
     )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(form_context)
     return templates.TemplateResponse("admin/network/core-devices/form.html", context)
 
 
-@router.post("/core-devices", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     pop_sites = web_network_core_devices_service.pop_sites_for_forms(db)
     values = web_network_core_devices_service.parse_form_values(form)
-    selected_pop_site_id = str(values.get("pop_site_id")) if values.get("pop_site_id") else None
+    selected_pop_site_id = (
+        str(values.get("pop_site_id")) if values.get("pop_site_id") else None
+    )
     selected_pop_site_uuid = _coerce_uuid_or_none(selected_pop_site_id)
     parent_devices = web_network_core_devices_service.parent_devices_for_forms(
         db,
@@ -234,11 +269,31 @@ def core_device_create(request: Request, db: Session = Depends(get_db)):
             action_url="/admin/network/core-devices",
             error=error,
         )
-        context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
         context.update(form_context)
-        return templates.TemplateResponse("admin/network/core-devices/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
 
-    assert normalized is not None
+    if normalized is None:
+        form_context = web_network_core_devices_service.build_form_context(
+            device=snapshot,
+            pop_sites=pop_sites,
+            parent_devices=parent_devices,
+            selected_pop_site_id=selected_pop_site_id,
+            current_device_id=None,
+            action_url="/admin/network/core-devices",
+            error="Please correct the highlighted fields.",
+        )
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
+        context.update(form_context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
     result = web_network_core_devices_service.create_device(db, normalized)
     if result.error:
         form_context = web_network_core_devices_service.build_form_context(
@@ -250,9 +305,13 @@ def core_device_create(request: Request, db: Session = Depends(get_db)):
             action_url="/admin/network/core-devices",
             error=result.error,
         )
-        context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
         context.update(form_context)
-        return templates.TemplateResponse("admin/network/core-devices/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
     device = result.device
     if device is None:
         form_context = web_network_core_devices_service.build_form_context(
@@ -264,9 +323,13 @@ def core_device_create(request: Request, db: Session = Depends(get_db)):
             action_url="/admin/network/core-devices",
             error="Failed to create device",
         )
-        context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
         context.update(form_context)
-        return templates.TemplateResponse("admin/network/core-devices/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
 
     from app.web.admin import get_current_user
 
@@ -286,7 +349,11 @@ def core_device_create(request: Request, db: Session = Depends(get_db)):
     return RedirectResponse(target_url, status_code=303)
 
 
-@router.get("/core-devices/parent-options", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/parent-options",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_parent_options(
     request: Request,
     pop_site_id: str | None = None,
@@ -310,7 +377,11 @@ def core_device_parent_options(
     )
 
 
-@router.get("/core-devices/{device_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_edit(request: Request, device_id: str, db: Session = Depends(get_db)):
     device = web_network_core_devices_service.get_device(db, device_id)
     if not device:
@@ -333,12 +404,18 @@ def core_device_edit(request: Request, device_id: str, db: Session = Depends(get
         current_device_id=str(device.id),
         action_url=f"/admin/network/core-devices/{device.id}",
     )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(form_context)
     return templates.TemplateResponse("admin/network/core-devices/form.html", context)
 
 
-@router.get("/core-devices/{device_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_detail(request: Request, device_id: str, db: Session = Depends(get_db)):
     page_data = web_network_core_devices_service.detail_page_data(
         db,
@@ -356,13 +433,19 @@ def core_device_detail(request: Request, device_id: str, db: Session = Depends(g
             status_code=404,
         )
     activities = build_audit_activities(db, "core_device", str(device_id))
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
     context["activities"] = activities
     return templates.TemplateResponse("admin/network/core-devices/detail.html", context)
 
 
-@router.post("/core-devices/{device_id}/provisioning-access", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/provisioning-access",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_provisioning_access_update(
     device_id: str,
     ssh_username: str = Form(""),
@@ -384,7 +467,11 @@ def core_device_provisioning_access_update(
     )
 
 
-@router.get("/core-devices/{device_id}/snmp-oids", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/snmp-oids",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_snmp_oids(
     request: Request,
     device_id: str,
@@ -402,12 +489,20 @@ def core_device_snmp_oids(
             {"request": request, "message": "Device not found"},
             status_code=404,
         )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/core-devices/snmp_oids.html", context)
+    return templates.TemplateResponse(
+        "admin/network/core-devices/snmp_oids.html", context
+    )
 
 
-@router.post("/core-devices/{device_id}/snmp-oids", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/snmp-oids",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_snmp_oid_create(
     device_id: str,
     title: str = Form(...),
@@ -433,7 +528,11 @@ def core_device_snmp_oid_create(
     )
 
 
-@router.post("/core-devices/{device_id}/snmp-oids/snmp-walk", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/snmp-oids/snmp-walk",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_snmp_oid_walk(
     request: Request,
     device_id: str,
@@ -458,12 +557,20 @@ def core_device_snmp_oid_walk(
             {"request": request, "message": "Device not found"},
             status_code=404,
         )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/core-devices/snmp_oids.html", context)
+    return templates.TemplateResponse(
+        "admin/network/core-devices/snmp_oids.html", context
+    )
 
 
-@router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/poll", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/poll",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_snmp_oid_poll(
     device_id: str,
     snmp_oid_id: str,
@@ -479,7 +586,11 @@ def core_device_snmp_oid_poll(
     )
 
 
-@router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/toggle", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_snmp_oid_toggle(
     device_id: str,
     snmp_oid_id: str,
@@ -496,7 +607,11 @@ def core_device_snmp_oid_toggle(
     )
 
 
-@router.post("/core-devices/{device_id}/interfaces/{interface_id}/toggle-monitored", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/interfaces/{interface_id}/toggle-monitored",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_interface_toggle_monitored(
     device_id: str,
     interface_id: str,
@@ -516,7 +631,11 @@ def core_device_interface_toggle_monitored(
     )
 
 
-@router.post("/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/snmp-oids/{snmp_oid_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_snmp_oid_delete(
     device_id: str,
     snmp_oid_id: str,
@@ -532,7 +651,11 @@ def core_device_snmp_oid_delete(
     )
 
 
-@router.get("/core-devices/{device_id}/graphs", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/graphs",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_graphs(
     request: Request,
     device_id: str,
@@ -552,12 +675,18 @@ def core_device_graphs(
             {"request": request, "message": "Device not found"},
             status_code=404,
         )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
     return templates.TemplateResponse("admin/network/core-devices/graphs.html", context)
 
 
-@router.post("/core-devices/{device_id}/graphs", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/graphs",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_graph_create(
     device_id: str,
     title: str = Form(...),
@@ -581,7 +710,11 @@ def core_device_graph_create(
     )
 
 
-@router.post("/core-devices/{device_id}/graphs/{graph_id}/sources", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/graphs/{graph_id}/sources",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_graph_source_add(
     device_id: str,
     graph_id: str,
@@ -613,7 +746,11 @@ def core_device_graph_source_add(
     )
 
 
-@router.post("/core-devices/{device_id}/graphs/{graph_id}/preview", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/graphs/{graph_id}/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_graph_preview(
     device_id: str,
     graph_id: str,
@@ -625,7 +762,11 @@ def core_device_graph_preview(
     )
 
 
-@router.post("/core-devices/{device_id}/graphs/{graph_id}/toggle-public", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/graphs/{graph_id}/toggle-public",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_graph_toggle_public(
     device_id: str,
     graph_id: str,
@@ -645,7 +786,11 @@ def core_device_graph_toggle_public(
     )
 
 
-@router.post("/core-devices/{device_id}/graphs/{graph_id}/clone", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/graphs/{graph_id}/clone",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_graph_clone(
     device_id: str,
     graph_id: str,
@@ -663,7 +808,11 @@ def core_device_graph_clone(
     )
 
 
-@router.get("/core-devices/graphs/dashboard", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/graphs/dashboard",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_graphs_dashboard(
     request: Request,
     search: str | None = None,
@@ -673,12 +822,20 @@ def core_device_graphs_dashboard(
         db,
         search=search,
     )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/core-devices/graphs_dashboard.html", context)
+    return templates.TemplateResponse(
+        "admin/network/core-devices/graphs_dashboard.html", context
+    )
 
 
-@router.get("/core-devices/{device_id}/backups", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/backups",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_backups(
     request: Request,
     device_id: str,
@@ -700,12 +857,20 @@ def core_device_backups(
             {"request": request, "message": "Device not found"},
             status_code=404,
         )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/core-devices/backups.html", context)
+    return templates.TemplateResponse(
+        "admin/network/core-devices/backups.html", context
+    )
 
 
-@router.post("/core-devices/{device_id}/backups/settings", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/backups/settings",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_backup_settings_update(
     device_id: str,
     enabled: bool = Form(False),
@@ -735,7 +900,11 @@ def core_device_backup_settings_update(
     )
 
 
-@router.post("/core-devices/{device_id}/backups/trigger", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}/backups/trigger",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_backup_trigger(
     device_id: str,
     db: Session = Depends(get_db),
@@ -752,7 +921,11 @@ def core_device_backup_trigger(
     )
 
 
-@router.get("/core-devices/{device_id}/backups/{backup_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/backups/{backup_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_backup_detail(
     request: Request,
     device_id: str,
@@ -770,12 +943,19 @@ def core_device_backup_detail(
             {"request": request, "message": "Backup not found"},
             status_code=404,
         )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/core-devices/backup_detail.html", context)
+    return templates.TemplateResponse(
+        "admin/network/core-devices/backup_detail.html", context
+    )
 
 
-@router.get("/core-devices/{device_id}/backups/{backup_id}/download", dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/backups/{backup_id}/download",
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_backup_download(
     device_id: str,
     backup_id: str,
@@ -789,7 +969,8 @@ def core_device_backup_download(
     if not page_data:
         return Response(status_code=404)
     backup = page_data["backup"]
-    assert backup is not None
+    if backup is None:
+        return Response(status_code=404)
     filename = f"core_device_backup_{device_id}_{backup_id}.txt"
     return Response(
         content=str(backup.config_content or ""),
@@ -798,7 +979,11 @@ def core_device_backup_download(
     )
 
 
-@router.get("/core-devices/{device_id}/backups/compare", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/core-devices/{device_id}/backups/compare",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def core_device_backup_compare(
     request: Request,
     device_id: str,
@@ -818,14 +1003,26 @@ def core_device_backup_compare(
             {"request": request, "message": "Unable to compare selected backups"},
             status_code=404,
         )
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
-    return templates.TemplateResponse("admin/network/core-devices/backup_compare.html", context)
+    return templates.TemplateResponse(
+        "admin/network/core-devices/backup_compare.html", context
+    )
 
 
-@router.post("/core-devices/{device_id}/ping", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def core_device_ping(request: Request, device_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
-    device, error, ping_success = web_network_core_runtime_service.ping_device(db, device_id)
+@router.post(
+    "/core-devices/{device_id}/ping",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def core_device_ping(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    device, error, ping_success = web_network_core_runtime_service.ping_device(
+        db, device_id
+    )
     if not device:
         return HTMLResponse(
             '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
@@ -845,13 +1042,14 @@ def core_device_ping(request: Request, device_id: str, db: Session = Depends(get
         'dark:border-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-400">'
         f"Ping successful: device is {status_label}.</div>"
         if ping_success
-        else
-        '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
+        else '<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
         'dark:border-red-800 dark:bg-red-900/30 dark:text-red-400">'
         f"Ping failed: device is {status_label}.</div>"
     )
 
-    badge = web_network_core_runtime_service.render_device_status_badge(device.status.value)
+    badge = web_network_core_runtime_service.render_device_status_badge(
+        device.status.value
+    )
     ping_badge = web_network_core_runtime_service.render_ping_badge(device)
     return HTMLResponse(
         message
@@ -860,8 +1058,14 @@ def core_device_ping(request: Request, device_id: str, db: Session = Depends(get
     )
 
 
-@router.post("/core-devices/{device_id}/snmp-check", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def core_device_snmp_check(request: Request, device_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+@router.post(
+    "/core-devices/{device_id}/snmp-check",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def core_device_snmp_check(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     device, error = web_network_core_runtime_service.snmp_check_device(db, device_id)
     if not device:
         return HTMLResponse(
@@ -876,8 +1080,14 @@ def core_device_snmp_check(request: Request, device_id: str, db: Session = Depen
     )
 
 
-@router.post("/core-devices/{device_id}/snmp-debug", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def core_device_snmp_debug(request: Request, device_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+@router.post(
+    "/core-devices/{device_id}/snmp-debug",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def core_device_snmp_debug(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     result = web_network_core_runtime_service.snmp_debug_device(db, device_id)
     if result.error:
         css = (
@@ -898,8 +1108,14 @@ def core_device_snmp_debug(request: Request, device_id: str, db: Session = Depen
     )
 
 
-@router.get("/core-devices/{device_id}/health", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
-def core_device_health_partial(request: Request, device_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+@router.get(
+    "/core-devices/{device_id}/health",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def core_device_health_partial(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     device = web_network_core_runtime_service.get_device(db, device_id)
     if not device:
         return HTMLResponse(
@@ -916,11 +1132,19 @@ def core_device_health_partial(request: Request, device_id: str, db: Session = D
     )
 
     html = web_network_core_runtime_service.render_device_health_content(device_health)
-    return HTMLResponse(f'<div id="device-health-content" hx-swap-oob="true">{html}</div>')
+    return HTMLResponse(
+        f'<div id="device-health-content" hx-swap-oob="true">{html}</div>'
+    )
 
 
-@router.post("/core-devices/{device_id}/discover-interfaces", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
-def core_device_discover_interfaces(request: Request, device_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/core-devices/{device_id}/discover-interfaces",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def core_device_discover_interfaces(
+    request: Request, device_id: str, db: Session = Depends(get_db)
+):
     device = web_network_core_runtime_service.get_device(db, device_id)
     if not device:
         return HTMLResponse(
@@ -946,8 +1170,8 @@ def core_device_discover_interfaces(request: Request, device_id: str, db: Sessio
         )
 
     try:
-        created, updated = web_network_core_runtime_service.discover_interfaces_and_health(
-            db, device
+        created, updated = (
+            web_network_core_runtime_service.discover_interfaces_and_health(db, device)
         )
     except Exception as exc:
         web_network_core_runtime_service.mark_discovery_failure(db, device)
@@ -977,7 +1201,9 @@ def core_device_discover_interfaces(request: Request, device_id: str, db: Sessio
     )
     if not page_data:
         return HTMLResponse(message_html)
-    context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+    context = _base_context(
+        request, db, active_page="core-devices", active_menu="core-network"
+    )
     context.update(page_data)
     context["oob_swap"] = True
     interfaces_card_html = _render_template_fragment(
@@ -987,7 +1213,11 @@ def core_device_discover_interfaces(request: Request, device_id: str, db: Sessio
     return HTMLResponse(message_html + interfaces_card_html)
 
 
-@router.post("/core-devices/{device_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/core-devices/{device_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def core_device_update(request: Request, device_id: str, db: Session = Depends(get_db)):
     device = web_network_core_devices_service.get_device(db, device_id)
     if not device:
@@ -1001,7 +1231,9 @@ def core_device_update(request: Request, device_id: str, db: Session = Depends(g
     form = parse_form_data_sync(request)
     values = web_network_core_devices_service.parse_form_values(form)
     pop_sites = web_network_core_devices_service.pop_sites_for_forms(db)
-    selected_pop_site_id = str(values.get("pop_site_id")) if values.get("pop_site_id") else None
+    selected_pop_site_id = (
+        str(values.get("pop_site_id")) if values.get("pop_site_id") else None
+    )
     selected_pop_site_uuid = _coerce_uuid_or_none(selected_pop_site_id)
     parent_devices = web_network_core_devices_service.parent_devices_for_forms(
         db,
@@ -1028,11 +1260,31 @@ def core_device_update(request: Request, device_id: str, db: Session = Depends(g
             action_url=f"/admin/network/core-devices/{device.id}",
             error=error,
         )
-        context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
         context.update(form_context)
-        return templates.TemplateResponse("admin/network/core-devices/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
 
-    assert normalized is not None
+    if normalized is None:
+        form_context = web_network_core_devices_service.build_form_context(
+            device=snapshot,
+            pop_sites=pop_sites,
+            parent_devices=parent_devices,
+            selected_pop_site_id=selected_pop_site_id,
+            current_device_id=str(device.id),
+            action_url=f"/admin/network/core-devices/{device.id}",
+            error="Please correct the highlighted fields.",
+        )
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
+        context.update(form_context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
     result = web_network_core_devices_service.update_device(db, device, normalized)
     if result.error:
         form_context = web_network_core_devices_service.build_form_context(
@@ -1044,9 +1296,13 @@ def core_device_update(request: Request, device_id: str, db: Session = Depends(g
             action_url=f"/admin/network/core-devices/{device.id}",
             error=result.error,
         )
-        context = _base_context(request, db, active_page="core-devices", active_menu="core-network")
+        context = _base_context(
+            request, db, active_page="core-devices", active_menu="core-network"
+        )
         context.update(form_context)
-        return templates.TemplateResponse("admin/network/core-devices/form.html", context)
+        return templates.TemplateResponse(
+            "admin/network/core-devices/form.html", context
+        )
 
     after_snapshot = model_to_dict(device)
     changes = diff_dicts(before_snapshot, after_snapshot)

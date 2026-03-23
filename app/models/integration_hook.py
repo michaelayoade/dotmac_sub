@@ -50,7 +50,9 @@ class IntegrationHook(Base):
     url: Mapped[str | None] = mapped_column(String(600))
     http_method: Mapped[str] = mapped_column(String(10), default="POST", nullable=False)
     auth_type: Mapped[IntegrationHookAuthType] = mapped_column(
-        Enum(IntegrationHookAuthType), default=IntegrationHookAuthType.none, nullable=False
+        Enum(IntegrationHookAuthType),
+        default=IntegrationHookAuthType.none,
+        nullable=False,
     )
     auth_config: Mapped[dict | None] = mapped_column(JSON)
     retry_max: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
@@ -102,4 +104,3 @@ class IntegrationHookExecution(Base):
     )
 
     hook = relationship("IntegrationHook", back_populates="executions")
-

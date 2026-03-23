@@ -68,7 +68,9 @@ def _build_pon_interface_summary(db: Session) -> dict[str, int]:
     summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
 
     rows = (
-        db.query(DeviceInterface.name, DeviceInterface.description, DeviceInterface.status)
+        db.query(
+            DeviceInterface.name, DeviceInterface.description, DeviceInterface.status
+        )
         .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
         .filter(NetworkDevice.is_active.is_(True))
         .all()
@@ -92,30 +94,46 @@ def _build_pon_interface_summary(db: Session) -> dict[str, int]:
 def _build_health_thresholds(db: Session) -> dict:
     """Resolve network/server health thresholds from settings."""
     return {
-        "disk_warn_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_disk_warn_pct"
-        )),
-        "disk_crit_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_disk_crit_pct"
-        )),
-        "mem_warn_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_mem_warn_pct"
-        )),
-        "mem_crit_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_mem_crit_pct"
-        )),
-        "load_warn": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_load_warn"
-        )),
-        "load_crit": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "server_health_load_crit"
-        )),
-        "network_warn_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "network_health_warn_pct"
-        )),
-        "network_crit_pct": _float_setting(settings_spec.resolve_value(
-            db, SettingDomain.network_monitoring, "network_health_crit_pct"
-        )),
+        "disk_warn_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_disk_warn_pct"
+            )
+        ),
+        "disk_crit_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_disk_crit_pct"
+            )
+        ),
+        "mem_warn_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_mem_warn_pct"
+            )
+        ),
+        "mem_crit_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_mem_crit_pct"
+            )
+        ),
+        "load_warn": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_load_warn"
+            )
+        ),
+        "load_crit": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "server_health_load_crit"
+            )
+        ),
+        "network_warn_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "network_health_warn_pct"
+            )
+        ),
+        "network_crit_pct": _float_setting(
+            settings_spec.resolve_value(
+                db, SettingDomain.network_monitoring, "network_health_crit_pct"
+            )
+        ),
     }
 
 
@@ -143,9 +161,7 @@ def _build_recent_activities(
         if not actor_name:
             metadata = getattr(event, "metadata_", None) or {}
             actor_name = (
-                metadata.get("actor_name")
-                or metadata.get("actor_email")
-                or "System"
+                metadata.get("actor_name") or metadata.get("actor_email") or "System"
             )
 
         time_str = format_audit_datetime(getattr(event, "occurred_at", None), "%H:%M")
@@ -159,12 +175,14 @@ def _build_recent_activities(
         message = f"{actor_name} {action_label} {entity_label}"
         detail = change_summary or entity_label
 
-        recent_activities.append({
-            "type": activity_type,
-            "message": message,
-            "detail": detail,
-            "time": time_str,
-        })
+        recent_activities.append(
+            {
+                "type": activity_type,
+                "message": message,
+                "detail": detail,
+                "time": time_str,
+            }
+        )
     return recent_activities
 
 
@@ -195,9 +213,7 @@ def dashboard(request: Request, db: Session):
     )
     ont_total = db.query(func.count(OntUnit.id)).scalar() or 0
     ont_active = (
-        db.query(func.count(OntUnit.id))
-        .filter(OntUnit.is_active.is_(True))
-        .scalar()
+        db.query(func.count(OntUnit.id)).filter(OntUnit.is_active.is_(True)).scalar()
         or 0
     )
     # Fall back to monitoring devices if no OLTs are defined
@@ -237,15 +253,17 @@ def dashboard(request: Request, db: Session):
     try:
         from sqlalchemy import text as sa_text
 
-        ar_row = db.execute(sa_text(
-            "SELECT "
-            "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
-            "  AND due_at >= NOW() - INTERVAL '30 days'), 0) as ar_30, "
-            "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
-            "  AND due_at < NOW() - INTERVAL '30 days' "
-            "  AND due_at >= NOW() - INTERVAL '60 days'), 0) as ar_60 "
-            "FROM invoices WHERE is_active = true AND status != 'void'"
-        )).one()
+        ar_row = db.execute(
+            sa_text(
+                "SELECT "
+                "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
+                "  AND due_at >= NOW() - INTERVAL '30 days'), 0) as ar_30, "
+                "COALESCE(SUM(balance_due) FILTER (WHERE balance_due > 0 "
+                "  AND due_at < NOW() - INTERVAL '30 days' "
+                "  AND due_at >= NOW() - INTERVAL '60 days'), 0) as ar_60 "
+                "FROM invoices WHERE is_active = true AND status != 'void'"
+            )
+        ).one()
         ar_30 = float(ar_row.ar_30)
         ar_60 = float(ar_row.ar_60)
     except Exception:
@@ -257,12 +275,14 @@ def dashboard(request: Request, db: Session):
     try:
         from sqlalchemy import text as sa_text
 
-        bw_row = db.execute(sa_text(
-            "SELECT COALESCE(SUM(value), 0) as total_bps "
-            "FROM device_metrics "
-            "WHERE metric_type = 'rx_bps' "
-            "AND recorded_at > NOW() - INTERVAL '10 minutes' AND value > 0"
-        )).one()
+        bw_row = db.execute(
+            sa_text(
+                "SELECT COALESCE(SUM(value), 0) as total_bps "
+                "FROM device_metrics "
+                "WHERE metric_type = 'rx_bps' "
+                "AND recorded_at > NOW() - INTERVAL '10 minutes' AND value > 0"
+            )
+        ).one()
         total_bps = float(bw_row.total_bps)
         if total_bps > 1e9:
             bw_current = f"{total_bps / 1e9:.1f} Gbps"
@@ -333,9 +353,9 @@ def dashboard(request: Request, db: Session):
     if actor_ids:
         subscribers_lookup = {
             str(subscriber.id): subscriber
-            for subscriber in db.query(Subscriber).filter(
-                Subscriber.id.in_(actor_ids)
-            ).all()
+            for subscriber in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
 
     recent_activities = _build_recent_activities(recent_activity, subscribers_lookup)
@@ -365,15 +385,26 @@ def dashboard(request: Request, db: Session):
         try:
             from app.models.system_user import SystemUser
 
-            sys_user = db.get(SystemUser, str(user.get("subscriber_id") or user.get("id", "")))
+            sys_user = db.get(
+                SystemUser, str(user.get("subscriber_id") or user.get("id", ""))
+            )
             roles = getattr(sys_user, "roles", None)
             if sys_user and roles is not None:
                 role_names = {getattr(r, "name", "") for r in roles} if roles else set()
                 # Admin role sees everything
                 is_admin = "admin" in role_names or "super_admin" in role_names
-                show_financials = is_admin or "finance" in role_names or "billing" in role_names
-                show_network = is_admin or "noc" in role_names or "network" in role_names or "technician" in role_names
-                show_subscribers = is_admin or "support" in role_names or "sales" in role_names
+                show_financials = (
+                    is_admin or "finance" in role_names or "billing" in role_names
+                )
+                show_network = (
+                    is_admin
+                    or "noc" in role_names
+                    or "network" in role_names
+                    or "technician" in role_names
+                )
+                show_subscribers = (
+                    is_admin or "support" in role_names or "sales" in role_names
+                )
             else:
                 # No role info — show everything (admin default)
                 show_financials = True
@@ -393,9 +424,7 @@ def dashboard(request: Request, db: Session):
     try:
         from app.models.radius_active_session import RadiusActiveSession
 
-        online_count = (
-            db.query(func.count(RadiusActiveSession.id)).scalar() or 0
-        )
+        online_count = db.query(func.count(RadiusActiveSession.id)).scalar() or 0
     except Exception:
         online_count = 0
 
@@ -412,10 +441,16 @@ def dashboard(request: Request, db: Session):
                 last_sync is not None
                 and (
                     datetime.now(UTC)
-                    - (last_sync if last_sync.tzinfo is not None else last_sync.replace(tzinfo=UTC))
+                    - (
+                        last_sync
+                        if last_sync.tzinfo is not None
+                        else last_sync.replace(tzinfo=UTC)
+                    )
                 ).total_seconds()
                 < 7200
-            ) if last_sync else False,
+            )
+            if last_sync
+            else False,
         }
     except Exception:
         logger.debug("Failed to load sync status for dashboard", exc_info=True)
@@ -440,7 +475,9 @@ def dashboard(request: Request, db: Session):
     try:
         pon_interface_summary = _build_pon_interface_summary(db)
     except Exception:
-        logger.debug("Failed to load PON interface summary for dashboard", exc_info=True)
+        logger.debug(
+            "Failed to load PON interface summary for dashboard", exc_info=True
+        )
         pon_interface_summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
 
     # --- VPN tunnel status ---
@@ -463,7 +500,9 @@ def dashboard(request: Request, db: Session):
         stats["orders_in_progress"] = so_stats.get("in_progress", 0)
         stats["orders_completed_today"] = so_stats.get("completed", 0)
     except ImportError:
-        logger.debug("provisioning_managers not available, skipping service order stats")
+        logger.debug(
+            "provisioning_managers not available, skipping service order stats"
+        )
     except Exception:
         logger.error("Failed to load service order stats for dashboard", exc_info=True)
 
@@ -476,41 +515,53 @@ def dashboard(request: Request, db: Session):
         + net_stats["alarms_warning"]
     )
     if net_stats["alarms_critical"] > 0:
-        attention_items.append({
-            "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
-            "href": "/admin/network/alarms",
-            "severity": "critical",
-        })
+        attention_items.append(
+            {
+                "label": f"{net_stats['alarms_critical']} critical alarm{'s' if net_stats['alarms_critical'] != 1 else ''}",
+                "href": "/admin/network/alarms",
+                "severity": "critical",
+            }
+        )
     if net_stats["alarms_major"] > 0:
-        attention_items.append({
-            "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
-            "href": "/admin/network/alarms",
-            "severity": "major",
-        })
+        attention_items.append(
+            {
+                "label": f"{net_stats['alarms_major']} major alarm{'s' if net_stats['alarms_major'] != 1 else ''}",
+                "href": "/admin/network/alarms",
+                "severity": "major",
+            }
+        )
     if net_stats.get("offline_count", 0) > 0:
-        attention_items.append({
-            "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
-            "href": "/admin/network/monitoring",
-            "severity": "warning",
-        })
+        attention_items.append(
+            {
+                "label": f"{net_stats['offline_count']} device{'s' if net_stats['offline_count'] != 1 else ''} offline",
+                "href": "/admin/network/monitoring",
+                "severity": "warning",
+            }
+        )
     if overdue_amount > 0:
-        attention_items.append({
-            "label": f"₦{overdue_amount:,.0f} overdue receivables",
-            "href": "/admin/billing",
-            "severity": "warning",
-        })
+        attention_items.append(
+            {
+                "label": f"₦{overdue_amount:,.0f} overdue receivables",
+                "href": "/admin/billing",
+                "severity": "warning",
+            }
+        )
     if sub_stats["suspended_count"] > 0:
-        attention_items.append({
-            "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
-            "href": "/admin/customers",
-            "severity": "info",
-        })
+        attention_items.append(
+            {
+                "label": f"{sub_stats['suspended_count']} suspended account{'s' if sub_stats['suspended_count'] != 1 else ''}",
+                "href": "/admin/customers",
+                "severity": "info",
+            }
+        )
     if pending_orders > 0:
-        attention_items.append({
-            "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
-            "href": "/admin/provisioning",
-            "severity": "info",
-        })
+        attention_items.append(
+            {
+                "label": f"{pending_orders} pending service order{'s' if pending_orders != 1 else ''}",
+                "href": "/admin/provisioning",
+                "severity": "info",
+            }
+        )
 
     return templates.TemplateResponse(
         "admin/dashboard/index.html",
@@ -555,7 +606,9 @@ def dashboard(request: Request, db: Session):
 def dashboard_server_health_partial(request: Request, db: Session):
     server_health = system_health_service.get_system_health()
     thresholds = _build_health_thresholds(db)
-    server_health_status = system_health_service.evaluate_health(server_health, thresholds)
+    server_health_status = system_health_service.evaluate_health(
+        server_health, thresholds
+    )
     return templates.TemplateResponse(
         "admin/dashboard/_server_health.html",
         {

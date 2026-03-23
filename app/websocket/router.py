@@ -69,9 +69,7 @@ async def _handle_client_message(
 
         elif message.type == InboundMessageType.UNSUBSCRIBE:
             if message.conversation_id:
-                await manager.unsubscribe_conversation(
-                    user_id, message.conversation_id
-                )
+                await manager.unsubscribe_conversation(user_id, message.conversation_id)
 
         elif message.type == InboundMessageType.TYPING:
             if message.conversation_id:

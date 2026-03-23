@@ -43,11 +43,18 @@ def _month_end(value: date) -> date:
 def _billing_location_options(db) -> list[str]:
     rows = (
         db.query(
-            func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city).label("location")
+            func.coalesce(
+                Subscriber.region, Subscriber.billing_region, Subscriber.city
+            ).label("location")
         )
-        .filter((Subscriber.user_type.is_(None)) | (Subscriber.user_type != UserType.system_user))
         .filter(
-            func.coalesce(Subscriber.region, Subscriber.billing_region, Subscriber.city).is_not(None)
+            (Subscriber.user_type.is_(None))
+            | (Subscriber.user_type != UserType.system_user)
+        )
+        .filter(
+            func.coalesce(
+                Subscriber.region, Subscriber.billing_region, Subscriber.city
+            ).is_not(None)
         )
         .distinct()
         .all()
@@ -90,8 +97,7 @@ def build_overview_data(
         .all()
     )
     result["partner_options"] = [
-        {"id": str(r.id), "name": r.name}
-        for r in partner_rows
+        {"id": str(r.id), "name": r.name} for r in partner_rows
     ]
 
     result["location_options"] = _billing_location_options(db)
@@ -118,10 +124,14 @@ def build_invoices_list_data(
         elif account_id:
             scoped = scoped.filter(Invoice.account_id == UUID(account_id))
         if selected_partner_id:
-            scoped = scoped.filter(Invoice.account.has(Subscriber.reseller_id == selected_partner_id))
+            scoped = scoped.filter(
+                Invoice.account.has(Subscriber.reseller_id == selected_partner_id)
+            )
 
         if include_status and status:
-            scoped = scoped.filter(Invoice.status == validate_enum(status, InvoiceStatus, "status"))
+            scoped = scoped.filter(
+                Invoice.status == validate_enum(status, InvoiceStatus, "status")
+            )
         if proforma_only:
             scoped = scoped.filter(
                 or_(
@@ -142,7 +152,9 @@ def build_invoices_list_data(
             if date_range == "today":
                 start = datetime(now.year, now.month, now.day, tzinfo=UTC)
             elif date_range == "week":
-                start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(days=now.weekday())
+                start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+                    days=now.weekday()
+                )
             elif date_range == "month":
                 start = datetime(now.year, now.month, 1, tzinfo=UTC)
             else:
@@ -160,20 +172,28 @@ def build_invoices_list_data(
         received_total = 0.0
         for invoice in items:
             raw_status = getattr(invoice, "status", InvoiceStatus.draft)
-            status_key = raw_status.value if isinstance(raw_status, InvoiceStatus) else str(raw_status)
+            status_key = (
+                raw_status.value
+                if isinstance(raw_status, InvoiceStatus)
+                else str(raw_status)
+            )
             if status_key not in summary:
                 summary[status_key] = {"count": 0, "amount": 0.0}
             amount = float(getattr(invoice, "total", 0) or 0)
             due = float(getattr(invoice, "balance_due", 0) or 0)
             received = max(amount - due, 0.0)
             summary[status_key]["count"] = int(summary[status_key]["count"]) + 1
-            summary[status_key]["amount"] = float(summary[status_key]["amount"]) + amount
+            summary[status_key]["amount"] = (
+                float(summary[status_key]["amount"]) + amount
+            )
             due_total += due
             received_total += received
 
         summary["all"] = {
             "count": len(items),
-            "amount": sum(float(getattr(invoice, "total", 0) or 0) for invoice in items),
+            "amount": sum(
+                float(getattr(invoice, "total", 0) or 0) for invoice in items
+            ),
             "due_total": due_total,
             "received_total": received_total,
         }
@@ -189,7 +209,12 @@ def build_invoices_list_data(
     account_ids = []
     customer_filtered = bool(customer_ref)
     if customer_ref:
-        account_ids = [UUID(item["id"]) for item in web_billing_customers_service.accounts_for_customer(db, customer_ref)]
+        account_ids = [
+            UUID(item["id"])
+            for item in web_billing_customers_service.accounts_for_customer(
+                db, customer_ref
+            )
+        ]
 
     invoices: list[Invoice] = []
     total = 0
@@ -197,23 +222,22 @@ def build_invoices_list_data(
     if account_ids or not customer_filtered:
         filtered_query = _apply_filters(db.query(Invoice), include_status=True)
         invoices = (
-            filtered_query
-            .order_by(Invoice.created_at.desc())
+            filtered_query.order_by(Invoice.created_at.desc())
             .offset(offset)
             .limit(per_page)
             .all()
         )
         total = filtered_query.count()
         # Efficient status summary using GROUP BY instead of loading all rows
-        status_summary_query = (
-            _apply_filters(db.query(
+        status_summary_query = _apply_filters(
+            db.query(
                 Invoice.status,
                 func.count(Invoice.id),
                 func.coalesce(func.sum(Invoice.total), 0),
                 func.coalesce(func.sum(Invoice.balance_due), 0),
-            ), include_status=True)
-            .group_by(Invoice.status)
-        )
+            ),
+            include_status=True,
+        ).group_by(Invoice.status)
         status_rows = status_summary_query.all()
 
         summary: dict[str, dict[str, float | int]] = {
@@ -225,7 +249,11 @@ def build_invoices_list_data(
         all_count = 0
         all_amount = 0.0
         for status_val, cnt, amount, due in status_rows:
-            key = status_val.value if isinstance(status_val, InvoiceStatus) else str(status_val)
+            key = (
+                status_val.value
+                if isinstance(status_val, InvoiceStatus)
+                else str(status_val)
+            )
             if key not in summary:
                 summary[key] = {"count": 0, "amount": 0.0}
             summary[key]["count"] = cnt
@@ -266,7 +294,9 @@ def build_invoices_list_data(
         "total": total,
         "total_pages": total_pages,
         "account_id": account_id,
-        "selected_partner_id": str(selected_partner_id) if selected_partner_id else None,
+        "selected_partner_id": str(selected_partner_id)
+        if selected_partner_id
+        else None,
         "partner_options": partner_options,
         "status": status,
         "proforma_only": proforma_only,
@@ -301,7 +331,9 @@ def render_invoices_csv(invoices: list[Invoice]) -> str:
         due = Decimal(str(getattr(invoice, "balance_due", 0) or 0))
         received = total - due
         raw_status = getattr(invoice, "status", None)
-        status_value = raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")
+        status_value = (
+            raw_status.value if hasattr(raw_status, "value") else str(raw_status or "")
+        )
         writer.writerow(
             [
                 str(invoice.id),
@@ -351,7 +383,9 @@ def _last_payment_date(invoice: Invoice) -> date | None:
     for allocation in getattr(invoice, "payment_allocations", []) or []:
         payment = getattr(allocation, "payment", None)
         if payment:
-            candidate = getattr(payment, "paid_at", None) or getattr(allocation, "created_at", None)
+            candidate = getattr(payment, "paid_at", None) or getattr(
+                allocation, "created_at", None
+            )
         else:
             candidate = getattr(allocation, "created_at", None)
         if candidate and (last_seen is None or candidate > last_seen):
@@ -396,7 +430,9 @@ def build_ar_aging_data(
     selected_bucket = bucket if bucket in _BUCKET_SEQUENCE else None
     selected_partner_id = (partner_id or "").strip() or None
     selected_location = (location or "").strip() or None
-    selected_debtor_period = debtor_period if debtor_period in {"all", "this_month", "last_month"} else "all"
+    selected_debtor_period = (
+        debtor_period if debtor_period in {"all", "this_month", "last_month"} else "all"
+    )
 
     invoices = billing_service.invoices.list(
         db=db,
@@ -424,7 +460,9 @@ def build_ar_aging_data(
     accounts_by_id = {
         account.id: account
         for account in (
-            db.query(Subscriber).filter(Subscriber.id.in_(account_ids)).all() if account_ids else []
+            db.query(Subscriber).filter(Subscriber.id.in_(account_ids)).all()
+            if account_ids
+            else []
         )
     }
 
@@ -441,7 +479,9 @@ def build_ar_aging_data(
 
     filtered_invoices = []
     for invoice in period_filtered_invoices:
-        account = getattr(invoice, "account", None) or accounts_by_id.get(invoice.account_id)
+        account = getattr(invoice, "account", None) or accounts_by_id.get(
+            invoice.account_id
+        )
         if selected_partner_id:
             account_partner = str(getattr(account, "reseller_id", "") or "")
             if account_partner != selected_partner_id:
@@ -507,7 +547,9 @@ def build_ar_aging_data(
         if not _debtor_period_match(invoice):
             continue
         account_id = invoice.account_id
-        debtor_totals[account_id] = debtor_totals.get(account_id, 0.0) + float(invoice.balance_due or 0)
+        debtor_totals[account_id] = debtor_totals.get(account_id, 0.0) + float(
+            invoice.balance_due or 0
+        )
         debtor_names.setdefault(account_id, _account_label(invoice))
 
     top_debtors = [
@@ -516,7 +558,9 @@ def build_ar_aging_data(
             "account_label": debtor_names.get(account_id, "Account"),
             "amount": amount,
         }
-        for account_id, amount in sorted(debtor_totals.items(), key=lambda item: item[1], reverse=True)[:10]
+        for account_id, amount in sorted(
+            debtor_totals.items(), key=lambda item: item[1], reverse=True
+        )[:10]
     ]
 
     bucket_order = [
@@ -575,7 +619,9 @@ def build_ar_aging_data(
         "selected_debtor_period": selected_debtor_period,
         "partner_options": [
             {"id": partner_key, "name": partner_name}
-            for partner_key, partner_name in sorted(partner_options.items(), key=lambda item: item[1].lower())
+            for partner_key, partner_name in sorted(
+                partner_options.items(), key=lambda item: item[1].lower()
+            )
         ],
         "location_options": sorted(location_options),
         "top_debtors": top_debtors,

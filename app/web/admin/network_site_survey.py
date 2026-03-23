@@ -32,7 +32,11 @@ def _base_context(
     }
 
 
-@router.get("/site-survey", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_list(request: Request, db: Session = Depends(get_db)):
     """List wireless site surveys."""
     from app.services import wireless_survey as ws_service
@@ -47,7 +51,11 @@ def site_survey_list(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/network/site-survey/index.html", context)
 
 
-@router.get("/site-survey/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_new(
     request: Request,
     lat: float | None = None,
@@ -59,11 +67,19 @@ def site_survey_new(
     from app.services import wireless_survey as ws_service
 
     context = _base_context(request, db, active_page="site-survey")
-    context.update(ws_service.wireless_surveys.build_form_context(db, None, lat, lon, subscriber_id))
+    context.update(
+        ws_service.wireless_surveys.build_form_context(
+            db, None, lat, lon, subscriber_id
+        )
+    )
     return templates.TemplateResponse("admin/network/site-survey/form.html", context)
 
 
-@router.post("/site-survey/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_create(
     request: Request,
     name: str = Form(...),
@@ -110,29 +126,45 @@ def site_survey_create(
     return RedirectResponse(redirect_url, status_code=303)
 
 
-@router.get("/site-survey/{survey_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_detail(request: Request, survey_id: str, db: Session = Depends(get_db)):
     """Wireless site survey detail with interactive map."""
     from app.services import wireless_survey as ws_service
 
     context = _base_context(request, db, active_page="site-survey")
     context.update(ws_service.wireless_surveys.build_detail_context(db, survey_id))
-    context["activities"] = build_audit_activities(db, "site_survey", str(survey_id), limit=10)
+    context["activities"] = build_audit_activities(
+        db, "site_survey", str(survey_id), limit=10
+    )
     return templates.TemplateResponse("admin/network/site-survey/detail.html", context)
 
 
-@router.get("/site-survey/{survey_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_edit(request: Request, survey_id: str, db: Session = Depends(get_db)):
     """Edit wireless site survey."""
     from app.services import wireless_survey as ws_service
 
     survey = ws_service.wireless_surveys.get(db, survey_id)
     context = _base_context(request, db, active_page="site-survey")
-    context.update(ws_service.wireless_surveys.build_form_context(db, survey, None, None, None))
+    context.update(
+        ws_service.wireless_surveys.build_form_context(db, survey, None, None, None)
+    )
     return templates.TemplateResponse("admin/network/site-survey/form.html", context)
 
 
-@router.post("/site-survey/{survey_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_update(
     request: Request,
     survey_id: str,
@@ -182,7 +214,10 @@ def site_survey_update(
     return RedirectResponse(f"/admin/network/site-survey/{survey_id}", status_code=303)
 
 
-@router.post("/site-survey/{survey_id}/delete", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_delete(request: Request, survey_id: str, db: Session = Depends(get_db)):
     """Delete wireless site survey."""
     from app.services import wireless_survey as ws_service
@@ -204,7 +239,11 @@ def site_survey_delete(request: Request, survey_id: str, db: Session = Depends(g
     return RedirectResponse("/admin/network/site-survey", status_code=303)
 
 
-@router.get("/site-survey/{survey_id}/elevation", response_class=HTMLResponse, dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}/elevation",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_elevation_lookup(
     request: Request,
     survey_id: str,
@@ -219,7 +258,10 @@ def site_survey_elevation_lookup(
     return JSONResponse(result)
 
 
-@router.post("/site-survey/{survey_id}/points", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/points",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_add_point(
     request: Request,
     survey_id: str,
@@ -261,8 +303,13 @@ def site_survey_add_point(
     return RedirectResponse(f"/admin/network/site-survey/{survey_id}", status_code=303)
 
 
-@router.post("/site-survey/points/{point_id}/delete", dependencies=[Depends(require_permission("network:write"))])
-def site_survey_delete_point(request: Request, point_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/site-survey/points/{point_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def site_survey_delete_point(
+    request: Request, point_id: str, db: Session = Depends(get_db)
+):
     """Delete a survey point."""
     from app.services import wireless_survey as ws_service
 
@@ -287,7 +334,10 @@ def site_survey_delete_point(request: Request, point_id: str, db: Session = Depe
     return RedirectResponse(f"/admin/network/site-survey/{survey_id}", status_code=303)
 
 
-@router.post("/site-survey/{survey_id}/analyze-los", dependencies=[Depends(require_permission("network:write"))])
+@router.post(
+    "/site-survey/{survey_id}/analyze-los",
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def site_survey_analyze_los(
     request: Request,
     survey_id: str,
@@ -298,7 +348,9 @@ def site_survey_analyze_los(
     """Analyze LOS between two points."""
     from app.services import wireless_survey as ws_service
 
-    los_path = ws_service.survey_los.analyze_path(db, survey_id, from_point_id, to_point_id)
+    los_path = ws_service.survey_los.analyze_path(
+        db, survey_id, from_point_id, to_point_id
+    )
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
@@ -318,7 +370,10 @@ def site_survey_analyze_los(
     return RedirectResponse(f"/admin/network/site-survey/{survey_id}", status_code=303)
 
 
-@router.get("/site-survey/{survey_id}/los/{path_id}", dependencies=[Depends(require_permission("network:read"))])
+@router.get(
+    "/site-survey/{survey_id}/los/{path_id}",
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def site_survey_los_detail(
     request: Request, survey_id: str, path_id: str, db: Session = Depends(get_db)
 ):
@@ -345,8 +400,13 @@ def site_survey_los_detail(
     )
 
 
-@router.post("/site-survey/los/{path_id}/delete", dependencies=[Depends(require_permission("network:write"))])
-def site_survey_delete_los(request: Request, path_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/site-survey/los/{path_id}/delete",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def site_survey_delete_los(
+    request: Request, path_id: str, db: Session = Depends(get_db)
+):
     """Delete a LOS path."""
     from app.services import wireless_survey as ws_service
 

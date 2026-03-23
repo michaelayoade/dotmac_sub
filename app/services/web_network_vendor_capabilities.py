@@ -46,9 +46,7 @@ def list_context(
     """Return context dict for the vendor capabilities list page."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    items = vendor_capabilities.list(
-        db, search=search, vendor=vendor, is_active=None
-    )
+    items = vendor_capabilities.list(db, search=search, vendor=vendor, is_active=None)
     vendors = vendor_capabilities.list_vendors(db)
     return {
         "request": request,
@@ -132,17 +130,21 @@ def validate_capability_form(values: dict[str, object]) -> str | None:
     return None
 
 
-def handle_create(
-    db: Session, form_data: dict[str, object]
-) -> VendorModelCapability:
+def handle_create(db: Session, form_data: dict[str, object]) -> VendorModelCapability:
     """Create a new vendor capability from validated form values."""
     return vendor_capabilities.create(
         db,
         vendor=str(form_data["vendor"]),
         model=str(form_data["model"]),
-        firmware_pattern=str(form_data["firmware_pattern"]) if form_data.get("firmware_pattern") else None,
-        tr069_root=str(form_data["tr069_root"]) if form_data.get("tr069_root") else None,
-        supported_features=form_data["supported_features"] if form_data.get("supported_features") else None,  # type: ignore[arg-type]
+        firmware_pattern=str(form_data["firmware_pattern"])
+        if form_data.get("firmware_pattern")
+        else None,
+        tr069_root=str(form_data["tr069_root"])
+        if form_data.get("tr069_root")
+        else None,
+        supported_features=form_data["supported_features"]
+        if form_data.get("supported_features")
+        else None,  # type: ignore[arg-type]
         max_wan_services=int(str(form_data.get("max_wan_services") or 1)),
         max_lan_ports=int(str(form_data.get("max_lan_ports") or 4)),
         max_ssids=int(str(form_data.get("max_ssids") or 2)),
@@ -164,9 +166,15 @@ def handle_update(
         capability_id,
         vendor=str(form_data["vendor"]),
         model=str(form_data["model"]),
-        firmware_pattern=str(form_data["firmware_pattern"]) if form_data.get("firmware_pattern") else None,
-        tr069_root=str(form_data["tr069_root"]) if form_data.get("tr069_root") else None,
-        supported_features=form_data["supported_features"] if form_data.get("supported_features") else None,  # type: ignore[arg-type]
+        firmware_pattern=str(form_data["firmware_pattern"])
+        if form_data.get("firmware_pattern")
+        else None,
+        tr069_root=str(form_data["tr069_root"])
+        if form_data.get("tr069_root")
+        else None,
+        supported_features=form_data["supported_features"]
+        if form_data.get("supported_features")
+        else None,  # type: ignore[arg-type]
         max_wan_services=int(str(form_data.get("max_wan_services") or 1)),
         max_lan_ports=int(str(form_data.get("max_lan_ports") or 4)),
         max_ssids=int(str(form_data.get("max_ssids") or 2)),
@@ -209,6 +217,8 @@ def handle_param_map_create(
         canonical_name=str(form_data["canonical_name"]),
         tr069_path=str(form_data["tr069_path"]),
         writable=bool(form_data.get("writable")),
-        value_type=str(form_data["value_type"]) if form_data.get("value_type") else None,
+        value_type=str(form_data["value_type"])
+        if form_data.get("value_type")
+        else None,
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )

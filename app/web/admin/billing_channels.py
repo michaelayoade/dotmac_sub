@@ -93,8 +93,12 @@ def payment_channels_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:channel:write"))],
 )
-def payment_channels_edit(request: Request, channel_id: UUID, db: Session = Depends(get_db)):
-    state = web_billing_channels_service.load_payment_channel_edit_data(db, str(channel_id))
+def payment_channels_edit(
+    request: Request, channel_id: UUID, db: Session = Depends(get_db)
+):
+    state = web_billing_channels_service.load_payment_channel_edit_data(
+        db, str(channel_id)
+    )
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -146,7 +150,9 @@ def payment_channels_update(
         )
         return RedirectResponse(url="/admin/billing/payment-channels", status_code=303)
     except Exception as exc:
-        state = web_billing_channels_service.load_payment_channel_edit_data(db, str(channel_id))
+        state = web_billing_channels_service.load_payment_channel_edit_data(
+            db, str(channel_id)
+        )
         return templates.TemplateResponse(
             "admin/billing/payment_channel_form.html",
             {
@@ -212,7 +218,9 @@ def payment_channel_accounts_create(
             is_default=is_default,
             is_active=is_active,
         )
-        return RedirectResponse(url="/admin/billing/payment-channel-accounts", status_code=303)
+        return RedirectResponse(
+            url="/admin/billing/payment-channel-accounts", status_code=303
+        )
     except Exception as exc:
         state = web_billing_channels_service.list_payment_channel_accounts_data(db)
         return templates.TemplateResponse(
@@ -231,8 +239,12 @@ def payment_channel_accounts_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:channel:write"))],
 )
-def payment_channel_accounts_edit(request: Request, mapping_id: UUID, db: Session = Depends(get_db)):
-    state = web_billing_channels_service.load_payment_channel_account_edit_data(db, str(mapping_id))
+def payment_channel_accounts_edit(
+    request: Request, mapping_id: UUID, db: Session = Depends(get_db)
+):
+    state = web_billing_channels_service.load_payment_channel_account_edit_data(
+        db, str(mapping_id)
+    )
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -278,9 +290,13 @@ def payment_channel_accounts_update(
             is_default=is_default,
             is_active=is_active,
         )
-        return RedirectResponse(url="/admin/billing/payment-channel-accounts", status_code=303)
+        return RedirectResponse(
+            url="/admin/billing/payment-channel-accounts", status_code=303
+        )
     except Exception as exc:
-        state = web_billing_channels_service.load_payment_channel_account_edit_data(db, str(mapping_id))
+        state = web_billing_channels_service.load_payment_channel_account_edit_data(
+            db, str(mapping_id)
+        )
         return templates.TemplateResponse(
             "admin/billing/payment_channel_account_form.html",
             {
@@ -300,6 +316,10 @@ def payment_channel_accounts_update(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:channel:write"))],
 )
-def payment_channel_accounts_deactivate(mapping_id: UUID, db: Session = Depends(get_db)):
+def payment_channel_accounts_deactivate(
+    mapping_id: UUID, db: Session = Depends(get_db)
+):
     billing_service.payment_channel_accounts.delete(db, str(mapping_id))
-    return RedirectResponse(url="/admin/billing/payment-channel-accounts", status_code=303)
+    return RedirectResponse(
+        url="/admin/billing/payment-channel-accounts", status_code=303
+    )

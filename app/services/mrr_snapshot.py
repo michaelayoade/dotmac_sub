@@ -101,9 +101,7 @@ class MrrSnapshotManager:
         limit: int = 365,
     ) -> list[MrrSnapshot]:
         """Get MRR history for a subscriber."""
-        stmt = select(MrrSnapshot).where(
-            MrrSnapshot.subscriber_id == subscriber_id
-        )
+        stmt = select(MrrSnapshot).where(MrrSnapshot.subscriber_id == subscriber_id)
         if start_date:
             stmt = stmt.where(MrrSnapshot.snapshot_date >= start_date)
         if end_date:
@@ -115,9 +113,9 @@ class MrrSnapshotManager:
     def get_total_mrr(db: Session, snapshot_date: date | None = None) -> Decimal:
         """Get total MRR across all subscribers for a given date."""
         snapshot_date = snapshot_date or date.today()
-        stmt = select(func.coalesce(func.sum(MrrSnapshot.mrr_amount), Decimal("0"))).where(
-            MrrSnapshot.snapshot_date == snapshot_date
-        )
+        stmt = select(
+            func.coalesce(func.sum(MrrSnapshot.mrr_amount), Decimal("0"))
+        ).where(MrrSnapshot.snapshot_date == snapshot_date)
         return db.scalar(stmt) or Decimal("0")
 
     @staticmethod

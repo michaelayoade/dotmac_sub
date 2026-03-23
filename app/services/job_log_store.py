@@ -14,7 +14,9 @@ from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 
 
-def read_json_list(db: Session, settings_service: Any, key: str) -> list[dict[str, Any]]:
+def read_json_list(
+    db: Session, settings_service: Any, key: str
+) -> list[dict[str, Any]]:
     """Read a JSON list setting and return only dict rows."""
     try:
         setting = settings_service.get_by_key(db, key)
@@ -62,7 +64,9 @@ def get_job(rows: list[dict[str, Any]], job_id: str) -> dict[str, Any] | None:
     return None
 
 
-def upsert_job(rows: list[dict[str, Any]], payload: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def upsert_job(
+    rows: list[dict[str, Any]], payload: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     job_id = str(payload.get("job_id") or "").strip()
     if not job_id:
         raise ValueError("job_id is required")

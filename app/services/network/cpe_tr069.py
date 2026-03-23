@@ -93,7 +93,9 @@ class CpeTR069:
             db.query(Tr069CpeDevice)
             .filter(Tr069CpeDevice.cpe_device_id == cpe.id)
             .filter(Tr069CpeDevice.is_active.is_(True))
-            .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
+            .order_by(
+                Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc()
+            )
             .first()
         )
 
@@ -147,7 +149,9 @@ class CpeTR069:
                 free = int(mem_free)
                 if total > 0:
                     used_pct = ((total - free) / total) * 100
-                    summary.system["Memory Usage"] = f"{used_pct:.1f}% ({free:,} / {total:,} KB)"
+                    summary.system["Memory Usage"] = (
+                        f"{used_pct:.1f}% ({free:,} / {total:,} KB)"
+                    )
             except (ValueError, TypeError):
                 pass
 
@@ -155,9 +159,13 @@ class CpeTR069:
         parsed_product_class = None
         parsed_serial = None
         try:
-            parsed_oui, parsed_product_class, parsed_serial = client.parse_device_id(device_id)
+            parsed_oui, parsed_product_class, parsed_serial = client.parse_device_id(
+                device_id
+            )
         except ValueError:
-            logger.debug("Could not parse device_id %s into OUI/class/serial", device_id)
+            logger.debug(
+                "Could not parse device_id %s into OUI/class/serial", device_id
+            )
 
         if not summary.system.get("Serial"):
             summary.system["Serial"] = (
@@ -176,7 +184,11 @@ class CpeTR069:
         if not summary.system.get("Manufacturer"):
             summary.system["Manufacturer"] = _vendor_fallback(
                 cpe.vendor,
-                "Huawei" if str(summary.system.get("Serial") or "").upper().startswith(("HW", "HWT")) else None,
+                "Huawei"
+                if str(summary.system.get("Serial") or "")
+                .upper()
+                .startswith(("HW", "HWT"))
+                else None,
                 parsed_oui,
             )
 

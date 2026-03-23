@@ -13,24 +13,25 @@ from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
 
+
 def list_page_data(db: Session) -> dict[str, object]:
     """Return strand list and summary stats for index page."""
-    strands = (
-        network_service.fiber_strands.list(
-            db=db,
-            cable_name=None,
-            status=None,
-            order_by="cable_name",
-            order_dir="asc",
-            limit=200,
-            offset=0,
-        )
+    strands = network_service.fiber_strands.list(
+        db=db,
+        cable_name=None,
+        status=None,
+        order_by="cable_name",
+        order_dir="asc",
+        limit=200,
+        offset=0,
     )
     return {
         "strands": strands,
         "stats": {
             "total": len(strands),
-            "available": sum(1 for strand in strands if strand.status.value == "available"),
+            "available": sum(
+                1 for strand in strands if strand.status.value == "available"
+            ),
             "in_use": sum(1 for strand in strands if strand.status.value == "in_use"),
         },
     }
@@ -83,15 +84,21 @@ def validate_form_values(values: dict[str, object]) -> tuple[int | None, str | N
     return strand_number, None
 
 
-def strand_form_data(values: dict[str, object], *, strand_id: str | None = None) -> dict[str, object]:
+def strand_form_data(
+    values: dict[str, object], *, strand_id: str | None = None
+) -> dict[str, object]:
     """Build strand-like object for form re-render after errors."""
     data = {
         "cable_name": values.get("cable_name"),
         "strand_number": values.get("strand_number_raw"),
         "label": values.get("label") or None,
         "status": {"value": values.get("status")} if values.get("status") else None,
-        "upstream_type": {"value": values.get("upstream_type")} if values.get("upstream_type") else None,
-        "downstream_type": {"value": values.get("downstream_type")} if values.get("downstream_type") else None,
+        "upstream_type": {"value": values.get("upstream_type")}
+        if values.get("upstream_type")
+        else None,
+        "downstream_type": {"value": values.get("downstream_type")}
+        if values.get("downstream_type")
+        else None,
         "notes": values.get("notes") or None,
     }
     if strand_id:
@@ -116,7 +123,11 @@ def create_strand(db: Session, values: dict[str, object]):
             "status",
         ),
         upstream_type=(
-            validate_enum(str(values.get("upstream_type") or ""), FiberEndpointType, "upstream_type")
+            validate_enum(
+                str(values.get("upstream_type") or ""),
+                FiberEndpointType,
+                "upstream_type",
+            )
             if values.get("upstream_type")
             else None
         ),
@@ -151,7 +162,11 @@ def update_strand(db: Session, strand_id: str, values: dict[str, object]):
             else None
         ),
         upstream_type=(
-            validate_enum(str(values.get("upstream_type") or ""), FiberEndpointType, "upstream_type")
+            validate_enum(
+                str(values.get("upstream_type") or ""),
+                FiberEndpointType,
+                "upstream_type",
+            )
             if values.get("upstream_type")
             else None
         ),

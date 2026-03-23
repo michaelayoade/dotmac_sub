@@ -73,17 +73,14 @@ class Offers(CRUDManager[CatalogOffer]):
         )
 
         # Subscriptions by plan (top 10)
-        plan_rows = (
-            db.execute(
-                select(CatalogOffer.name, func.count(Subscription.id))
-                .join(Subscription, Subscription.offer_id == CatalogOffer.id)
-                .where(Subscription.status == SubscriptionStatus.active)
-                .group_by(CatalogOffer.id, CatalogOffer.name)
-                .order_by(func.count(Subscription.id).desc())
-                .limit(10)
-            )
-            .all()
-        )
+        plan_rows = db.execute(
+            select(CatalogOffer.name, func.count(Subscription.id))
+            .join(Subscription, Subscription.offer_id == CatalogOffer.id)
+            .where(Subscription.status == SubscriptionStatus.active)
+            .group_by(CatalogOffer.id, CatalogOffer.name)
+            .order_by(func.count(Subscription.id).desc())
+            .limit(10)
+        ).all()
         subscriptions_by_plan = {
             "labels": [row[0] for row in plan_rows],
             "values": [row[1] for row in plan_rows],
@@ -98,14 +95,15 @@ class Offers(CRUDManager[CatalogOffer]):
         )
 
         # Status chart
-        status_rows = (
-            db.execute(
-                select(CatalogOffer.status, func.count(CatalogOffer.id))
-                .group_by(CatalogOffer.status)
+        status_rows = db.execute(
+            select(CatalogOffer.status, func.count(CatalogOffer.id)).group_by(
+                CatalogOffer.status
             )
-            .all()
-        )
-        status_map = {row[0].value if hasattr(row[0], "value") else str(row[0]): row[1] for row in status_rows}
+        ).all()
+        status_map = {
+            row[0].value if hasattr(row[0], "value") else str(row[0]): row[1]
+            for row in status_rows
+        }
         chart_labels = ["Active", "Inactive", "Archived", "Draft"]
         chart_keys = ["active", "inactive", "archived", "draft"]
         chart_colors = ["#10b981", "#f59e0b", "#94a3b8", "#64748b"]
@@ -158,9 +156,7 @@ class Offers(CRUDManager[CatalogOffer]):
                 db, SettingDomain.catalog, "default_offer_status"
             )
             if default_status:
-                data["status"] = validate_enum(
-                    default_status, OfferStatus, "status"
-                )
+                data["status"] = validate_enum(default_status, OfferStatus, "status")
         offer = CatalogOffer(**data)
         db.add(offer)
         db.commit()
@@ -207,11 +203,13 @@ class Offers(CRUDManager[CatalogOffer]):
         )
         if service_type:
             query = query.filter(
-                CatalogOffer.service_type == validate_enum(service_type, ServiceType, "service_type")
+                CatalogOffer.service_type
+                == validate_enum(service_type, ServiceType, "service_type")
             )
         if access_type:
             query = query.filter(
-                CatalogOffer.access_type == validate_enum(access_type, AccessType, "access_type")
+                CatalogOffer.access_type
+                == validate_enum(access_type, AccessType, "access_type")
             )
         if status:
             query = query.filter(
@@ -222,7 +220,11 @@ class Offers(CRUDManager[CatalogOffer]):
             query,
             order_by,
             order_dir,
-            {"created_at": CatalogOffer.created_at, "name": CatalogOffer.name, "status": CatalogOffer.status},
+            {
+                "created_at": CatalogOffer.created_at,
+                "name": CatalogOffer.name,
+                "status": CatalogOffer.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -338,9 +340,7 @@ class OfferVersions(CRUDManager[OfferVersion]):
                 db, SettingDomain.catalog, "default_offer_status"
             )
             if default_status:
-                data["status"] = validate_enum(
-                    default_status, OfferStatus, "status"
-                )
+                data["status"] = validate_enum(default_status, OfferStatus, "status")
         version = OfferVersion(**data)
         db.add(version)
         db.commit()
@@ -368,7 +368,10 @@ class OfferVersions(CRUDManager[OfferVersion]):
             query,
             order_by,
             order_dir,
-            {"created_at": OfferVersion.created_at, "version_number": OfferVersion.version_number},
+            {
+                "created_at": OfferVersion.created_at,
+                "version_number": OfferVersion.version_number,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -450,7 +453,10 @@ class OfferVersionPrices(CRUDManager[OfferVersionPrice]):
             query,
             order_by,
             order_dir,
-            {"created_at": OfferVersionPrice.created_at, "amount": OfferVersionPrice.amount},
+            {
+                "created_at": OfferVersionPrice.created_at,
+                "amount": OfferVersionPrice.amount,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

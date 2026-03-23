@@ -77,7 +77,9 @@ def validate_vlan_create(
     try:
         ipaddress.IPv4Interface(ip_address)
     except (ValueError, ipaddress.AddressValueError):
-        return f"Invalid IP address/CIDR: {ip_address}. Expected format: 172.16.110.1/24"
+        return (
+            f"Invalid IP address/CIDR: {ip_address}. Expected format: 172.16.110.1/24"
+        )
 
     return None
 
@@ -140,5 +142,7 @@ def handle_vlan_delete(
 
     from app.services.nas._mikrotik_vlan import remove_vlan_interface
 
-    result = remove_vlan_interface(device, vlan_id=vlan_id, parent_interface=parent_interface)
+    result = remove_vlan_interface(
+        device, vlan_id=vlan_id, parent_interface=parent_interface
+    )
     return {"success": result.success, "message": result.message}

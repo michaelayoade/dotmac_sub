@@ -45,7 +45,9 @@ def build_ledger_entries_data(
         if date_range == "today":
             start = datetime(now.year, now.month, now.day, tzinfo=UTC)
         elif date_range == "week":
-            start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(days=now.weekday())
+            start = datetime(now.year, now.month, now.day, tzinfo=UTC) - timedelta(
+                days=now.weekday()
+            )
         elif date_range == "month":
             start = datetime(now.year, now.month, 1, tzinfo=UTC)
         elif date_range == "quarter":
@@ -59,7 +61,9 @@ def build_ledger_entries_data(
     if customer_ref:
         account_ids = [
             UUID(item["id"])
-            for item in web_billing_customers_service.accounts_for_customer(db, customer_ref)
+            for item in web_billing_customers_service.accounts_for_customer(
+                db, customer_ref
+            )
         ]
 
     entries = []
@@ -74,31 +78,50 @@ def build_ledger_entries_data(
     if account_ids or not customer_ref:
         query = (
             db.query(LedgerEntry)
-            .options(joinedload(LedgerEntry.account).joinedload(Subscriber.organization))
+            .options(
+                joinedload(LedgerEntry.account).joinedload(Subscriber.organization)
+            )
             .filter(LedgerEntry.is_active.is_(True))
         )
         if account_ids:
             query = query.filter(LedgerEntry.account_id.in_(account_ids))
         if entry_type:
             query = query.filter(
-                LedgerEntry.entry_type == validate_enum(entry_type, LedgerEntryType, "entry_type")
+                LedgerEntry.entry_type
+                == validate_enum(entry_type, LedgerEntryType, "entry_type")
             )
         if selected_partner_id:
-            query = query.filter(LedgerEntry.account.has(Subscriber.reseller_id == UUID(selected_partner_id)))
+            query = query.filter(
+                LedgerEntry.account.has(
+                    Subscriber.reseller_id == UUID(selected_partner_id)
+                )
+            )
         selected_category = (category or "").strip().lower()
         if selected_category in _CATEGORY_SOURCES:
-            query = query.filter(LedgerEntry.source.in_(_CATEGORY_SOURCES[selected_category]))
+            query = query.filter(
+                LedgerEntry.source.in_(_CATEGORY_SOURCES[selected_category])
+            )
         query = _apply_date_range(query)
-        entries = query.order_by(LedgerEntry.created_at.desc()).limit(limit).offset(0).all()
+        entries = (
+            query.order_by(LedgerEntry.created_at.desc()).limit(limit).offset(0).all()
+        )
 
     credit_entries = [
-        entry for entry in entries if getattr(getattr(entry, "entry_type", None), "value", None) == "credit"
+        entry
+        for entry in entries
+        if getattr(getattr(entry, "entry_type", None), "value", None) == "credit"
     ]
     debit_entries = [
-        entry for entry in entries if getattr(getattr(entry, "entry_type", None), "value", None) == "debit"
+        entry
+        for entry in entries
+        if getattr(getattr(entry, "entry_type", None), "value", None) == "debit"
     ]
-    credit_total = sum(float(getattr(entry, "amount", 0) or 0) for entry in credit_entries)
-    debit_total = sum(float(getattr(entry, "amount", 0) or 0) for entry in debit_entries)
+    credit_total = sum(
+        float(getattr(entry, "amount", 0) or 0) for entry in credit_entries
+    )
+    debit_total = sum(
+        float(getattr(entry, "amount", 0) or 0) for entry in debit_entries
+    )
     ledger_totals = {
         "credit_count": len(credit_entries),
         "credit_total": credit_total,

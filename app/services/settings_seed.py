@@ -32,6 +32,7 @@ from app.services.secrets import is_openbao_ref
 
 logger = logging.getLogger(__name__)
 
+
 def seed_auth_settings(db: Session) -> None:
     auth_settings.ensure_by_key(
         db,
@@ -584,9 +585,7 @@ def seed_notification_templates(db: Session) -> None:
             "name": "Payment Received SMS",
             "channel": NotificationChannel.sms,
             "subject": None,
-            "body": (
-                "We received your payment of {amount}. Thank you."
-            ),
+            "body": ("We received your payment of {amount}. Thank you."),
         },
         {
             "code": "payment_failed",
@@ -1072,7 +1071,9 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("BILLING_DEFAULT_PAYMENT_PROVIDER_TYPE", "paystack"),
     )
-    payment_failover_enabled_raw = os.getenv("BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true")
+    payment_failover_enabled_raw = os.getenv(
+        "BILLING_PAYMENT_GATEWAY_FAILOVER_ENABLED", "true"
+    )
     billing_settings.ensure_by_key(
         db,
         key="payment_gateway_failover_enabled",
@@ -1090,7 +1091,9 @@ def seed_billing_settings(db: Session) -> None:
         db,
         key="payment_gateway_secondary_provider",
         value_type=SettingValueType.string,
-        value_text=os.getenv("BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"),
+        value_text=os.getenv(
+            "BILLING_PAYMENT_GATEWAY_SECONDARY_PROVIDER", "flutterwave"
+        ),
     )
     billing_settings.ensure_by_key(
         db,
@@ -1617,7 +1620,9 @@ def seed_provisioning_workflows(db: Session) -> None:
         db.add(step)
 
     db.commit()
-    logger.info("Seeded provisioning workflow: %s (%d steps)", workflow_name, len(steps))
+    logger.info(
+        "Seeded provisioning workflow: %s (%d steps)", workflow_name, len(steps)
+    )
 
 
 def seed_projects_settings(db: Session) -> None:

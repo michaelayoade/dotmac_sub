@@ -106,7 +106,9 @@ class VendorCapabilities:
         return item
 
     @staticmethod
-    def update(db: Session, capability_id: str, **kwargs: object) -> VendorModelCapability:
+    def update(
+        db: Session, capability_id: str, **kwargs: object
+    ) -> VendorModelCapability:
         """Update an existing vendor model capability."""
         item = db.get(VendorModelCapability, coerce_uuid(capability_id))
         if not item:
@@ -192,9 +194,7 @@ class Tr069ParameterMaps:
     """CRUD operations for TR-069 parameter map entries."""
 
     @staticmethod
-    def list_for_capability(
-        db: Session, capability_id: str
-    ) -> list[Tr069ParameterMap]:
+    def list_for_capability(db: Session, capability_id: str) -> list[Tr069ParameterMap]:
         """List all parameter maps for a given vendor capability."""
         stmt = (
             select(Tr069ParameterMap)
@@ -245,9 +245,7 @@ class Tr069ParameterMaps:
         return item
 
     @staticmethod
-    def update(
-        db: Session, param_map_id: str, **kwargs: object
-    ) -> Tr069ParameterMap:
+    def update(db: Session, param_map_id: str, **kwargs: object) -> Tr069ParameterMap:
         """Update a TR-069 parameter map entry."""
         item = db.get(Tr069ParameterMap, coerce_uuid(param_map_id))
         if not item:

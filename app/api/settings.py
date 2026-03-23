@@ -9,7 +9,9 @@ from app.services import settings_api as settings_service
 router = APIRouter(prefix="/settings", tags=["settings"])
 
 
-@router.get("/gis", response_model=ListResponse[DomainSettingRead], tags=["settings-gis"])
+@router.get(
+    "/gis", response_model=ListResponse[DomainSettingRead], tags=["settings-gis"]
+)
 def list_gis_settings(
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),
@@ -122,7 +124,9 @@ def get_radius_setting(key: str, db: Session = Depends(get_db)):
     return settings_service.get_radius_setting(db, key)
 
 
-@router.get("/auth", response_model=ListResponse[DomainSettingRead], tags=["settings-auth"])
+@router.get(
+    "/auth", response_model=ListResponse[DomainSettingRead], tags=["settings-auth"]
+)
 def list_auth_settings(
     is_active: bool | None = None,
     order_by: str = Query(default="created_at"),

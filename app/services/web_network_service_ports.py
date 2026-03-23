@@ -92,8 +92,7 @@ def _reference_ont_options(
 ) -> list[dict[str, str]]:
     """Return selectable reference ONTs on the same OLT."""
     assignments = db.scalars(
-        select(OntAssignment)
-        .where(
+        select(OntAssignment).where(
             OntAssignment.active.is_(True),
             OntAssignment.pon_port_id.is_not(None),
             OntAssignment.ont_unit_id != target_ont_id,

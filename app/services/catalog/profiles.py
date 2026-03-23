@@ -19,6 +19,7 @@ from app.services.query_builders import apply_active_state
 
 logger = logging.getLogger(__name__)
 
+
 class RegionZones(CRUDManager[RegionZone]):
     model = RegionZone
     not_found_detail = "Region zone not found"
@@ -56,6 +57,7 @@ class RegionZones(CRUDManager[RegionZone]):
     def delete(cls, db: Session, zone_id: str):
         return super().delete(db, zone_id)
 
+
 class UsageAllowances(CRUDManager[UsageAllowance]):
     model = UsageAllowance
     not_found_detail = "Usage allowance not found"
@@ -92,6 +94,7 @@ class UsageAllowances(CRUDManager[UsageAllowance]):
     @classmethod
     def delete(cls, db: Session, allowance_id: str):
         return super().delete(db, allowance_id)
+
 
 class SlaProfiles(CRUDManager[SlaProfile]):
     model = SlaProfile

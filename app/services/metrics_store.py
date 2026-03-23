@@ -4,6 +4,7 @@ VictoriaMetrics client for bandwidth metrics storage.
 Provides methods for writing bandwidth samples and querying time series data
 using VictoriaMetrics' Prometheus-compatible API.
 """
+
 import logging
 import os
 from dataclasses import dataclass
@@ -24,6 +25,7 @@ _DEFAULT_TIMEOUT = 30.0  # fallback when settings unavailable
 @dataclass
 class BandwidthPoint:
     """A single bandwidth measurement point."""
+
     timestamp: datetime
     subscription_id: str
     nas_device_id: str | None
@@ -34,6 +36,7 @@ class BandwidthPoint:
 @dataclass
 class TimeSeriesPoint:
     """A single point in a time series query result."""
+
     timestamp: datetime
     value: float
 
@@ -41,12 +44,14 @@ class TimeSeriesPoint:
 @dataclass
 class TimeSeriesResult:
     """Result from a time series query."""
+
     metric: dict[str, str]
     values: list[TimeSeriesPoint]
 
 
 class MetricsStoreError(Exception):
     """Base exception for metrics store errors."""
+
     pass
 
 
@@ -76,7 +81,9 @@ class MetricsStore:
         except Exception:
             timeout_obj = os.getenv("VICTORIAMETRICS_TIMEOUT_SECONDS")
         try:
-            return float(str(timeout_obj)) if timeout_obj is not None else _DEFAULT_TIMEOUT
+            return (
+                float(str(timeout_obj)) if timeout_obj is not None else _DEFAULT_TIMEOUT
+            )
         except (TypeError, ValueError):
             return _DEFAULT_TIMEOUT
 
@@ -215,7 +222,9 @@ class MetricsStore:
             data = response.json()
 
             if data.get("status") != "success":
-                raise MetricsStoreError(f"Query failed: {data.get('error', 'Unknown error')}")
+                raise MetricsStoreError(
+                    f"Query failed: {data.get('error', 'Unknown error')}"
+                )
 
             results = []
             for result in data.get("data", {}).get("result", []):
@@ -226,10 +235,12 @@ class MetricsStore:
                     )
                     for ts, val in result.get("values", [])
                 ]
-                results.append(TimeSeriesResult(
-                    metric=result.get("metric", {}),
-                    values=values,
-                ))
+                results.append(
+                    TimeSeriesResult(
+                        metric=result.get("metric", {}),
+                        values=values,
+                    )
+                )
 
             return results
 
@@ -260,7 +271,9 @@ class MetricsStore:
             if not isinstance(data, dict):
                 raise MetricsStoreError("Query failed: invalid response payload")
             if data.get("status") != "success":
-                raise MetricsStoreError(f"Query failed: {data.get('error', 'Unknown error')}")
+                raise MetricsStoreError(
+                    f"Query failed: {data.get('error', 'Unknown error')}"
+                )
 
             data_obj = data.get("data")
             if not isinstance(data_obj, dict):
@@ -401,7 +414,7 @@ class MetricsStore:
         Returns:
             List of top users with subscription_id and bandwidth
         """
-        query = f'topk({limit}, sum by (subscription_id) (rate(bandwidth_rx_bps[{duration}]) + rate(bandwidth_tx_bps[{duration}])))'
+        query = f"topk({limit}, sum by (subscription_id) (rate(bandwidth_rx_bps[{duration}]) + rate(bandwidth_tx_bps[{duration}])))"
 
         results = await self.get_instant(query)
 

@@ -21,6 +21,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class OfferAddOns(ListResponseMixin):
     """Service for managing offer-addon links."""
 
@@ -217,7 +218,9 @@ class OfferAddOns(ListResponseMixin):
                     continue  # Skip invalid addon IDs
 
                 link = OfferAddOn(
-                    offer_id=uuid.UUID(offer_id) if isinstance(offer_id, str) else offer_id,
+                    offer_id=uuid.UUID(offer_id)
+                    if isinstance(offer_id, str)
+                    else offer_id,
                     add_on_id=uuid.UUID(add_on_id),
                     is_required=is_required,
                     min_quantity=min_quantity,

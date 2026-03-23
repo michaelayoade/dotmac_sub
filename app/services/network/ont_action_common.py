@@ -92,7 +92,9 @@ def build_tr069_params(
     return {f"{root}.{path}": value for path, value in params.items()}
 
 
-def get_ont_or_error(db: Session, ont_id: str) -> tuple[OntUnit | None, ActionResult | None]:
+def get_ont_or_error(
+    db: Session, ont_id: str
+) -> tuple[OntUnit | None, ActionResult | None]:
     """Load an ONT record or return a standard not-found result."""
     ont = db.get(OntUnit, ont_id)
     if not ont:

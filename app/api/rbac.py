@@ -55,7 +55,9 @@ def list_roles(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return rbac_service.roles.list_response(db, is_active, order_by, order_dir, limit, offset)
+    return rbac_service.roles.list_response(
+        db, is_active, order_by, order_dir, limit, offset
+    )
 
 
 @router.patch(
@@ -108,7 +110,9 @@ def list_permissions(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    return rbac_service.permissions.list_response(db, is_active, order_by, order_dir, limit, offset)
+    return rbac_service.permissions.list_response(
+        db, is_active, order_by, order_dir, limit, offset
+    )
 
 
 @router.patch(
@@ -197,7 +201,9 @@ def delete_role_permission(link_id: str, db: Session = Depends(get_db)):
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
-def create_subscriber_role(payload: SubscriberRoleCreate, db: Session = Depends(get_db)):
+def create_subscriber_role(
+    payload: SubscriberRoleCreate, db: Session = Depends(get_db)
+):
     return rbac_service.subscriber_roles.create(db, payload)
 
 

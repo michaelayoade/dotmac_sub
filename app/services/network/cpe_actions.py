@@ -37,7 +37,9 @@ class CpeActions:
     set_wifi_ssid = staticmethod(set_wifi_ssid)
     set_wifi_password = staticmethod(set_wifi_password)
     toggle_lan_port = staticmethod(toggle_lan_port)
-    set_connection_request_credentials = staticmethod(set_connection_request_credentials)
+    set_connection_request_credentials = staticmethod(
+        set_connection_request_credentials
+    )
     send_connection_request = staticmethod(send_connection_request)
     run_ping_diagnostic = staticmethod(run_ping_diagnostic)
     run_traceroute_diagnostic = staticmethod(run_traceroute_diagnostic)

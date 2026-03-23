@@ -48,16 +48,22 @@ def validate_service_order_exists(db: Session, service_order_id: str) -> Service
     return service_order
 
 
-def validate_install_appointment_links(db: Session, service_order_id: str) -> InstallAppointment | None:
+def validate_install_appointment_links(
+    db: Session, service_order_id: str
+) -> InstallAppointment | None:
     validate_service_order_exists(db, service_order_id)
     return None
 
 
-def validate_provisioning_task_links(db: Session, service_order_id: str) -> ProvisioningTask | None:
+def validate_provisioning_task_links(
+    db: Session, service_order_id: str
+) -> ProvisioningTask | None:
     validate_service_order_exists(db, service_order_id)
     return None
 
 
-def validate_state_transition_links(db: Session, service_order_id: str) -> ServiceStateTransition | None:
+def validate_state_transition_links(
+    db: Session, service_order_id: str
+) -> ServiceStateTransition | None:
     validate_service_order_exists(db, service_order_id)
     return None

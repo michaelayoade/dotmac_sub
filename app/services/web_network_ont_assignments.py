@@ -15,6 +15,7 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+
 def assignment_form_dependencies(db: Session) -> dict[str, object]:
     """Return common select options for ONT assignment form."""
     return {

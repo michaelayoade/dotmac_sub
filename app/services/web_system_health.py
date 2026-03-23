@@ -12,6 +12,7 @@ from app.services import system_health as system_health_service
 
 logger = logging.getLogger(__name__)
 
+
 def build_health_data(db) -> dict[str, object]:
     health = system_health_service.get_system_health()
     thresholds_raw: dict[str, Any] = {

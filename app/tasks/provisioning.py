@@ -69,9 +69,7 @@ def provision_ont(
             tr069_olt_profile_id=tr069_olt_profile_id,
         )
         session.commit()
-        logger.info(
-            "Provisioning task for ONT %s: %s", ont_id, result.message
-        )
+        logger.info("Provisioning task for ONT %s: %s", ont_id, result.message)
         return result.to_dict()
     except Exception:
         session.rollback()

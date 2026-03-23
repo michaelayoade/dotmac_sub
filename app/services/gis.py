@@ -59,6 +59,7 @@ def _layer_filter_value(filters: dict | None, key: str) -> object | None:
         return None
     return filters.get(key)
 
+
 class GeoLocations(CRUDManager[GeoLocation]):
     model = GeoLocation
     not_found_detail = "Geo location not found"
@@ -154,7 +155,7 @@ class GeoLocations(CRUDManager[GeoLocation]):
                 ST_DWithin(
                     func.ST_Transform(GeoLocation.geom, 3857),
                     func.ST_Transform(point, 3857),
-                    radius_meters
+                    radius_meters,
                 )
             )
             .order_by(ST_Distance(GeoLocation.geom, point))
@@ -286,9 +287,7 @@ class GeoAreas(CRUDManager[GeoArea]):
             return False
 
         point = ST_SetSRID(ST_MakePoint(longitude, latitude), 4326)
-        result = db.query(
-            ST_Contains(area.geom, point)
-        ).scalar()
+        result = db.query(ST_Contains(area.geom, point)).scalar()
         return bool(result)
 
     @staticmethod
@@ -466,13 +465,17 @@ def _build_layer_features(
     layer = GeoLayers.get_by_key(db, layer_key)
     features: list[GeoFeatureRead] = []
     if layer.source_type.value == "locations":
-        is_active_filter = _coerce_filter_bool(_layer_filter_value(layer.filters, "is_active"))
+        is_active_filter = _coerce_filter_bool(
+            _layer_filter_value(layer.filters, "is_active")
+        )
         location_type = _layer_filter_value(layer.filters, "location_type")
         address_id = _layer_filter_value(layer.filters, "address_id")
         pop_site_id = _layer_filter_value(layer.filters, "pop_site_id")
         locations = GeoLocations.list(
             db,
-            location_type=str(location_type) if isinstance(location_type, str) else None,
+            location_type=str(location_type)
+            if isinstance(location_type, str)
+            else None,
             address_id=str(address_id) if isinstance(address_id, str) else None,
             pop_site_id=str(pop_site_id) if isinstance(pop_site_id, str) else None,
             is_active=True if is_active_filter is None else is_active_filter,
@@ -508,7 +511,9 @@ def _build_layer_features(
                 )
             )
     elif layer.source_type.value == "areas":
-        is_active_filter = _coerce_filter_bool(_layer_filter_value(layer.filters, "is_active"))
+        is_active_filter = _coerce_filter_bool(
+            _layer_filter_value(layer.filters, "is_active")
+        )
         area_type = _layer_filter_value(layer.filters, "area_type")
         areas = GeoAreas.list(
             db,

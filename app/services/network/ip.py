@@ -49,7 +49,9 @@ class IPAssignments(CRUDManager[IPAssignment]):
             db,
             str(payload.subscriber_id),
             str(payload.subscription_id) if payload.subscription_id else None,
-            str(payload.subscription_add_on_id) if payload.subscription_add_on_id else None,
+            str(payload.subscription_add_on_id)
+            if payload.subscription_add_on_id
+            else None,
             str(payload.service_address_id) if payload.service_address_id else None,
         )
         assignment = IPAssignment(**payload.model_dump())
@@ -86,7 +88,10 @@ class IPAssignments(CRUDManager[IPAssignment]):
             query,
             order_by,
             order_dir,
-            {"created_at": IPAssignment.created_at, "ipv4_address_id": IPAssignment.ipv4_address_id},
+            {
+                "created_at": IPAssignment.created_at,
+                "ipv4_address_id": IPAssignment.ipv4_address_id,
+            },
         )
         return _apply_pagination(query, limit, offset).all()
 

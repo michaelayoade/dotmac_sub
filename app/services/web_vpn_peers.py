@@ -130,7 +130,9 @@ def create_peer(db: Session, payload: WireGuardPeerCreate) -> WireGuardPeer:
     return cast(WireGuardPeer, wg_service.wg_peers.create(db, payload))
 
 
-def update_peer(db: Session, peer_id: UUID, payload: WireGuardPeerUpdate) -> WireGuardPeer:
+def update_peer(
+    db: Session, peer_id: UUID, payload: WireGuardPeerUpdate
+) -> WireGuardPeer:
     """Update peer."""
     return wg_service.wg_peers.update(db, peer_id, payload)
 

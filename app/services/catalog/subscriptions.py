@@ -59,6 +59,7 @@ def _add_months(value: datetime, months: int) -> datetime:
     day = min(value.day, monthrange(year, month)[1])
     return value.replace(year=year, month=month, day=day)
 
+
 def _resolve_billing_cycle(
     db: Session,
     offer_id: str,
@@ -84,7 +85,10 @@ def _resolve_billing_cycle(
     if offer_price and offer_price.billing_cycle:
         return offer_price.billing_cycle
     offer = db.get(CatalogOffer, offer_id)
-    return offer.billing_cycle if offer and offer.billing_cycle else BillingCycle.monthly
+    return (
+        offer.billing_cycle if offer and offer.billing_cycle else BillingCycle.monthly
+    )
+
 
 def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetime:
     """Compute the next billing date based on the billing cycle.
@@ -105,12 +109,14 @@ def _compute_next_billing_at(start_at: datetime, cycle: BillingCycle) -> datetim
     # Default to monthly
     return _add_months(start_at, 1)
 
+
 def _compute_contract_end_at(start_at: datetime, term: ContractTerm) -> datetime | None:
     if term == ContractTerm.twelve_month:
         return _add_months(start_at, 12)
     if term == ContractTerm.twentyfour_month:
         return _add_months(start_at, 24)
     return None
+
 
 def _generate_proration_if_enabled(
     db: Session,
@@ -138,13 +144,16 @@ def _generate_proration_if_enabled(
         # Log but don't fail the activation
         logger.warning(
             "Failed to generate prorated invoice for subscription %s: %s",
-            subscription.id, exc,
+            subscription.id,
+            exc,
         )
+
 
 def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
     """Reconcile internal/external RADIUS state for active subscriptions."""
     try:
         from app.services.radius import reconcile_subscription_connectivity
+
         active_subscriptions = (
             db.query(Subscription)
             .filter(Subscription.subscriber_id == subscriber_id)
@@ -156,11 +165,14 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
     except Exception as exc:
         logger.warning(
             "Failed to reconcile RADIUS state for subscriber %s: %s",
-            subscriber_id, exc,
+            subscriber_id,
+            exc,
         )
 
+
 def _auto_generate_pppoe_if_enabled(
-    db: Session, subscription: Subscription,
+    db: Session,
+    subscription: Subscription,
 ) -> None:
     """Auto-generate PPPoE credentials for newly activated subscriptions."""
     try:
@@ -179,9 +191,8 @@ def _auto_generate_pppoe_if_enabled(
             exc,
         )
 
-def _resolve_offer_radius_profile_id(
-    db: Session, offer_id: str | None
-):
+
+def _resolve_offer_radius_profile_id(db: Session, offer_id: str | None):
     if not offer_id:
         return None
     link = (
@@ -190,6 +201,7 @@ def _resolve_offer_radius_profile_id(
         .first()
     )
     return link.profile_id if link else None
+
 
 def apply_offer_radius_profile(
     db: Session,
@@ -233,6 +245,7 @@ def apply_offer_radius_profile(
                 credential.radius_profile_id = resolved_target
 
     return resolved_target
+
 
 def _emit_subscription_status_event(
     db: Session,
@@ -307,6 +320,7 @@ def _emit_subscription_status_event(
             account_id=subscription.subscriber_id,
         )
 
+
 def _validate_plan_change(
     db: Session,
     subscription: Subscription,
@@ -357,7 +371,11 @@ def _validate_plan_change(
             from app.models.network_monitoring import PopSite
 
             pop = db.get(PopSite, subscriber.pop_site_id)
-            if pop and pop.zone_id and str(pop.zone_id) != str(new_offer.region_zone_id):
+            if (
+                pop
+                and pop.zone_id
+                and str(pop.zone_id) != str(new_offer.region_zone_id)
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail=f"Offer '{new_offer.name}' is not available in your service region.",
@@ -368,13 +386,17 @@ def _billing_cycle_days(db: Session, offer_id) -> int:
     """Resolve the number of days in a billing cycle for an offer."""
     price = (
         db.query(OfferPrice)
-        .filter(OfferPrice.offer_id == offer_id,
-                OfferPrice.price_type == PriceType.recurring,
-                OfferPrice.is_active.is_(True))
+        .filter(
+            OfferPrice.offer_id == offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
         .first()
     )
     cycle = price.billing_cycle.value if price and price.billing_cycle else "monthly"
-    return {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90, "annual": 365}.get(cycle, 30)
+    return {"daily": 1, "weekly": 7, "monthly": 30, "quarterly": 90, "annual": 365}.get(
+        cycle, 30
+    )
 
 
 def _offer_recurring_price_amount(db: Session, offer_id) -> Decimal:
@@ -397,7 +419,9 @@ def _plan_change_text_setting(db: Session, key: str, default: str) -> str:
     return text if text else default
 
 
-def _plan_change_decimal_setting(db: Session, key: str, default: str = "0.00") -> Decimal:
+def _plan_change_decimal_setting(
+    db: Session, key: str, default: str = "0.00"
+) -> Decimal:
     try:
         return Decimal(_plan_change_text_setting(db, key, default))
     except Exception:
@@ -414,7 +438,9 @@ def _apply_plan_change_policy(
     """Apply billing-domain plan-change policy settings to proration output."""
     result = dict(proration)
     refund_policy = _plan_change_text_setting(db, "refund_policy", "none").lower()
-    invoice_timing = _plan_change_text_setting(db, "invoice_timing", "immediate").lower()
+    invoice_timing = _plan_change_text_setting(
+        db, "invoice_timing", "immediate"
+    ).lower()
     minimum_invoice_amount = _plan_change_decimal_setting(db, "minimum_invoice_amount")
     fee_tax_rate = _plan_change_decimal_setting(db, "fee_tax_rate")
 
@@ -437,7 +463,9 @@ def _apply_plan_change_policy(
         tax_multiplier = Decimal("1.00") + (fee_tax_rate / Decimal("100"))
         fee_total = (fee_amount * tax_multiplier).quantize(Decimal("0.01"))
         result["fee_amount"] = fee_total
-        net_amount = (Decimal(str(result.get("net_amount", "0"))) + fee_total).quantize(Decimal("0.01"))
+        net_amount = (Decimal(str(result.get("net_amount", "0"))) + fee_total).quantize(
+            Decimal("0.01")
+        )
         result["net_amount"] = net_amount
 
     result["invoice_timing"] = invoice_timing
@@ -471,8 +499,13 @@ def _calculate_proration(
     now = datetime.now(UTC)
     next_billing = subscription.next_billing_at
     if not next_billing:
-        return {"credit_amount": Decimal("0"), "charge_amount": Decimal("0"),
-                "net_amount": Decimal("0"), "days_remaining": 0, "days_in_cycle": 30}
+        return {
+            "credit_amount": Decimal("0"),
+            "charge_amount": Decimal("0"),
+            "net_amount": Decimal("0"),
+            "days_remaining": 0,
+            "days_in_cycle": 30,
+        }
 
     # Resolve cycle length from the current offer's billing cycle
     cycle_days = _billing_cycle_days(db, subscription.offer_id)
@@ -483,22 +516,31 @@ def _calculate_proration(
     days_remaining = max(0, cycle_days - days_elapsed)
 
     if days_remaining == 0:
-        return {"credit_amount": Decimal("0"), "charge_amount": Decimal("0"),
-                "net_amount": Decimal("0"), "days_remaining": 0, "days_in_cycle": cycle_days}
+        return {
+            "credit_amount": Decimal("0"),
+            "charge_amount": Decimal("0"),
+            "net_amount": Decimal("0"),
+            "days_remaining": 0,
+            "days_in_cycle": cycle_days,
+        }
 
     # Get old and new recurring prices
     old_price_row = (
         db.query(OfferPrice.amount)
-        .filter(OfferPrice.offer_id == subscription.offer_id,
-                OfferPrice.price_type == PriceType.recurring,
-                OfferPrice.is_active.is_(True))
+        .filter(
+            OfferPrice.offer_id == subscription.offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
         .first()
     )
     new_price_row = (
         db.query(OfferPrice.amount)
-        .filter(OfferPrice.offer_id == new_offer_id,
-                OfferPrice.price_type == PriceType.recurring,
-                OfferPrice.is_active.is_(True))
+        .filter(
+            OfferPrice.offer_id == new_offer_id,
+            OfferPrice.price_type == PriceType.recurring,
+            OfferPrice.is_active.is_(True),
+        )
         .first()
     )
 
@@ -575,9 +617,13 @@ def _generate_proration_invoice(
     if net > 0:
         # Customer owes more — generate invoice
         invoice_number = numbering.generate_number(
-            db, SettingDomain.billing, "invoice_number",
-            "invoice_number_enabled", "invoice_number_prefix",
-            "invoice_number_padding", "invoice_number_start",
+            db,
+            SettingDomain.billing,
+            "invoice_number",
+            "invoice_number_enabled",
+            "invoice_number_prefix",
+            "invoice_number_padding",
+            "invoice_number_start",
         )
         invoice = Invoice(
             account_id=subscriber_id,
@@ -605,15 +651,22 @@ def _generate_proration_invoice(
         db.add(line)
         logger.info(
             "Generated proration invoice %s for ₦%s (upgrade %s → %s)",
-            invoice_number, net, old_offer_name, new_offer_name,
+            invoice_number,
+            net,
+            old_offer_name,
+            new_offer_name,
         )
     else:
         # Customer gets credit — generate credit note
         credit_amount = abs(net)
         credit_number = numbering.generate_number(
-            db, SettingDomain.billing, "credit_note_number",
-            "credit_note_number_enabled", "credit_note_number_prefix",
-            "credit_note_number_padding", "credit_note_number_start",
+            db,
+            SettingDomain.billing,
+            "credit_note_number",
+            "credit_note_number_enabled",
+            "credit_note_number_prefix",
+            "credit_note_number_padding",
+            "credit_note_number_start",
         )
         credit = CreditNote(
             account_id=subscriber_id,
@@ -628,7 +681,10 @@ def _generate_proration_invoice(
         db.add(credit)
         logger.info(
             "Generated proration credit %s for ₦%s (downgrade %s → %s)",
-            credit_number, credit_amount, old_offer_name, new_offer_name,
+            credit_number,
+            credit_amount,
+            old_offer_name,
+            new_offer_name,
         )
 
 
@@ -703,9 +759,7 @@ def _emit_offer_change_event(
     try:
         from app.services.enforcement import update_subscription_sessions
 
-        update_subscription_sessions(
-            db, str(subscription.id), reason="plan_change"
-        )
+        update_subscription_sessions(db, str(subscription.id), reason="plan_change")
     except Exception:
         logger.warning(
             "Failed to update sessions after plan change for %s",
@@ -738,6 +792,7 @@ def _create_service_order_for_subscription(db: Session, subscription: Subscripti
             subscription.id,
             exc_info=True,
         )
+
 
 class Subscriptions(ListResponseMixin):
     @staticmethod
@@ -789,15 +844,26 @@ class Subscriptions(ListResponseMixin):
         if "billing_mode" not in fields_set:
             offer = db.get(CatalogOffer, str(payload.offer_id))
             data["billing_mode"] = (
-                offer.billing_mode if offer and offer.billing_mode else BillingMode.prepaid
+                offer.billing_mode
+                if offer and offer.billing_mode
+                else BillingMode.prepaid
             )
-        if "start_at" not in fields_set and data.get("status") == SubscriptionStatus.active:
+        if (
+            "start_at" not in fields_set
+            and data.get("status") == SubscriptionStatus.active
+        ):
             data["start_at"] = datetime.now(UTC)
         start_at = data.get("start_at")
-        if "next_billing_at" not in fields_set and start_at and data.get("status") == SubscriptionStatus.active:
+        if (
+            "next_billing_at" not in fields_set
+            and start_at
+            and data.get("status") == SubscriptionStatus.active
+        ):
             offer_version_id = data.get("offer_version_id")
             cycle = _resolve_billing_cycle(
-                db, str(data["offer_id"]), str(offer_version_id) if offer_version_id else None
+                db,
+                str(data["offer_id"]),
+                str(offer_version_id) if offer_version_id else None,
             )
             data["next_billing_at"] = _compute_next_billing_at(start_at, cycle)
         if "end_at" not in fields_set and start_at and data.get("contract_term"):
@@ -809,7 +875,8 @@ class Subscriptions(ListResponseMixin):
             db,
             subscription,
             target_profile_id=data.get("radius_profile_id"),
-            force="radius_profile_id" in fields_set or not bool(data.get("radius_profile_id")),
+            force="radius_profile_id" in fields_set
+            or not bool(data.get("radius_profile_id")),
             sync_credentials=False,
         )
         db.add(subscription)
@@ -844,7 +911,9 @@ class Subscriptions(ListResponseMixin):
                 EventType.subscription_activated,
                 {
                     "subscription_id": str(subscription.id),
-                    "offer_name": subscription.offer.name if subscription.offer else None,
+                    "offer_name": subscription.offer.name
+                    if subscription.offer
+                    else None,
                     "from_status": None,
                     "to_status": "active",
                 },
@@ -877,7 +946,9 @@ class Subscriptions(ListResponseMixin):
             subscription_id,
             options=[
                 selectinload(Subscription.offer),
-                selectinload(Subscription.add_ons).selectinload(SubscriptionAddOn.add_on),
+                selectinload(Subscription.add_ons).selectinload(
+                    SubscriptionAddOn.add_on
+                ),
             ],
         )
         if not subscription:
@@ -908,7 +979,8 @@ class Subscriptions(ListResponseMixin):
         )
         if status:
             query = query.filter(
-                Subscription.status == validate_enum(status, SubscriptionStatus, "status")
+                Subscription.status
+                == validate_enum(status, SubscriptionStatus, "status")
             )
         query = apply_ordering(
             query,
@@ -970,7 +1042,9 @@ class Subscriptions(ListResponseMixin):
         status = data.get("status", subscription.status)
         start_at = _ensure_utc(data.get("start_at", subscription.start_at))
         end_at = _ensure_utc(data.get("end_at", subscription.end_at))
-        next_billing_at = _ensure_utc(data.get("next_billing_at", subscription.next_billing_at))
+        next_billing_at = _ensure_utc(
+            data.get("next_billing_at", subscription.next_billing_at)
+        )
         canceled_at = _ensure_utc(data.get("canceled_at", subscription.canceled_at))
         reference_at = start_at or datetime.now(UTC)
         if offer_version_id:
@@ -1012,7 +1086,9 @@ class Subscriptions(ListResponseMixin):
             resuming = previous_status == SubscriptionStatus.suspended
             if "next_billing_at" not in data or resuming or stale:
                 billing_anchor = now if (resuming or stale) else start_at
-                data["next_billing_at"] = _compute_next_billing_at(billing_anchor, cycle)
+                data["next_billing_at"] = _compute_next_billing_at(
+                    billing_anchor, cycle
+                )
         if start_at and "end_at" not in data:
             term = data.get("contract_term", subscription.contract_term)
             end_at = _compute_contract_end_at(start_at, term)
@@ -1043,10 +1119,14 @@ class Subscriptions(ListResponseMixin):
             _emit_subscription_status_event(
                 db, subscription, previous_status, new_status
             )
-        elif previous_status == SubscriptionStatus.active and previous_profile_id != subscription.radius_profile_id:
+        elif (
+            previous_status == SubscriptionStatus.active
+            and previous_profile_id != subscription.radius_profile_id
+        ):
             _sync_credentials_to_radius(db, subscription.subscriber_id)
             try:
                 from app.services.enforcement import update_subscription_sessions
+
                 update_subscription_sessions(
                     db, str(subscription.id), reason="profile_change"
                 )
@@ -1066,7 +1146,11 @@ class Subscriptions(ListResponseMixin):
             _emit_offer_change_event(db, subscription, str(previous_offer_id))
 
             # Generate proration invoice/credit for the plan change
-            if proration_result and proration_result.get("net_amount") and proration_result.get("generate_now"):
+            if (
+                proration_result
+                and proration_result.get("net_amount")
+                and proration_result.get("generate_now")
+            ):
                 old_offer = db.get(CatalogOffer, previous_offer_id)
                 new_offer = db.get(CatalogOffer, subscription.offer_id)
                 _generate_proration_invoice(
@@ -1146,15 +1230,21 @@ class Subscriptions(ListResponseMixin):
                     EventType.subscription_expired,
                     {
                         "subscription_id": str(subscription.id),
-                        "offer_name": subscription.offer.name if subscription.offer else None,
-                        "from_status": previous_status.value if previous_status else None,
+                        "offer_name": subscription.offer.name
+                        if subscription.offer
+                        else None,
+                        "from_status": previous_status.value
+                        if previous_status
+                        else None,
                         "to_status": "expired",
                         "reason": "contract_end",
-                        "end_at": subscription.end_at.isoformat() if subscription.end_at else None,
+                        "end_at": subscription.end_at.isoformat()
+                        if subscription.end_at
+                        else None,
                     },
                     subscription_id=subscription.id,
-            account_id=subscription.subscriber_id,
-        )
+                    account_id=subscription.subscriber_id,
+                )
 
             expired_count += 1
 
@@ -1166,6 +1256,7 @@ class Subscriptions(ListResponseMixin):
             "subscriptions_expired": expired_count,
             "dry_run": dry_run,
         }
+
 
 class SubscriptionAddOns(CRUDManager[SubscriptionAddOn]):
     model = SubscriptionAddOn
@@ -1231,7 +1322,9 @@ class SubscriptionAddOns(CRUDManager[SubscriptionAddOn]):
         if not subscription_add_on:
             raise HTTPException(status_code=404, detail="Subscription add-on not found")
         data = payload.model_dump(exclude_unset=True)
-        subscription_id = data.get("subscription_id", subscription_add_on.subscription_id)
+        subscription_id = data.get(
+            "subscription_id", subscription_add_on.subscription_id
+        )
         add_on_id = data.get("add_on_id", subscription_add_on.add_on_id)
         quantity = data.get("quantity", subscription_add_on.quantity)
         catalog_validators.validate_subscription_add_on(

@@ -114,12 +114,16 @@ def parse_selected_ids(form_data: Any) -> list[str]:
     return _selected_ids(form_data)
 
 
-def _candidate_subscribers(db: Session, filters: MigrationFilters, *, limit: int) -> list[Subscriber]:
+def _candidate_subscribers(
+    db: Session, filters: MigrationFilters, *, limit: int
+) -> list[Subscriber]:
     stmt = (
         select(Subscriber)
         .options(
             joinedload(Subscriber.subscriptions).joinedload(Subscription.offer),
-            joinedload(Subscriber.subscriptions).joinedload(Subscription.provisioning_nas_device),
+            joinedload(Subscriber.subscriptions).joinedload(
+                Subscription.provisioning_nas_device
+            ),
             joinedload(Subscriber.access_credentials),
             joinedload(Subscriber.ip_assignments).joinedload(IPAssignment.ipv4_address),
             joinedload(Subscriber.ip_assignments).joinedload(IPAssignment.ipv6_address),
@@ -132,11 +136,17 @@ def _candidate_subscribers(db: Session, filters: MigrationFilters, *, limit: int
         stmt = stmt.where(Subscriber.reseller_id == filters.reseller_id)
     if filters.subscriber_status:
         try:
-            stmt = stmt.where(Subscriber.status == SubscriberStatus(filters.subscriber_status))
+            stmt = stmt.where(
+                Subscriber.status == SubscriberStatus(filters.subscriber_status)
+            )
         except ValueError:
             return []
 
-    subscribers = list(db.scalars(stmt.order_by(Subscriber.created_at.desc()).limit(max(1, limit))).unique().all())
+    subscribers = list(
+        db.scalars(stmt.order_by(Subscriber.created_at.desc()).limit(max(1, limit)))
+        .unique()
+        .all()
+    )
 
     if filters.query:
         needle = filters.query.lower()
@@ -161,14 +171,19 @@ def _candidate_subscribers(db: Session, filters: MigrationFilters, *, limit: int
         subscribers = [
             sub
             for sub in subscribers
-            if any(str(s.offer_id) == filters.current_offer_id for s in sub.subscriptions)
+            if any(
+                str(s.offer_id) == filters.current_offer_id for s in sub.subscriptions
+            )
         ]
 
     if filters.current_nas_device_id:
         subscribers = [
             sub
             for sub in subscribers
-            if any(str(s.provisioning_nas_device_id or "") == filters.current_nas_device_id for s in sub.subscriptions)
+            if any(
+                str(s.provisioning_nas_device_id or "") == filters.current_nas_device_id
+                for s in sub.subscriptions
+            )
         ]
 
     if filters.pop_site_id:
@@ -177,7 +192,8 @@ def _candidate_subscribers(db: Session, filters: MigrationFilters, *, limit: int
             for sub in subscribers
             if any(
                 s.provisioning_nas_device is not None
-                and str(s.provisioning_nas_device.pop_site_id or "") == filters.pop_site_id
+                and str(s.provisioning_nas_device.pop_site_id or "")
+                == filters.pop_site_id
                 for s in sub.subscriptions
             )
         ]
@@ -188,12 +204,23 @@ def _candidate_subscribers(db: Session, filters: MigrationFilters, *, limit: int
 def _current_subscription(subscriber: Subscriber) -> Subscription | None:
     if not subscriber.subscriptions:
         return None
-    active = [s for s in subscriber.subscriptions if str(getattr(s.status, "value", s.status)) == "active"]
+    active = [
+        s
+        for s in subscriber.subscriptions
+        if str(getattr(s.status, "value", s.status)) == "active"
+    ]
     if active:
-        active.sort(key=lambda row: row.start_at or row.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+        active.sort(
+            key=lambda row: (
+                row.start_at or row.created_at or datetime.min.replace(tzinfo=UTC)
+            ),
+            reverse=True,
+        )
         return active[0]
     rows = list(subscriber.subscriptions)
-    rows.sort(key=lambda row: row.created_at or datetime.min.replace(tzinfo=UTC), reverse=True)
+    rows.sort(
+        key=lambda row: row.created_at or datetime.min.replace(tzinfo=UTC), reverse=True
+    )
     return rows[0]
 
 
@@ -211,9 +238,15 @@ def _subscriber_ips(subscriber: Subscriber) -> str:
     for assignment in subscriber.ip_assignments:
         if not assignment.is_active:
             continue
-        if assignment.ip_version == IPVersion.ipv4 and assignment.ipv4_address is not None:
+        if (
+            assignment.ip_version == IPVersion.ipv4
+            and assignment.ipv4_address is not None
+        ):
             parts.append(str(assignment.ipv4_address.address))
-        if assignment.ip_version == IPVersion.ipv6 and assignment.ipv6_address is not None:
+        if (
+            assignment.ip_version == IPVersion.ipv6
+            and assignment.ipv6_address is not None
+        ):
             parts.append(str(assignment.ipv6_address.address))
     return ", ".join(parts)
 
@@ -229,7 +262,12 @@ def _subscriber_olt_port(subscriber: Subscriber) -> str:
 
 def _table_row(subscriber: Subscriber) -> dict[str, Any]:
     current = _current_subscription(subscriber)
-    subscriber_label = subscriber.full_name or subscriber.display_name or subscriber.email or "Subscriber"
+    subscriber_label = (
+        subscriber.full_name
+        or subscriber.display_name
+        or subscriber.email
+        or "Subscriber"
+    )
     return {
         "subscriber_id": str(subscriber.id),
         "subscriber_label": subscriber_label,
@@ -242,19 +280,37 @@ def _table_row(subscriber: Subscriber) -> dict[str, Any]:
         "current_plan": current.offer.name if current and current.offer else "",
         "current_offer_id": str(current.offer_id) if current else "",
         "assigned_ips": _subscriber_ips(subscriber),
-        "router_nas": current.provisioning_nas_device.name if current and current.provisioning_nas_device else "",
-        "router_nas_id": str(current.provisioning_nas_device_id) if current and current.provisioning_nas_device_id else "",
+        "router_nas": current.provisioning_nas_device.name
+        if current and current.provisioning_nas_device
+        else "",
+        "router_nas_id": str(current.provisioning_nas_device_id)
+        if current and current.provisioning_nas_device_id
+        else "",
         "mac_address": current.mac_address if current and current.mac_address else "",
         "olt_port": _subscriber_olt_port(subscriber),
     }
 
 
 def _require_targets(targets: MigrationTargets) -> None:
-    if not any([targets.offer_id, targets.nas_device_id, targets.ip_pool_id, targets.pon_port_id]):
-        raise HTTPException(status_code=400, detail="Select at least one migration target")
+    if not any(
+        [
+            targets.offer_id,
+            targets.nas_device_id,
+            targets.ip_pool_id,
+            targets.pon_port_id,
+        ]
+    ):
+        raise HTTPException(
+            status_code=400, detail="Select at least one migration target"
+        )
 
 
-def build_selection_table(db: Session, *, filters: MigrationFilters, limit: int = SERVICE_MIGRATION_DEFAULT_LIMIT) -> dict[str, Any]:
+def build_selection_table(
+    db: Session,
+    *,
+    filters: MigrationFilters,
+    limit: int = SERVICE_MIGRATION_DEFAULT_LIMIT,
+) -> dict[str, Any]:
     subscribers = _candidate_subscribers(db, filters, limit=limit)
     rows = [_table_row(subscriber) for subscriber in subscribers]
     return {
@@ -263,10 +319,14 @@ def build_selection_table(db: Session, *, filters: MigrationFilters, limit: int 
     }
 
 
-def _preview_changes(db: Session, row: dict[str, Any], targets: MigrationTargets) -> dict[str, Any]:
+def _preview_changes(
+    db: Session, row: dict[str, Any], targets: MigrationTargets
+) -> dict[str, Any]:
     out = {
         "subscriber_id": row["subscriber_id"],
-        "subscriber_label": row.get("subscriber_label") or row["full_name"] or "Subscriber",
+        "subscriber_label": row.get("subscriber_label")
+        or row["full_name"]
+        or "Subscriber",
         "full_name": row["full_name"],
         "changes": [],
     }
@@ -321,7 +381,9 @@ def build_preview(
     selected_ids: list[str],
 ) -> dict[str, Any]:
     _require_targets(targets)
-    table = build_selection_table(db, filters=filters, limit=SERVICE_MIGRATION_DEFAULT_LIMIT)
+    table = build_selection_table(
+        db, filters=filters, limit=SERVICE_MIGRATION_DEFAULT_LIMIT
+    )
     row_map = {row["subscriber_id"]: row for row in table["rows"]}
 
     rows: list[dict[str, Any]] = []
@@ -389,7 +451,9 @@ def create_job(
         raise ValueError("Select at least one subscriber")
 
     scheduled_at = _parse_scheduled_at(targets.scheduled_at)
-    status = "scheduled" if scheduled_at and scheduled_at > datetime.now(UTC) else "queued"
+    status = (
+        "scheduled" if scheduled_at and scheduled_at > datetime.now(UTC) else "queued"
+    )
 
     return upsert_job(
         db,
@@ -435,7 +499,9 @@ def _log_migration_audit(
     audit_service.audit_events.create(db=db, payload=payload)
 
 
-def _update_ip_pool_for_subscriber(db: Session, *, subscriber_id: str, pool_id: str) -> int:
+def _update_ip_pool_for_subscriber(
+    db: Session, *, subscriber_id: str, pool_id: str
+) -> int:
     target_pool = db.get(IpPool, pool_id)
     if not target_pool:
         raise ValueError("Target IP pool not found")
@@ -447,16 +513,24 @@ def _update_ip_pool_for_subscriber(db: Session, *, subscriber_id: str, pool_id: 
         .where(IPAssignment.is_active.is_(True))
     ).all()
     for assignment in assignments:
-        if assignment.ip_version == IPVersion.ipv4 and assignment.ipv4_address is not None:
+        if (
+            assignment.ip_version == IPVersion.ipv4
+            and assignment.ipv4_address is not None
+        ):
             assignment.ipv4_address.pool_id = target_pool.id
             moved += 1
-        if assignment.ip_version == IPVersion.ipv6 and assignment.ipv6_address is not None:
+        if (
+            assignment.ip_version == IPVersion.ipv6
+            and assignment.ipv6_address is not None
+        ):
             assignment.ipv6_address.pool_id = target_pool.id
             moved += 1
     return moved
 
 
-def _update_olt_port_for_subscriber(db: Session, *, subscriber_id: str, pon_port_id: str) -> int:
+def _update_olt_port_for_subscriber(
+    db: Session, *, subscriber_id: str, pon_port_id: str
+) -> int:
     target_port = db.get(PonPort, pon_port_id)
     if not target_port:
         raise ValueError("Target OLT port not found")
@@ -532,9 +606,13 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
             moved_ip = 0
             moved_olt = 0
             if targets.ip_pool_id:
-                moved_ip = _update_ip_pool_for_subscriber(db, subscriber_id=subscriber_id, pool_id=targets.ip_pool_id)
+                moved_ip = _update_ip_pool_for_subscriber(
+                    db, subscriber_id=subscriber_id, pool_id=targets.ip_pool_id
+                )
             if targets.pon_port_id:
-                moved_olt = _update_olt_port_for_subscriber(db, subscriber_id=subscriber_id, pon_port_id=targets.pon_port_id)
+                moved_olt = _update_olt_port_for_subscriber(
+                    db, subscriber_id=subscriber_id, pon_port_id=targets.pon_port_id
+                )
 
             # ensure radius can be re-provisioned before committing this subscriber migration
             db.flush()
@@ -569,7 +647,11 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 {
                     "job_id": job_id,
                     "progress_percent": int((idx / total) * 100),
-                    "counts": {"migrated": migrated, "failed": failed, "skipped": skipped},
+                    "counts": {
+                        "migrated": migrated,
+                        "failed": failed,
+                        "skipped": skipped,
+                    },
                     "failed_items": failed_items,
                     "manual_intervention": failed_items,
                 },
@@ -613,12 +695,30 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
 def page_options(db: Session) -> dict[str, Any]:
     from app.models.catalog import NasDevice
 
-    offers = db.scalars(select(CatalogOffer).where(CatalogOffer.is_active.is_(True)).order_by(CatalogOffer.name.asc())).all()
-    resellers = db.scalars(select(Reseller).where(Reseller.is_active.is_(True)).order_by(Reseller.name.asc())).all()
-    pop_sites = db.scalars(select(PopSite).where(PopSite.is_active.is_(True)).order_by(PopSite.name.asc())).all()
-    nas_devices = db.scalars(select(NasDevice).where(NasDevice.is_active.is_(True)).order_by(NasDevice.name.asc())).all()
-    ip_pools = db.scalars(select(IpPool).where(IpPool.is_active.is_(True)).order_by(IpPool.name.asc())).all()
-    pon_ports = db.scalars(select(PonPort).where(PonPort.is_active.is_(True)).order_by(PonPort.name.asc())).all()
+    offers = db.scalars(
+        select(CatalogOffer)
+        .where(CatalogOffer.is_active.is_(True))
+        .order_by(CatalogOffer.name.asc())
+    ).all()
+    resellers = db.scalars(
+        select(Reseller)
+        .where(Reseller.is_active.is_(True))
+        .order_by(Reseller.name.asc())
+    ).all()
+    pop_sites = db.scalars(
+        select(PopSite).where(PopSite.is_active.is_(True)).order_by(PopSite.name.asc())
+    ).all()
+    nas_devices = db.scalars(
+        select(NasDevice)
+        .where(NasDevice.is_active.is_(True))
+        .order_by(NasDevice.name.asc())
+    ).all()
+    ip_pools = db.scalars(
+        select(IpPool).where(IpPool.is_active.is_(True)).order_by(IpPool.name.asc())
+    ).all()
+    pon_ports = db.scalars(
+        select(PonPort).where(PonPort.is_active.is_(True)).order_by(PonPort.name.asc())
+    ).all()
     return {
         "offers": offers,
         "resellers": resellers,

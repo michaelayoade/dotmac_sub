@@ -1,4 +1,3 @@
-
 import logging
 
 from fastapi import HTTPException
@@ -10,6 +9,7 @@ from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
+
 
 class KPIConfigs(ListResponseMixin):
     @staticmethod
@@ -42,7 +42,10 @@ class KPIConfigs(ListResponseMixin):
         else:
             query = query.filter(KPIConfig.is_active == is_active)
         query = apply_ordering(
-            query, order_by, order_dir, {"created_at": KPIConfig.created_at, "key": KPIConfig.key}
+            query,
+            order_by,
+            order_dir,
+            {"created_at": KPIConfig.created_at, "key": KPIConfig.key},
         )
         return apply_pagination(query, limit, offset).all()
 

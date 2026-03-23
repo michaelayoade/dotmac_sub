@@ -1,4 +1,5 @@
 """NAS device provisioning execution engine."""
+
 import logging
 import time
 from typing import Any
@@ -100,9 +101,13 @@ class DeviceProvisioner:
             execution_method = template.execution_method or "ssh"
 
             if execution_method == "ssh":
-                response = DeviceProvisioner._execute_ssh(device, command, timeout_seconds=timeout_secs)
+                response = DeviceProvisioner._execute_ssh(
+                    device, command, timeout_seconds=timeout_secs
+                )
             elif execution_method == "api":
-                response = DeviceProvisioner._execute_api(device, command, variables, timeout_seconds=timeout_secs)
+                response = DeviceProvisioner._execute_api(
+                    device, command, variables, timeout_seconds=timeout_secs
+                )
             else:
                 raise HTTPException(
                     status_code=400,
@@ -121,15 +126,17 @@ class DeviceProvisioner:
             )
 
             # Handle queue mapping for bandwidth monitoring
-            DeviceProvisioner._handle_queue_mapping(
-                db, device, action, variables
-            )
+            DeviceProvisioner._handle_queue_mapping(db, device, action, variables)
 
-            _emit_nas_event(db, "nas_provisioning_completed", {
-                "device_id": str(device.id),
-                "action": action.value,
-                "execution_time_ms": execution_time,
-            })
+            _emit_nas_event(
+                db,
+                "nas_provisioning_completed",
+                {
+                    "device_id": str(device.id),
+                    "action": action.value,
+                    "execution_time_ms": execution_time,
+                },
+            )
 
         except TimeoutError:
             execution_time = int((time.time() - start_time) * 1000)
@@ -140,11 +147,15 @@ class DeviceProvisioner:
                 error=f"Command timed out after {timeout_secs}s",
                 execution_time_ms=execution_time,
             )
-            _emit_nas_event(db, "nas_provisioning_failed", {
-                "device_id": str(device.id),
-                "action": action.value,
-                "error": f"timeout ({timeout_secs}s)",
-            })
+            _emit_nas_event(
+                db,
+                "nas_provisioning_failed",
+                {
+                    "device_id": str(device.id),
+                    "action": action.value,
+                    "error": f"timeout ({timeout_secs}s)",
+                },
+            )
             raise
         except Exception as e:
             execution_time = int((time.time() - start_time) * 1000)
@@ -155,11 +166,15 @@ class DeviceProvisioner:
                 error=str(e),
                 execution_time_ms=execution_time,
             )
-            _emit_nas_event(db, "nas_provisioning_failed", {
-                "device_id": str(device.id),
-                "action": action.value,
-                "error": str(e),
-            })
+            _emit_nas_event(
+                db,
+                "nas_provisioning_failed",
+                {
+                    "device_id": str(device.id),
+                    "action": action.value,
+                    "error": str(e),
+                },
+            )
             raise
 
         return ProvisioningLogs.get(db, log.id)
@@ -205,7 +220,10 @@ class DeviceProvisioner:
                 subscription_id=subscription_id,
             )
 
-        elif action in (ProvisioningAction.delete_user, ProvisioningAction.suspend_user):
+        elif action in (
+            ProvisioningAction.delete_user,
+            ProvisioningAction.suspend_user,
+        ):
             # Deactivate queue mappings when user is deleted or suspended
             queue_mapping.remove_subscription_mappings(db, subscription_id)
 
@@ -231,11 +249,14 @@ class DeviceProvisioner:
 
         host = device.management_ip or device.ip_address
         port = device.management_port or 120
-        assert host is not None
+        if host is None:
+            raise HTTPException(
+                status_code=400, detail="Device has no management IP or address"
+            )
 
         client = paramiko.SSHClient()
         if device.ssh_verify_host_key is False:
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # noqa: S507 - explicitly allowed when host-key verification is disabled
         else:
             client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
@@ -244,6 +265,7 @@ class DeviceProvisioner:
             if device.ssh_key:
                 # Use SSH key authentication - decrypt key before use
                 import io
+
                 decrypted_key = decrypt_credential(device.ssh_key)
                 key = paramiko.RSAKey.from_private_key(io.StringIO(decrypted_key))
                 client.connect(
@@ -260,7 +282,9 @@ class DeviceProvisioner:
                     timeout=30,
                 )
 
-            stdin, stdout, stderr = client.exec_command(command, timeout=timeout_seconds)
+            stdin, stdout, stderr = client.exec_command(
+                command, timeout=timeout_seconds
+            )
             output: str = stdout.read().decode()
             error: str = stderr.read().decode()
 
@@ -273,12 +297,16 @@ class DeviceProvisioner:
             client.close()
 
     @staticmethod
-    def _execute_api(device: NasDevice, command: str, variables: dict, timeout_seconds: int = 30) -> str:
+    def _execute_api(
+        device: NasDevice, command: str, variables: dict, timeout_seconds: int = 30
+    ) -> str:
         """Execute command via REST API."""
         import requests
 
         if not device.api_url:
-            raise HTTPException(status_code=400, detail="Device has no API URL configured")
+            raise HTTPException(
+                status_code=400, detail="Device has no API URL configured"
+            )
 
         # Build authentication - decrypt credentials before use
         auth = None
@@ -294,7 +322,9 @@ class DeviceProvisioner:
         # For MikroTik REST API, the command is the API path
         url = f"{device.api_url.rstrip('/')}/{command.lstrip('/')}"
 
-        verify_tls = device.api_verify_tls if device.api_verify_tls is not None else False
+        verify_tls = (
+            device.api_verify_tls if device.api_verify_tls is not None else False
+        )
         response = requests.post(
             url,
             json=variables,
@@ -308,7 +338,9 @@ class DeviceProvisioner:
         return str(response.text)
 
     @staticmethod
-    def backup_config(db: Session, nas_device_id: UUID, triggered_by: str = "system") -> NasConfigBackup:
+    def backup_config(
+        db: Session, nas_device_id: UUID, triggered_by: str = "system"
+    ) -> NasConfigBackup:
         """
         Backup configuration from a NAS device.
 
@@ -356,11 +388,15 @@ class DeviceProvisioner:
             ),
         )
 
-        _emit_nas_event(db, "nas_backup_completed", {
-            "device_id": str(device.id),
-            "device_name": device.name,
-            "backup_id": str(backup.id),
-        })
+        _emit_nas_event(
+            db,
+            "nas_backup_completed",
+            {
+                "device_id": str(device.id),
+                "device_name": device.name,
+                "backup_id": str(backup.id),
+            },
+        )
 
         return backup
 
@@ -393,10 +429,14 @@ class DeviceProvisioner:
         backup = NasConfigBackups.get(db, backup_id)
 
         if str(backup.nas_device_id) != str(device.id):
-            raise HTTPException(status_code=400, detail="Backup does not belong to this device")
+            raise HTTPException(
+                status_code=400, detail="Backup does not belong to this device"
+            )
 
         if not backup.config_content:
-            raise HTTPException(status_code=400, detail="Backup has no configuration content")
+            raise HTTPException(
+                status_code=400, detail="Backup has no configuration content"
+            )
 
         # Vendor-specific import command
         if device.vendor == NasVendor.mikrotik:
@@ -425,14 +465,20 @@ class DeviceProvisioner:
             response = DeviceProvisioner._execute_ssh(device, command)
             execution_time = int((time.time() - start_time) * 1000)
             ProvisioningLogs.update_status(
-                db, log.id, ProvisioningLogStatus.success,
-                response=response, execution_time_ms=execution_time,
+                db,
+                log.id,
+                ProvisioningLogStatus.success,
+                response=response,
+                execution_time_ms=execution_time,
             )
         except Exception as e:
             execution_time = int((time.time() - start_time) * 1000)
             ProvisioningLogs.update_status(
-                db, log.id, ProvisioningLogStatus.failed,
-                error=str(e), execution_time_ms=execution_time,
+                db,
+                log.id,
+                ProvisioningLogStatus.failed,
+                error=str(e),
+                execution_time_ms=execution_time,
             )
             raise
 

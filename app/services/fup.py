@@ -176,7 +176,9 @@ class FupPolicies:
             speed_reduction_percent=speed_reduction_percent,
             time_start=time_start,
             time_end=time_end,
-            enabled_by_rule_id=coerce_uuid(enabled_by_rule_id) if enabled_by_rule_id else None,
+            enabled_by_rule_id=coerce_uuid(enabled_by_rule_id)
+            if enabled_by_rule_id
+            else None,
             days_of_week=days_of_week,
             is_active=is_active,
         )
@@ -316,7 +318,9 @@ class FupPolicies:
                 cooldown_minutes=source_rule.cooldown_minutes,
                 time_start=source_rule.time_start,
                 time_end=source_rule.time_end,
-                days_of_week=list(source_rule.days_of_week) if source_rule.days_of_week else None,
+                days_of_week=list(source_rule.days_of_week)
+                if source_rule.days_of_week
+                else None,
                 is_active=source_rule.is_active,
             )
             db.add(rule)
@@ -422,35 +426,42 @@ def evaluate_rules(
 
     for rule in policy.rules:
         if not rule.is_active:
-            results.append({
-                "rule_id": str(rule.id),
-                "name": rule.name,
-                "sort_order": rule.sort_order,
-                "threshold_gb": _threshold_gb(rule),
-                "triggered": False,
-                "action": rule.action.value,
-                "speed_reduction_percent": rule.speed_reduction_percent,
-                "reason": "Rule is disabled",
-                "status": "disabled",
-            })
+            results.append(
+                {
+                    "rule_id": str(rule.id),
+                    "name": rule.name,
+                    "sort_order": rule.sort_order,
+                    "threshold_gb": _threshold_gb(rule),
+                    "triggered": False,
+                    "action": rule.action.value,
+                    "speed_reduction_percent": rule.speed_reduction_percent,
+                    "reason": "Rule is disabled",
+                    "status": "disabled",
+                }
+            )
             continue
 
         threshold = _threshold_gb(rule)
 
         # Check chaining: does this rule require a prior rule to have fired?
-        if rule.enabled_by_rule_id and str(rule.enabled_by_rule_id) not in fired_rule_ids:
-            results.append({
-                "rule_id": str(rule.id),
-                "name": rule.name,
-                "sort_order": rule.sort_order,
-                "threshold_gb": threshold,
-                "triggered": False,
-                "action": rule.action.value,
-                "speed_reduction_percent": rule.speed_reduction_percent,
-                "reason": "Waiting for prerequisite rule to fire",
-                "blocked_by": str(rule.enabled_by_rule_id),
-                "status": "waiting",
-            })
+        if (
+            rule.enabled_by_rule_id
+            and str(rule.enabled_by_rule_id) not in fired_rule_ids
+        ):
+            results.append(
+                {
+                    "rule_id": str(rule.id),
+                    "name": rule.name,
+                    "sort_order": rule.sort_order,
+                    "threshold_gb": threshold,
+                    "triggered": False,
+                    "action": rule.action.value,
+                    "speed_reduction_percent": rule.speed_reduction_percent,
+                    "reason": "Waiting for prerequisite rule to fire",
+                    "blocked_by": str(rule.enabled_by_rule_id),
+                    "status": "waiting",
+                }
+            )
             continue
 
         # Check time-of-day window (rule-level overrides policy-level)
@@ -459,35 +470,47 @@ def evaluate_rules(
         inverse = policy.traffic_inverse_interval
 
         if not _time_in_window(current_time, time_start, time_end, inverse):
-            results.append({
-                "rule_id": str(rule.id),
-                "name": rule.name,
-                "sort_order": rule.sort_order,
-                "threshold_gb": threshold,
-                "triggered": False,
-                "action": rule.action.value,
-                "speed_reduction_percent": rule.speed_reduction_percent,
-                "reason": f"Outside time window ({time_start}-{time_end})",
-                "status": "time_skip",
-            })
+            results.append(
+                {
+                    "rule_id": str(rule.id),
+                    "name": rule.name,
+                    "sort_order": rule.sort_order,
+                    "threshold_gb": threshold,
+                    "triggered": False,
+                    "action": rule.action.value,
+                    "speed_reduction_percent": rule.speed_reduction_percent,
+                    "reason": f"Outside time window ({time_start}-{time_end})",
+                    "status": "time_skip",
+                }
+            )
             continue
 
         # Check day-of-week
         days = rule.days_of_week or policy.traffic_days_of_week
         if not _day_in_list(current_time, days):
-            day_names = {0: "Mon", 1: "Tue", 2: "Wed", 3: "Thu", 4: "Fri", 5: "Sat", 6: "Sun"}
+            day_names = {
+                0: "Mon",
+                1: "Tue",
+                2: "Wed",
+                3: "Thu",
+                4: "Fri",
+                5: "Sat",
+                6: "Sun",
+            }
             allowed = ", ".join(day_names.get(d, str(d)) for d in (days or []))
-            results.append({
-                "rule_id": str(rule.id),
-                "name": rule.name,
-                "sort_order": rule.sort_order,
-                "threshold_gb": threshold,
-                "triggered": False,
-                "action": rule.action.value,
-                "speed_reduction_percent": rule.speed_reduction_percent,
-                "reason": f"Not active today (active: {allowed})",
-                "status": "day_skip",
-            })
+            results.append(
+                {
+                    "rule_id": str(rule.id),
+                    "name": rule.name,
+                    "sort_order": rule.sort_order,
+                    "threshold_gb": threshold,
+                    "triggered": False,
+                    "action": rule.action.value,
+                    "speed_reduction_percent": rule.speed_reduction_percent,
+                    "reason": f"Not active today (active: {allowed})",
+                    "status": "day_skip",
+                }
+            )
             continue
 
         # Check threshold
@@ -496,23 +519,29 @@ def evaluate_rules(
         if triggered:
             fired_rule_ids.add(str(rule.id))
 
-        results.append({
-            "rule_id": str(rule.id),
-            "name": rule.name,
-            "sort_order": rule.sort_order,
-            "threshold_gb": threshold,
-            "current_usage_gb": round(current_usage_gb, 2),
-            "triggered": triggered,
-            "action": rule.action.value if triggered else None,
-            "speed_reduction_percent": rule.speed_reduction_percent if triggered else None,
-            "reason": (
-                f"Usage {current_usage_gb:.1f} GB >= threshold {threshold:.1f} GB"
+        results.append(
+            {
+                "rule_id": str(rule.id),
+                "name": rule.name,
+                "sort_order": rule.sort_order,
+                "threshold_gb": threshold,
+                "current_usage_gb": round(current_usage_gb, 2),
+                "triggered": triggered,
+                "action": rule.action.value if triggered else None,
+                "speed_reduction_percent": rule.speed_reduction_percent
                 if triggered
-                else f"Usage {current_usage_gb:.1f} GB < threshold {threshold:.1f} GB"
-            ),
-            "status": "triggered" if triggered else "ok",
-            "usage_percent": round(current_usage_gb / threshold * 100, 1) if threshold > 0 else 0,
-        })
+                else None,
+                "reason": (
+                    f"Usage {current_usage_gb:.1f} GB >= threshold {threshold:.1f} GB"
+                    if triggered
+                    else f"Usage {current_usage_gb:.1f} GB < threshold {threshold:.1f} GB"
+                ),
+                "status": "triggered" if triggered else "ok",
+                "usage_percent": round(current_usage_gb / threshold * 100, 1)
+                if threshold > 0
+                else 0,
+            }
+        )
 
     return results
 
@@ -541,10 +570,12 @@ def simulate_fup(
         # Find next date with the target weekday
         while current_time.weekday() != current_day:
             from datetime import timedelta
+
             current_time += timedelta(days=1)
 
     rules = evaluate_rules(
-        db, offer_id,
+        db,
+        offer_id,
         current_usage_gb=current_usage_gb,
         current_time=current_time,
     )
@@ -576,13 +607,19 @@ def simulate_fup(
             "total_rules": len(rules),
             "current_usage_gb": round(current_usage_gb, 2),
             "max_threshold_gb": round(max_threshold, 2),
-            "usage_percent": round(current_usage_gb / max_threshold * 100, 1) if max_threshold > 0 else 0,
+            "usage_percent": round(current_usage_gb / max_threshold * 100, 1)
+            if max_threshold > 0
+            else 0,
         },
         "projection": {
             "daily_average_gb": round(daily_avg, 2),
             "projected_total_gb": round(projected_total, 2),
             "days_remaining": days_remaining,
-            "will_exceed": projected_total > max_threshold if max_threshold > 0 else False,
-            "days_until_cap": round((max_threshold - current_usage_gb) / daily_avg, 1) if daily_avg > 0 and max_threshold > current_usage_gb else 0,
+            "will_exceed": projected_total > max_threshold
+            if max_threshold > 0
+            else False,
+            "days_until_cap": round((max_threshold - current_usage_gb) / daily_avg, 1)
+            if daily_avg > 0 and max_threshold > current_usage_gb
+            else 0,
         },
     }

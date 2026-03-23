@@ -90,6 +90,7 @@ WORK_ORDER_TYPE_DISPLAY: dict[str, str] = {
 
 # ── Subscriber ID Resolution ────────────────────────────────────────────
 
+
 def _cache_get(key: str) -> str | None:
     """Get a value from Redis cache, or None."""
     r = get_session_redis()
@@ -163,7 +164,9 @@ def _sort_by_recent(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     )
 
 
-def _error_context(message: str = "Unable to reach support system. Please try again later.") -> dict[str, Any]:
+def _error_context(
+    message: str = "Unable to reach support system. Please try again later.",
+) -> dict[str, Any]:
     """Return CRM error flags for template context."""
     return {"crm_error": True, "crm_error_message": message}
 
@@ -174,6 +177,7 @@ def _ok_context() -> dict[str, Any]:
 
 
 # ── Customer Portal: Tickets ────────────────────────────────────────────
+
 
 def tickets_list_context(
     request: Request,
@@ -322,20 +326,30 @@ def handle_ticket_create(
     try:
         crm_sub_id = resolve_crm_subscriber_id(db, subscriber_id)
         if not crm_sub_id:
-            return {"success": False, "error": "Unable to link your account to the support system."}
+            return {
+                "success": False,
+                "error": "Unable to link your account to the support system.",
+            }
 
         client = get_crm_client()
-        ticket = client.create_ticket({
-            "subscriber_id": crm_sub_id,
-            "title": title,
-            "description": description or "",
-            "priority": priority if priority in TICKET_PRIORITY_DISPLAY else "normal",
-            "source": "customer_portal",
-        })
+        ticket = client.create_ticket(
+            {
+                "subscriber_id": crm_sub_id,
+                "title": title,
+                "description": description or "",
+                "priority": priority
+                if priority in TICKET_PRIORITY_DISPLAY
+                else "normal",
+                "source": "customer_portal",
+            }
+        )
         return {"success": True, "ticket": ticket}
     except CRMClientError as e:
         logger.error("Failed to create CRM ticket: %s", e)
-        return {"success": False, "error": "Unable to create ticket. Please try again later."}
+        return {
+            "success": False,
+            "error": "Unable to create ticket. Please try again later.",
+        }
 
 
 def handle_ticket_comment(
@@ -358,19 +372,25 @@ def handle_ticket_comment(
         ticket = client.get_ticket(ticket_id)
         if str(ticket.get("subscriber_id", "")) not in crm_sub_ids:
             return {"success": False, "error": "Ticket not found."}
-        client.create_ticket_comment({
-            "ticket_id": ticket_id,
-            "body": body,
-            "is_internal": False,
-            "author_name": customer.get("current_user", {}).get("name", "Customer"),
-        })
+        client.create_ticket_comment(
+            {
+                "ticket_id": ticket_id,
+                "body": body,
+                "is_internal": False,
+                "author_name": customer.get("current_user", {}).get("name", "Customer"),
+            }
+        )
         return {"success": True}
     except CRMClientError as e:
         logger.error("Failed to create CRM ticket comment: %s", e)
-        return {"success": False, "error": "Unable to add comment. Please try again later."}
+        return {
+            "success": False,
+            "error": "Unable to add comment. Please try again later.",
+        }
 
 
 # ── Customer Portal: Work Orders ─────────────────────────────────────────
+
 
 def work_orders_list_context(
     request: Request,
@@ -484,6 +504,7 @@ def work_order_detail_context(
 
 # ── Reseller Portal ─────────────────────────────────────────────────────
 
+
 def reseller_account_tickets_context(
     request: Request,
     db: Session,
@@ -552,7 +573,8 @@ def reseller_open_tickets_count(
                 continue
             tickets = client.list_tickets(subscriber_id=crm_sub_id)
             total += sum(
-                1 for t in tickets
+                1
+                for t in tickets
                 if t.get("status") in ("open", "in_progress", "waiting_on_agent")
             )
         except CRMClientError:

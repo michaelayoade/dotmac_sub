@@ -34,7 +34,9 @@ def poll_all_olt_signals() -> dict[str, int]:
             ).scalar()
         )
         if not lock_acquired:
-            logger.warning("Skipping OLT signal polling: previous run still in progress.")
+            logger.warning(
+                "Skipping OLT signal polling: previous run still in progress."
+            )
             return {
                 "olts_polled": 0,
                 "total_polled": 0,

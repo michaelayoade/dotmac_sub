@@ -66,7 +66,9 @@ def refresh_core_device_snmp() -> dict[str, int]:
                 else:
                     core_runtime_service.snmp_check_device(session, str(device.id))
                     if device.last_snmp_ok:
-                        core_runtime_service.discover_interfaces_and_health(session, device)
+                        core_runtime_service.discover_interfaces_and_health(
+                            session, device
+                        )
                         # Poll custom SNMP OIDs
                         try:
                             from app.services.monitoring_metrics import (
@@ -75,7 +77,9 @@ def refresh_core_device_snmp() -> dict[str, int]:
 
                             poll_custom_snmp_oids(session, device)
                         except Exception as exc:
-                            logger.warning("Custom OID poll failed for %s: %s", device.id, exc)
+                            logger.warning(
+                                "Custom OID poll failed for %s: %s", device.id, exc
+                            )
                         # Poll interface traffic counters for bandwidth
                         try:
                             from app.services.monitoring_metrics import (
@@ -84,7 +88,11 @@ def refresh_core_device_snmp() -> dict[str, int]:
 
                             poll_interface_traffic(session, device)
                         except Exception as exc:
-                            logger.warning("Interface traffic poll failed for %s: %s", device.id, exc)
+                            logger.warning(
+                                "Interface traffic poll failed for %s: %s",
+                                device.id,
+                                exc,
+                            )
                         # Update subscriber impact count
                         try:
                             from app.services.monitoring_metrics import (
@@ -93,7 +101,11 @@ def refresh_core_device_snmp() -> dict[str, int]:
 
                             update_device_subscriber_count(session, device)
                         except Exception as exc:
-                            logger.warning("Subscriber count update failed for %s: %s", device.id, exc)
+                            logger.warning(
+                                "Subscriber count update failed for %s: %s",
+                                device.id,
+                                exc,
+                            )
                         # Poll CPU/memory/temperature
                         try:
                             from app.services.monitoring_metrics import (
@@ -102,7 +114,9 @@ def refresh_core_device_snmp() -> dict[str, int]:
 
                             poll_device_system_metrics(session, device)
                         except Exception as exc:
-                            logger.warning("System metrics poll failed for %s: %s", device.id, exc)
+                            logger.warning(
+                                "System metrics poll failed for %s: %s", device.id, exc
+                            )
                         updated += 1
                     else:
                         failed += 1
@@ -114,10 +128,14 @@ def refresh_core_device_snmp() -> dict[str, int]:
                 try:
                     device_fresh = session.get(NetworkDevice, device.id)
                     if device_fresh:
-                        core_runtime_service.mark_discovery_failure(session, device_fresh)
+                        core_runtime_service.mark_discovery_failure(
+                            session, device_fresh
+                        )
                         session.commit()
                 except Exception:
-                    logger.warning("Failed to mark discovery failure for device %s", device.id)
+                    logger.warning(
+                        "Failed to mark discovery failure for device %s", device.id
+                    )
                     session.rollback()
 
         return {"checked": checked, "updated": updated, "failed": failed}

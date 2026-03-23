@@ -14,7 +14,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -39,16 +41,21 @@ def network_topology(
 ) -> HTMLResponse:
     """Network topology visualization page."""
     graph = topology_service.list_nodes_and_edges(
-        db, topology_group=group, pop_site_id=site, include_utilization=True,
+        db,
+        topology_group=group,
+        pop_site_id=site,
+        include_utilization=True,
     )
     form_options = topology_service.get_form_options(db)
     context = _base_context(request, db, active_page="topology")
-    context.update({
-        "graph": graph,
-        "form_options": form_options,
-        "selected_group": group or "",
-        "selected_site": site or "",
-    })
+    context.update(
+        {
+            "graph": graph,
+            "form_options": form_options,
+            "selected_group": group or "",
+            "selected_site": site or "",
+        }
+    )
     return templates.TemplateResponse("admin/network/topology/index.html", context)
 
 
@@ -69,7 +76,14 @@ def network_weathermap_redirect() -> RedirectResponse:
 def topology_link_new(request: Request, db: Session = Depends(get_db)):
     form_options = topology_service.get_form_options(db)
     context = _base_context(request, db, active_page="topology")
-    context.update({"link": None, "action_url": "/admin/network/topology/links/new", "error": None, **form_options})
+    context.update(
+        {
+            "link": None,
+            "action_url": "/admin/network/topology/links/new",
+            "error": None,
+            **form_options,
+        }
+    )
     return templates.TemplateResponse("admin/network/topology/link_form.html", context)
 
 
@@ -87,8 +101,17 @@ def topology_link_create(request: Request, db: Session = Depends(get_db)):
     except (ValueError, Exception) as exc:
         form_options = topology_service.get_form_options(db)
         context = _base_context(request, db, active_page="topology")
-        context.update({"link": data, "action_url": "/admin/network/topology/links/new", "error": str(exc), **form_options})
-        return templates.TemplateResponse("admin/network/topology/link_form.html", context)
+        context.update(
+            {
+                "link": data,
+                "action_url": "/admin/network/topology/links/new",
+                "error": str(exc),
+                **form_options,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/topology/link_form.html", context
+        )
 
 
 @router.get(
@@ -100,7 +123,14 @@ def topology_link_edit(request: Request, link_id: str, db: Session = Depends(get
     link = topology_service.topology_links.get(db, link_id)
     form_options = topology_service.get_form_options(db)
     context = _base_context(request, db, active_page="topology")
-    context.update({"link": link, "action_url": f"/admin/network/topology/links/{link_id}/edit", "error": None, **form_options})
+    context.update(
+        {
+            "link": link,
+            "action_url": f"/admin/network/topology/links/{link_id}/edit",
+            "error": None,
+            **form_options,
+        }
+    )
     return templates.TemplateResponse("admin/network/topology/link_form.html", context)
 
 
@@ -119,15 +149,26 @@ def topology_link_update(request: Request, link_id: str, db: Session = Depends(g
         link = topology_service.topology_links.get(db, link_id)
         form_options = topology_service.get_form_options(db)
         context = _base_context(request, db, active_page="topology")
-        context.update({"link": link, "action_url": f"/admin/network/topology/links/{link_id}/edit", "error": str(exc), **form_options})
-        return templates.TemplateResponse("admin/network/topology/link_form.html", context)
+        context.update(
+            {
+                "link": link,
+                "action_url": f"/admin/network/topology/links/{link_id}/edit",
+                "error": str(exc),
+                **form_options,
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/topology/link_form.html", context
+        )
 
 
 @router.post(
     "/topology/links/{link_id}/delete",
     dependencies=[Depends(require_permission("network:write"))],
 )
-def topology_link_delete(link_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def topology_link_delete(
+    link_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
     topology_service.topology_links.delete(db, link_id)
     return RedirectResponse(url="/admin/network/topology", status_code=303)
 
@@ -160,17 +201,23 @@ def topology_node_summary(device_id: str, db: Session = Depends(get_db)):
     response_class=JSONResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
-def topology_graph_data(group: str | None = None, site: str | None = None, db: Session = Depends(get_db)):
+def topology_graph_data(
+    group: str | None = None, site: str | None = None, db: Session = Depends(get_db)
+):
     """Return full graph data as JSON (for D3 refresh without full page reload)."""
-    return topology_service.list_nodes_and_edges(db, topology_group=group, pop_site_id=site)
+    return topology_service.list_nodes_and_edges(
+        db, topology_group=group, pop_site_id=site
+    )
 
 
 def _parse_link_form(form) -> dict:
     return {
         "source_device_id": str(form.get("source_device_id") or "").strip(),
-        "source_interface_id": str(form.get("source_interface_id") or "").strip() or None,
+        "source_interface_id": str(form.get("source_interface_id") or "").strip()
+        or None,
         "target_device_id": str(form.get("target_device_id") or "").strip(),
-        "target_interface_id": str(form.get("target_interface_id") or "").strip() or None,
+        "target_interface_id": str(form.get("target_interface_id") or "").strip()
+        or None,
         "link_role": str(form.get("link_role") or "unknown").strip(),
         "medium": str(form.get("medium") or "unknown").strip(),
         "capacity_bps": str(form.get("capacity_bps") or "").strip() or None,

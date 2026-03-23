@@ -51,9 +51,7 @@ def evaluate_alert_rules() -> dict[str, int]:
 
     try:
         rules = list(
-            db.scalars(
-                select(AlertRule).where(AlertRule.is_active.is_(True))
-            ).all()
+            db.scalars(select(AlertRule).where(AlertRule.is_active.is_(True))).all()
         )
 
         errors = 0
@@ -65,7 +63,9 @@ def evaluate_alert_rules() -> dict[str, int]:
                     alerts_created += created
                     alerts_resolved += resolved
             except OperationalError:
-                logger.exception("DB connection error evaluating rule %s — aborting", rule.id)
+                logger.exception(
+                    "DB connection error evaluating rule %s — aborting", rule.id
+                )
                 errors += 1
                 break  # Session is dead, no point continuing
             except Exception:
@@ -160,9 +160,15 @@ def _notify_alert(
             db.add(notification)
 
         if recipients:
-            logger.info("Queued alert notification to %d recipients for %s", len(recipients), rule.name)
+            logger.info(
+                "Queued alert notification to %d recipients for %s",
+                len(recipients),
+                rule.name,
+            )
     except Exception as exc:
-        logger.warning("Failed to queue alert notification for rule %s: %s", rule.id, exc)
+        logger.warning(
+            "Failed to queue alert notification for rule %s: %s", rule.id, exc
+        )
 
 
 def _get_alert_recipients(db: Session, rule: AlertRule) -> list[str]:
@@ -172,10 +178,12 @@ def _get_alert_recipients(db: Session, rule: AlertRule) -> list[str]:
 
         admins = list(
             db.scalars(
-                select(SystemUser.email).where(
+                select(SystemUser.email)
+                .where(
                     SystemUser.is_active.is_(True),
                     SystemUser.email.isnot(None),
-                ).limit(10)
+                )
+                .limit(10)
             ).all()
         )
         return [email for email in admins if email]
@@ -230,7 +238,9 @@ def _evaluate_rule(db: Session, rule: AlertRule) -> tuple[int, int]:
         # Check duration requirement
         if rule.duration_seconds:
             # Need to verify condition was breached for the full duration
-            duration_start = datetime.now(UTC) - timedelta(seconds=rule.duration_seconds)
+            duration_start = datetime.now(UTC) - timedelta(
+                seconds=rule.duration_seconds
+            )
             oldest_breach = db.scalars(
                 select(DeviceMetric)
                 .where(

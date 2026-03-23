@@ -69,13 +69,17 @@ def validate_offer_version_active(
     if not version:
         raise HTTPException(status_code=404, detail="Offer version not found")
     if str(version.offer_id) != offer_id:
-        raise HTTPException(status_code=400, detail="Offer version does not match offer")
+        raise HTTPException(
+            status_code=400, detail="Offer version does not match offer"
+        )
     if not version.is_active:
         raise HTTPException(status_code=400, detail="Offer version is not active")
     if version.effective_start and reference_at < version.effective_start:
         raise HTTPException(status_code=400, detail="Offer version not yet effective")
     if version.effective_end and reference_at > version.effective_end:
-        raise HTTPException(status_code=400, detail="Offer version is no longer effective")
+        raise HTTPException(
+            status_code=400, detail="Offer version is no longer effective"
+        )
     return version
 
 
@@ -93,9 +97,13 @@ def validate_subscription_dates(
             status_code=400, detail="next_billing_at must be after start_at"
         )
     if status == SubscriptionStatus.canceled and not canceled_at:
-        raise HTTPException(status_code=400, detail="canceled_at required when canceled")
+        raise HTTPException(
+            status_code=400, detail="canceled_at required when canceled"
+        )
     if status != SubscriptionStatus.canceled and canceled_at:
-        raise HTTPException(status_code=400, detail="canceled_at only allowed when canceled")
+        raise HTTPException(
+            status_code=400, detail="canceled_at only allowed when canceled"
+        )
 
 
 def enforce_single_active_subscription(

@@ -33,6 +33,7 @@ from app.services import settings_spec
 
 logger = logging.getLogger(__name__)
 
+
 def _coerce_float(value: object, default: float) -> float:
     if value is None:
         return default
@@ -81,7 +82,9 @@ def _coerce_bool(value: object, default: bool = False) -> bool:
     return default
 
 
-def _setting_float(db: Session, domain: SettingDomain, key: str, default: float) -> float:
+def _setting_float(
+    db: Session, domain: SettingDomain, key: str, default: float
+) -> float:
     return _coerce_float(settings_spec.resolve_value(db, domain, key), default)
 
 
@@ -89,7 +92,9 @@ def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> 
     return _coerce_int(settings_spec.resolve_value(db, domain, key), default)
 
 
-def _setting_bool(db: Session, domain: SettingDomain, key: str, default: bool = False) -> bool:
+def _setting_bool(
+    db: Session, domain: SettingDomain, key: str, default: bool = False
+) -> bool:
     return _coerce_bool(settings_spec.resolve_value(db, domain, key), default)
 
 
@@ -127,7 +132,9 @@ def get_fiber_plant_consolidated_data(db: Session) -> dict[str, object]:
         status=FiberChangeRequestStatus.pending,
     )
 
-    strands_available = sum(1 for strand in strands if strand.status.value == "available")
+    strands_available = sum(
+        1 for strand in strands if strand.status.value == "available"
+    )
     strands_in_use = sum(1 for strand in strands if strand.status.value == "in_use")
 
     stats = {
@@ -160,7 +167,9 @@ def has_change_request_conflict(db: Session, change_request) -> bool:
         return False
     asset_updated_at = getattr(asset, "updated_at", None)
     request_created_at = getattr(change_request, "created_at", None)
-    if not isinstance(asset_updated_at, datetime) or not isinstance(request_created_at, datetime):
+    if not isinstance(asset_updated_at, datetime) or not isinstance(
+        request_created_at, datetime
+    ):
         return False
     return asset_updated_at > request_created_at
 
@@ -314,8 +323,12 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
                     "id": str(segment.id),
                     "type": "fiber_segment",
                     "name": segment.name,
-                    "segment_type": segment.segment_type.value if segment.segment_type else None,
-                    "cable_type": segment.cable_type.value if segment.cable_type else None,
+                    "segment_type": segment.segment_type.value
+                    if segment.segment_type
+                    else None,
+                    "cable_type": segment.cable_type.value
+                    if segment.cable_type
+                    else None,
                     "fiber_count": segment.fiber_count,
                     "length_m": segment.length_m,
                 },
@@ -355,7 +368,9 @@ def get_fiber_plant_map_data(db: Session) -> dict[str, object]:
         "installation_base": _setting_float(
             db, SettingDomain.network, "fiber_installation_base_fee", 50.00
         ),
-        "currency": settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+        "currency": settings_spec.resolve_value(
+            db, SettingDomain.billing, "default_currency"
+        )
         or "NGN",
     }
 
@@ -423,12 +438,16 @@ def get_fiber_reports_data(db: Session, map_limit: int | None) -> dict[str, obje
         "drop": {"count": 0, "length": 0},
     }
     for segment in segments:
-        segment_type = segment.segment_type.value if segment.segment_type else "distribution"
+        segment_type = (
+            segment.segment_type.value if segment.segment_type else "distribution"
+        )
         if segment_type in segment_stats:
             entry = segment_stats[segment_type]
             if isinstance(entry, dict):
                 entry["count"] = int(entry.get("count", 0)) + 1
-                entry["length"] = int(entry.get("length", 0)) + int(segment.length_m or 0)
+                entry["length"] = int(entry.get("length", 0)) + int(
+                    segment.length_m or 0
+                )
 
     segment_stats["total_count"] = len(segments)
     segment_stats["total_length"] = sum(
@@ -574,7 +593,11 @@ def update_asset_position(
     if asset_type == "fdh_cabinet":
         asset = db.query(FdhCabinet).filter(FdhCabinet.id == asset_id).first()
     elif asset_type == "splice_closure":
-        asset = db.query(FiberSpliceClosure).filter(FiberSpliceClosure.id == asset_id).first()
+        asset = (
+            db.query(FiberSpliceClosure)
+            .filter(FiberSpliceClosure.id == asset_id)
+            .first()
+        )
     else:
         return {"error": "Invalid asset type"}, 400
 
@@ -592,7 +615,9 @@ def update_asset_position(
     }, 200
 
 
-def find_nearest_cabinet_data(db: Session, *, lat: float, lng: float) -> tuple[dict, int]:
+def find_nearest_cabinet_data(
+    db: Session, *, lat: float, lng: float
+) -> tuple[dict, int]:
     """Find nearest cabinet and routing path details for coordinates."""
     max_km = _setting_float(db, SettingDomain.gis, "map_nearest_search_max_km", 50.0)
     snap_max_m = _setting_float(db, SettingDomain.gis, "map_snap_max_m", 250.0)
@@ -620,7 +645,9 @@ def find_nearest_cabinet_data(db: Session, *, lat: float, lng: float) -> tuple[d
     start_node, _ = _snap_to_graph(lat, lng, graph, edges, snap_max_m)
     if nearest.latitude is None or nearest.longitude is None:
         return {"error": "Nearest cabinet is missing coordinates"}, 500
-    cabinet_node, _ = _snap_to_graph(nearest.latitude, nearest.longitude, graph, edges, snap_max_m)
+    cabinet_node, _ = _snap_to_graph(
+        nearest.latitude, nearest.longitude, graph, edges, snap_max_m
+    )
     if start_node and cabinet_node:
         path_distance, path = _shortest_path(graph, start_node, cabinet_node)
         if path_distance is not None and path:
@@ -668,7 +695,10 @@ def get_plan_options_data(db: Session, *, lat: float, lng: float) -> tuple[dict,
             }
         )
     options.sort(key=lambda item: item["distance_m"])
-    return {"options": options[:10], "customer_coords": {"latitude": lat, "longitude": lng}}, 200
+    return {
+        "options": options[:10],
+        "customer_coords": {"latitude": lat, "longitude": lng},
+    }, 200
 
 
 def get_plan_route_data(
@@ -697,7 +727,9 @@ def get_plan_route_data(
     start_node, start_snap = _snap_to_graph(lat, lng, graph, edges, snap_max_m)
     if cabinet.latitude is None or cabinet.longitude is None:
         return {"error": "Cabinet is missing coordinates"}, 400
-    cabinet_node, cabinet_snap = _snap_to_graph(cabinet.latitude, cabinet.longitude, graph, edges, snap_max_m)
+    cabinet_node, cabinet_snap = _snap_to_graph(
+        cabinet.latitude, cabinet.longitude, graph, edges, snap_max_m
+    )
     if not start_node or not cabinet_node:
         return {
             "error": "Unable to snap to fiber network",
@@ -783,7 +815,12 @@ def _closest_point_on_segment(
 def _build_fiber_graph(db: Session):
     graph: dict[tuple[float, float], list[tuple[tuple[float, float], float]]] = {}
     edges: list[
-        tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]
+        tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ]
     ] = []
 
     def add_edge(a: tuple[float, float], b: tuple[float, float]) -> None:
@@ -791,10 +828,14 @@ def _build_fiber_graph(db: Session):
         graph.setdefault(a, []).append((b, dist))
         graph.setdefault(b, []).append((a, dist))
 
-    segments = db.query(func.ST_AsGeoJSON(FiberSegment.route_geom)).filter(
-        FiberSegment.is_active.is_(True),
-        FiberSegment.route_geom.isnot(None),
-    ).all()
+    segments = (
+        db.query(func.ST_AsGeoJSON(FiberSegment.route_geom))
+        .filter(
+            FiberSegment.is_active.is_(True),
+            FiberSegment.route_geom.isnot(None),
+        )
+        .all()
+    )
     for (geojson_str,) in segments:
         if not geojson_str:
             continue
@@ -823,7 +864,12 @@ def _snap_to_graph(
     lon_in: float,
     graph: dict[tuple[float, float], list[tuple[tuple[float, float], float]]],
     edges: list[
-        tuple[tuple[float, float], tuple[float, float], tuple[float, float], tuple[float, float]]
+        tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ]
     ],
     snap_max_m: float,
 ) -> tuple[tuple[float, float] | None, float]:

@@ -1,4 +1,5 @@
 """Bulk tariff plan change service."""
+
 from __future__ import annotations
 
 import logging
@@ -106,6 +107,7 @@ class BulkTariffChange:
                 from app.services.catalog.subscriptions import (
                     apply_offer_radius_profile,
                 )
+
                 apply_offer_radius_profile(
                     db,
                     sub,
@@ -127,7 +129,9 @@ class BulkTariffChange:
             for subscription_id in changed_ids:
                 try:
                     reconcile_subscription_connectivity(db, subscription_id)
-                    update_subscription_sessions(db, subscription_id, reason="profile_change")
+                    update_subscription_sessions(
+                        db, subscription_id, reason="profile_change"
+                    )
                 except Exception as exc:
                     logger.warning(
                         "Failed to refresh RADIUS state for subscription %s after bulk tariff change: %s",

@@ -37,7 +37,10 @@ def provisioning_profiles_list(
 ) -> HTMLResponse:
     """List all ONT provisioning profiles."""
     context = web_profile_service.list_context(
-        request, db, search=search, profile_type=profile_type,
+        request,
+        db,
+        search=search,
+        profile_type=profile_type,
         config_method=config_method,
     )
     return templates.TemplateResponse(

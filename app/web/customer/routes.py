@@ -46,9 +46,10 @@ def _emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
         logger.warning("Failed to emit customer event %s: %s", event_name, e)
 
 
-
 def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription | None:
-    account_id, session_subscription_id = customer_portal.resolve_customer_account(customer, db)
+    account_id, session_subscription_id = customer_portal.resolve_customer_account(
+        customer, db
+    )
     account_id_str = str(account_id) if account_id else None
 
     if session_subscription_id:
@@ -62,14 +63,19 @@ def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription 
         return None
 
     try:
-        return bandwidth_samples.get_user_active_subscription(db, {"account_id": account_id_str})
+        return bandwidth_samples.get_user_active_subscription(
+            db, {"account_id": account_id_str}
+        )
     except HTTPException:
         return None
 
 
 def _resolve_subscriber_id(customer: dict) -> str:
     """Extract subscriber_id from customer session for CRM lookups."""
-    return str(customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id", ""))
+    return str(
+        customer.get("subscriber_id")
+        or customer.get("session", {}).get("subscriber_id", "")
+    )
 
 
 def _resolve_allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
@@ -81,20 +87,33 @@ def _resolve_allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
     return [fallback] if fallback else []
 
 
-def _render_dashboard(request: Request, db: Session, customer: dict, next_url: str) -> Response:
+def _render_dashboard(
+    request: Request, db: Session, customer: dict, next_url: str
+) -> Response:
     """Render full or restricted dashboard based on subscriber status."""
     subscriber_id = customer.get("subscriber_id")
     if subscriber_id and is_subscriber_restricted(db, subscriber_id):
         ctx = get_restricted_dashboard_context(db, customer)
         return templates.TemplateResponse(
             "customer/dashboard/restricted.html",
-            {"request": request, "customer": customer, **ctx, "active_page": "dashboard"},
+            {
+                "request": request,
+                "customer": customer,
+                **ctx,
+                "active_page": "dashboard",
+            },
         )
     dashboard_context = customer_portal.get_dashboard_context(db, customer)
     return templates.TemplateResponse(
         "customer/dashboard/index.html",
-        {"request": request, "customer": customer, **dashboard_context, "active_page": "dashboard"},
+        {
+            "request": request,
+            "customer": customer,
+            **dashboard_context,
+            "active_page": "dashboard",
+        },
     )
+
 
 @router.get("", response_class=HTMLResponse)
 def portal_home(request: Request, db: Session = Depends(get_db)) -> Response:
@@ -110,7 +129,9 @@ def customer_dashboard(request: Request, db: Session = Depends(get_db)) -> Respo
     """Customer dashboard with account overview."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/dashboard", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/dashboard", status_code=303
+        )
     return _render_dashboard(request, db, customer, "/portal/dashboard")
 
 
@@ -122,7 +143,9 @@ def customer_support(
     """Customer support tickets (CRM-backed)."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/support", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/support", status_code=303
+        )
 
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.tickets_list_context(request, db, customer, subscriber_ids)
@@ -136,7 +159,9 @@ def customer_support_new(
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/support/new", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/support/new", status_code=303
+        )
     context = crm_portal.ticket_create_context(request, customer)
     return templates.TemplateResponse("customer/support/new.html", context)
 
@@ -153,7 +178,9 @@ def customer_support_create(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
-    subscriber_id, _subscription_id = customer_portal.resolve_customer_account(customer, db)
+    subscriber_id, _subscription_id = customer_portal.resolve_customer_account(
+        customer, db
+    )
     subscriber_lookup = str(subscriber_id or _resolve_subscriber_id(customer) or "")
     result = crm_portal.handle_ticket_create(
         db,
@@ -166,10 +193,14 @@ def customer_support_create(
     if result["success"]:
         ticket = result["ticket"]
         ticket_id = ticket.get("id", "")
-        _emit_customer_event(db, "customer_ticket_created", {
-            "ticket_id": str(ticket_id),
-            "subscriber_id": subscriber_lookup,
-        })
+        _emit_customer_event(
+            db,
+            "customer_ticket_created",
+            {
+                "ticket_id": str(ticket_id),
+                "subscriber_id": subscriber_lookup,
+            },
+        )
         return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
     context = crm_portal.ticket_create_context(request, customer)
     context["crm_error"] = True
@@ -194,7 +225,9 @@ def customer_support_detail(
 ) -> Response:
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/support", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/support", status_code=303
+        )
 
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.ticket_detail_context(
@@ -215,7 +248,9 @@ def customer_support_add_comment(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
-    result = crm_portal.handle_ticket_comment(db, customer, subscriber_ids, ticket_id, body)
+    result = crm_portal.handle_ticket_comment(
+        db, customer, subscriber_ids, ticket_id, body
+    )
     if not result.get("success"):
         context = crm_portal.ticket_detail_context(
             request, db, customer, subscriber_ids, ticket_id
@@ -241,7 +276,9 @@ def customer_work_orders(
     """Customer work orders list (CRM-backed)."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/work-orders", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/work-orders", status_code=303
+        )
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_orders_list_context(request, db, customer, subscriber_ids)
     return templates.TemplateResponse("customer/work-orders/index.html", context)
@@ -256,7 +293,9 @@ def customer_work_order_detail(
     """Customer work order detail (CRM-backed)."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/work-orders", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/work-orders", status_code=303
+        )
     subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_order_detail_context(
         request, db, customer, subscriber_ids, work_order_id
@@ -369,7 +408,9 @@ def customer_invoice_pdf(
 
     # Check for existing completed export
     latest_export = billing_invoice_pdf_service.get_latest_export(db, str(invoice_id))
-    latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
+    latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(
+        db, latest_export
+    )
 
     if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
         try:
@@ -398,9 +439,13 @@ def customer_invoice_pdf(
             )
 
     # Queue generation if not ready
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id")
+    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
+        "subscriber_id"
+    )
     billing_invoice_pdf_service.queue_export(
-        db, str(invoice_id), requested_by_id=subscriber_id,
+        db,
+        str(invoice_id),
+        requested_by_id=subscriber_id,
     )
     # Redirect back with notice
     return RedirectResponse(
@@ -519,7 +564,9 @@ def customer_bandwidth_live(
 
             current = {"rx_bps": 0.0, "tx_bps": 0.0}
             try:
-                current = await metrics_store.get_current_bandwidth(str(subscription_id))
+                current = await metrics_store.get_current_bandwidth(
+                    str(subscription_id)
+                )
             except Exception:
                 logger.debug(
                     "Failed to fetch current bandwidth for subscription %s",
@@ -587,7 +634,9 @@ def customer_speedtest(
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_id = account_id or (str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None)
+    subscriber_id = account_id or (
+        str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None
+    )
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -630,7 +679,9 @@ def customer_speedtest_submit(
     account_id, resolved_subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_id = account_id or (str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None)
+    subscriber_id = account_id or (
+        str(customer.get("subscriber_id")) if customer.get("subscriber_id") else None
+    )
     if not subscriber_id:
         return templates.TemplateResponse(
             "customer/errors/404.html",
@@ -899,7 +950,9 @@ def customer_notifications(
     """Customer notification inbox."""
     customer = get_current_customer_from_request(request, db)
     if not customer:
-        return RedirectResponse(url="/portal/auth/login?next=/portal/notifications", status_code=303)
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/notifications", status_code=303
+        )
     return templates.TemplateResponse(
         "customer/notifications/index.html",
         {
@@ -1129,7 +1182,9 @@ def customer_submit_change_plan(
     except Exception:
         import logging as _logging
 
-        _logging.getLogger(__name__).exception("Plan change error for %s", subscription_id)
+        _logging.getLogger(__name__).exception(
+            "Plan change error for %s", subscription_id
+        )
         raise
 
 
@@ -1276,7 +1331,9 @@ def customer_submit_payment_arrangement(
         raise
 
 
-@router.post("/billing/arrangements/{arrangement_id}/cancel", response_class=HTMLResponse)
+@router.post(
+    "/billing/arrangements/{arrangement_id}/cancel", response_class=HTMLResponse
+)
 def customer_cancel_payment_arrangement(
     request: Request,
     arrangement_id: UUID,
@@ -1291,7 +1348,9 @@ def customer_cancel_payment_arrangement(
 
     account_id = customer.get("account_id")
     try:
-        arrangement = arrangement_service.payment_arrangements.get(db, str(arrangement_id))
+        arrangement = arrangement_service.payment_arrangements.get(
+            db, str(arrangement_id)
+        )
     except HTTPException:
         return templates.TemplateResponse(
             "customer/errors/404.html",

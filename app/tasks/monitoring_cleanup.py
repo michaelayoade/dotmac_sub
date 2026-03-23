@@ -50,7 +50,9 @@ def cleanup_old_device_metrics() -> dict[str, int]:
 
         retention_days = 90
         try:
-            val = resolve_value(db, SettingDomain.network_monitoring, "device_metrics_retention_days")
+            val = resolve_value(
+                db, SettingDomain.network_monitoring, "device_metrics_retention_days"
+            )
             if val is not None:
                 retention_days = int(cast(str | bytes | SupportsInt, val))
         except (TypeError, ValueError):

@@ -28,7 +28,10 @@ def _parse_pagination(request: Request) -> tuple[int, int]:
     except (ValueError, TypeError):
         page = 1
     try:
-        per_page = min(200, max(10, int(request.query_params.get("per_page", str(_PER_PAGE_DEFAULT)))))
+        per_page = min(
+            200,
+            max(10, int(request.query_params.get("per_page", str(_PER_PAGE_DEFAULT)))),
+        )
     except (ValueError, TypeError):
         per_page = _PER_PAGE_DEFAULT
     return page, per_page
@@ -90,16 +93,76 @@ def _base_audit_query(
 # ---------------------------------------------------------------------------
 
 LOG_CATEGORIES: list[dict] = [
-    {"name": "Operations Log", "url": "/admin/system/logs/operations", "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2", "description": "Admin actions and operations", "color": "slate"},
-    {"name": "API Log", "url": "/admin/system/logs/api", "icon": "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4", "description": "API request audit trail", "color": "violet"},
-    {"name": "Internal Log", "url": "/admin/system/logs/internal", "icon": "M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2", "description": "Automated system operations", "color": "blue"},
-    {"name": "Portal Activity", "url": "/admin/system/logs/portal", "icon": "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z", "description": "Customer portal logins and actions", "color": "indigo"},
-    {"name": "Email Log", "url": "/admin/system/logs/email", "icon": "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z", "description": "Outbound email delivery status", "color": "emerald"},
-    {"name": "SMS Log", "url": "/admin/system/logs/sms", "icon": "M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z", "description": "SMS delivery and errors", "color": "cyan"},
-    {"name": "Status Changes", "url": "/admin/system/logs/status-changes", "icon": "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4", "description": "Subscriber status transitions", "color": "amber"},
-    {"name": "Service Changes", "url": "/admin/system/logs/service-changes", "icon": "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15", "description": "Subscription and plan changes", "color": "amber"},
-    {"name": "Accounting Sync", "url": "/admin/system/logs/accounting", "icon": "M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z", "description": "Accounting software sync status", "color": "emerald"},
-    {"name": "Payment Gateway", "url": "/admin/system/logs/payment-gateway", "icon": "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z", "description": "Payment provider transactions", "color": "emerald"},
+    {
+        "name": "Operations Log",
+        "url": "/admin/system/logs/operations",
+        "icon": "M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2",
+        "description": "Admin actions and operations",
+        "color": "slate",
+    },
+    {
+        "name": "API Log",
+        "url": "/admin/system/logs/api",
+        "icon": "M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4",
+        "description": "API request audit trail",
+        "color": "violet",
+    },
+    {
+        "name": "Internal Log",
+        "url": "/admin/system/logs/internal",
+        "icon": "M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2",
+        "description": "Automated system operations",
+        "color": "blue",
+    },
+    {
+        "name": "Portal Activity",
+        "url": "/admin/system/logs/portal",
+        "icon": "M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z",
+        "description": "Customer portal logins and actions",
+        "color": "indigo",
+    },
+    {
+        "name": "Email Log",
+        "url": "/admin/system/logs/email",
+        "icon": "M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z",
+        "description": "Outbound email delivery status",
+        "color": "emerald",
+    },
+    {
+        "name": "SMS Log",
+        "url": "/admin/system/logs/sms",
+        "icon": "M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z",
+        "description": "SMS delivery and errors",
+        "color": "cyan",
+    },
+    {
+        "name": "Status Changes",
+        "url": "/admin/system/logs/status-changes",
+        "icon": "M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4",
+        "description": "Subscriber status transitions",
+        "color": "amber",
+    },
+    {
+        "name": "Service Changes",
+        "url": "/admin/system/logs/service-changes",
+        "icon": "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15",
+        "description": "Subscription and plan changes",
+        "color": "amber",
+    },
+    {
+        "name": "Accounting Sync",
+        "url": "/admin/system/logs/accounting",
+        "icon": "M9 7h6m0 10v-3m-3 3h.01M9 17h.01M9 14h.01M12 14h.01M15 11h.01M12 11h.01M9 11h.01M7 21h10a2 2 0 002-2V5a2 2 0 00-2-2H7a2 2 0 00-2 2v14a2 2 0 002 2z",
+        "description": "Accounting software sync status",
+        "color": "emerald",
+    },
+    {
+        "name": "Payment Gateway",
+        "url": "/admin/system/logs/payment-gateway",
+        "icon": "M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z",
+        "description": "Payment provider transactions",
+        "color": "emerald",
+    },
 ]
 
 
@@ -108,11 +171,14 @@ def build_logs_index_context(db: Session) -> dict:
     now = datetime.now(UTC)
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
 
-    today_count = db.scalar(
-        select(func.count())
-        .select_from(AuditEvent)
-        .where(AuditEvent.occurred_at >= today_start)
-    ) or 0
+    today_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(AuditEvent)
+            .where(AuditEvent.occurred_at >= today_start)
+        )
+        or 0
+    )
 
     total_count = db.scalar(select(func.count()).select_from(AuditEvent)) or 0
 
@@ -126,6 +192,7 @@ def build_logs_index_context(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 # Generic log page builder
 # ---------------------------------------------------------------------------
+
 
 def _build_log_page_context(
     request: Request,
@@ -178,10 +245,12 @@ def _build_log_page_context(
 # Individual Log Page Builders
 # ---------------------------------------------------------------------------
 
+
 def build_api_logs_context(request: Request, db: Session) -> dict:
     """API request audit log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="API Request Log",
         page_subtitle="Audit trail of all API interactions",
         entity_type_filter="api",
@@ -191,7 +260,8 @@ def build_api_logs_context(request: Request, db: Session) -> dict:
 def build_operations_log_context(request: Request, db: Session) -> dict:
     """Admin operations audit log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Operations Log",
         page_subtitle="All administrator operations including view, edit, create, and delete actions",
     )
@@ -200,7 +270,8 @@ def build_operations_log_context(request: Request, db: Session) -> dict:
 def build_internal_log_context(request: Request, db: Session) -> dict:
     """Internal/system automated operations log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Internal System Log",
         page_subtitle="Automated batch processing and system-triggered events",
         actor_type_filter="system",
@@ -210,7 +281,8 @@ def build_internal_log_context(request: Request, db: Session) -> dict:
 def build_portal_activity_context(request: Request, db: Session) -> dict:
     """Customer portal activity log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Portal Activity Log",
         page_subtitle="Customer portal login, logout, and self-service actions",
         entity_type_filter="portal",
@@ -220,7 +292,8 @@ def build_portal_activity_context(request: Request, db: Session) -> dict:
 def build_email_log_context(request: Request, db: Session) -> dict:
     """Email delivery log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Email Delivery Log",
         page_subtitle="Outbound email delivery status and tracking",
         entity_type_filter="email",
@@ -231,7 +304,8 @@ def build_email_log_context(request: Request, db: Session) -> dict:
 def build_sms_log_context(request: Request, db: Session) -> dict:
     """SMS delivery log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="SMS Delivery Log",
         page_subtitle="SMS message delivery status and error tracking",
         entity_type_filter="sms",
@@ -241,7 +315,8 @@ def build_sms_log_context(request: Request, db: Session) -> dict:
 def build_status_changes_context(request: Request, db: Session) -> dict:
     """Subscriber status change history."""
     ctx = _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Subscriber Status Changes",
         page_subtitle="History of all subscriber status transitions with attribution",
         entity_type_filter="subscriber",
@@ -253,7 +328,8 @@ def build_status_changes_context(request: Request, db: Session) -> dict:
 def build_service_changes_context(request: Request, db: Session) -> dict:
     """Service/subscription status and plan change log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Service & Plan Changes",
         page_subtitle="Subscription status transitions and plan migrations",
         entity_type_filter="subscription",
@@ -263,7 +339,8 @@ def build_service_changes_context(request: Request, db: Session) -> dict:
 def build_accounting_sync_context(request: Request, db: Session) -> dict:
     """Accounting integration sync log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Accounting Sync Log",
         page_subtitle="Integration sync status for external accounting systems",
         entity_type_filter="accounting",
@@ -277,7 +354,8 @@ def build_accounting_sync_context(request: Request, db: Session) -> dict:
 def build_payment_gateway_log_context(request: Request, db: Session) -> dict:
     """Payment gateway transaction log."""
     return _build_log_page_context(
-        request, db,
+        request,
+        db,
         page_title="Payment Gateway Log",
         page_subtitle="Payment provider transaction events and error details",
         entity_type_filter="payment",

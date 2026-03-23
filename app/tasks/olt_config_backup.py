@@ -89,7 +89,9 @@ def _fetch_running_config_via_ssh(olt: OLTDevice) -> str | None:
         return None
 
 
-def _fetch_running_config(olt: OLTDevice, community_str: str | None = None) -> str | None:
+def _fetch_running_config(
+    olt: OLTDevice, community_str: str | None = None
+) -> str | None:
     """Fetch running config from an OLT via SNMP sysDescr + entPhysicalTable.
 
     This is the SNMP fallback when SSH is unavailable.
@@ -144,15 +146,21 @@ def _fetch_running_config(olt: OLTDevice, community_str: str | None = None) -> s
             if error_indication or error_status:
                 continue
             for var_bind in var_binds:
-                lines.append(f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}")
+                lines.append(
+                    f"{var_bind[0].prettyPrint()} = {var_bind[1].prettyPrint()}"
+                )
 
         return "\n".join(lines) + "\n"
 
     except ImportError:
-        logger.warning("pysnmp not installed — skipping SNMP config fetch for %s", olt.name)
+        logger.warning(
+            "pysnmp not installed — skipping SNMP config fetch for %s", olt.name
+        )
         return None
     except Exception as e:
-        logger.error("Failed to fetch config from OLT %s (%s): %s", olt.name, olt.mgmt_ip, e)
+        logger.error(
+            "Failed to fetch config from OLT %s (%s): %s", olt.name, olt.mgmt_ip, e
+        )
         return None
 
 
@@ -184,11 +192,7 @@ def _cleanup_old_backups(db, max_age_days: int = 90, max_per_olt: int = 50) -> i
         cleaned += 1
 
     # 2. Per-OLT cap: keep only the newest max_per_olt backups
-    olt_ids = list(
-        db.scalars(
-            select(OltConfigBackup.olt_device_id).distinct()
-        ).all()
-    )
+    olt_ids = list(db.scalars(select(OltConfigBackup.olt_device_id).distinct()).all())
     for olt_id in olt_ids:
         backups = list(
             db.scalars(
@@ -204,7 +208,9 @@ def _cleanup_old_backups(db, max_age_days: int = 90, max_per_olt: int = 50) -> i
                 if filepath.exists():
                     filepath.unlink()
             except OSError as e:
-                logger.warning("Failed to delete backup file %s: %s", backup.file_path, e)
+                logger.warning(
+                    "Failed to delete backup file %s: %s", backup.file_path, e
+                )
             db.delete(backup)
             cleaned += 1
 
@@ -227,7 +233,9 @@ def backup_all_olts() -> dict[str, int]:
     try:
         from sqlalchemy import select
 
-        olts = list(db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all())
+        olts = list(
+            db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()
+        )
 
         for olt in olts:
             # Try SSH first (full running-config), fall back to SNMP metadata
@@ -301,4 +309,9 @@ def backup_all_olts() -> dict[str, int]:
         skipped,
         cleaned,
     )
-    return {"backed_up": backed_up, "errors": errors, "skipped": skipped, "cleaned": cleaned}
+    return {
+        "backed_up": backed_up,
+        "errors": errors,
+        "skipped": skipped,
+        "cleaned": cleaned,
+    }

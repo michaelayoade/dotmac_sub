@@ -391,7 +391,9 @@ def service_migration_execute(
         scheduled_at = job.get("scheduled_at")
         if scheduled_at:
             eta = datetime.fromisoformat(str(scheduled_at))
-            run_service_migration_job.apply_async(kwargs={"job_id": str(job["job_id"])}, eta=eta)
+            run_service_migration_job.apply_async(
+                kwargs={"job_id": str(job["job_id"])}, eta=eta
+            )
             notice = quote_plus("Service migration scheduled.")
         else:
             run_service_migration_job.delay(job_id=str(job["job_id"]))
@@ -471,12 +473,10 @@ def orders_list(
         }
     )
     if request.headers.get("HX-Request"):
-        return templates.TemplateResponse(
-            "admin/provisioning/_table.html", ctx
-        )
-    return templates.TemplateResponse("admin/provisioning/index.html", {**ctx, "show_orders": True})
-
-
+        return templates.TemplateResponse("admin/provisioning/_table.html", ctx)
+    return templates.TemplateResponse(
+        "admin/provisioning/index.html", {**ctx, "show_orders": True}
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +550,9 @@ def order_add_comment(
 
     cleaned_comment = comment.strip()
     if not cleaned_comment:
-        return RedirectResponse(url=f"/admin/provisioning/orders/{order_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/provisioning/orders/{order_id}", status_code=303
+        )
 
     mentions = _extract_mentioned_emails(cleaned_comment)
     notified_count = _notify_tagged_users(
@@ -574,9 +576,9 @@ def order_add_comment(
             "notified_users": notified_count,
         },
     )
-    return RedirectResponse(url=f"/admin/provisioning/orders/{order_id}", status_code=303)
-
-
+    return RedirectResponse(
+        url=f"/admin/provisioning/orders/{order_id}", status_code=303
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -766,9 +768,7 @@ def run_workflow(
     db: Session = Depends(get_db),
     workflow_id: str = Form(...),
 ) -> RedirectResponse:
-    provisioning_service.service_orders.run_for_order(
-        db, str(order_id), workflow_id
-    )
+    provisioning_service.service_orders.run_for_order(db, str(order_id), workflow_id)
     log_audit_event(
         db=db,
         request=request,
@@ -833,9 +833,7 @@ def workflows_list(
             "has_prev": page > 1,
         }
     )
-    return templates.TemplateResponse(
-        "admin/provisioning/workflows/index.html", ctx
-    )
+    return templates.TemplateResponse("admin/provisioning/workflows/index.html", ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -859,9 +857,7 @@ def workflow_create_form(
             "vendors": [v.value for v in ProvisioningVendor],
         }
     )
-    return templates.TemplateResponse(
-        "admin/provisioning/workflows/form.html", ctx
-    )
+    return templates.TemplateResponse("admin/provisioning/workflows/form.html", ctx)
 
 
 @router.post(
@@ -913,9 +909,7 @@ def workflow_detail(
     workflow_id: UUID,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    workflow = provisioning_service.provisioning_workflows.get(
-        db, str(workflow_id)
-    )
+    workflow = provisioning_service.provisioning_workflows.get(db, str(workflow_id))
     if not workflow:
         ctx = _ctx(request, db, "workflows")
         return templates.TemplateResponse("admin/errors/404.html", ctx, status_code=404)
@@ -942,9 +936,7 @@ def workflow_detail(
             "vendors": [v.value for v in ProvisioningVendor],
         }
     )
-    return templates.TemplateResponse(
-        "admin/provisioning/workflows/detail.html", ctx
-    )
+    return templates.TemplateResponse("admin/provisioning/workflows/detail.html", ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -962,9 +954,7 @@ def workflow_edit_form(
     workflow_id: UUID,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    workflow = provisioning_service.provisioning_workflows.get(
-        db, str(workflow_id)
-    )
+    workflow = provisioning_service.provisioning_workflows.get(db, str(workflow_id))
     if not workflow:
         ctx = _ctx(request, db, "workflows")
         return templates.TemplateResponse("admin/errors/404.html", ctx, status_code=404)
@@ -976,9 +966,7 @@ def workflow_edit_form(
             "vendors": [v.value for v in ProvisioningVendor],
         }
     )
-    return templates.TemplateResponse(
-        "admin/provisioning/workflows/form.html", ctx
-    )
+    return templates.TemplateResponse("admin/provisioning/workflows/form.html", ctx)
 
 
 @router.post(
@@ -995,9 +983,7 @@ def workflow_edit(
     description: str | None = Form(default=None),
     is_active: bool = Form(default=True),
 ) -> RedirectResponse:
-    before = provisioning_service.provisioning_workflows.get(
-        db, str(workflow_id)
-    )
+    before = provisioning_service.provisioning_workflows.get(db, str(workflow_id))
     before_state = model_to_dict(before) if before else None
     payload = ProvisioningWorkflowUpdate(
         name=name,
@@ -1005,12 +991,8 @@ def workflow_edit(
         description=description or None,
         is_active=is_active,
     )
-    provisioning_service.provisioning_workflows.update(
-        db, str(workflow_id), payload
-    )
-    after = provisioning_service.provisioning_workflows.get(
-        db, str(workflow_id)
-    )
+    provisioning_service.provisioning_workflows.update(db, str(workflow_id), payload)
+    after = provisioning_service.provisioning_workflows.get(db, str(workflow_id))
     metadata = None
     if before_state is not None and after:
         changes = diff_dicts(before_state, model_to_dict(after))
@@ -1206,9 +1188,7 @@ def appointments_list(
             "subscriber_label": _subscriber_label,
         }
     )
-    return templates.TemplateResponse(
-        "admin/provisioning/appointments.html", ctx
-    )
+    return templates.TemplateResponse("admin/provisioning/appointments.html", ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -1230,12 +1210,8 @@ def appointment_status(
 ) -> RedirectResponse:
     before = provisioning_service.install_appointments.get(db, str(appointment_id))
     before_state = model_to_dict(before) if before else None
-    payload = InstallAppointmentUpdate(
-        status=AppointmentStatus(new_status)
-    )
-    provisioning_service.install_appointments.update(
-        db, str(appointment_id), payload
-    )
+    payload = InstallAppointmentUpdate(status=AppointmentStatus(new_status))
+    provisioning_service.install_appointments.update(db, str(appointment_id), payload)
     after = provisioning_service.install_appointments.get(db, str(appointment_id))
     order_id = str(
         (after and getattr(after, "service_order_id", None))
@@ -1258,6 +1234,4 @@ def appointment_status(
         )
     if redirect_to:
         return RedirectResponse(url=redirect_to, status_code=303)
-    return RedirectResponse(
-        url="/admin/provisioning/appointments", status_code=303
-    )
+    return RedirectResponse(url="/admin/provisioning/appointments", status_code=303)

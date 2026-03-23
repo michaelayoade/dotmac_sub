@@ -71,7 +71,8 @@ class ProvisioningHandler:
         except Exception as exc:
             logger.warning(
                 "RADIUS credential sync failed for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _push_nas_provisioning(self, db: Session, subscription_id: str) -> None:
@@ -92,7 +93,11 @@ class ProvisioningHandler:
                 return
             profile = _resolve_effective_profile(db, subscription)
             commands = build_nas_provisioning_commands(
-                db, subscription, nas_device, profile=profile, action="create",
+                db,
+                subscription,
+                nas_device,
+                profile=profile,
+                action="create",
             )
             if not commands:
                 return
@@ -102,7 +107,9 @@ class ProvisioningHandler:
                 except Exception as cmd_exc:
                     logger.warning(
                         "NAS command failed for subscription %s: %s (cmd: %s)",
-                        subscription_id, cmd_exc, cmd,
+                        subscription_id,
+                        cmd_exc,
+                        cmd,
                     )
             try:
                 DeviceProvisioner._handle_queue_mapping(
@@ -122,12 +129,14 @@ class ProvisioningHandler:
                 )
             logger.info(
                 "Pushed %d NAS provisioning commands for subscription %s.",
-                len(commands), subscription_id,
+                len(commands),
+                subscription_id,
             )
         except Exception as exc:
             logger.warning(
                 "NAS provisioning failed for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _auto_provision_ont(self, db: Session, subscription_id: str) -> None:
@@ -169,14 +178,20 @@ class ProvisioningHandler:
             if not ont:
                 return
 
-            profile_id = str(ont.provisioning_profile_id) if ont.provisioning_profile_id else None
+            profile_id = (
+                str(ont.provisioning_profile_id)
+                if ont.provisioning_profile_id
+                else None
+            )
             if not profile_id:
                 # Try default profile from settings
                 from app.models.domain_settings import SettingDomain
                 from app.services import settings_spec
 
                 default_profile = settings_spec.resolve_value(
-                    db, SettingDomain.provisioning, "default_ont_provisioning_profile_id"
+                    db,
+                    SettingDomain.provisioning,
+                    "default_ont_provisioning_profile_id",
                 )
                 if default_profile:
                     profile_id = str(default_profile)
@@ -206,27 +221,36 @@ class ProvisioningHandler:
             )
 
             result = OntProvisioningOrchestrator.provision_ont(
-                db, ont_id, profile_id, dry_run=False,
+                db,
+                ont_id,
+                profile_id,
+                dry_run=False,
             )
 
             if result.success:
                 logger.info(
                     "Auto-provisioned ONT %s for subscription %s: %s",
-                    ont.serial_number, subscription_id, result.message,
+                    ont.serial_number,
+                    subscription_id,
+                    result.message,
                 )
             else:
                 logger.warning(
                     "ONT auto-provisioning failed for %s: %s",
-                    ont.serial_number, result.message,
+                    ont.serial_number,
+                    result.message,
                 )
         except Exception as exc:
             logger.warning(
                 "ONT auto-provisioning error for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _handle_service_order_assigned(self, db: Session, event: Event) -> None:
-        service_order_id = event.service_order_id or event.payload.get("service_order_id")
+        service_order_id = event.service_order_id or event.payload.get(
+            "service_order_id"
+        )
         if not service_order_id:
             logger.warning(
                 "Skipping provisioning run: missing service_order_id in event payload."
@@ -258,7 +282,9 @@ class ProvisioningHandler:
                 existing.status.value,
             )
             return
-        workflow = provisioning_service.resolve_workflow_for_service_order(db, service_order)
+        workflow = provisioning_service.resolve_workflow_for_service_order(
+            db, service_order
+        )
         if not workflow:
             logger.warning(
                 "Skipping provisioning run for service order %s: no active workflow found.",

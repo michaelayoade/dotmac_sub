@@ -73,7 +73,9 @@ def push_subscriber_change(
             return True
         logger.warning(
             "CRM webhook failed for customer %d: %d %s",
-            splynx_customer_id, resp.status_code, resp.text[:200],
+            splynx_customer_id,
+            resp.status_code,
+            resp.text[:200],
         )
     except RequestException as e:
         logger.warning("CRM webhook error for customer %d: %s", splynx_customer_id, e)

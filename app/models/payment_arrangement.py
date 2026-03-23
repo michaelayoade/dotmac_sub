@@ -23,6 +23,7 @@ from app.db import Base
 
 class PaymentFrequency(enum.Enum):
     """Frequency options for payment arrangements."""
+
     weekly = "weekly"
     biweekly = "biweekly"
     monthly = "monthly"
@@ -30,20 +31,22 @@ class PaymentFrequency(enum.Enum):
 
 class ArrangementStatus(enum.Enum):
     """Status for payment arrangements."""
-    pending = "pending"      # Requested, awaiting approval
-    active = "active"        # Approved and in progress
+
+    pending = "pending"  # Requested, awaiting approval
+    active = "active"  # Approved and in progress
     completed = "completed"  # All installments paid
     defaulted = "defaulted"  # Missed payments, arrangement failed
-    canceled = "canceled"    # Canceled by user or admin
+    canceled = "canceled"  # Canceled by user or admin
 
 
 class InstallmentStatus(enum.Enum):
     """Status for individual installments."""
-    pending = "pending"      # Not yet due
-    due = "due"              # Currently due
-    paid = "paid"            # Payment received
-    overdue = "overdue"      # Past due, not paid
-    waived = "waived"        # Waived by admin
+
+    pending = "pending"  # Not yet due
+    due = "due"  # Currently due
+    paid = "paid"  # Payment received
+    overdue = "overdue"  # Past due, not paid
+    waived = "waived"  # Waived by admin
 
 
 class PaymentArrangement(Base):
@@ -51,6 +54,7 @@ class PaymentArrangement(Base):
 
     Can be linked to a specific invoice or the entire account balance.
     """
+
     __tablename__ = "payment_arrangements"
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -107,6 +111,7 @@ class PaymentArrangement(Base):
 
 class PaymentArrangementInstallment(Base):
     """Individual installment within a payment arrangement."""
+
     __tablename__ = "payment_arrangement_installments"
 
     id: Mapped[uuid.UUID] = mapped_column(

@@ -19,11 +19,19 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(
     prefix="/network",
     tags=["web-admin-network"],
-    dependencies=[Depends(require_method_permission("network:speedtest:read", "network:speedtest:write"))],
+    dependencies=[
+        Depends(
+            require_method_permission(
+                "network:speedtest:read", "network:speedtest:write"
+            )
+        )
+    ],
 )
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -64,13 +72,18 @@ def speedtests_list(
         # Reset failed transaction state before any fallback DB queries.
         db.rollback()
         fallback_error = str(exc)
-        if "speed_test_results" in fallback_error and "does not exist" in fallback_error:
+        if (
+            "speed_test_results" in fallback_error
+            and "does not exist" in fallback_error
+        ):
             fallback_error = (
                 "Speed test tables are not available yet. "
                 "Run database migrations, then reload this page."
             )
         try:
-            reference_data = web_network_speedtests_service.speedtest_form_reference_data(db)
+            reference_data = (
+                web_network_speedtests_service.speedtest_form_reference_data(db)
+            )
         except Exception:
             db.rollback()
             reference_data = {
@@ -111,7 +124,9 @@ def speedtests_list(
     context["message"] = message
     filter_error = data.get("invalid_filter_error")
     if filter_error:
-        error_message = f"{error_message} | {filter_error}" if error_message else str(filter_error)
+        error_message = (
+            f"{error_message} | {filter_error}" if error_message else str(filter_error)
+        )
     context["error_message"] = error_message
     return templates.TemplateResponse("admin/network/speedtests/index.html", context)
 
@@ -125,7 +140,9 @@ def speedtests_analytics(
     data = web_network_speedtests_service.analytics_page_data(db, days=days)
     context = _base_context(request, db, active_page="speedtests")
     context.update(data)
-    return templates.TemplateResponse("admin/network/speedtests/analytics.html", context)
+    return templates.TemplateResponse(
+        "admin/network/speedtests/analytics.html", context
+    )
 
 
 @router.get("/speedtests/new", response_class=HTMLResponse)
@@ -146,13 +163,17 @@ def speedtests_new(request: Request, db: Session = Depends(get_db)) -> HTMLRespo
 
 @router.post("/speedtests", response_class=HTMLResponse)
 def speedtests_create(request: Request, db: Session = Depends(get_db)):
-    values = web_network_speedtests_service.parse_speedtest_form(parse_form_data_sync(request))
+    values = web_network_speedtests_service.parse_speedtest_form(
+        parse_form_data_sync(request)
+    )
     error = web_network_speedtests_service.validate_speedtest_values(values)
     if error:
         context = _base_context(request, db, active_page="speedtests")
         context.update(
             {
-                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(values),
+                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(
+                    values
+                ),
                 "action_url": "/admin/network/speedtests",
                 "error": error,
                 **web_network_speedtests_service.speedtest_form_reference_data(db),
@@ -166,7 +187,9 @@ def speedtests_create(request: Request, db: Session = Depends(get_db)):
         context = _base_context(request, db, active_page="speedtests")
         context.update(
             {
-                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(values),
+                "speedtest": web_network_speedtests_service.speedtest_form_snapshot(
+                    values
+                ),
                 "action_url": "/admin/network/speedtests",
                 "error": str(exc),
                 **web_network_speedtests_service.speedtest_form_reference_data(db),

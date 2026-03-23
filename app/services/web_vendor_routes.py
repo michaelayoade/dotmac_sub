@@ -107,7 +107,7 @@ def vendor_projects_mine(request: Request, db: Session):
         "vendor/projects/my-projects.html",
         {
             "request": request,
-        "active_page": "fiber-map",
+            "active_page": "fiber-map",
             "vendor": context["vendor"],
             "current_user": context["current_user"],
             "projects": projects,
@@ -234,31 +234,40 @@ def vendor_fiber_map_update_position(request: Request, db: Session):
         return JSONResponse({"error": str(exc)}, status_code=500)
 
 
-def vendor_fiber_map_nearest_cabinet(request: Request, lat: float, lng: float, db: Session):
+def vendor_fiber_map_nearest_cabinet(
+    request: Request, lat: float, lng: float, db: Session
+):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network_fiber_plant as admin_network
+
     return admin_network.find_nearest_cabinet(request, lat, lng, db)
 
 
-def vendor_fiber_map_plan_options(request: Request, lat: float, lng: float, db: Session):
+def vendor_fiber_map_plan_options(
+    request: Request, lat: float, lng: float, db: Session
+):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network_fiber_plant as admin_network
+
     return admin_network.plan_options(request, lat, lng, db)
 
 
-def vendor_fiber_map_route(request: Request, lat: float, lng: float, cabinet_id: str, db: Session):
+def vendor_fiber_map_route(
+    request: Request, lat: float, lng: float, cabinet_id: str, db: Session
+):
     context = _require_vendor_context(request, db)
     if not context:
         return JSONResponse({"error": "Authentication required"}, status_code=401)
     if not _has_vendor_role(db, str(context["person"].id), context["vendor_user"].role):
         return JSONResponse({"error": "Forbidden"}, status_code=403)
     from app.web.admin import network_fiber_plant as admin_network
+
     return admin_network.plan_route(request, lat, lng, cabinet_id, db)

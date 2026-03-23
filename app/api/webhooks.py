@@ -25,7 +25,9 @@ router = APIRouter(prefix="/webhooks")
     status_code=status.HTTP_201_CREATED,
     tags=["webhook-endpoints"],
 )
-def create_webhook_endpoint(payload: WebhookEndpointCreate, db: Session = Depends(get_db)):
+def create_webhook_endpoint(
+    payload: WebhookEndpointCreate, db: Session = Depends(get_db)
+):
     return webhook_service.webhook_endpoints.create(db, payload)
 
 
@@ -123,7 +125,9 @@ def list_webhook_subscriptions(
     tags=["webhook-subscriptions"],
 )
 def update_webhook_subscription(
-    subscription_id: str, payload: WebhookSubscriptionUpdate, db: Session = Depends(get_db)
+    subscription_id: str,
+    payload: WebhookSubscriptionUpdate,
+    db: Session = Depends(get_db),
 ):
     return webhook_service.webhook_subscriptions.update(db, subscription_id, payload)
 

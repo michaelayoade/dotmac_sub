@@ -7,8 +7,8 @@ from starlette.responses import Response
 
 from app.config import settings
 
-CSRF_TOKEN_NAME = "csrf_token"
-CSRF_COOKIE_NAME = "csrf_token"
+CSRF_TOKEN_NAME = "csrf_token"  # noqa: S105 - CSRF field identifier, not a secret
+CSRF_COOKIE_NAME = "csrf_token"  # noqa: S105 - CSRF cookie name, not a secret
 CSRF_HEADER_NAME = "X-CSRF-Token"
 CSRF_TOKEN_LENGTH = 32
 
@@ -36,7 +36,9 @@ def _is_https_request(request: Request | None) -> bool:
     return request.url.scheme == "https"
 
 
-def set_csrf_cookie(response: Response, token: str, request: Request | None = None) -> None:
+def set_csrf_cookie(
+    response: Response, token: str, request: Request | None = None
+) -> None:
     """Set CSRF token in a secure cookie."""
     secure_cookie = settings.secure_cookies and _is_https_request(request)
     response.set_cookie(
@@ -82,5 +84,5 @@ class CSRFValidationError(HTTPException):
     def __init__(self):
         super().__init__(
             status_code=403,
-            detail="CSRF token validation failed. Please refresh the page and try again."
+            detail="CSRF token validation failed. Please refresh the page and try again.",
         )

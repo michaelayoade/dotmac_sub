@@ -12,6 +12,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class TaxRates(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: TaxRateCreate):
@@ -74,7 +75,9 @@ class TaxRates(ListResponseMixin):
         rate.is_active = not rate.is_active
         db.commit()
         db.refresh(rate)
-        logger.info("Tax rate %s (%s) toggled to %s", rate.name, rate.id, rate.is_active)
+        logger.info(
+            "Tax rate %s (%s) toggled to %s", rate.name, rate.id, rate.is_active
+        )
         return rate
 
     @staticmethod

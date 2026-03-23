@@ -59,7 +59,9 @@ def reseller_dashboard(
                 db, str(context["reseller"].id), account_ids
             )
     except Exception:
-        logger.warning("Could not fetch CRM open tickets for reseller dashboard", exc_info=True)
+        logger.warning(
+            "Could not fetch CRM open tickets for reseller dashboard", exc_info=True
+        )
 
     return templates.TemplateResponse(
         "reseller/dashboard/index.html",
@@ -155,7 +157,11 @@ def reseller_account_detail(
     if not detail:
         return templates.TemplateResponse(
             "reseller/errors/404.html",
-            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
             status_code=404,
         )
 
@@ -193,7 +199,11 @@ def reseller_account_invoices(
     if invoices is None:
         return templates.TemplateResponse(
             "reseller/errors/404.html",
-            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
             status_code=404,
         )
 
@@ -231,7 +241,11 @@ def reseller_invoice_detail(
     if not invoice:
         return templates.TemplateResponse(
             "reseller/errors/404.html",
-            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
             status_code=404,
         )
 
@@ -337,12 +351,18 @@ def reseller_account_tickets(
     if not detail:
         return templates.TemplateResponse(
             "reseller/errors/404.html",
-            {"request": request, "current_user": context["current_user"], "reseller": context["reseller"]},
+            {
+                "request": request,
+                "current_user": context["current_user"],
+                "reseller": context["reseller"],
+            },
             status_code=404,
         )
 
     ticket_context = crm_portal.reseller_account_tickets_context(
-        request, db, account_id,
+        request,
+        db,
+        account_id,
         current_user=context["current_user"],
         reseller=context["reseller"],
     )

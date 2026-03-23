@@ -124,7 +124,9 @@ class CpeDevices(ListResponseMixin):
         return text[:max_len]
 
     @staticmethod
-    def _extract_identity(client: GenieACSClient, device_data: dict) -> tuple[str | None, str | None, str | None]:
+    def _extract_identity(
+        client: GenieACSClient, device_data: dict
+    ) -> tuple[str | None, str | None, str | None]:
         device_id = str(device_data.get("_id") or "").strip()
         parsed_oui: str | None = None
         parsed_product_class: str | None = None
@@ -132,7 +134,9 @@ class CpeDevices(ListResponseMixin):
 
         if device_id:
             try:
-                parsed_oui, parsed_product_class, parsed_serial = client.parse_device_id(device_id)
+                parsed_oui, parsed_product_class, parsed_serial = (
+                    client.parse_device_id(device_id)
+                )
             except ValueError:
                 logger.warning("Invalid device ID format: %s", device_id)
 
@@ -140,8 +144,12 @@ class CpeDevices(ListResponseMixin):
         fallback_oui = fallback_product_class = fallback_serial = None
         if isinstance(raw_device_id, dict):
             fallback_oui = raw_device_id.get("_OUI") or raw_device_id.get("OUI")
-            fallback_product_class = raw_device_id.get("_ProductClass") or raw_device_id.get("ProductClass")
-            fallback_serial = raw_device_id.get("_SerialNumber") or raw_device_id.get("SerialNumber")
+            fallback_product_class = raw_device_id.get(
+                "_ProductClass"
+            ) or raw_device_id.get("ProductClass")
+            fallback_serial = raw_device_id.get("_SerialNumber") or raw_device_id.get(
+                "SerialNumber"
+            )
 
         param_serial = client.extract_parameter_value(
             device_data, "Device.DeviceInfo.SerialNumber"
@@ -155,7 +163,9 @@ class CpeDevices(ListResponseMixin):
         )
 
         # Prefer structured GenieACS identity fields over parsed `_id` parts.
-        oui = CpeDevices._clip_text(fallback_oui, 8) or CpeDevices._clip_text(parsed_oui, 8)
+        oui = CpeDevices._clip_text(fallback_oui, 8) or CpeDevices._clip_text(
+            parsed_oui, 8
+        )
         product_class = (
             CpeDevices._clip_text(param_product_class, 120)
             or CpeDevices._clip_text(fallback_product_class, 120)
@@ -204,7 +214,10 @@ class CpeDevices(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": Tr069CpeDevice.created_at, "serial_number": Tr069CpeDevice.serial_number},
+            {
+                "created_at": Tr069CpeDevice.created_at,
+                "serial_number": Tr069CpeDevice.serial_number,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -252,9 +265,14 @@ class CpeDevices(ListResponseMixin):
         now = datetime.now(UTC)
 
         for device_data in devices:
-            oui, product_class, serial_number = CpeDevices._extract_identity(client, device_data)
+            oui, product_class, serial_number = CpeDevices._extract_identity(
+                client, device_data
+            )
             if not serial_number:
-                logger.warning("Skipping GenieACS device without serial number: %s", device_data.get("_id"))
+                logger.warning(
+                    "Skipping GenieACS device without serial number: %s",
+                    device_data.get("_id"),
+                )
                 continue
 
             # Skip GenieACS discovery service probes — these are not real devices
@@ -265,7 +283,8 @@ class CpeDevices(ListResponseMixin):
             connection_url = client.extract_parameter_value(
                 device_data, "Device.ManagementServer.ConnectionRequestURL"
             ) or client.extract_parameter_value(
-                device_data, "InternetGatewayDevice.ManagementServer.ConnectionRequestURL"
+                device_data,
+                "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
             )
             connection_url = CpeDevices._clip_text(connection_url, 255)
 
@@ -303,7 +322,9 @@ class CpeDevices(ListResponseMixin):
             last_inform_at = None
             if last_inform:
                 try:
-                    last_inform_at = datetime.fromisoformat(last_inform.replace("Z", "+00:00"))
+                    last_inform_at = datetime.fromisoformat(
+                        last_inform.replace("Z", "+00:00")
+                    )
                 except (ValueError, AttributeError):
                     pass
 
@@ -394,14 +415,26 @@ class CpeDevices(ListResponseMixin):
                 db.commit()
                 logger.info(
                     "Auto-link: %d ONTs linked to ACS %s, %d serials updated",
-                    auto_linked, server.name, serial_updated,
+                    auto_linked,
+                    server.name,
+                    serial_updated,
                 )
         except Exception as e:
             logger.warning("Auto-link ONTs after sync failed: %s", e)
             db.rollback()
 
-        logger.info("GenieACS sync: created=%d, updated=%d, auto_linked=%d", created, updated, auto_linked)
-        return {"created": created, "updated": updated, "total": len(devices), "auto_linked": auto_linked}
+        logger.info(
+            "GenieACS sync: created=%d, updated=%d, auto_linked=%d",
+            created,
+            updated,
+            auto_linked,
+        )
+        return {
+            "created": created,
+            "updated": updated,
+            "total": len(devices),
+            "auto_linked": auto_linked,
+        }
 
 
 class Sessions(ListResponseMixin):
@@ -436,7 +469,10 @@ class Sessions(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": Tr069Session.created_at, "started_at": Tr069Session.started_at},
+            {
+                "created_at": Tr069Session.created_at,
+                "started_at": Tr069Session.started_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -594,7 +630,7 @@ class Jobs(ListResponseMixin):
         if job.status not in (Tr069JobStatus.queued, Tr069JobStatus.failed):
             raise HTTPException(
                 status_code=400,
-                detail=f"Job cannot be executed in {job.status.value} status"
+                detail=f"Job cannot be executed in {job.status.value} status",
             )
 
         device = db.get(Tr069CpeDevice, job.device_id)
@@ -616,9 +652,7 @@ class Jobs(ListResponseMixin):
 
             # Build GenieACS device ID
             genieacs_device_id = client.build_device_id(
-                device.oui or "",
-                device.product_class or "",
-                device.serial_number or ""
+                device.oui or "", device.product_class or "", device.serial_number or ""
             )
 
             # Build task based on command
@@ -665,7 +699,7 @@ class Jobs(ListResponseMixin):
         if job.status != Tr069JobStatus.queued:
             raise HTTPException(
                 status_code=400,
-                detail=f"Only queued jobs can be canceled, current status: {job.status.value}"
+                detail=f"Only queued jobs can be canceled, current status: {job.status.value}",
             )
 
         job.status = Tr069JobStatus.canceled
@@ -746,7 +780,9 @@ def receive_inform(
 
     logger.info(
         "Inform received: serial=%s event=%s device_id=%s",
-        serial, event_str, device.id,
+        serial,
+        event_str,
+        device.id,
     )
     return {"status": "ok", "device_id": str(device.id), "event": event_str}
 

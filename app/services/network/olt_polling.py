@@ -235,9 +235,7 @@ def _build_reading_targets(
 ) -> list[tuple[OntUnit, OntSignalReading]]:
     """Map SNMP readings to ONTs using external_id/FSP hints, then fallback order."""
     assignment_ont_ids = [
-        ont_id
-        for ont_id in (a.ont_unit_id for a in assignments)
-        if ont_id is not None
+        ont_id for ont_id in (a.ont_unit_id for a in assignments) if ont_id is not None
     ]
     direct_ont_ids = list(
         db.scalars(
@@ -348,11 +346,15 @@ def _get_olt_snmp_config(db: Session, olt: OLTDevice) -> dict[str, str | int | N
         linked: NetworkDevice | None = None
         if olt.mgmt_ip:
             linked = db.scalars(
-                select(NetworkDevice).where(NetworkDevice.mgmt_ip == olt.mgmt_ip).limit(1)
+                select(NetworkDevice)
+                .where(NetworkDevice.mgmt_ip == olt.mgmt_ip)
+                .limit(1)
             ).first()
         if linked is None and olt.hostname:
             linked = db.scalars(
-                select(NetworkDevice).where(NetworkDevice.hostname == olt.hostname).limit(1)
+                select(NetworkDevice)
+                .where(NetworkDevice.hostname == olt.hostname)
+                .limit(1)
             ).first()
         if linked is None and olt.name:
             linked = db.scalars(
@@ -395,7 +397,9 @@ def _get_signal_scale(vendor: str) -> float:
     return 0.01
 
 
-def _run_olt_snmpwalk(host: str, oid: str, community: str, timeout: int = 90) -> list[str]:
+def _run_olt_snmpwalk(
+    host: str, oid: str, community: str, timeout: int = 90
+) -> list[str]:
     """Run snmpbulkwalk (with snmpwalk fallback) against an OLT and return output lines."""
     import shutil
     import subprocess
@@ -417,7 +421,7 @@ def _run_olt_snmpwalk(host: str, oid: str, community: str, timeout: int = 90) ->
         host,
         oid,
     ]
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - arguments are built as a fixed argv list
         args,
         capture_output=True,
         text=True,
@@ -460,7 +464,9 @@ def _extract_index_from_oid(oid_part: str, base_oid: str | None = None) -> str |
     return parts[-1]
 
 
-def _parse_snmp_table(lines: list[str], *, base_oid: str | None = None) -> dict[str, str]:
+def _parse_snmp_table(
+    lines: list[str], *, base_oid: str | None = None
+) -> dict[str, str]:
     """Parse SNMP walk output into {index: value} dict."""
     parsed: dict[str, str] = {}
     for line in lines:
@@ -644,7 +650,9 @@ def poll_olt_ont_signals(
     scale = _get_signal_scale(vendor)
 
     # Huawei ONT indexes are composite (e.g., 4194320384.0), preserve full indexes.
-    parse_table = _parse_snmp_table_composite if "huawei" in vendor else _parse_snmp_table
+    parse_table = (
+        _parse_snmp_table_composite if "huawei" in vendor else _parse_snmp_table
+    )
 
     # Walk signal tables from OLT
     olt_rx_raw = parse_table(
@@ -783,9 +791,7 @@ def poll_olt_ont_signals(
                 continue
 
             db.execute(
-                update(OntUnit)
-                .where(OntUnit.id == ont.id)
-                .values(**update_values)
+                update(OntUnit).where(OntUnit.id == ont.id).values(**update_values)
             )
             updated += 1
 
@@ -794,10 +800,21 @@ def poll_olt_ont_signals(
             if new_status and prev_status != new_status:
                 if new_status == OnuOnlineStatus.offline:
                     reason_val = update_values.get("offline_reason")
-                    status_transitions.append((ont, "offline", {
-                        "offline_reason": reason_val.value if reason_val else "unknown",
-                    }))
-                elif new_status == OnuOnlineStatus.online and prev_status == OnuOnlineStatus.offline:
+                    status_transitions.append(
+                        (
+                            ont,
+                            "offline",
+                            {
+                                "offline_reason": reason_val.value
+                                if reason_val
+                                else "unknown",
+                            },
+                        )
+                    )
+                elif (
+                    new_status == OnuOnlineStatus.online
+                    and prev_status == OnuOnlineStatus.offline
+                ):
                     status_transitions.append((ont, "online", {}))
 
             # Signal degradation alerts with cooldown.
@@ -824,18 +841,30 @@ def poll_olt_ont_signals(
                 if not recently_alerted:
                     if reading.olt_rx_dbm < crit_thresh:
                         if prev_signal is None or prev_signal >= crit_thresh:
-                            status_transitions.append((ont, "signal_degraded", {
-                                "olt_rx_dbm": reading.olt_rx_dbm,
-                                "threshold": crit_thresh,
-                                "severity": "critical",
-                            }))
+                            status_transitions.append(
+                                (
+                                    ont,
+                                    "signal_degraded",
+                                    {
+                                        "olt_rx_dbm": reading.olt_rx_dbm,
+                                        "threshold": crit_thresh,
+                                        "severity": "critical",
+                                    },
+                                )
+                            )
                     elif reading.olt_rx_dbm < warn_thresh:
                         if prev_signal is None or prev_signal >= warn_thresh:
-                            status_transitions.append((ont, "signal_degraded", {
-                                "olt_rx_dbm": reading.olt_rx_dbm,
-                                "threshold": warn_thresh,
-                                "severity": "warning",
-                            }))
+                            status_transitions.append(
+                                (
+                                    ont,
+                                    "signal_degraded",
+                                    {
+                                        "olt_rx_dbm": reading.olt_rx_dbm,
+                                        "threshold": warn_thresh,
+                                        "severity": "warning",
+                                    },
+                                )
+                            )
 
                 # ±3dB signal delta detection (relative change alert).
                 # Fires regardless of absolute threshold — catches sudden
@@ -847,14 +876,22 @@ def poll_olt_ont_signals(
                 ):
                     delta = abs(reading.olt_rx_dbm - prev_signal)
                     if delta >= _DEFAULT_SIGNAL_DELTA_DB:
-                        direction = "drop" if reading.olt_rx_dbm < prev_signal else "rise"
-                        status_transitions.append((ont, "signal_delta", {
-                            "olt_rx_dbm": reading.olt_rx_dbm,
-                            "previous_dbm": prev_signal,
-                            "delta_db": round(delta, 2),
-                            "direction": direction,
-                            "threshold_db": _DEFAULT_SIGNAL_DELTA_DB,
-                        }))
+                        direction = (
+                            "drop" if reading.olt_rx_dbm < prev_signal else "rise"
+                        )
+                        status_transitions.append(
+                            (
+                                ont,
+                                "signal_delta",
+                                {
+                                    "olt_rx_dbm": reading.olt_rx_dbm,
+                                    "previous_dbm": prev_signal,
+                                    "delta_db": round(delta, 2),
+                                    "direction": direction,
+                                    "threshold_db": _DEFAULT_SIGNAL_DELTA_DB,
+                                },
+                            )
+                        )
 
         except Exception as e:
             logger.error("Error updating ONT %s: %s", ont.id, e)
@@ -891,10 +928,10 @@ def poll_olt_ont_signals(
 
 _OLT_HEALTH_OIDS: dict[str, dict[str, str]] = {
     "huawei": {
-        "cpu": ".1.3.6.1.4.1.2011.6.3.4.1.2.0",       # hwAvgDuty1min
-        "temperature": ".1.3.6.1.4.1.2011.6.3.4.1.3.0", # hwEntityTemperature
-        "memory": ".1.3.6.1.4.1.2011.6.3.4.1.8.0",      # hwMemoryUtilization
-        "uptime": ".1.3.6.1.2.1.1.3.0",                  # sysUpTime (standard)
+        "cpu": ".1.3.6.1.4.1.2011.6.3.4.1.2.0",  # hwAvgDuty1min
+        "temperature": ".1.3.6.1.4.1.2011.6.3.4.1.3.0",  # hwEntityTemperature
+        "memory": ".1.3.6.1.4.1.2011.6.3.4.1.8.0",  # hwMemoryUtilization
+        "uptime": ".1.3.6.1.2.1.1.3.0",  # sysUpTime (standard)
     },
     "zte": {
         "cpu": ".1.3.6.1.4.1.3902.1082.500.1.2.1.0",
@@ -978,8 +1015,23 @@ def _snmpget_value(host: str, oid: str, community: str) -> str | None:
     """Perform a single SNMP GET and return the value string, or None."""
     import subprocess
 
-    args = ["snmpget", "-t", "5", "-r", "1", "-m", "", "-v2c", "-c", community, host, oid]
-    result = subprocess.run(args, capture_output=True, text=True, check=False, timeout=15)
+    args = [
+        "snmpget",
+        "-t",
+        "5",
+        "-r",
+        "1",
+        "-m",
+        "",
+        "-v2c",
+        "-c",
+        community,
+        host,
+        oid,
+    ]
+    result = subprocess.run(  # noqa: S603 - arguments are built as a fixed argv list
+        args, capture_output=True, text=True, check=False, timeout=15
+    )
     if result.returncode != 0:
         return None
     output = result.stdout.strip()
@@ -1112,10 +1164,14 @@ def _push_signal_metrics(db: Session) -> int:
         .select_from(OntUnit)
         .outerjoin(
             OntAssignment,
-            (OntAssignment.ont_unit_id == OntUnit.id) & (OntAssignment.active.is_(True)),
+            (OntAssignment.ont_unit_id == OntUnit.id)
+            & (OntAssignment.active.is_(True)),
         )
         .outerjoin(PonPort, PonPort.id == OntAssignment.pon_port_id)
-        .outerjoin(OLTDevice, OLTDevice.id == func.coalesce(PonPort.olt_id, OntUnit.olt_device_id))
+        .outerjoin(
+            OLTDevice,
+            OLTDevice.id == func.coalesce(PonPort.olt_id, OntUnit.olt_device_id),
+        )
         .where(
             OntUnit.is_active.is_(True),
             OntUnit.signal_updated_at.is_not(None),
@@ -1152,30 +1208,38 @@ def _push_signal_metrics(db: Session) -> int:
     ).all()
 
     for status_val, count in status_counts:
-        status_str = status_val.value if hasattr(status_val, "value") else str(status_val)
+        status_str = (
+            status_val.value if hasattr(status_val, "value") else str(status_val)
+        )
         lines.append(f'onu_status_total{{status="{status_str}"}} {count} {now_ms}')
 
     # Signal quality counts
     warn_thresh, crit_thresh = get_signal_thresholds(db)
-    warning_count = db.scalar(
-        select(func.count())
-        .select_from(OntUnit)
-        .where(
-            OntUnit.is_active.is_(True),
-            OntUnit.olt_rx_signal_dbm.is_not(None),
-            OntUnit.olt_rx_signal_dbm < warn_thresh,
-            OntUnit.olt_rx_signal_dbm >= crit_thresh,
+    warning_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(
+                OntUnit.is_active.is_(True),
+                OntUnit.olt_rx_signal_dbm.is_not(None),
+                OntUnit.olt_rx_signal_dbm < warn_thresh,
+                OntUnit.olt_rx_signal_dbm >= crit_thresh,
+            )
         )
-    ) or 0
-    critical_count = db.scalar(
-        select(func.count())
-        .select_from(OntUnit)
-        .where(
-            OntUnit.is_active.is_(True),
-            OntUnit.olt_rx_signal_dbm.is_not(None),
-            OntUnit.olt_rx_signal_dbm < crit_thresh,
+        or 0
+    )
+    critical_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(
+                OntUnit.is_active.is_(True),
+                OntUnit.olt_rx_signal_dbm.is_not(None),
+                OntUnit.olt_rx_signal_dbm < crit_thresh,
+            )
         )
-    ) or 0
+        or 0
+    )
     lines.append(f'onu_signal_low{{severity="warning"}} {warning_count} {now_ms}')
     lines.append(f'onu_signal_low{{severity="critical"}} {critical_count} {now_ms}')
 
@@ -1272,8 +1336,16 @@ def poll_sfp_modules(
         return {"discovered": 0, "updated": 0, "errors": 0}
 
     # Standard IF-MIB OIDs for transceiver diagnostics (many vendors support these)
-    sfp_tx_oid = ".1.3.6.1.4.1.2011.5.25.31.1.1.3.1.9" if "huawei" in (olt.vendor or "").lower() else ".1.3.6.1.2.1.47.1.1.1.1.7"
-    sfp_rx_oid = ".1.3.6.1.4.1.2011.5.25.31.1.1.3.1.10" if "huawei" in (olt.vendor or "").lower() else ".1.3.6.1.2.1.47.1.1.1.1.7"
+    sfp_tx_oid = (
+        ".1.3.6.1.4.1.2011.5.25.31.1.1.3.1.9"
+        if "huawei" in (olt.vendor or "").lower()
+        else ".1.3.6.1.2.1.47.1.1.1.1.7"
+    )
+    sfp_rx_oid = (
+        ".1.3.6.1.4.1.2011.5.25.31.1.1.3.1.10"
+        if "huawei" in (olt.vendor or "").lower()
+        else ".1.3.6.1.2.1.47.1.1.1.1.7"
+    )
 
     try:
         tx_raw = _parse_snmp_table(
@@ -1303,15 +1375,27 @@ def poll_sfp_modules(
     updated_count = 0
     for sfp in sfp_modules:
         port_idx = str(sfp.olt_card_port_id)[:8]  # Simplified matching
-        tx_val = _parse_signal_value(tx_raw.get(port_idx, ""), 0.01) if port_idx in tx_raw else None
-        rx_val = _parse_signal_value(rx_raw.get(port_idx, ""), 0.01) if port_idx in rx_raw else None
+        tx_val = (
+            _parse_signal_value(tx_raw.get(port_idx, ""), 0.01)
+            if port_idx in tx_raw
+            else None
+        )
+        rx_val = (
+            _parse_signal_value(rx_raw.get(port_idx, ""), 0.01)
+            if port_idx in rx_raw
+            else None
+        )
         if tx_val is not None:
             sfp.tx_power_dbm = tx_val
             updated_count += 1
         if rx_val is not None:
             sfp.rx_power_dbm = rx_val
 
-    return {"discovered": len(tx_raw) + len(rx_raw), "updated": updated_count, "errors": 0}
+    return {
+        "discovered": len(tx_raw) + len(rx_raw),
+        "updated": updated_count,
+        "errors": 0,
+    }
 
 
 def poll_all_olts(db: Session) -> dict[str, int]:
@@ -1374,13 +1458,15 @@ def poll_all_olts(db: Session) -> dict[str, int]:
                     if sw and sw != olt.software_version:
                         logger.debug(
                             "Auto-detected software_version for OLT %s: %s",
-                            olt.name, sw,
+                            olt.name,
+                            sw,
                         )
                         olt.software_version = sw
                     if fw and fw != olt.firmware_version:
                         logger.debug(
                             "Auto-detected firmware_version for OLT %s: %s",
-                            olt.name, fw,
+                            olt.name,
+                            fw,
                         )
                         olt.firmware_version = fw
                 else:

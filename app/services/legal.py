@@ -61,7 +61,9 @@ class LegalDocumentService:
         """Return total/published/draft counts for list page filters."""
         count_query = db.query(func.count(LegalDocument.id))
         if document_type is not None:
-            count_query = count_query.filter(LegalDocument.document_type == document_type)
+            count_query = count_query.filter(
+                LegalDocument.document_type == document_type
+            )
         if is_published is not None:
             count_query = count_query.filter(LegalDocument.is_published == is_published)
         total = count_query.scalar() or 0
@@ -76,7 +78,9 @@ class LegalDocumentService:
             published_query = published_query.filter(
                 LegalDocument.document_type == document_type
             )
-            draft_query = draft_query.filter(LegalDocument.document_type == document_type)
+            draft_query = draft_query.filter(
+                LegalDocument.document_type == document_type
+            )
 
         return {
             "total": total,
@@ -163,7 +167,9 @@ class LegalDocumentService:
         db.commit()
         return True
 
-    def get_active_file_record(self, db: Session, document_id: str) -> StoredFile | None:
+    def get_active_file_record(
+        self, db: Session, document_id: str
+    ) -> StoredFile | None:
         return file_uploads.get_active_entity_file(db, "legal_document", document_id)
 
     def upload_file(

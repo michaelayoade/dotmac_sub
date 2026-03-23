@@ -14,6 +14,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class ConnectorConfigs(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ConnectorConfigCreate):

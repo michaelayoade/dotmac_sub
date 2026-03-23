@@ -61,7 +61,11 @@ def notifications_menu(request: Request, db: Session = Depends(get_db)):
     return web_admin_notifications_service.notifications_menu(request, db)
 
 
-@router.get("/templates", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
+@router.get(
+    "/templates",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def notification_templates_list(
     request: Request,
     channel: str | None = None,
@@ -82,12 +86,15 @@ def notification_templates_list(
         offset=offset,
     )
 
-    total = notification_service.templates.count(db=db, channel=channel if channel else None)
+    total = notification_service.templates.count(
+        db=db, channel=channel if channel else None
+    )
     total_pages = (total + per_page - 1) // per_page if total else 1
 
     channel_counts = notification_service.templates.channel_counts(db)
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/templates_list.html",
         {
@@ -108,10 +115,15 @@ def notification_templates_list(
     )
 
 
-@router.get("/templates/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
+@router.get(
+    "/templates/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def notification_template_new(request: Request, db: Session = Depends(get_db)):
     """Create new notification template form."""
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/template_form.html",
         {
@@ -128,7 +140,11 @@ def notification_template_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/templates", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
+@router.post(
+    "/templates",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def notification_template_create(
     request: Request,
     name: str = Form(...),
@@ -150,9 +166,12 @@ def notification_template_create(
             body=body.strip(),
         )
         template = notification_service.templates.create(db=db, payload=payload)
-        return RedirectResponse(url=f"/admin/notifications/templates/{template.id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/notifications/templates/{template.id}", status_code=303
+        )
     except Exception as exc:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/notifications/template_form.html",
             {
@@ -171,7 +190,11 @@ def notification_template_create(
         )
 
 
-@router.get("/templates/{template_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
+@router.get(
+    "/templates/{template_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def notification_template_detail(
     request: Request,
     template_id: UUID,
@@ -187,6 +210,7 @@ def notification_template_detail(
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/template_form.html",
         {
@@ -204,7 +228,11 @@ def notification_template_detail(
     )
 
 
-@router.post("/templates/{template_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
+@router.post(
+    "/templates/{template_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def notification_template_update(
     request: Request,
     template_id: UUID,
@@ -228,11 +256,18 @@ def notification_template_update(
             body=body.strip(),
             is_active=is_active,
         )
-        notification_service.templates.update(db=db, template_id=str(template_id), payload=payload)
-        return RedirectResponse(url=f"/admin/notifications/templates/{template_id}", status_code=303)
+        notification_service.templates.update(
+            db=db, template_id=str(template_id), payload=payload
+        )
+        return RedirectResponse(
+            url=f"/admin/notifications/templates/{template_id}", status_code=303
+        )
     except Exception as exc:
-        template = notification_service.templates.get(db=db, template_id=str(template_id))
+        template = notification_service.templates.get(
+            db=db, template_id=str(template_id)
+        )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/notifications/template_form.html",
             {
@@ -252,7 +287,11 @@ def notification_template_update(
         )
 
 
-@router.post("/templates/{template_id}/test", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
+@router.post(
+    "/templates/{template_id}/test",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def notification_template_test(
     request: Request,
     template_id: UUID,
@@ -266,7 +305,9 @@ def notification_template_test(
     from app.services.integrations.connectors import whatsapp as whatsapp_service
 
     try:
-        template = notification_service.templates.get(db=db, template_id=str(template_id))
+        template = notification_service.templates.get(
+            db=db, template_id=str(template_id)
+        )
         variables = template_renderer.default_preview_variables()
         if test_variables_json and test_variables_json.strip():
             parsed = json.loads(test_variables_json)
@@ -306,7 +347,9 @@ def notification_template_test(
                 dry_run=False,
             )
             if not result.get("ok"):
-                raise RuntimeError(str(result.get("response") or "Failed to send WhatsApp test"))
+                raise RuntimeError(
+                    str(result.get("response") or "Failed to send WhatsApp test")
+                )
             message = f"Test WhatsApp message sent to {test_recipient}"
         else:
             message = f"Test notification queued for {template.channel.value}"
@@ -319,12 +362,18 @@ def notification_template_test(
                     "message": message,
                 }
             }
-            return Response(status_code=200, headers={"HX-Trigger": json.dumps(trigger)})
-        return RedirectResponse(url=f"/admin/notifications/templates/{template_id}", status_code=303)
+            return Response(
+                status_code=200, headers={"HX-Trigger": json.dumps(trigger)}
+            )
+        return RedirectResponse(
+            url=f"/admin/notifications/templates/{template_id}", status_code=303
+        )
     except Exception as exc:
         if request.headers.get("HX-Request"):
             return _htmx_error_response(str(exc), status_code=200, reswap="none")
-        return RedirectResponse(url=f"/admin/notifications/templates/{template_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/notifications/templates/{template_id}", status_code=303
+        )
 
 
 @router.post(
@@ -366,8 +415,16 @@ def notification_template_preview(
     )
 
 
-@router.delete("/templates/{template_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
-@router.post("/templates/{template_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:write"))])
+@router.delete(
+    "/templates/{template_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
+@router.post(
+    "/templates/{template_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def notification_template_delete(
     request: Request,
     template_id: UUID,
@@ -377,15 +434,24 @@ def notification_template_delete(
     try:
         notification_service.templates.delete(db=db, template_id=str(template_id))
         if request.headers.get("HX-Request"):
-            return Response(status_code=200, headers={"HX-Redirect": "/admin/notifications/templates"})
+            return Response(
+                status_code=200,
+                headers={"HX-Redirect": "/admin/notifications/templates"},
+            )
         return RedirectResponse(url="/admin/notifications/templates", status_code=303)
     except Exception as exc:
         if request.headers.get("HX-Request"):
             return _htmx_error_response(str(exc), status_code=200, reswap="none")
-        return RedirectResponse(url=f"/admin/notifications/templates/{template_id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/notifications/templates/{template_id}", status_code=303
+        )
 
 
-@router.get("/queue", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
+@router.get(
+    "/queue",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def notification_queue(
     request: Request,
     status: str | None = None,
@@ -419,6 +485,7 @@ def notification_queue(
     status_counts = notification_service.notifications.status_counts(db)
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/queue.html",
         {
@@ -441,7 +508,11 @@ def notification_queue(
     )
 
 
-@router.get("/history", response_class=HTMLResponse, dependencies=[Depends(require_permission("system:read"))])
+@router.get(
+    "/history",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def notification_history(
     request: Request,
     status: str | None = None,
@@ -471,6 +542,7 @@ def notification_history(
     total_pages = (total + per_page - 1) // per_page if total else 1
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/history.html",
         {
@@ -512,6 +584,7 @@ def alert_policies_list(
         db, page=page, per_page=per_page
     )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/alert_policies.html",
         {
@@ -534,6 +607,7 @@ def alert_policy_new(request: Request, db: Session = Depends(get_db)):
     """Create new alert policy form."""
     state = web_alert_policies_service.alert_policy_form_data(db)
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/alert_policy_form.html",
         {
@@ -589,6 +663,7 @@ def alert_policy_create(
     except Exception as exc:
         state = web_alert_policies_service.alert_policy_form_data(db)
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/notifications/alert_policy_form.html",
             {
@@ -628,6 +703,7 @@ def alert_policy_detail(
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/alert_policy_form.html",
         {
@@ -686,6 +762,7 @@ def alert_policy_update(
             db, policy_id=str(policy_id)
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/notifications/alert_policy_form.html",
             {
@@ -798,6 +875,7 @@ def oncall_rotations_list(
         db, page=page, per_page=per_page
     )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/oncall_rotations.html",
         {
@@ -830,9 +908,7 @@ def oncall_rotation_create(
             timezone=timezone.strip(),
             notes=notes.strip() if notes else None,
         )
-        rotation = notification_service.on_call_rotations.create(
-            db=db, payload=payload
-        )
+        rotation = notification_service.on_call_rotations.create(db=db, payload=payload)
         return RedirectResponse(
             url=f"/admin/notifications/oncall-rotations/{rotation.id}",
             status_code=303,
@@ -842,6 +918,7 @@ def oncall_rotation_create(
             db, page=1, per_page=25
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/notifications/oncall_rotations.html",
             {
@@ -878,6 +955,7 @@ def oncall_rotation_detail(
             status_code=404,
         )
     from app.web.admin import get_current_user, get_sidebar_stats
+
     return templates.TemplateResponse(
         "admin/notifications/oncall_form.html",
         {
@@ -925,6 +1003,7 @@ def oncall_rotation_update(
             db, rotation_id=str(rotation_id)
         )
         from app.web.admin import get_current_user, get_sidebar_stats
+
         return templates.TemplateResponse(
             "admin/notifications/oncall_form.html",
             {
@@ -947,9 +1026,7 @@ def oncall_rotation_update(
 )
 def oncall_rotation_delete(rotation_id: UUID, db: Session = Depends(get_db)):
     """Delete an on-call rotation."""
-    notification_service.on_call_rotations.delete(
-        db=db, rotation_id=str(rotation_id)
-    )
+    notification_service.on_call_rotations.delete(db=db, rotation_id=str(rotation_id))
     return RedirectResponse(
         url="/admin/notifications/oncall-rotations", status_code=303
     )
@@ -976,9 +1053,7 @@ def oncall_rotation_member_create(
             contact=member_contact.strip(),
             priority=member_priority,
         )
-        notification_service.on_call_rotation_members.create(
-            db=db, payload=payload
-        )
+        notification_service.on_call_rotation_members.create(db=db, payload=payload)
     except Exception:
         logger.warning(
             "Failed to create on-call rotation member for rotation %s",

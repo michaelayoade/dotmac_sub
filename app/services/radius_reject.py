@@ -234,7 +234,10 @@ def enforce_subscription_reject_ip(
     if subscription.status == SubscriptionStatus.active:
         original_ipv4 = str(entry.get("original_ipv4") or "").strip()
         changed = False
-        if original_ipv4 and original_ipv4 != str(subscription.ipv4_address or "").strip():
+        if (
+            original_ipv4
+            and original_ipv4 != str(subscription.ipv4_address or "").strip()
+        ):
             subscription.ipv4_address = original_ipv4
             changed = True
         if sub_id in subscriptions:
@@ -254,7 +257,11 @@ def enforce_subscription_reject_ip(
 
     # Per-subscriber captive redirect: route to the "negative" pool
     # (which has HTTP→portal NAT redirect rules) instead of "blocked" (drop)
-    subscriber = db.get(Subscriber, subscription.subscriber_id) if subscription.subscriber_id else None
+    subscriber = (
+        db.get(Subscriber, subscription.subscriber_id)
+        if subscription.subscriber_id
+        else None
+    )
     if subscriber and subscriber.captive_redirect_enabled and reject_key == "blocked":
         reject_key = "negative"
 
@@ -271,7 +278,11 @@ def enforce_subscription_reject_ip(
         }
 
     current_ip = str(subscription.ipv4_address or "").strip()
-    if not entry.get("original_ipv4") and current_ip and not _is_in_any_reject_network(current_ip, networks):
+    if (
+        not entry.get("original_ipv4")
+        and current_ip
+        and not _is_in_any_reject_network(current_ip, networks)
+    ):
         entry["original_ipv4"] = current_ip
 
     assigned_ip = str(entry.get("reject_ipv4") or "").strip()
@@ -279,7 +290,11 @@ def enforce_subscription_reject_ip(
         assigned_obj = ipaddress.ip_address(assigned_ip) if assigned_ip else None
     except ValueError:
         assigned_obj = None
-    if not assigned_obj or assigned_obj.version != 4 or assigned_obj not in target_network:
+    if (
+        not assigned_obj
+        or assigned_obj.version != 4
+        or assigned_obj not in target_network
+    ):
         assigned_ip = _pick_reject_ipv4(
             db,
             subscription=subscription,
@@ -334,8 +349,14 @@ def _firewall_commands(
     commands: list[str] = []
     block_chain = "dotmac-block-chain"
     oss_ports = "80,443,8101,8102,8103,8104"
-    portal_text = _sanitize_routeros_value(captive_portal_ip) if captive_portal_ip else ""
-    portal_target = _sanitize_routeros_value(_nat_target_ip(captive_portal_ip)) if captive_portal_ip else ""
+    portal_text = (
+        _sanitize_routeros_value(captive_portal_ip) if captive_portal_ip else ""
+    )
+    portal_target = (
+        _sanitize_routeros_value(_nat_target_ip(captive_portal_ip))
+        if captive_portal_ip
+        else ""
+    )
 
     # Refresh shared block-chain rules in a deterministic order.
     block_dns_comment = "dotmac-block-allow-dns"
@@ -381,12 +402,20 @@ def _firewall_commands(
         network = networks.get(reason)
         if not network:
             continue
-        list_name = _sanitize_routeros_value(f"dotmac-reject-{reason.replace('_', '-')}")
+        list_name = _sanitize_routeros_value(
+            f"dotmac-reject-{reason.replace('_', '-')}"
+        )
         net_text = _sanitize_routeros_value(str(network))
         jump_comment = _sanitize_routeros_value(f"dotmac-reject-jump-{reason}")
-        allow_dns_comment = _sanitize_routeros_value(f"dotmac-reject-allow-dns-{reason}")
-        allow_oss_comment = _sanitize_routeros_value(f"dotmac-reject-allow-oss-{reason}")
-        redirect_comment = _sanitize_routeros_value(f"dotmac-negative-redirect-http-{reason}")
+        allow_dns_comment = _sanitize_routeros_value(
+            f"dotmac-reject-allow-dns-{reason}"
+        )
+        allow_oss_comment = _sanitize_routeros_value(
+            f"dotmac-reject-allow-oss-{reason}"
+        )
+        redirect_comment = _sanitize_routeros_value(
+            f"dotmac-negative-redirect-http-{reason}"
+        )
         legacy_drop_comment = _sanitize_routeros_value(f"dotmac-reject-drop-{reason}")
         commands.extend(
             [
@@ -422,11 +451,21 @@ def push_reject_rules_to_radius_nas(db: Session) -> dict[str, Any]:
     """Push reject CIDR address-lists and drop rules to connected MikroTik NAS devices."""
     networks = get_reject_networks(db)
     if not networks:
-        return {"ok": False, "message": "No reject IP ranges configured.", "pushed": 0, "failed": 0}
+        return {
+            "ok": False,
+            "message": "No reject IP ranges configured.",
+            "pushed": 0,
+            "failed": 0,
+        }
 
     devices = _radius_connected_nas_devices(db)
     if not devices:
-        return {"ok": False, "message": "No RADIUS-connected NAS devices found.", "pushed": 0, "failed": 0}
+        return {
+            "ok": False,
+            "message": "No RADIUS-connected NAS devices found.",
+            "pushed": 0,
+            "failed": 0,
+        }
 
     captive = _captive_portal_config(db)
     commands = _firewall_commands(
@@ -435,7 +474,12 @@ def push_reject_rules_to_radius_nas(db: Session) -> dict[str, Any]:
         captive_portal_ip=str(captive.get("portal_ip") or ""),
     )
     if not commands:
-        return {"ok": False, "message": "No valid reject CIDR rules to push.", "pushed": 0, "failed": 0}
+        return {
+            "ok": False,
+            "message": "No valid reject CIDR rules to push.",
+            "pushed": 0,
+            "failed": 0,
+        }
 
     pushed = 0
     failed = 0
@@ -458,7 +502,12 @@ def push_reject_rules_to_radius_nas(db: Session) -> dict[str, Any]:
             failures.append(f"{device.name}: {exc}")
 
     if pushed == 0 and failed == 0:
-        return {"ok": False, "message": "No MikroTik NAS devices matched the RADIUS-connected set.", "pushed": 0, "failed": 0}
+        return {
+            "ok": False,
+            "message": "No MikroTik NAS devices matched the RADIUS-connected set.",
+            "pushed": 0,
+            "failed": 0,
+        }
 
     if failed:
         return {
@@ -480,15 +529,9 @@ def push_reject_rules_to_radius_nas(db: Session) -> dict[str, Any]:
 def push_reject_rules_once(db: Session) -> dict[str, Any]:
     """Push reject rules once (bootstrap), then mark completion in settings."""
     existing = _get_setting(db, _INITIAL_PUSH_KEY)
-    already_done = (
-        existing is not None
-        and (
-            str(existing.value_text or "").strip()
-            or (
-                isinstance(existing.value_json, str)
-                and existing.value_json.strip()
-            )
-        )
+    already_done = existing is not None and (
+        str(existing.value_text or "").strip()
+        or (isinstance(existing.value_json, str) and existing.value_json.strip())
     )
     if already_done:
         return {"ok": True, "message": "Initial reject rule push already completed."}

@@ -77,7 +77,9 @@ def format_audit_datetime(value: datetime | None, fmt: str) -> str:
     return localized.strftime(fmt)
 
 
-def model_to_dict(model, include: set[str] | None = None, exclude: set[str] | None = None) -> dict:
+def model_to_dict(
+    model, include: set[str] | None = None, exclude: set[str] | None = None
+) -> dict:
     if model is None:
         return {}
     excluded = set(exclude or set()) | SENSITIVE_FIELDS
@@ -209,10 +211,15 @@ def log_audit_event(
     if request is not None:
         subscriber = getattr(request.state, "user", None)
         if subscriber:
-            display_name = subscriber.display_name or f"{subscriber.first_name} {subscriber.last_name}".strip()
+            display_name = (
+                subscriber.display_name
+                or f"{subscriber.first_name} {subscriber.last_name}".strip()
+            )
             if display_name and not metadata_payload.get("actor_name"):
                 metadata_payload["actor_name"] = display_name
-            if getattr(subscriber, "email", None) and not metadata_payload.get("actor_email"):
+            if getattr(subscriber, "email", None) and not metadata_payload.get(
+                "actor_email"
+            ):
                 metadata_payload["actor_email"] = subscriber.email
     payload = AuditEventCreate(
         actor_type=actor_type,
@@ -286,9 +293,7 @@ def _events_to_activities(
     if not events:
         return []
     actor_ids = {
-        str(event.actor_id)
-        for event in events
-        if getattr(event, "actor_id", None)
+        str(event.actor_id) for event in events if getattr(event, "actor_id", None)
     }
     people: dict[str, Subscriber] = {}
     if actor_ids:
@@ -306,9 +311,7 @@ def _events_to_activities(
             else None
         )
         actor_name = (
-            f"{actor.first_name} {actor.last_name}".strip()
-            if actor
-            else "System"
+            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
         )
         metadata = getattr(event, "metadata_", None) or {}
         comment_text = str(metadata.get("comment") or "").strip()
@@ -316,16 +319,16 @@ def _events_to_activities(
         change_summary = format_changes(changes, max_items=2)
         action_label = (event.action or "Activity").replace("_", " ").title()
         if include_entity_label:
-            entity_label = (
-                (event.entity_type or "Activity").replace("_", " ").title()
-            )
+            entity_label = (event.entity_type or "Activity").replace("_", " ").title()
             title = f"{entity_label} {action_label}"
         else:
             title = action_label
         if comment_text:
             description = f"{actor_name} · {comment_text}"
         else:
-            description = f"{actor_name}" + (f" · {change_summary}" if change_summary else "")
+            description = f"{actor_name}" + (
+                f" · {change_summary}" if change_summary else ""
+            )
         activities.append(
             {
                 "title": title,
@@ -347,9 +350,7 @@ def log_update(
     exclude_fields: set[str] | None = None,
 ) -> None:
     """Snapshot before/after, compute diff, and log an audit event in one call."""
-    meta = build_changes_metadata(
-        before_obj, after_obj, exclude=exclude_fields
-    )
+    meta = build_changes_metadata(before_obj, after_obj, exclude=exclude_fields)
     log_audit_event(
         db=db,
         request=request,
@@ -394,13 +395,16 @@ def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> lis
     actor_ids = {
         str(event.actor_id)
         for event in sliced_events
-        if getattr(event, "actor_id", None) and _is_user_actor(getattr(event, "actor_type", None))
+        if getattr(event, "actor_id", None)
+        and _is_user_actor(getattr(event, "actor_type", None))
     }
     subscribers: dict[str, Subscriber] = {}
     if actor_ids:
         subscribers = {
             str(subscriber.id): subscriber
-            for subscriber in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
+            for subscriber in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
     activities = []
     for event in sliced_events:
@@ -408,9 +412,13 @@ def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> lis
         changes = extract_changes(metadata, getattr(event, "action", None))
         change_summary = format_changes(changes)
         action_label = humanize_action(getattr(event, "action", None))
-        entity_label = humanize_entity(getattr(event, "entity_type", None), getattr(event, "entity_id", None))
+        entity_label = humanize_entity(
+            getattr(event, "entity_type", None), getattr(event, "entity_id", None)
+        )
         actor_name = _resolve_actor_name(event, subscribers)
-        time_str = format_audit_datetime(getattr(event, "occurred_at", None), "%b %d, %H:%M")
+        time_str = format_audit_datetime(
+            getattr(event, "occurred_at", None), "%b %d, %H:%M"
+        )
         message = f"{actor_name} {action_label} {entity_label}"
         detail = change_summary or entity_label
         activities.append(

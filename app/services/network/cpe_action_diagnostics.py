@@ -16,7 +16,9 @@ from app.services.network.ont_action_common import (
 logger = logging.getLogger(__name__)
 
 
-def run_ping_diagnostic(db: Session, cpe_id: str, host: str, count: int = 4) -> ActionResult:
+def run_ping_diagnostic(
+    db: Session, cpe_id: str, host: str, count: int = 4
+) -> ActionResult:
     """Run a ping diagnostic from the CPE device via TR-069."""
     if not host or not host.strip():
         return ActionResult(success=False, message="Ping target host is required.")
@@ -44,7 +46,9 @@ def run_ping_diagnostic(db: Session, cpe_id: str, host: str, count: int = 4) -> 
         result = client.set_parameter_values(device_id, params)
         logger.info(
             "Ping diagnostic started on CPE %s → %s (%d pings)",
-            cpe.serial_number, host.strip(), count,
+            cpe.serial_number,
+            host.strip(),
+            count,
         )
         return ActionResult(
             success=True,
@@ -56,13 +60,17 @@ def run_ping_diagnostic(db: Session, cpe_id: str, host: str, count: int = 4) -> 
         )
     except GenieACSError as exc:
         logger.error("Ping diagnostic failed for CPE %s: %s", cpe.serial_number, exc)
-        return ActionResult(success=False, message=f"Failed to start ping diagnostic: {exc}")
+        return ActionResult(
+            success=False, message=f"Failed to start ping diagnostic: {exc}"
+        )
 
 
 def run_traceroute_diagnostic(db: Session, cpe_id: str, host: str) -> ActionResult:
     """Run a traceroute diagnostic from the CPE device via TR-069."""
     if not host or not host.strip():
-        return ActionResult(success=False, message="Traceroute target host is required.")
+        return ActionResult(
+            success=False, message="Traceroute target host is required."
+        )
 
     cpe, error = get_cpe_or_error(db, cpe_id)
     if error:
@@ -84,7 +92,8 @@ def run_traceroute_diagnostic(db: Session, cpe_id: str, host: str) -> ActionResu
         result = client.set_parameter_values(device_id, params)
         logger.info(
             "Traceroute diagnostic started on CPE %s → %s",
-            cpe.serial_number, host.strip(),
+            cpe.serial_number,
+            host.strip(),
         )
         return ActionResult(
             success=True,
@@ -95,5 +104,7 @@ def run_traceroute_diagnostic(db: Session, cpe_id: str, host: str) -> ActionResu
             data=result,
         )
     except GenieACSError as exc:
-        logger.error("Traceroute diagnostic failed for CPE %s: %s", cpe.serial_number, exc)
+        logger.error(
+            "Traceroute diagnostic failed for CPE %s: %s", cpe.serial_number, exc
+        )
         return ActionResult(success=False, message=f"Failed to start traceroute: {exc}")

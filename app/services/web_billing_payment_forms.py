@@ -13,6 +13,7 @@ from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
 
+
 def account_label(account) -> str:
     """Build a human label for account/subscriber objects."""
     if not account:
@@ -35,7 +36,8 @@ def filter_open_invoices(invoices: list) -> list:
     return [
         invoice
         for invoice in invoices
-        if invoice.status in {InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue}
+        if invoice.status
+        in {InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue}
     ]
 
 
@@ -95,7 +97,9 @@ def build_new_form_state(
     if resolved_account_id:
         prefill["account_id"] = resolved_account_id
         try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=resolved_account_id)
+            selected_account = subscriber_service.accounts.get(
+                db=db, account_id=resolved_account_id
+            )
         except Exception:
             selected_account = None
 
@@ -123,7 +127,9 @@ def build_new_form_state(
         selected_invoice_id = prefill.get("invoice_id")
         if selected_invoice_id:
             invoice_obj = resolve_invoice(db, str(selected_invoice_id))
-            if invoice_obj and all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
+            if invoice_obj and all(
+                str(inv.id) != str(invoice_obj.id) for inv in invoices
+            ):
                 invoices = [invoice_obj, *invoices]
 
     return {
@@ -147,7 +153,9 @@ def load_invoice_options_state(
     selected_account = None
     if account_id:
         try:
-            selected_account = subscriber_service.accounts.get(db=db, account_id=account_id)
+            selected_account = subscriber_service.accounts.get(
+                db=db, account_id=account_id
+            )
         except Exception:
             selected_account = None
     invoices = []
@@ -269,7 +277,11 @@ def build_edit_error_context(
         "account_locked": True,
         "account_label": account_label(selected_account),
         "account_number": selected_account.account_number if selected_account else None,
-        "selected_account_id": str(selected_account.id) if selected_account else str(payment.account_id) if payment else None,
+        "selected_account_id": str(selected_account.id)
+        if selected_account
+        else str(payment.account_id)
+        if payment
+        else None,
         "currency_locked": bool(primary_invoice_id) if payment else False,
         "show_invoice_typeahead": False,
         "selected_invoice_id": primary_invoice_id,
@@ -373,7 +385,9 @@ def load_edit_dependencies(
     invoice_obj = None
     if primary_invoice_id:
         try:
-            invoice_obj = billing_service.invoices.get(db=db, invoice_id=primary_invoice_id)
+            invoice_obj = billing_service.invoices.get(
+                db=db, invoice_id=primary_invoice_id
+            )
             if all(str(inv.id) != str(invoice_obj.id) for inv in invoices):
                 invoices = [invoice_obj, *invoices]
         except Exception:

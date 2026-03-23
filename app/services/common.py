@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+
 def coerce_uuid(value):
     """Convert value to UUID, returning None if value is None."""
     if value is None:
@@ -33,6 +34,7 @@ def coerce_uuid(value):
     if isinstance(value, uuid.UUID):
         return value
     return uuid.UUID(str(value))
+
 
 def apply_ordering(query, order_by: str, order_dir: str, allowed_columns: dict):
     """Apply ordering to a query with validation.
@@ -59,6 +61,7 @@ def apply_ordering(query, order_by: str, order_dir: str, allowed_columns: dict):
         return query.order_by(column.desc())
     return query.order_by(column.asc())
 
+
 def apply_pagination(query, limit: int, offset: int):
     """Apply pagination to a query.
 
@@ -71,6 +74,7 @@ def apply_pagination(query, limit: int, offset: int):
         Query with pagination applied
     """
     return query.limit(limit).offset(offset)
+
 
 def validate_enum(value, enum_cls, label: str):
     """Validate and convert a value to an enum member.
@@ -93,6 +97,7 @@ def validate_enum(value, enum_cls, label: str):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid {label}") from exc
 
+
 def apply_is_active_filter(query, model, is_active: bool | None):
     """Apply standard is_active filter logic.
 
@@ -110,7 +115,10 @@ def apply_is_active_filter(query, model, is_active: bool | None):
         return query.filter(model.is_active.is_(True))
     return query.filter(model.is_active == is_active)
 
-def get_or_404(db: Session, model: type[T], id: str, detail: str | None = None, **options) -> T:
+
+def get_or_404(
+    db: Session, model: type[T], id: str, detail: str | None = None, **options
+) -> T:
     """Get entity by ID or raise 404.
 
     Args:
@@ -129,10 +137,10 @@ def get_or_404(db: Session, model: type[T], id: str, detail: str | None = None, 
     entity = db.get(model, coerce_uuid(id), **options)
     if not entity:
         raise HTTPException(
-            status_code=404,
-            detail=detail or f"{model.__name__} not found"
+            status_code=404, detail=detail or f"{model.__name__} not found"
         )
     return entity
+
 
 def get_by_id(db: Session, model: type[T], value, **kwargs) -> T | None:
     """Get entity by ID, returning None if not found or value is None.
@@ -149,6 +157,7 @@ def get_by_id(db: Session, model: type[T], value, **kwargs) -> T | None:
     if value is None:
         return None
     return db.get(model, coerce_uuid(value), **kwargs)
+
 
 def ensure_exists(db: Session, model: type[T], id: str, detail: str) -> T:
     """Ensure entity exists, raise 404 if not.
@@ -170,6 +179,7 @@ def ensure_exists(db: Session, model: type[T], id: str, detail: str) -> T:
         raise HTTPException(status_code=404, detail=detail)
     return entity
 
+
 def round_money(value: Decimal | int | float | str) -> Decimal:
     """Round monetary value to 2 decimal places using banker's rounding.
 
@@ -181,7 +191,10 @@ def round_money(value: Decimal | int | float | str) -> Decimal:
     """
     return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
-def to_decimal(value: Decimal | int | float | str | None, default: Decimal = Decimal("0.00")) -> Decimal:
+
+def to_decimal(
+    value: Decimal | int | float | str | None, default: Decimal = Decimal("0.00")
+) -> Decimal:
     """Safely convert a value to Decimal.
 
     Handles None and various numeric types that come back from SQLAlchemy
@@ -216,7 +229,10 @@ def validate_positive_decimal(value: Decimal | None, label: str) -> Decimal | No
         raise HTTPException(status_code=400, detail=f"{label} cannot be negative")
     return value
 
-def parse_date_filter(value: str | None, *, end_of_day: bool = False) -> datetime | None:
+
+def parse_date_filter(
+    value: str | None, *, end_of_day: bool = False
+) -> datetime | None:
     """Parse a YYYY-MM-DD string into a UTC-aware datetime for query filtering.
 
     Args:

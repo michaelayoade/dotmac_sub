@@ -47,7 +47,9 @@ def build_cpe_identity_context(db: Session, cpe: CPEDevice) -> dict[str, object]
         .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
         .first()
     )
-    raw_serial = str(cpe.serial_number or (linked_tr069.serial_number if linked_tr069 else "") or "").strip()
+    raw_serial = str(
+        cpe.serial_number or (linked_tr069.serial_number if linked_tr069 else "") or ""
+    ).strip()
     decoded_serial = decode_huawei_hex_serial(raw_serial)
     display_serial = decoded_serial or raw_serial or None
     vendor = (
@@ -69,8 +71,12 @@ def build_cpe_identity_context(db: Session, cpe: CPEDevice) -> dict[str, object]
         "model": model,
         "mac_address": mac_address,
         "oui": str(getattr(linked_tr069, "oui", "") or "").strip() or None,
-        "product_class": str(getattr(linked_tr069, "product_class", "") or "").strip() or None,
-        "connection_request_url": str(getattr(linked_tr069, "connection_request_url", "") or "").strip() or None,
+        "product_class": str(getattr(linked_tr069, "product_class", "") or "").strip()
+        or None,
+        "connection_request_url": str(
+            getattr(linked_tr069, "connection_request_url", "") or ""
+        ).strip()
+        or None,
         "last_inform_at": getattr(linked_tr069, "last_inform_at", None),
     }
 
@@ -84,7 +90,9 @@ def _normalize_cpe_device_type(value: str | None) -> str:
     return _CPE_DEFAULT_DEVICE_TYPE
 
 
-def parse_cpe_notes_metadata(notes: str | None) -> tuple[dict[str, str | None], str | None]:
+def parse_cpe_notes_metadata(
+    notes: str | None,
+) -> tuple[dict[str, str | None], str | None]:
     text = str(notes or "").strip()
     metadata = dict.fromkeys(_CPE_META_KEYS)
     if not text:
@@ -97,7 +105,7 @@ def parse_cpe_notes_metadata(notes: str | None) -> tuple[dict[str, str | None], 
         for key in _CPE_META_KEYS:
             token = f"[{key}:"
             if lowered.startswith(token) and lowered.endswith("]"):
-                metadata[key] = stripped[len(token):-1].strip() or None
+                metadata[key] = stripped[len(token) : -1].strip() or None
                 matched = True
                 break
         if not matched:
@@ -158,7 +166,9 @@ def parse_cpe_form(form) -> dict[str, object]:
     }
 
 
-def cpe_form_snapshot(values: dict[str, object], *, cpe_id: str | None = None) -> dict[str, object]:
+def cpe_form_snapshot(
+    values: dict[str, object], *, cpe_id: str | None = None
+) -> dict[str, object]:
     data = dict(values)
     data["device_type"] = _normalize_cpe_device_type(data.get("device_type"))
     if cpe_id:
@@ -172,7 +182,9 @@ def cpe_form_snapshot_from_model(cpe) -> dict[str, object]:
         "id": str(cpe.id),
         "subscriber_id": str(cpe.subscriber_id),
         "subscription_id": str(cpe.subscription_id) if cpe.subscription_id else "",
-        "service_address_id": str(cpe.service_address_id) if cpe.service_address_id else "",
+        "service_address_id": str(cpe.service_address_id)
+        if cpe.service_address_id
+        else "",
         "device_type": _normalize_cpe_device_type(cpe.device_type.value),
         "status": cpe.status.value,
         "serial_number": cpe.serial_number or "",
@@ -194,7 +206,11 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str | None) -> str:
     if not selected_subscriber_id:
         return ""
     try:
-        subscriber = db.query(Subscriber).filter(Subscriber.id == coerce_uuid(selected_subscriber_id)).first()
+        subscriber = (
+            db.query(Subscriber)
+            .filter(Subscriber.id == coerce_uuid(selected_subscriber_id))
+            .first()
+        )
     except Exception:
         logger.warning(
             "Failed to resolve CPE subscriber label for %s",
@@ -232,7 +248,9 @@ def create_cpe(db, values: dict[str, object]):
     if values.get("subscription_id"):
         normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
-        normalized["service_address_id"] = coerce_uuid(str(values.get("service_address_id")))
+        normalized["service_address_id"] = coerce_uuid(
+            str(values.get("service_address_id"))
+        )
     normalized["device_type"] = _normalize_cpe_device_type(values.get("device_type"))
     normalized["status"] = validate_enum(
         str(values.get("status") or DeviceStatus.active.value), DeviceStatus, "status"
@@ -260,7 +278,9 @@ def update_cpe(db, *, cpe_id: str, values: dict[str, object]):
     if values.get("subscription_id"):
         normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
-        normalized["service_address_id"] = coerce_uuid(str(values.get("service_address_id")))
+        normalized["service_address_id"] = coerce_uuid(
+            str(values.get("service_address_id"))
+        )
     normalized["device_type"] = _normalize_cpe_device_type(values.get("device_type"))
     normalized["status"] = validate_enum(
         str(values.get("status") or DeviceStatus.active.value), DeviceStatus, "status"
@@ -284,7 +304,9 @@ def get_cpe(db, *, cpe_id: str):
     return network_service.cpe_devices.get(db=db, device_id=cpe_id)
 
 
-def cpe_form_reference_data(db, *, subscriber_id: str | None = None) -> dict[str, object]:
+def cpe_form_reference_data(
+    db, *, subscriber_id: str | None = None
+) -> dict[str, object]:
     selected_subscriber_id = str(subscriber_id or "").strip()
     subscriptions: list[Subscription] = []
     addresses: list[Address] = []
@@ -304,7 +326,9 @@ def cpe_form_reference_data(db, *, subscriber_id: str | None = None) -> dict[str
             .all()
         )
     return {
-        "selected_subscriber_label": _resolve_subscriber_label(db, selected_subscriber_id),
+        "selected_subscriber_label": _resolve_subscriber_label(
+            db, selected_subscriber_id
+        ),
         "subscriptions": subscriptions,
         "addresses": addresses,
         "device_types": _CPE_DEVICE_TYPE_OPTIONS,
@@ -341,7 +365,8 @@ def build_cpe_list_data(
         devices = [
             d
             for d in devices
-            if search_q in " ".join(
+            if search_q
+            in " ".join(
                 [
                     str(d.serial_number or ""),
                     str(d.vendor or ""),
@@ -353,15 +378,24 @@ def build_cpe_list_data(
             ).lower()
         ]
     vendors = sorted({str(d.vendor) for d in devices if d.vendor})
-    subscribers = db.query(Subscriber).order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc()).limit(500).all()
+    subscribers = (
+        db.query(Subscriber)
+        .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
+        .limit(500)
+        .all()
+    )
     return {
         "cpes": devices,
         "vendors": vendors,
         "subscribers": subscribers,
         "stats": {
             "total": len(devices),
-            "active": sum(1 for d in devices if d.status.value == DeviceStatus.active.value),
-            "mikrotik": sum(1 for d in devices if "mikrotik" in str(d.vendor or "").lower()),
+            "active": sum(
+                1 for d in devices if d.status.value == DeviceStatus.active.value
+            ),
+            "mikrotik": sum(
+                1 for d in devices if "mikrotik" in str(d.vendor or "").lower()
+            ),
         },
         "filters": {
             "search": str(search or "").strip(),

@@ -36,6 +36,9 @@ def list_invoices_by_ids(db, invoice_ids_csv: str):
             if invoice:
                 invoices.append(invoice)
         except Exception:
+            logger.debug(
+                "Skipping invoice %s while loading bulk list", invoice_id, exc_info=True
+            )
             continue
     return invoices
 
@@ -52,6 +55,9 @@ def bulk_issue(db, invoice_ids_csv: str) -> list[str]:
                 db.commit()
                 updated.append(invoice_id)
         except Exception:
+            logger.debug(
+                "Skipping invoice %s during bulk issue", invoice_id, exc_info=True
+            )
             continue
     return updated
 
@@ -70,6 +76,9 @@ def bulk_send(db, invoice_ids_csv: str) -> list[str]:
                 )
                 queued.append(invoice_id)
         except Exception:
+            logger.debug(
+                "Skipping invoice %s during bulk send", invoice_id, exc_info=True
+            )
             continue
     return queued
 
@@ -80,11 +89,17 @@ def bulk_void(db, invoice_ids_csv: str) -> list[str]:
     for invoice_id in parse_ids_csv(invoice_ids_csv):
         try:
             invoice = billing_service.invoices.get(db, invoice_id)
-            if invoice and invoice.status not in [InvoiceStatus.paid, InvoiceStatus.void]:
+            if invoice and invoice.status not in [
+                InvoiceStatus.paid,
+                InvoiceStatus.void,
+            ]:
                 invoice.status = InvoiceStatus.void
                 db.commit()
                 updated.append(invoice_id)
         except Exception:
+            logger.debug(
+                "Skipping invoice %s during bulk void", invoice_id, exc_info=True
+            )
             continue
     return updated
 
@@ -110,6 +125,9 @@ def bulk_mark_paid(db, invoice_ids_csv: str) -> list[str]:
             db.commit()
             updated.append(invoice_id)
         except Exception:
+            logger.debug(
+                "Skipping invoice %s during bulk mark paid", invoice_id, exc_info=True
+            )
             continue
     return updated
 
@@ -127,7 +145,9 @@ def execute_bulk_action(db, *, action: str, invoice_ids_csv: str) -> list[str]:
     raise ValueError("Unsupported invoice bulk action")
 
 
-def bulk_queue_pdf_exports(db, invoice_ids_csv: str, requested_by_id: str | None = None) -> dict[str, list[str]]:
+def bulk_queue_pdf_exports(
+    db, invoice_ids_csv: str, requested_by_id: str | None = None
+) -> dict[str, list[str]]:
     """Queue PDF exports for selected invoices and report results."""
     queued: list[str] = []
     ready: list[str] = []
@@ -138,8 +158,12 @@ def bulk_queue_pdf_exports(db, invoice_ids_csv: str, requested_by_id: str | None
             if not invoice:
                 missing.append(invoice_id)
                 continue
-            latest_export = billing_invoice_pdf_service.get_latest_export(db, invoice_id=str(invoice.id))
-            latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
+            latest_export = billing_invoice_pdf_service.get_latest_export(
+                db, invoice_id=str(invoice.id)
+            )
+            latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(
+                db, latest_export
+            )
             if billing_invoice_pdf_service.export_file_exists(db, latest_export):
                 ready.append(str(invoice.id))
                 continue
@@ -229,8 +253,12 @@ def bulk_pdf_readiness(db, invoice_ids_csv: str) -> dict[str, object]:
             if not invoice:
                 missing.append(invoice_id)
                 continue
-            latest_export = billing_invoice_pdf_service.get_latest_export(db, invoice_id=str(invoice.id))
-            latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(db, latest_export)
+            latest_export = billing_invoice_pdf_service.get_latest_export(
+                db, invoice_id=str(invoice.id)
+            )
+            latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(
+                db, latest_export
+            )
             if billing_invoice_pdf_service.export_file_exists(db, latest_export):
                 ready.append(str(invoice.id))
             else:

@@ -90,10 +90,12 @@ def _company_lines(company_info: dict[str, str]) -> list[str]:
         (company_info.get("company_address_street2") or "").strip(),
     ]
     city_line = " ".join(
-        part for part in [
+        part
+        for part in [
             (company_info.get("company_address_city") or "").strip(),
             (company_info.get("company_address_zip") or "").strip(),
-        ] if part
+        ]
+        if part
     ).strip()
     country = (company_info.get("company_address_country") or "").strip()
     if city_line:
@@ -205,14 +207,22 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
         rows = "<tr><td colspan='4'>No line items</td></tr>"
 
     account_name = html.escape(_display_account_name(invoice))
-    account_email = html.escape((getattr(invoice.account, "email", None) or "").strip() or "N/A")
+    account_email = html.escape(
+        (getattr(invoice.account, "email", None) or "").strip() or "N/A"
+    )
     invoice_number = html.escape(invoice.invoice_number or str(invoice.id))
     memo = html.escape((invoice.memo or "").strip() or "-")
-    status = html.escape(invoice.status.value.replace("_", " ").title() if invoice.status else "Draft")
+    status = html.escape(
+        invoice.status.value.replace("_", " ").title() if invoice.status else "Draft"
+    )
     logo_src = _logo_src(db)
     company_info = company_info_service.get_company_info(db)
-    company_name = html.escape((company_info.get("company_name") or "").strip() or "Your Company")
-    company_block = "<br>".join(html.escape(line) for line in _company_lines(company_info))
+    company_name = html.escape(
+        (company_info.get("company_name") or "").strip() or "Your Company"
+    )
+    company_block = "<br>".join(
+        html.escape(line) for line in _company_lines(company_info)
+    )
     accent_invoice_id = invoice.invoice_number or str(invoice.id)
     tax_label = "Tax"
     vat_number = html.escape((company_info.get("company_vat_number") or "").strip())
@@ -315,7 +325,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <div class=\"invoice-meta\">
             <div>Issued: {_format_date(invoice.issued_at)}</div>
             <div>Due: {_format_date(invoice.due_at)}</div>
-            <div>Currency: {html.escape(invoice.currency or 'NGN')}</div>
+            <div>Currency: {html.escape(invoice.currency or "NGN")}</div>
           </div>
           <div class=\"status-pill\">{status}</div>
         </div>
@@ -403,7 +413,13 @@ def _build_simple_pdf(lines: list[str]) -> bytes:
         b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] "
         b"/Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>"
     )
-    objects.append(b"<< /Length " + str(len(content)).encode("ascii") + b" >>\nstream\n" + content + b"\nendstream")
+    objects.append(
+        b"<< /Length "
+        + str(len(content)).encode("ascii")
+        + b" >>\nstream\n"
+        + content
+        + b"\nendstream"
+    )
     objects.append(b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
 
     pdf = bytearray()
@@ -469,8 +485,12 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
 
     def _font(size: int, bold: bool = False):
         candidates = [
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf"
+            if bold
+            else "/usr/share/fonts/dejavu/DejaVuSans.ttf",
         ]
         for path in candidates:
             if Path(path).exists():
@@ -498,7 +518,13 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     label_font = _font(18, bold=True)
     value_font = _font(24, bold=True)
 
-    draw.rounded_rectangle((36, 36, width - 36, height - 36), radius=28, outline=slate_200, width=2, fill="#ffffff")
+    draw.rounded_rectangle(
+        (36, 36, width - 36, height - 36),
+        radius=28,
+        outline=slate_200,
+        width=2,
+        fill="#ffffff",
+    )
     draw.rounded_rectangle((36, 36, width - 36, 350), radius=28, fill=green_900)
     draw.rectangle((36, 220, width - 36, 350), fill=green_700)
 
@@ -509,13 +535,22 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     if logo_image is not None:
         logo = logo_image.copy()
         logo.thumbnail((220, 100))
-        logo_bg = Image.new("RGBA", (logo.width + 28, logo.height + 20), (255, 255, 255, 255))
+        logo_bg = Image.new(
+            "RGBA", (logo.width + 28, logo.height + 20), (255, 255, 255, 255)
+        )
         page.paste(logo_bg.convert("RGB"), (margin_x - 10, 78))
         page.paste(logo, (margin_x + 4, 88), logo)
         company_x = margin_x + logo_bg.width + 26
     else:
-        draw.rounded_rectangle((margin_x, 78, margin_x + 88, 166), radius=22, fill="#ffffff")
-        draw.text((margin_x + 28, 96), company_name[:1].upper(), font=title_font, fill=green_900)
+        draw.rounded_rectangle(
+            (margin_x, 78, margin_x + 88, 166), radius=22, fill="#ffffff"
+        )
+        draw.text(
+            (margin_x + 28, 96),
+            company_name[:1].upper(),
+            font=title_font,
+            fill=green_900,
+        )
         company_x = margin_x + 118
 
     draw.text((company_x, 84), company_name, font=title_font, fill="#ffffff")
@@ -528,53 +563,150 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     draw.rounded_rectangle((panel_x, 82, width - 84, 252), radius=22, fill="#ffffff")
     invoice_number = invoice.invoice_number or str(invoice.id)
     draw.text((panel_x + 28, 106), "INVOICE", font=label_font, fill=green_900)
-    draw.text((panel_x + 28, 138), f"#{invoice_number}", font=heading_font, fill=slate_900)
-    draw.text((panel_x + 28, 188), f"Issued: {_format_date(invoice.issued_at)}", font=small_font, fill=slate_700)
-    draw.text((panel_x + 28, 214), f"Due: {_format_date(invoice.due_at)}", font=small_font, fill=slate_700)
+    draw.text(
+        (panel_x + 28, 138), f"#{invoice_number}", font=heading_font, fill=slate_900
+    )
+    draw.text(
+        (panel_x + 28, 188),
+        f"Issued: {_format_date(invoice.issued_at)}",
+        font=small_font,
+        fill=slate_700,
+    )
+    draw.text(
+        (panel_x + 28, 214),
+        f"Due: {_format_date(invoice.due_at)}",
+        font=small_font,
+        fill=slate_700,
+    )
 
     y = 390
     card_height = 138
     card_gap = 22
     card_width = (width - (margin_x * 2) - card_gap * 2) // 3
     cards = [
-        ("Billed To", _display_account_name(invoice), getattr(invoice.account, "email", None) or "N/A", "#ffffff", slate_900),
-        ("Balance Due", f"N{_money(invoice.balance_due)}", f"Currency: {invoice.currency or 'NGN'}", green_50, green_900),
-        ("Reference", f"Invoice {invoice_number}", invoice.status.value.replace("_", " ").title() if invoice.status else "Draft", "#fff5f5", red_700),
+        (
+            "Billed To",
+            _display_account_name(invoice),
+            getattr(invoice.account, "email", None) or "N/A",
+            "#ffffff",
+            slate_900,
+        ),
+        (
+            "Balance Due",
+            f"N{_money(invoice.balance_due)}",
+            f"Currency: {invoice.currency or 'NGN'}",
+            green_50,
+            green_900,
+        ),
+        (
+            "Reference",
+            f"Invoice {invoice_number}",
+            invoice.status.value.replace("_", " ").title()
+            if invoice.status
+            else "Draft",
+            "#fff5f5",
+            red_700,
+        ),
     ]
     for index, (title, line1, line2, fill, accent) in enumerate(cards):
         left = margin_x + index * (card_width + card_gap)
-        draw.rounded_rectangle((left, y, left + card_width, y + card_height), radius=20, fill=fill, outline=slate_200)
+        draw.rounded_rectangle(
+            (left, y, left + card_width, y + card_height),
+            radius=20,
+            fill=fill,
+            outline=slate_200,
+        )
         draw.text((left + 20, y + 18), title.upper(), font=label_font, fill=accent)
-        draw.text((left + 20, y + 54), line1, font=value_font if index == 1 else body_font, fill=slate_900 if index != 1 else green_900)
+        draw.text(
+            (left + 20, y + 54),
+            line1,
+            font=value_font if index == 1 else body_font,
+            fill=slate_900 if index != 1 else green_900,
+        )
         draw.text((left + 20, y + 94), line2, font=small_font, fill=slate_700)
 
     table_top = 572
     table_left = margin_x
     table_right = width - margin_x
-    draw.rounded_rectangle((table_left, table_top, table_right, table_top + 560), radius=22, fill="#ffffff", outline=slate_200)
-    draw.rounded_rectangle((table_left, table_top, table_right, table_top + 66), radius=22, fill=green_900)
+    draw.rounded_rectangle(
+        (table_left, table_top, table_right, table_top + 560),
+        radius=22,
+        fill="#ffffff",
+        outline=slate_200,
+    )
+    draw.rounded_rectangle(
+        (table_left, table_top, table_right, table_top + 66), radius=22, fill=green_900
+    )
     columns = [table_left + 24, table_left + 650, table_left + 800, table_left + 980]
     headers = ["Description", "Qty", "Unit Price", "Amount"]
     for header, col in zip(headers, columns):
-        draw.text((col, table_top + 20), header.upper(), font=label_font, fill="#ffffff")
+        draw.text(
+            (col, table_top + 20), header.upper(), font=label_font, fill="#ffffff"
+        )
 
-    line_items = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
+    line_items = [
+        line for line in (invoice.lines or []) if getattr(line, "is_active", True)
+    ]
     if not line_items:
-        line_items = [type("FallbackLine", (), {"description": "No line items", "quantity": "", "unit_price": "", "amount": ""})()]
+        line_items = [
+            type(
+                "FallbackLine",
+                (),
+                {
+                    "description": "No line items",
+                    "quantity": "",
+                    "unit_price": "",
+                    "amount": "",
+                },
+            )()
+        ]
     row_y = table_top + 86
     row_height = 64
     for index, line in enumerate(line_items[:7]):
         if index % 2 == 1:
-            draw.rounded_rectangle((table_left + 6, row_y - 8, table_right - 6, row_y + row_height - 10), radius=12, fill=green_50)
-        draw.text((columns[0], row_y), str(line.description or "Line item"), font=body_font, fill=slate_900)
-        draw.text((columns[1], row_y), str(line.quantity or ""), font=body_font, fill=slate_700)
-        draw.text((columns[2], row_y), f"N{_money(getattr(line, 'unit_price', None))}" if getattr(line, "unit_price", None) != "" else "", font=body_font, fill=slate_700)
-        draw.text((columns[3], row_y), f"N{_money(getattr(line, 'amount', None))}" if getattr(line, "amount", None) != "" else "", font=body_font, fill=slate_900)
+            draw.rounded_rectangle(
+                (table_left + 6, row_y - 8, table_right - 6, row_y + row_height - 10),
+                radius=12,
+                fill=green_50,
+            )
+        draw.text(
+            (columns[0], row_y),
+            str(line.description or "Line item"),
+            font=body_font,
+            fill=slate_900,
+        )
+        draw.text(
+            (columns[1], row_y),
+            str(line.quantity or ""),
+            font=body_font,
+            fill=slate_700,
+        )
+        draw.text(
+            (columns[2], row_y),
+            f"N{_money(getattr(line, 'unit_price', None))}"
+            if getattr(line, "unit_price", None) != ""
+            else "",
+            font=body_font,
+            fill=slate_700,
+        )
+        draw.text(
+            (columns[3], row_y),
+            f"N{_money(getattr(line, 'amount', None))}"
+            if getattr(line, "amount", None) != ""
+            else "",
+            font=body_font,
+            fill=slate_900,
+        )
         row_y += row_height
 
     totals_left = width - 430
     totals_top = 1180
-    draw.rounded_rectangle((totals_left, totals_top, width - margin_x, totals_top + 172), radius=20, fill="#ffffff", outline=slate_200)
+    draw.rounded_rectangle(
+        (totals_left, totals_top, width - margin_x, totals_top + 172),
+        radius=20,
+        fill="#ffffff",
+        outline=slate_200,
+    )
     totals = [
         ("Subtotal", f"N{_money(invoice.subtotal)}"),
         ("Tax", f"N{_money(invoice.tax_total)}"),
@@ -582,18 +714,48 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     ]
     for index, (label, value) in enumerate(totals):
         ty = totals_top + 22 + (index * 44)
-        draw.text((totals_left + 22, ty), label, font=body_font, fill=slate_700 if label != "Total" else green_900)
-        draw.text((totals_left + 210, ty), value, font=value_font if label == "Total" else body_font, fill=green_900 if label == "Total" else slate_900)
+        draw.text(
+            (totals_left + 22, ty),
+            label,
+            font=body_font,
+            fill=slate_700 if label != "Total" else green_900,
+        )
+        draw.text(
+            (totals_left + 210, ty),
+            value,
+            font=value_font if label == "Total" else body_font,
+            fill=green_900 if label == "Total" else slate_900,
+        )
 
     memo_top = 1388
-    draw.rounded_rectangle((margin_x, memo_top, width - margin_x, memo_top + 150), radius=18, fill="#fff5f5", outline="#fecaca")
+    draw.rounded_rectangle(
+        (margin_x, memo_top, width - margin_x, memo_top + 150),
+        radius=18,
+        fill="#fff5f5",
+        outline="#fecaca",
+    )
     draw.rectangle((margin_x, memo_top, margin_x + 12, memo_top + 150), fill=red_700)
     draw.text((margin_x + 28, memo_top + 20), "MEMO", font=label_font, fill=red_700)
-    draw.text((margin_x + 28, memo_top + 58), (invoice.memo or "").strip() or "-", font=body_font, fill=slate_900)
+    draw.text(
+        (margin_x + 28, memo_top + 58),
+        (invoice.memo or "").strip() or "-",
+        font=body_font,
+        fill=slate_900,
+    )
 
     footer_y = 1612
-    draw.text((margin_x, footer_y), f"Prepared by {company_name}", font=small_font, fill=slate_500)
-    draw.text((width - 360, footer_y), "Thank you for your business.", font=small_font, fill=slate_500)
+    draw.text(
+        (margin_x, footer_y),
+        f"Prepared by {company_name}",
+        font=small_font,
+        fill=slate_500,
+    )
+    draw.text(
+        (width - 360, footer_y),
+        "Thank you for your business.",
+        font=small_font,
+        fill=slate_500,
+    )
 
     output = io.BytesIO()
     page.save(output, format="PDF", resolution=144.0)
@@ -623,7 +785,9 @@ def _is_export_fresh(invoice: Invoice, export: InvoicePdfExport) -> bool:
     return True
 
 
-def is_export_cache_valid(db: Session, invoice: Invoice, export: InvoicePdfExport | None) -> bool:
+def is_export_cache_valid(
+    db: Session, invoice: Invoice, export: InvoicePdfExport | None
+) -> bool:
     if not export:
         return False
     if not _is_export_fresh(invoice, export):
@@ -776,7 +940,9 @@ def get_cache_dashboard_stats(db: Session) -> dict[str, Any]:
     )
     unique_invoice_ids = {str(row.invoice_id) for row in completed}
     total_size_bytes = sum(int(row.file_size_bytes or 0) for row in completed)
-    oldest_cached = min((row.completed_at for row in completed if row.completed_at), default=None)
+    oldest_cached = min(
+        (row.completed_at for row in completed if row.completed_at), default=None
+    )
 
     durations = [
         (row.completed_at - row.created_at).total_seconds()
@@ -803,7 +969,9 @@ def get_cache_dashboard_stats(db: Session) -> dict[str, Any]:
 
 
 def _invalidate_export_file(db: Session, export: InvoicePdfExport) -> None:
-    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    record = file_uploads.get_active_entity_file(
+        db, "invoice_pdf_export", str(export.id)
+    )
     if record:
         file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
     export.file_path = None
@@ -846,7 +1014,9 @@ def clear_cache(
     date_to: datetime | None = None,
     account_id: str | None = None,
 ) -> dict[str, int]:
-    query = db.query(InvoicePdfExport).join(Invoice, Invoice.id == InvoicePdfExport.invoice_id)
+    query = db.query(InvoicePdfExport).join(
+        Invoice, Invoice.id == InvoicePdfExport.invoice_id
+    )
     query = query.filter(InvoicePdfExport.status == InvoicePdfExportStatus.completed)
     if date_from:
         query = query.filter(InvoicePdfExport.completed_at >= date_from)
@@ -867,9 +1037,15 @@ def clear_cache(
 
 
 def export_file_exists(db: Session, export: InvoicePdfExport | None) -> bool:
-    if not export or export.status != InvoicePdfExportStatus.completed or not export.file_path:
+    if (
+        not export
+        or export.status != InvoicePdfExportStatus.completed
+        or not export.file_path
+    ):
         return False
-    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    record = file_uploads.get_active_entity_file(
+        db, "invoice_pdf_export", str(export.id)
+    )
     if record:
         try:
             file_uploads.stream_file(record)
@@ -894,9 +1070,14 @@ def maybe_finalize_stalled_export(
         return None
 
     should_process_inline = False
-    if export.status == InvoicePdfExportStatus.completed and not export_file_exists(db, export):
+    if export.status == InvoicePdfExportStatus.completed and not export_file_exists(
+        db, export
+    ):
         should_process_inline = True
-    elif export.status in (InvoicePdfExportStatus.queued, InvoicePdfExportStatus.processing):
+    elif export.status in (
+        InvoicePdfExportStatus.queued,
+        InvoicePdfExportStatus.processing,
+    ):
         marker = export.updated_at or export.created_at
         if marker:
             age_seconds = (datetime.now(UTC) - marker).total_seconds()
@@ -963,7 +1144,9 @@ def stream_export(db: Session, export: InvoicePdfExport) -> StreamResult:
     if local_path.exists():
         return _stream_local_file(local_path)
 
-    record = file_uploads.get_active_entity_file(db, "invoice_pdf_export", str(export.id))
+    record = file_uploads.get_active_entity_file(
+        db, "invoice_pdf_export", str(export.id)
+    )
     if record:
         return file_uploads.stream_file(record)
 
@@ -990,7 +1173,11 @@ def process_export(export_id: str) -> dict[str, Any]:
             export.error = "Invoice not found"
             export.completed_at = datetime.now(UTC)
             db.commit()
-            return {"status": "failed", "reason": "invoice_not_found", "export_id": export_id}
+            return {
+                "status": "failed",
+                "reason": "invoice_not_found",
+                "export_id": export_id,
+            }
 
         # Load related data used by renderer.
         _ = invoice.account
@@ -1000,7 +1187,9 @@ def process_export(export_id: str) -> dict[str, Any]:
             db, "invoice_pdf_export", str(export.id)
         )
         if existing_record:
-            file_uploads.soft_delete(db=db, file=existing_record, hard_delete_object=True)
+            file_uploads.soft_delete(
+                db=db, file=existing_record, hard_delete_object=True
+            )
 
         pdf_bytes = _build_pdf_bytes(db, invoice)
         uploaded = file_uploads.upload(

@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 logger = logging.getLogger(__name__)
 
+
 def html_notice(message: str) -> str:
     return (
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 '

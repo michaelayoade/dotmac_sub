@@ -124,7 +124,9 @@ def _coerce_scalar(value: Any, field_type: str) -> Any:
         try:
             return date.fromisoformat(str(value))
         except (TypeError, ValueError) as exc:
-            raise FilterValidationError("Expected an ISO date value (YYYY-MM-DD)") from exc
+            raise FilterValidationError(
+                "Expected an ISO date value (YYYY-MM-DD)"
+            ) from exc
 
     if field_type == "datetime":
         if isinstance(value, datetime):
@@ -162,7 +164,9 @@ def _normalized_operator(operator: Any) -> str:
     return op
 
 
-def parse_filter_payload(payload: str | list | dict | None, *, default_doctype: str) -> FilterQuery:
+def parse_filter_payload(
+    payload: str | list | dict | None, *, default_doctype: str
+) -> FilterQuery:
     """Parse ERPNext-style filters with optional OR grouping.
 
     Accepted payloads:
@@ -214,7 +218,9 @@ def parse_filter_payload(payload: str | list | dict | None, *, default_doctype: 
             )
         return conditions
 
-    return FilterQuery(and_filters=_parse_rows(and_rows), or_filters=_parse_rows(or_rows))
+    return FilterQuery(
+        and_filters=_parse_rows(and_rows), or_filters=_parse_rows(or_rows)
+    )
 
 
 def _validate_field_doctype(condition: FilterCondition, expected_doctype: str) -> None:
@@ -227,7 +233,9 @@ def _validate_field_doctype(condition: FilterCondition, expected_doctype: str) -
 def _allowed_ops(spec: FilterFieldSpec) -> set[str]:
     if spec.operators is not None:
         return spec.operators
-    return DEFAULT_OPERATORS_BY_TYPE.get(spec.field_type, DEFAULT_OPERATORS_BY_TYPE["text"])
+    return DEFAULT_OPERATORS_BY_TYPE.get(
+        spec.field_type, DEFAULT_OPERATORS_BY_TYPE["text"]
+    )
 
 
 def _validate_select_option(spec: FilterFieldSpec, value: Any) -> None:
@@ -261,7 +269,9 @@ def _build_default_expression(
 
     if operator in {"like", "not like"}:
         if field_type not in {"text", "select", "uuid"}:
-            raise FilterValidationError(f"Operator '{operator}' is not allowed for {field_type} fields")
+            raise FilterValidationError(
+                f"Operator '{operator}' is not allowed for {field_type} fields"
+            )
         pattern = f"%{_coerce_scalar(value, 'text')}%"
         return col.ilike(pattern) if operator == "like" else ~col.ilike(pattern)
 
@@ -272,7 +282,9 @@ def _build_default_expression(
 
     if operator == "between":
         if field_type not in {"date", "datetime"}:
-            raise FilterValidationError("Between is only supported for date/datetime fields")
+            raise FilterValidationError(
+                "Between is only supported for date/datetime fields"
+            )
         if not isinstance(value, (list, tuple)) or len(value) != 2:
             raise FilterValidationError("Between expects [from, to]")
         start = _coerce_scalar(value[0], field_type)
@@ -333,14 +345,16 @@ def build_filter_expression(
             )
 
         if spec.builder is not None:
-            return cast(ColumnElement[bool], spec.builder(condition.operator, condition.value))
+            return cast(
+                ColumnElement[bool], spec.builder(condition.operator, condition.value)
+            )
 
         return cast(
             ColumnElement[bool],
             _build_default_expression(
-            spec,
-            operator=condition.operator,
-            value=condition.value,
+                spec,
+                operator=condition.operator,
+                value=condition.value,
             ),
         )
 

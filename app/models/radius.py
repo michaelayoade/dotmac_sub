@@ -41,7 +41,9 @@ class RadiusServer(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     clients = relationship("RadiusClient", back_populates="server")
@@ -71,7 +73,9 @@ class RadiusClient(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     server = relationship("RadiusServer", back_populates="clients")
@@ -82,7 +86,9 @@ class RadiusUser(Base):
     __tablename__ = "radius_users"
     __table_args__ = (
         UniqueConstraint("username", name="uq_radius_users_username"),
-        UniqueConstraint("access_credential_id", name="uq_radius_users_access_credential"),
+        UniqueConstraint(
+            "access_credential_id", name="uq_radius_users_access_credential"
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -109,7 +115,9 @@ class RadiusUser(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     access_credential = relationship("AccessCredential", back_populates="radius_users")
@@ -146,7 +154,9 @@ class RadiusSyncJob(Base):
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=lambda: datetime.now(UTC), onupdate=lambda: datetime.now(UTC)
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
     )
 
     server = relationship("RadiusServer")

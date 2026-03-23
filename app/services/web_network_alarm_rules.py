@@ -21,6 +21,7 @@ from app.services import network_monitoring as monitoring_service
 
 logger = logging.getLogger(__name__)
 
+
 class AlarmRuleFormValues(TypedDict):
     name: str
     metric_type: str
@@ -80,7 +81,9 @@ def parse_form_values(form) -> AlarmRuleFormValues:
     }
 
 
-def validate_form_values(values: AlarmRuleFormValues) -> tuple[AlarmRuleNormalized | None, str | None]:
+def validate_form_values(
+    values: AlarmRuleFormValues,
+) -> tuple[AlarmRuleNormalized | None, str | None]:
     """Validate/normalize alarm-rule form fields."""
     threshold_raw = values["threshold_raw"]
     duration_raw = values["duration_raw"]

@@ -23,6 +23,7 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+
 def _invite_login_route_for_user(_system_user: SystemUser) -> str:
     return "/auth/login?next=/admin/dashboard"
 
@@ -33,9 +34,9 @@ def set_user_active(db: Session, *, user_id: str, is_active: bool) -> SystemUser
     if not system_user:
         raise ValueError("User not found")
     system_user.is_active = is_active
-    db.query(UserCredential).filter(UserCredential.system_user_id == system_user.id).update(
-        {"is_active": is_active}
-    )
+    db.query(UserCredential).filter(
+        UserCredential.system_user_id == system_user.id
+    ).update({"is_active": is_active})
     db.commit()
     return system_user
 
@@ -294,15 +295,15 @@ def delete_user_records(db: Session, *, user_id: str) -> SystemUser:
     db.query(UserCredential).filter(
         UserCredential.system_user_id == system_user.id
     ).delete(synchronize_session=False)
-    db.query(MFAMethod).filter(
-        MFAMethod.system_user_id == system_user.id
-    ).delete(synchronize_session=False)
-    db.query(AuthSession).filter(
-        AuthSession.system_user_id == system_user.id
-    ).delete(synchronize_session=False)
-    db.query(ApiKey).filter(
-        ApiKey.system_user_id == system_user.id
-    ).delete(synchronize_session=False)
+    db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).delete(
+        synchronize_session=False
+    )
+    db.query(AuthSession).filter(AuthSession.system_user_id == system_user.id).delete(
+        synchronize_session=False
+    )
+    db.query(ApiKey).filter(ApiKey.system_user_id == system_user.id).delete(
+        synchronize_session=False
+    )
     db.query(SystemUserRoleModel).filter(
         SystemUserRoleModel.system_user_id == system_user.id
     ).delete(synchronize_session=False)
@@ -331,15 +332,15 @@ def bulk_delete_user_records(db: Session, *, user_ids: list[str]) -> tuple[int, 
         db.query(UserCredential).filter(
             UserCredential.system_user_id == system_user.id
         ).delete(synchronize_session=False)
-        db.query(MFAMethod).filter(
-            MFAMethod.system_user_id == system_user.id
-        ).delete(synchronize_session=False)
+        db.query(MFAMethod).filter(MFAMethod.system_user_id == system_user.id).delete(
+            synchronize_session=False
+        )
         db.query(AuthSession).filter(
             AuthSession.system_user_id == system_user.id
         ).delete(synchronize_session=False)
-        db.query(ApiKey).filter(
-            ApiKey.system_user_id == system_user.id
-        ).delete(synchronize_session=False)
+        db.query(ApiKey).filter(ApiKey.system_user_id == system_user.id).delete(
+            synchronize_session=False
+        )
         db.query(SystemUserRoleModel).filter(
             SystemUserRoleModel.system_user_id == system_user.id
         ).delete(synchronize_session=False)

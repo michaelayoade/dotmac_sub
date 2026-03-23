@@ -9,6 +9,7 @@ from app.services import web_customer_auth as web_customer_auth_service
 
 router = APIRouter(prefix="/portal/auth", tags=["web-customer-auth"])
 
+
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
     """Get the current customer from request cookies."""
     return web_customer_auth_service.get_current_customer_from_request(request, db)
@@ -59,7 +60,9 @@ def customer_stop_impersonation(request: Request, next: str = Form("/admin/custo
 
 
 @router.get("/stop-impersonation")
-def customer_stop_impersonation_get(request: Request, next: str | None = Query(default=None)):
+def customer_stop_impersonation_get(
+    request: Request, next: str | None = Query(default=None)
+):
     """Backwards-compatible GET stop impersonation endpoint.
 
     Preferred flow is POST from the portal banner form.

@@ -18,6 +18,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class Engines(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SubscriptionEngineCreate):
@@ -52,7 +53,10 @@ class Engines(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": SubscriptionEngine.created_at, "name": SubscriptionEngine.name},
+            {
+                "created_at": SubscriptionEngine.created_at,
+                "name": SubscriptionEngine.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -89,7 +93,9 @@ class EngineSettings(ListResponseMixin):
     def get(db: Session, setting_id: str):
         setting = db.get(SubscriptionEngineSetting, setting_id)
         if not setting:
-            raise HTTPException(status_code=404, detail="Subscription engine setting not found")
+            raise HTTPException(
+                status_code=404, detail="Subscription engine setting not found"
+            )
         return setting
 
     @staticmethod
@@ -108,7 +114,10 @@ class EngineSettings(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": SubscriptionEngineSetting.created_at, "key": SubscriptionEngineSetting.key},
+            {
+                "created_at": SubscriptionEngineSetting.created_at,
+                "key": SubscriptionEngineSetting.key,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -116,7 +125,9 @@ class EngineSettings(ListResponseMixin):
     def update(db: Session, setting_id: str, payload: SubscriptionEngineSettingUpdate):
         setting = db.get(SubscriptionEngineSetting, setting_id)
         if not setting:
-            raise HTTPException(status_code=404, detail="Subscription engine setting not found")
+            raise HTTPException(
+                status_code=404, detail="Subscription engine setting not found"
+            )
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(setting, key, value)
         db.commit()
@@ -127,7 +138,9 @@ class EngineSettings(ListResponseMixin):
     def delete(db: Session, setting_id: str):
         setting = db.get(SubscriptionEngineSetting, setting_id)
         if not setting:
-            raise HTTPException(status_code=404, detail="Subscription engine setting not found")
+            raise HTTPException(
+                status_code=404, detail="Subscription engine setting not found"
+            )
         db.delete(setting)
         db.commit()
 

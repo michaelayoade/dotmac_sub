@@ -22,6 +22,7 @@ from app.services.query_builders import apply_active_state, apply_optional_equal
 
 logger = logging.getLogger(__name__)
 
+
 class AddOns(CRUDManager[AddOn]):
     model = AddOn
     not_found_detail = "Add-on not found"
@@ -81,6 +82,7 @@ class AddOns(CRUDManager[AddOn]):
     @classmethod
     def delete(cls, db: Session, add_on_id: str):
         return super().delete(db, add_on_id)
+
 
 class AddOnPrices(CRUDManager[AddOnPrice]):
     model = AddOnPrice

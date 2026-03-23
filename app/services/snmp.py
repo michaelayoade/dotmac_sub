@@ -24,6 +24,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class Credentials(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: SnmpCredentialCreate):
@@ -241,7 +242,10 @@ class Pollers(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": SnmpPoller.created_at, "poll_interval_sec": SnmpPoller.poll_interval_sec},
+            {
+                "created_at": SnmpPoller.created_at,
+                "poll_interval_sec": SnmpPoller.poll_interval_sec,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -297,7 +301,10 @@ class Readings(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": SnmpReading.created_at, "recorded_at": SnmpReading.recorded_at},
+            {
+                "created_at": SnmpReading.created_at,
+                "recorded_at": SnmpReading.recorded_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

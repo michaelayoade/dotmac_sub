@@ -67,7 +67,9 @@ def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
 def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
     """Set WiFi password on ONT via TR-069."""
     if not password or len(password) < 8:
-        return ActionResult(success=False, message="WiFi password must be at least 8 characters.")
+        return ActionResult(
+            success=False, message="WiFi password must be at least 8 characters."
+        )
 
     ont, error = get_ont_or_error(db, ont_id)
     if error:
@@ -91,13 +93,17 @@ def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
         )
     except GenieACSError as exc:
         logger.error("Set WiFi password failed for ONT %s: %s", ont.serial_number, exc)
-        return ActionResult(success=False, message=f"Failed to set WiFi password: {exc}")
+        return ActionResult(
+            success=False, message=f"Failed to set WiFi password: {exc}"
+        )
 
 
 def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> ActionResult:
     """Enable or disable an ONT LAN port via TR-069."""
     if port < 1 or port > 4:
-        return ActionResult(success=False, message="Port number must be between 1 and 4.")
+        return ActionResult(
+            success=False, message="Port number must be between 1 and 4."
+        )
 
     ont, error = get_ont_or_error(db, ont_id)
     if error:
@@ -123,5 +129,7 @@ def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> Actio
             data=result,
         )
     except GenieACSError as exc:
-        logger.error("Toggle LAN port %d failed for ONT %s: %s", port, ont.serial_number, exc)
+        logger.error(
+            "Toggle LAN port %d failed for ONT %s: %s", port, ont.serial_number, exc
+        )
         return ActionResult(success=False, message=f"Failed to toggle LAN port: {exc}")

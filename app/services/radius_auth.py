@@ -13,6 +13,7 @@ from app.models.radius import RadiusServer
 
 logger = logging.getLogger(__name__)
 
+
 def _setting_value(db: Session, key: str) -> str | None:
     setting = (
         db.query(DomainSetting)
@@ -53,7 +54,9 @@ def authenticate(
     try:
         dictionary = Dictionary(dict_path)
     except Exception as exc:
-        raise HTTPException(status_code=500, detail="Radius dictionary not available") from exc
+        raise HTTPException(
+            status_code=500, detail="Radius dictionary not available"
+        ) from exc
     client = Client(
         server=server.host,
         secret=secret.encode("utf-8"),

@@ -67,9 +67,7 @@ class FupState(Base):
         nullable=False,
         default=FupActionStatus.none,
     )
-    speed_reduction_percent: Mapped[float | None] = mapped_column(
-        Float, nullable=True
-    )
+    speed_reduction_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     # RADIUS profile applied before throttle (to restore on reset)
     original_profile_id: Mapped[uuid.UUID | None] = mapped_column(
@@ -111,9 +109,5 @@ class FupState(Base):
     subscription = relationship("Subscription", backref="fup_state", uselist=False)
     offer = relationship("CatalogOffer")
     active_rule = relationship("FupRule")
-    original_profile = relationship(
-        "RadiusProfile", foreign_keys=[original_profile_id]
-    )
-    throttle_profile = relationship(
-        "RadiusProfile", foreign_keys=[throttle_profile_id]
-    )
+    original_profile = relationship("RadiusProfile", foreign_keys=[original_profile_id])
+    throttle_profile = relationship("RadiusProfile", foreign_keys=[throttle_profile_id])

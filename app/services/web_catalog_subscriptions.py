@@ -79,7 +79,9 @@ def _coerce_setting_int(value: object | None) -> int | None:
     return None
 
 
-def _coerce_setting_bool(value: object | None, default: bool | None = None) -> bool | None:
+def _coerce_setting_bool(
+    value: object | None, default: bool | None = None
+) -> bool | None:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
@@ -159,8 +161,12 @@ def _tax_rate_label(rate: TaxRate | None) -> str:
     return f"{rate.name} ({percentage}%)"
 
 
-def _subscription_commercial_policy(db: Session, subscription: Subscription) -> dict[str, object]:
-    subscriber = subscription.subscriber or db.get(Subscriber, subscription.subscriber_id)
+def _subscription_commercial_policy(
+    db: Session, subscription: Subscription
+) -> dict[str, object]:
+    subscriber = subscription.subscriber or db.get(
+        Subscriber, subscription.subscriber_id
+    )
     global_defaults = _billing_global_defaults(db)
 
     rows = [
@@ -212,15 +218,25 @@ def _subscription_commercial_policy(db: Session, subscription: Subscription) -> 
     ]
     for key, label, uses_global in subscriber_fields:
         raw = getattr(subscriber, key, None) if subscriber else None
-        effective = raw if raw is not None else (global_defaults.get(key) if uses_global else None)
-        source = "Customer override" if raw is not None else ("Global default" if uses_global else "Not set")
+        effective = (
+            raw
+            if raw is not None
+            else (global_defaults.get(key) if uses_global else None)
+        )
+        source = (
+            "Customer override"
+            if raw is not None
+            else ("Global default" if uses_global else "Not set")
+        )
         rows.append(
             {
                 "key": key,
                 "label": label,
                 "effective": _format_commercial_value(key, effective),
                 "source": source,
-                "global": _format_commercial_value(key, global_defaults.get(key)) if uses_global else "Not set",
+                "global": _format_commercial_value(key, global_defaults.get(key))
+                if uses_global
+                else "Not set",
                 "override": _format_commercial_value(key, raw),
             }
         )
@@ -282,8 +298,13 @@ def _subscription_policy_subject(
     if not subscriber_id:
         return None
 
-    billing_mode_value = _enum_raw_value(subscription_data.get("billing_mode")) or default_billing_mode
-    contract_term_value = _enum_raw_value(subscription_data.get("contract_term")) or ContractTerm.month_to_month.value
+    billing_mode_value = (
+        _enum_raw_value(subscription_data.get("billing_mode")) or default_billing_mode
+    )
+    contract_term_value = (
+        _enum_raw_value(subscription_data.get("contract_term"))
+        or ContractTerm.month_to_month.value
+    )
     service_address_id = str(subscription_data.get("service_address_id") or "").strip()
     return Subscription(
         subscriber_id=UUID(subscriber_id),
@@ -342,7 +363,9 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
     }
 
 
-def parse_subscription_form(form: FormData, *, subscription_id: str | None = None) -> dict[str, object]:
+def parse_subscription_form(
+    form: FormData, *, subscription_id: str | None = None
+) -> dict[str, object]:
     """Parse subscription form payload from request form."""
     ipv4_block_ids = [
         str(value).strip()
@@ -374,16 +397,23 @@ def parse_subscription_form(form: FormData, *, subscription_id: str | None = Non
         "unit_price": _form_str(form, "unit_price").strip(),
         "discount": form.get("discount") == "true",
         "discount_value": _form_str(form, "discount_value").strip(),
-        "discount_type": _normalize_discount_type(_form_str(form, "discount_type").strip()),
+        "discount_type": _normalize_discount_type(
+            _form_str(form, "discount_type").strip()
+        ),
         "service_status_raw": _form_str(form, "service_status_raw").strip(),
         "login": _form_str(form, "login").strip(),
         "ipv4_address": _form_str(form, "ipv4_address").strip(),
         "ipv6_address": _form_str(form, "ipv6_address").strip(),
         "mac_address": _form_str(form, "mac_address").strip(),
-        "provisioning_nas_device_id": _form_str(form, "provisioning_nas_device_id").strip(),
+        "provisioning_nas_device_id": _form_str(
+            form, "provisioning_nas_device_id"
+        ).strip(),
         "radius_profile_id": _form_str(form, "radius_profile_id").strip(),
         "service_password": _form_str(form, "service_password").strip(),
-        "ipv4_method": _form_str(form, "ipv4_method", "permanent_static").strip().lower() or "permanent_static",
+        "ipv4_method": _form_str(form, "ipv4_method", "permanent_static")
+        .strip()
+        .lower()
+        or "permanent_static",
         "ipv4_block_ids": ipv4_block_ids,
         "ipv4_addresses": ipv4_addresses,
     }
@@ -428,7 +458,9 @@ def resolve_account_id(db: Session, subscription: dict[str, object]) -> str | No
     return None
 
 
-def validate_subscription_form(subscription: dict[str, object], *, for_create: bool) -> str | None:
+def validate_subscription_form(
+    subscription: dict[str, object], *, for_create: bool
+) -> str | None:
     """Validate required subscription form fields."""
     if for_create:
         if not subscription.get("account_id") and not subscription.get("subscriber_id"):
@@ -505,7 +537,12 @@ def _generated_service_password(subscriber: Subscriber) -> str:
 
 
 def _pppoe_auto_generate_enabled(db: Session) -> bool:
-    return settings_spec.resolve_value(db, SettingDomain.radius, "pppoe_auto_generate_enabled") is True
+    return (
+        settings_spec.resolve_value(
+            db, SettingDomain.radius, "pppoe_auto_generate_enabled"
+        )
+        is True
+    )
 
 
 def _pool_allows_network_broadcast(pool: IpPool | None) -> bool:
@@ -524,7 +561,10 @@ def _iter_block_ipv4_hosts(block: IpBlock) -> list[str]:
         return []
     if network.version != 4:
         return []
-    if _pool_allows_network_broadcast(getattr(block, "pool", None)) or network.prefixlen >= 31:
+    if (
+        _pool_allows_network_broadcast(getattr(block, "pool", None))
+        or network.prefixlen >= 31
+    ):
         return [str(ip) for ip in network]
     return [str(ip) for ip in network.hosts()]
 
@@ -605,7 +645,9 @@ def _subscription_ipv4_form_rows(
             if ip_obj is not None:
                 for block in pool_blocks[pool_key]:
                     try:
-                        if ip_obj in ipaddress.ip_network(str(block.cidr), strict=False):
+                        if ip_obj in ipaddress.ip_network(
+                            str(block.cidr), strict=False
+                        ):
                             block_id = str(block.id)
                             break
                     except ValueError:
@@ -638,12 +680,18 @@ def _nas_device_label(device: NasDevice | None) -> str:
     return label
 
 
-def apply_generated_service_credentials(db: Session, subscription: dict[str, object]) -> None:
-    subscriber_id = str(subscription.get("subscriber_id") or subscription.get("account_id") or "")
+def apply_generated_service_credentials(
+    db: Session, subscription: dict[str, object]
+) -> None:
+    subscriber_id = str(
+        subscription.get("subscriber_id") or subscription.get("account_id") or ""
+    )
     if not subscriber_id:
         return
     try:
-        subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+        subscriber = subscriber_service.subscribers.get(
+            db=db, subscriber_id=subscriber_id
+        )
     except Exception:
         logger.warning(
             "Subscriber lookup failed during credential generation for %s",
@@ -655,7 +703,10 @@ def apply_generated_service_credentials(db: Session, subscription: dict[str, obj
         return
     if not str(subscription.get("login") or "").strip():
         subscription["login"] = _generated_service_login(subscriber)
-    if not subscription.get("id") and not str(subscription.get("service_password") or "").strip():
+    if (
+        not subscription.get("id")
+        and not str(subscription.get("service_password") or "").strip()
+    ):
         subscription["service_password"] = _generated_service_password(subscriber)
 
 
@@ -707,7 +758,9 @@ def _upsert_access_credential(
     db.commit()
 
 
-def _current_access_credential(db: Session, subscriber_id: str | UUID | None) -> AccessCredential | None:
+def _current_access_credential(
+    db: Session, subscriber_id: str | UUID | None
+) -> AccessCredential | None:
     if not subscriber_id:
         return None
     try:
@@ -722,7 +775,9 @@ def _current_access_credential(db: Session, subscriber_id: str | UUID | None) ->
     )
 
 
-def _current_service_password(db: Session, subscriber_id: str | UUID | None) -> str | None:
+def _current_service_password(
+    db: Session, subscriber_id: str | UUID | None
+) -> str | None:
     credential = _current_access_credential(db, subscriber_id)
     if not credential or not credential.secret_hash:
         return None
@@ -763,7 +818,9 @@ def send_subscription_credentials(
     *,
     subscription_id: str,
 ) -> dict[str, object]:
-    subscription = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
+    subscription = catalog_service.subscriptions.get(
+        db=db, subscription_id=subscription_id
+    )
     subscriber = db.get(Subscriber, subscription.subscriber_id)
     if not subscriber:
         raise ValueError("Subscriber not found for this subscription.")
@@ -808,8 +865,7 @@ def send_subscription_credentials(
         email_sent += 1
 
     sms_body = (
-        f"Service login: {credential.username} | "
-        f"Password: {password}. Keep it secure."
+        f"Service login: {credential.username} | Password: {password}. Keep it secure."
     )
     for phone in targets["sms"]:
         if sms_service.send_sms(db, phone, sms_body, track=True):
@@ -829,7 +885,9 @@ def _reconcile_active_subscription_after_credential_sync(
     if not subscription_id:
         return
     try:
-        subscription = catalog_service.subscriptions.get(db=db, subscription_id=str(subscription_id))
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=str(subscription_id)
+        )
     except Exception:
         logger.warning(
             "Subscription lookup failed during RADIUS reconcile for %s",
@@ -862,12 +920,10 @@ def _resolve_ipv4_for_block(
         return None
     selected_ip = str(requested_ip or "").strip() or available_ips[0]
     if selected_ip not in available_ips:
-        raise ValueError(f"Selected IPv4 address {selected_ip} is not available in block {block.cidr}.")
-    address = (
-        db.query(IPv4Address)
-        .filter(IPv4Address.address == selected_ip)
-        .first()
-    )
+        raise ValueError(
+            f"Selected IPv4 address {selected_ip} is not available in block {block.cidr}."
+        )
+    address = db.query(IPv4Address).filter(IPv4Address.address == selected_ip).first()
     if address:
         return address
     address = IPv4Address(address=selected_ip, pool_id=block.pool_id, is_reserved=False)
@@ -928,7 +984,11 @@ def _allocate_ipv4_assignments_for_subscription(
                 .filter(IPv4Address.address == requested_ip)
                 .first()
             )
-            existing_assignment = getattr(existing_address, "assignment", None) if existing_address else None
+            existing_assignment = (
+                getattr(existing_address, "assignment", None)
+                if existing_address
+                else None
+            )
             if (
                 existing_address
                 and existing_assignment
@@ -1032,7 +1092,9 @@ def ensure_ipv4_blocks_allocatable(
             raise ValueError(f"No available IPv4 address in block {block.cidr}.")
 
 
-def apply_create_quick_options(payload_data: dict[str, object], form: FormData) -> tuple[bool, bool, bool]:
+def apply_create_quick_options(
+    payload_data: dict[str, object], form: FormData
+) -> tuple[bool, bool, bool]:
     """Apply create quick options and return flags."""
     activate_immediately = form.get("activate_immediately") == "1"
     generate_invoice = form.get("generate_invoice") == "1"
@@ -1051,7 +1113,9 @@ def create_subscription(db: Session, payload_data: dict[str, object]):
     )
 
 
-def update_subscription(db: Session, subscription_id: str, payload_data: dict[str, object]):
+def update_subscription(
+    db: Session, subscription_id: str, payload_data: dict[str, object]
+):
     """Update subscription."""
     return catalog_service.subscriptions.update(
         db=db,
@@ -1126,14 +1190,24 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         "subscriber_id": str(subscription_obj.subscriber_id),
         "offer_id": str(subscription_obj.offer_id),
         "status": subscription_obj.status.value if subscription_obj.status else "",
-        "billing_mode": subscription_obj.billing_mode.value if subscription_obj.billing_mode else "",
-        "contract_term": subscription_obj.contract_term.value if subscription_obj.contract_term else "",
-        "start_at": subscription_obj.start_at.strftime("%Y-%m-%dT%H:%M") if subscription_obj.start_at else "",
-        "end_at": subscription_obj.end_at.strftime("%Y-%m-%dT%H:%M") if subscription_obj.end_at else "",
+        "billing_mode": subscription_obj.billing_mode.value
+        if subscription_obj.billing_mode
+        else "",
+        "contract_term": subscription_obj.contract_term.value
+        if subscription_obj.contract_term
+        else "",
+        "start_at": subscription_obj.start_at.strftime("%Y-%m-%dT%H:%M")
+        if subscription_obj.start_at
+        else "",
+        "end_at": subscription_obj.end_at.strftime("%Y-%m-%dT%H:%M")
+        if subscription_obj.end_at
+        else "",
         "next_billing_at": subscription_obj.next_billing_at.strftime("%Y-%m-%dT%H:%M")
         if subscription_obj.next_billing_at
         else "",
-        "canceled_at": subscription_obj.canceled_at.strftime("%Y-%m-%dT%H:%M") if subscription_obj.canceled_at else "",
+        "canceled_at": subscription_obj.canceled_at.strftime("%Y-%m-%dT%H:%M")
+        if subscription_obj.canceled_at
+        else "",
         "cancel_reason": subscription_obj.cancel_reason or "",
         "splynx_service_id": subscription_obj.splynx_service_id or "",
         "router_id": subscription_obj.router_id or "",
@@ -1144,7 +1218,9 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         "discount": subscription_obj.discount,
         "discount_value": subscription_obj.discount_value or "",
         "discount_type": _normalize_discount_type(
-            subscription_obj.discount_type.value if subscription_obj.discount_type else ""
+            subscription_obj.discount_type.value
+            if subscription_obj.discount_type
+            else ""
         ),
         "service_status_raw": subscription_obj.service_status_raw or "",
         "login": subscription_obj.login or "",
@@ -1154,11 +1230,14 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         "provisioning_nas_device_id": str(subscription_obj.provisioning_nas_device_id)
         if subscription_obj.provisioning_nas_device_id
         else "",
-        "radius_profile_id": str(subscription_obj.radius_profile_id) if subscription_obj.radius_profile_id else "",
+        "radius_profile_id": str(subscription_obj.radius_profile_id)
+        if subscription_obj.radius_profile_id
+        else "",
         "service_password": "",
         "ipv4_method": (
             "permanent_static"
-            if (subscription_obj.service_status_raw or "").strip().lower() == "permanent_static"
+            if (subscription_obj.service_status_raw or "").strip().lower()
+            == "permanent_static"
             else "dynamic"
         ),
         "ipv4_block_ids": ipv4_block_ids,
@@ -1203,12 +1282,27 @@ def _ip_assignment_mode(subscription: Subscription) -> tuple[str, str]:
     if mode == "dynamic":
         return ("Dynamic pool", "IP is assigned from RADIUS/DHCP pool at session time.")
     if mode == "permanent_static":
-        return ("Static assignment", "Subscription is configured with a fixed IPv4 assignment.")
+        return (
+            "Static assignment",
+            "Subscription is configured with a fixed IPv4 assignment.",
+        )
     if subscription.ipv4_address:
-        return ("Static assignment", "Subscription stores a fixed IPv4 address directly.")
-    if any(getattr(assignment, "is_active", False) for assignment in (subscription.ip_assignments or [])):
-        return ("Assigned IP", "Subscription has active IP assignments linked in inventory.")
-    return ("Unspecified", "No explicit IP assignment mode is recorded on the subscription.")
+        return (
+            "Static assignment",
+            "Subscription stores a fixed IPv4 address directly.",
+        )
+    if any(
+        getattr(assignment, "is_active", False)
+        for assignment in (subscription.ip_assignments or [])
+    ):
+        return (
+            "Assigned IP",
+            "Subscription has active IP assignments linked in inventory.",
+        )
+    return (
+        "Unspecified",
+        "No explicit IP assignment mode is recorded on the subscription.",
+    )
 
 
 def _humanize_label(value: object | None) -> str:
@@ -1218,7 +1312,9 @@ def _humanize_label(value: object | None) -> str:
     return raw.replace(".", " ").replace("_", " ").title()
 
 
-def _subscription_domain_events(db: Session, subscription: Subscription) -> list[dict[str, object]]:
+def _subscription_domain_events(
+    db: Session, subscription: Subscription
+) -> list[dict[str, object]]:
     rows = (
         db.query(EventStore)
         .filter(
@@ -1253,7 +1349,9 @@ def _subscription_domain_events(db: Session, subscription: Subscription) -> list
                 "status": _humanize_label(row.status),
                 "created_at": row.created_at,
                 "processed_at": row.processed_at,
-                "detail": " · ".join(detail_parts) if detail_parts else "System event persisted.",
+                "detail": " · ".join(detail_parts)
+                if detail_parts
+                else "System event persisted.",
                 "failed_handlers": failed_handlers,
                 "failed_handler_text": ", ".join(failed_handlers),
             }
@@ -1261,9 +1359,17 @@ def _subscription_domain_events(db: Session, subscription: Subscription) -> list
     return events
 
 
-def _subscription_notifications(db: Session, subscription: Subscription) -> dict[str, object]:
-    subscriber = subscription.subscriber or db.get(Subscriber, subscription.subscriber_id)
-    targets = _credential_contact_targets(subscriber) if subscriber else {"email": [], "sms": []}
+def _subscription_notifications(
+    db: Session, subscription: Subscription
+) -> dict[str, object]:
+    subscriber = subscription.subscriber or db.get(
+        Subscriber, subscription.subscriber_id
+    )
+    targets = (
+        _credential_contact_targets(subscriber)
+        if subscriber
+        else {"email": [], "sms": []}
+    )
     recipients = list(dict.fromkeys([*targets["email"], *targets["sms"]]))
     if not recipients:
         return {"targets": targets, "items": []}
@@ -1283,7 +1389,9 @@ def _subscription_notifications(db: Session, subscription: Subscription) -> dict
     }
     rows = (
         db.query(Notification, NotificationTemplate)
-        .outerjoin(NotificationTemplate, Notification.template_id == NotificationTemplate.id)
+        .outerjoin(
+            NotificationTemplate, Notification.template_id == NotificationTemplate.id
+        )
         .filter(Notification.is_active.is_(True))
         .filter(Notification.recipient.in_(recipients))
         .filter(
@@ -1337,7 +1445,9 @@ def _subscription_radius_sync_evidence(
         nas_clients = (
             db.query(RadiusClient)
             .join(RadiusServer, RadiusServer.id == RadiusClient.server_id)
-            .filter(RadiusClient.nas_device_id == subscription.provisioning_nas_device_id)
+            .filter(
+                RadiusClient.nas_device_id == subscription.provisioning_nas_device_id
+            )
             .filter(RadiusClient.is_active.is_(True))
             .filter(RadiusServer.is_active.is_(True))
             .order_by(RadiusServer.name.asc())
@@ -1373,7 +1483,11 @@ def _subscription_radius_sync_evidence(
             .order_by(RadiusSyncRun.finished_at.desc(), RadiusSyncRun.started_at.desc())
             .first()
         )
-    external_details = external_run.details if external_run and isinstance(external_run.details, dict) else {}
+    external_details = (
+        external_run.details
+        if external_run and isinstance(external_run.details, dict)
+        else {}
+    )
 
     return {
         "internal_user": radius_user,
@@ -1382,15 +1496,23 @@ def _subscription_radius_sync_evidence(
         "last_sync_run": last_sync_run,
         "external_job_count": len(external_jobs),
         "external_run": external_run,
-        "external_users_synced": int(external_details.get("external_users_synced") or 0),
+        "external_users_synced": int(
+            external_details.get("external_users_synced") or 0
+        ),
         "external_nas_synced": int(external_details.get("external_nas_synced") or 0),
-        "external_credentials_scanned": int(external_details.get("credentials_scanned") or 0),
-        "external_nas_devices_synced": int(external_details.get("nas_devices_synced") or 0),
+        "external_credentials_scanned": int(
+            external_details.get("credentials_scanned") or 0
+        ),
+        "external_nas_devices_synced": int(
+            external_details.get("nas_devices_synced") or 0
+        ),
         "external_error": str(external_details.get("error") or ""),
     }
 
 
-def _subscription_enforcement_state(db: Session, subscription: Subscription) -> dict[str, object]:
+def _subscription_enforcement_state(
+    db: Session, subscription: Subscription
+) -> dict[str, object]:
     runtime_state = radius_reject_service._load_runtime_state(db)
     runtime_entry = runtime_state.get("subscriptions", {}).get(str(subscription.id), {})
     last_event = (
@@ -1433,10 +1555,14 @@ def _subscription_external_radius_rows(
 ) -> list[dict[str, object]]:
     if not credential or not credential.username:
         return []
-    return radius_service.read_external_radius_rows_for_username(db, credential.username)
+    return radius_service.read_external_radius_rows_for_username(
+        db, credential.username
+    )
 
 
-def subscription_detail_context(db: Session, subscription: Subscription) -> dict[str, object]:
+def subscription_detail_context(
+    db: Session, subscription: Subscription
+) -> dict[str, object]:
     from app.services.connection_type_provisioning import build_radius_reply_attributes
 
     credential = _current_access_credential(db, subscription.subscriber_id)
@@ -1468,7 +1594,7 @@ def subscription_detail_context(db: Session, subscription: Subscription) -> dict
         .all()
     )
     lifecycle_events = sorted(
-        list(subscription.lifecycle_events or []),
+        subscription.lifecycle_events or [],
         key=lambda event: event.created_at or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )
@@ -1476,7 +1602,9 @@ def subscription_detail_context(db: Session, subscription: Subscription) -> dict
     has_service_orders = bool(subscription.service_orders)
     domain_events = _subscription_domain_events(db, subscription)
     notification_evidence = _subscription_notifications(db, subscription)
-    radius_sync_evidence = _subscription_radius_sync_evidence(db, subscription, credential)
+    radius_sync_evidence = _subscription_radius_sync_evidence(
+        db, subscription, credential
+    )
     enforcement_state = _subscription_enforcement_state(db, subscription)
     external_radius_rows = _subscription_external_radius_rows(db, credential)
     return {
@@ -1488,7 +1616,8 @@ def subscription_detail_context(db: Session, subscription: Subscription) -> dict
         "lifecycle_events": lifecycle_events,
         "ip_assignment_mode": ip_assignment_mode,
         "ip_assignment_detail": ip_assignment_detail,
-        "direct_active_workflow": subscription.status == SubscriptionStatus.active and not has_service_orders,
+        "direct_active_workflow": subscription.status == SubscriptionStatus.active
+        and not has_service_orders,
         "commercial_policy": commercial_policy,
         "domain_events": domain_events,
         "notification_evidence": notification_evidence,
@@ -1503,7 +1632,9 @@ def _resolve_subscriber_label(db: Session, subscriber_id: str) -> str:
     if not subscriber_id:
         return ""
     try:
-        subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+        subscriber = subscriber_service.subscribers.get(
+            db=db, subscriber_id=subscriber_id
+        )
         if subscriber.organization:
             label = str(subscriber.organization.name or "")
         else:
@@ -1534,9 +1665,10 @@ def subscription_form_context(
     Returns all reference data (accounts, offers, NAS devices, RADIUS profiles,
     enum value lists, settings) needed by the form.
     """
-    default_billing_mode = settings_spec.resolve_value(
-        db, SettingDomain.catalog, "default_billing_mode"
-    ) or BillingMode.prepaid.value
+    default_billing_mode = (
+        settings_spec.resolve_value(db, SettingDomain.catalog, "default_billing_mode")
+        or BillingMode.prepaid.value
+    )
     if not subscription.get("subscriber_id") and subscription.get("account_id"):
         subscription["subscriber_id"] = subscription.get("account_id")
     if not subscription.get("billing_mode"):
@@ -1564,9 +1696,7 @@ def subscription_form_context(
     )
 
     nas_stmt = (
-        select(NasDevice)
-        .where(NasDevice.is_active.is_(True))
-        .order_by(NasDevice.name)
+        select(NasDevice).where(NasDevice.is_active.is_(True)).order_by(NasDevice.name)
     )
     nas_devices = db.scalars(nas_stmt).all()
     ipv4_pools = (
@@ -1608,26 +1738,38 @@ def subscription_form_context(
     )
     radius_profiles = db.scalars(rp_stmt).all()
 
-    subscriber_id = subscription.get("subscriber_id") if isinstance(subscription, dict) else None
+    subscriber_id = (
+        subscription.get("subscriber_id") if isinstance(subscription, dict) else None
+    )
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
     current_password = _current_service_password(db, str(subscriber_id or ""))
     current_credential = _current_access_credential(db, str(subscriber_id or ""))
     credential_targets = None
     if subscriber_id:
         try:
-            subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+            subscriber = subscriber_service.subscribers.get(
+                db=db, subscriber_id=str(subscriber_id)
+            )
         except Exception:
-            logger.warning("Subscriber lookup failed for form context: %s", subscriber_id, exc_info=True)
+            logger.warning(
+                "Subscriber lookup failed for form context: %s",
+                subscriber_id,
+                exc_info=True,
+            )
             subscriber = None
         if subscriber:
             credential_targets = _credential_contact_targets(subscriber)
     selected_router_label = ""
-    provisioning_nas_device_id = str(subscription.get("provisioning_nas_device_id") or "").strip()
+    provisioning_nas_device_id = str(
+        subscription.get("provisioning_nas_device_id") or ""
+    ).strip()
 
     # Auto-populate NAS from subscriber's POP site if not already set
     if not provisioning_nas_device_id and subscriber_id:
         try:
-            sub_obj = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+            sub_obj = subscriber_service.subscribers.get(
+                db=db, subscriber_id=str(subscriber_id)
+            )
             if sub_obj and getattr(sub_obj, "pop_site_id", None):
                 pop_nas = (
                     db.query(NasDevice)
@@ -1638,14 +1780,20 @@ def subscription_form_context(
                 )
                 if pop_nas:
                     provisioning_nas_device_id = str(pop_nas.id)
-                    subscription["provisioning_nas_device_id"] = provisioning_nas_device_id
+                    subscription["provisioning_nas_device_id"] = (
+                        provisioning_nas_device_id
+                    )
                     logger.debug(
                         "Auto-selected NAS %s from subscriber POP site %s",
                         pop_nas.name,
                         sub_obj.pop_site_id,
                     )
         except Exception:
-            logger.debug("POP-based NAS auto-select failed for subscriber %s", subscriber_id, exc_info=True)
+            logger.debug(
+                "POP-based NAS auto-select failed for subscriber %s",
+                subscriber_id,
+                exc_info=True,
+            )
 
     if provisioning_nas_device_id:
         try:
@@ -1653,7 +1801,11 @@ def subscription_form_context(
                 catalog_service.nas_devices.get(db, provisioning_nas_device_id)
             )
         except Exception:
-            logger.warning("NAS device lookup failed for %s", provisioning_nas_device_id, exc_info=True)
+            logger.warning(
+                "NAS device lookup failed for %s",
+                provisioning_nas_device_id,
+                exc_info=True,
+            )
             selected_router_label = ""
     apply_generated_service_credentials(db, subscription)
     if not subscription.get("ipv4_method"):
@@ -1680,14 +1832,19 @@ def subscription_form_context(
         "selected_router_label": selected_router_label,
         "billing_mode_help_text": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_help_text"
-        ) or "Overrides tariff default.",
+        )
+        or "Overrides tariff default.",
         "billing_mode_prepaid_notice": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_prepaid_notice"
-        ) or "Balance enforcement applies.",
+        )
+        or "Balance enforcement applies.",
         "billing_mode_postpaid_notice": settings_spec.resolve_value(
             db, SettingDomain.catalog, "billing_mode_postpaid_notice"
-        ) or "This subscription follows dunning steps.",
-        "current_service_login": getattr(current_credential, "username", "") if current_credential else "",
+        )
+        or "This subscription follows dunning steps.",
+        "current_service_login": getattr(current_credential, "username", "")
+        if current_credential
+        else "",
         "current_service_password": current_password or "",
         "credential_targets": credential_targets or {"email": [], "sms": []},
         "commercial_policy": {"rows": []},
@@ -1800,7 +1957,9 @@ def bulk_update_status(
                 )
                 count += 1
         except Exception as exc:
-            logger.error("Bulk status update failed for subscription %s: %s", sub_id, exc)
+            logger.error(
+                "Bulk status update failed for subscription %s: %s", sub_id, exc
+            )
             continue
 
     return count
@@ -1842,7 +2001,10 @@ def bulk_change_plan(
                     entity_type="subscription",
                     entity_id=sub_id,
                     actor_id=actor_id,
-                    metadata={"new_offer_id": target_offer_id, "offer_name": target_offer.name},
+                    metadata={
+                        "new_offer_id": target_offer_id,
+                        "offer_name": target_offer.name,
+                    },
                 )
                 count += 1
         except Exception as exc:
@@ -1872,7 +2034,10 @@ def create_subscription_with_audit(
     if subscriber:
         pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
         existing_credential = _current_access_credential(db, created.subscriber_id)
-        if not existing_credential and str(getattr(created, "status", "") or "").strip().lower() == "active":
+        if (
+            not existing_credential
+            and str(getattr(created, "status", "") or "").strip().lower() == "active"
+        ):
             try:
                 from app.services.pppoe_credentials import (
                     auto_generate_pppoe_credential,
@@ -1881,9 +2046,13 @@ def create_subscription_with_audit(
                 auto_generate_pppoe_credential(
                     db,
                     str(created.subscriber_id),
-                    radius_profile_id=str(created.radius_profile_id) if created.radius_profile_id else None,
+                    radius_profile_id=str(created.radius_profile_id)
+                    if created.radius_profile_id
+                    else None,
                 )
-                existing_credential = _current_access_credential(db, created.subscriber_id)
+                existing_credential = _current_access_credential(
+                    db, created.subscriber_id
+                )
             except Exception:
                 logger.warning(
                     "PPPoE credential auto-generation failed during web subscription create for %s",
@@ -1902,7 +2071,11 @@ def create_subscription_with_audit(
         explicit_password = str(form.get("service_password") or "").strip()
         selected_password = explicit_password or (
             None
-            if pppoe_auto_generate or (existing_credential and getattr(existing_credential, "secret_hash", None))
+            if pppoe_auto_generate
+            or (
+                existing_credential
+                and getattr(existing_credential, "secret_hash", None)
+            )
             else generated_password
         )
         update_payload: dict[str, object] = {
@@ -1946,7 +2119,9 @@ def create_subscription_with_audit(
                 subscriber_id=created.subscriber_id,
                 username=selected_login,
                 plain_password=selected_password,
-                radius_profile_id=str(created.radius_profile_id) if created.radius_profile_id else None,
+                radius_profile_id=str(created.radius_profile_id)
+                if created.radius_profile_id
+                else None,
             )
         except Exception:
             logger.warning(
@@ -1968,7 +2143,9 @@ def create_subscription_with_audit(
             "offer_id": str(created.offer_id),
             "account_id": str(created.subscriber_id),
             "generated_login": created.login,
-            "service_password_changed": bool(str(form.get("service_password") or "").strip()),
+            "service_password_changed": bool(
+                str(form.get("service_password") or "").strip()
+            ),
             "ipv4_method": str(form.get("ipv4_method") or "permanent_static"),
             "allocated_ipv4_count": len(allocated_ips),
             "allocated_ipv4_addresses": allocated_ips,
@@ -2019,7 +2196,9 @@ def update_subscription_with_audit(
             subscriber_id=after.subscriber_id,
             username=str(after.login or ""),
             plain_password=entered_password or None,
-            radius_profile_id=str(after.radius_profile_id) if after.radius_profile_id else None,
+            radius_profile_id=str(after.radius_profile_id)
+            if after.radius_profile_id
+            else None,
         )
     except Exception:
         logger.warning(

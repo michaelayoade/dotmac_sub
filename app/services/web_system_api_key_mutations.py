@@ -12,6 +12,7 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+
 def revoke_api_key(db: Session, *, key_id: str) -> bool:
     """Revoke API key by id. Returns True when key exists."""
     api_key = db.get(ApiKey, coerce_uuid(key_id))

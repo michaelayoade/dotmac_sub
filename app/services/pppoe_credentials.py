@@ -72,7 +72,9 @@ def _resolve_radius_setting(db: Session, key: str) -> object | None:
     if spec.allowed and value is not None and value not in spec.allowed:
         value = spec.default
     if spec.value_type == SettingValueType.integer and value is not None:
-        parsed = _resolve_int_setting(value, spec.default if isinstance(spec.default, int) else 1)
+        parsed = _resolve_int_setting(
+            value, spec.default if isinstance(spec.default, int) else 1
+        )
         if spec.min_value is not None and parsed < spec.min_value:
             parsed = spec.default if isinstance(spec.default, int) else parsed
         if spec.max_value is not None and parsed > spec.max_value:
@@ -186,7 +188,10 @@ def auto_generate_pppoe_credential(
             # Generate a new username for the next attempt
             username = _generate_pppoe_username(db)
             if not username:
-                logger.error("PPPoE username generation exhausted for subscriber %s", subscriber_id)
+                logger.error(
+                    "PPPoE username generation exhausted for subscriber %s",
+                    subscriber_id,
+                )
                 return None
 
     logger.error(

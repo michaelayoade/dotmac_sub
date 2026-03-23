@@ -76,13 +76,18 @@ class AccessCredentials(CRUDManager[AccessCredential]):
         offset: int,
     ):
         query = db.query(AccessCredential)
-        query = apply_optional_equals(query, {AccessCredential.subscriber_id: subscriber_id})
+        query = apply_optional_equals(
+            query, {AccessCredential.subscriber_id: subscriber_id}
+        )
         query = apply_active_state(query, AccessCredential.is_active, is_active)
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": AccessCredential.created_at, "username": AccessCredential.username},
+            {
+                "created_at": AccessCredential.created_at,
+                "username": AccessCredential.username,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

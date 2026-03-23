@@ -28,12 +28,16 @@ class StoredFile(Base):
     entity_type: Mapped[str] = mapped_column(String(100), nullable=False)
     entity_id: Mapped[str] = mapped_column(String(100), nullable=False)
     original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
-    storage_key_or_relative_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    storage_key_or_relative_path: Mapped[str] = mapped_column(
+        String(1024), nullable=False
+    )
     legacy_local_path: Mapped[str | None] = mapped_column(String(1024))
     file_size: Mapped[int] = mapped_column(Integer, nullable=False)
     content_type: Mapped[str | None] = mapped_column(String(255))
     checksum: Mapped[str | None] = mapped_column(String(64))
-    storage_provider: Mapped[str] = mapped_column(String(20), nullable=False, default="s3")
+    storage_provider: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="s3"
+    )
     uploaded_by: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )

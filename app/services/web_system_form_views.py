@@ -11,6 +11,7 @@ from app.services import web_system_role_forms as web_system_role_forms_service
 
 logger = logging.getLogger(__name__)
 
+
 def get_role_new_form_context(db: Session) -> dict:
     """Return template context fragment for role create form."""
     return {

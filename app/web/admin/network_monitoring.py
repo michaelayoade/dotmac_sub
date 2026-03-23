@@ -2,6 +2,7 @@
 
 import html as html_mod
 import logging
+import shutil
 import subprocess
 from datetime import UTC, datetime, timedelta
 
@@ -25,9 +26,12 @@ router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 _format_duration = web_network_core_runtime_service.format_duration
 _format_bps = web_network_core_runtime_service.format_bps
+WG_BIN = shutil.which("wg") or "/usr/bin/wg"
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network") -> dict:
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+) -> dict:
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -52,9 +56,11 @@ def _get_vpn_tunnel_status() -> list[dict]:
     """Read WireGuard peer status from wg show."""
     tunnels = []
     try:
-        result = subprocess.run(
-            ["wg", "show", "wg0", "dump"],
-            capture_output=True, text=True, timeout=5,
+        result = subprocess.run(  # noqa: S603 - argv is fixed and peer data is read-only
+            [WG_BIN, "show", "wg0", "dump"],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
         if result.returncode != 0:
             return []
@@ -69,21 +75,27 @@ def _get_vpn_tunnel_status() -> list[dict]:
             rx_bytes = int(parts[5])
             tx_bytes = int(parts[6])
 
-            handshake_dt = datetime.fromtimestamp(handshake_ts, tz=UTC) if handshake_ts else None
+            handshake_dt = (
+                datetime.fromtimestamp(handshake_ts, tz=UTC) if handshake_ts else None
+            )
             stale = True
             if handshake_dt:
                 stale = (datetime.now(UTC) - handshake_dt) > timedelta(minutes=3)
 
-            tunnels.append({
-                "name": _TUNNEL_NAMES.get(pubkey, pubkey[:12] + "..."),
-                "endpoint": endpoint,
-                "handshake": handshake_dt,
-                "handshake_ago": _format_ago(handshake_dt) if handshake_dt else "never",
-                "rx": _format_bytes(rx_bytes),
-                "tx": _format_bytes(tx_bytes),
-                "up": not stale and handshake_ts > 0,
-                "stale": stale,
-            })
+            tunnels.append(
+                {
+                    "name": _TUNNEL_NAMES.get(pubkey, pubkey[:12] + "..."),
+                    "endpoint": endpoint,
+                    "handshake": handshake_dt,
+                    "handshake_ago": _format_ago(handshake_dt)
+                    if handshake_dt
+                    else "never",
+                    "rx": _format_bytes(rx_bytes),
+                    "tx": _format_bytes(tx_bytes),
+                    "up": not stale and handshake_ts > 0,
+                    "stale": stale,
+                }
+            )
     except FileNotFoundError:
         logger.warning("WireGuard 'wg' command not found — VPN status unavailable")
     except PermissionError:
@@ -119,7 +131,11 @@ def _format_bytes(b: int) -> str:
     return f"{b} B"
 
 
-@router.get("/monitoring", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/monitoring",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def monitoring_page(
     request: Request,
     q: str | None = None,
@@ -155,7 +171,11 @@ def monitoring_page(
     return templates.TemplateResponse("admin/network/monitoring/index.html", context)
 
 
-@router.get("/monitoring/kpi", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/monitoring/kpi",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial: auto-refreshing KPI cards + alarm/outage summary."""
     from app.services.network_monitoring import (
@@ -169,7 +189,9 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
     )
     onu_summary = get_onu_status_summary(db)
     pon_outages = get_pon_outage_summary(db)
-    alarms_data = web_network_monitoring_service.alarms_page_data(db, severity=None, status=None)
+    alarms_data = web_network_monitoring_service.alarms_page_data(
+        db, severity=None, status=None
+    )
     from datetime import UTC, datetime
 
     # VPN tunnel health from WireGuard
@@ -188,10 +210,16 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
         "site_reachability": site_reachability,
         "now": datetime.now(UTC),
     }
-    return templates.TemplateResponse("admin/network/monitoring/_kpi_partial.html", context)
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_kpi_partial.html", context
+    )
 
 
-@router.get("/alarms", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/alarms",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def alarms_page(
     request: Request,
     severity: str | None = None,
@@ -208,7 +236,11 @@ def alarms_page(
     return templates.TemplateResponse("admin/network/monitoring/alarms.html", context)
 
 
-@router.get("/alarms/rules/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:read"))])
+@router.get(
+    "/alarms/rules/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
 def alarms_rules_new(request: Request, db: Session = Depends(get_db)):
     options = web_network_alarm_rules_service.form_options(db)
     context = _base_context(request, db, active_page="monitoring")
@@ -219,19 +251,26 @@ def alarms_rules_new(request: Request, db: Session = Depends(get_db)):
             **options,
         }
     )
-    return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
+    return templates.TemplateResponse(
+        "admin/network/monitoring/rule_form.html", context
+    )
 
 
-@router.post("/alarms/rules/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("monitoring:write"))])
+@router.post(
+    "/alarms/rules/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:write"))],
+)
 def alarms_rules_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     values = web_network_alarm_rules_service.parse_form_values(form)
     normalized, error = web_network_alarm_rules_service.validate_form_values(values)
-    if not error:
-        assert normalized is not None
+    if not error and normalized is not None:
         error = web_network_alarm_rules_service.create_rule(db, normalized)
         if not error:
             return RedirectResponse(url="/admin/network/alarms", status_code=303)
+    elif not error:
+        error = "Please correct the highlighted fields."
 
     options = web_network_alarm_rules_service.form_options(db)
     rule = web_network_alarm_rules_service.rule_form_data(values)
@@ -244,7 +283,9 @@ def alarms_rules_create(request: Request, db: Session = Depends(get_db)):
             "error": error or "Please correct the highlighted fields.",
         }
     )
-    return templates.TemplateResponse("admin/network/monitoring/rule_form.html", context)
+    return templates.TemplateResponse(
+        "admin/network/monitoring/rule_form.html", context
+    )
 
 
 # ── Bulk actions on monitoring devices ────────────────────────────────

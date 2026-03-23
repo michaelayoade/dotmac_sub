@@ -23,7 +23,9 @@ def _read_path(path: str | Path) -> Path:
     return Path(path).expanduser()
 
 
-def load_csv(path: str | Path, model_cls: type[ModelT]) -> tuple[list[ModelT], list[ImportError]]:
+def load_csv(
+    path: str | Path, model_cls: type[ModelT]
+) -> tuple[list[ModelT], list[ImportError]]:
     items: list[ModelT] = []
     errors: list[ImportError] = []
     with _read_path(path).open(newline="", encoding="utf-8") as handle:
@@ -36,7 +38,9 @@ def load_csv(path: str | Path, model_cls: type[ModelT]) -> tuple[list[ModelT], l
     return items, errors
 
 
-def load_json(path: str | Path, model_cls: type[ModelT]) -> tuple[list[ModelT], list[ImportError]]:
+def load_json(
+    path: str | Path, model_cls: type[ModelT]
+) -> tuple[list[ModelT], list[ImportError]]:
     items: list[ModelT] = []
     errors: list[ImportError] = []
     data = json.loads(_read_path(path).read_text(encoding="utf-8"))

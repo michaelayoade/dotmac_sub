@@ -120,7 +120,9 @@ def command_preview_context(
     context["ont"] = ont
 
     if not olt or not fsp or olt_ont_id is None:
-        context["error"] = "Cannot resolve OLT context — check assignment and external ID"
+        context["error"] = (
+            "Cannot resolve OLT context — check assignment and external ID"
+        )
         return context
 
     profile = db.get(OntProvisioningProfile, profile_id)

@@ -63,7 +63,9 @@ class CRMClient:
                 self._token_expires_at = time.time() + 840
                 return self._token
         except httpx.HTTPStatusError as e:
-            logger.error("CRM login failed: %d %s", e.response.status_code, e.response.text[:200])
+            logger.error(
+                "CRM login failed: %d %s", e.response.status_code, e.response.text[:200]
+            )
             raise CRMClientError(f"CRM login failed: {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error("CRM login error: %s", e)
@@ -100,7 +102,13 @@ class CRMClient:
                     return {}
                 return resp.json()
         except httpx.HTTPStatusError as e:
-            logger.error("CRM API error %s %s: %d %s", method, path, e.response.status_code, e.response.text[:200])
+            logger.error(
+                "CRM API error %s %s: %d %s",
+                method,
+                path,
+                e.response.status_code,
+                e.response.text[:200],
+            )
             raise CRMClientError(f"CRM API error: {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error("CRM request error %s %s: %s", method, path, e)
@@ -128,7 +136,9 @@ class CRMClient:
             if items:
                 return str(items[0]["id"])
         except CRMClientError:
-            logger.warning("CRM subscriber lookup failed for splynx_id=%s", splynx_customer_id)
+            logger.warning(
+                "CRM subscriber lookup failed for splynx_id=%s", splynx_customer_id
+            )
         return None
 
     # ── Tickets ──────────────────────────────────────────────────────────
@@ -152,7 +162,9 @@ class CRMClient:
     def list_ticket_comments(self, ticket_id: str) -> list[dict[str, Any]]:
         """List comments for a ticket."""
         data = self._request(
-            "GET", "/api/v1/ticket-comments", params={"ticket_id": ticket_id, "limit": 500}
+            "GET",
+            "/api/v1/ticket-comments",
+            params={"ticket_id": ticket_id, "limit": 500},
         )
         return data if isinstance(data, list) else data.get("items", [])
 
@@ -162,7 +174,9 @@ class CRMClient:
 
     # ── Work Orders ──────────────────────────────────────────────────────
 
-    def list_work_orders(self, subscriber_id: str | None = None) -> list[dict[str, Any]]:
+    def list_work_orders(
+        self, subscriber_id: str | None = None
+    ) -> list[dict[str, Any]]:
         """List work orders, optionally filtered by CRM subscriber."""
         params: dict[str, Any] = {"limit": 100}
         if subscriber_id:
@@ -177,7 +191,9 @@ class CRMClient:
     def list_work_order_notes(self, work_order_id: str) -> list[dict[str, Any]]:
         """List notes for a work order."""
         data = self._request(
-            "GET", "/api/v1/work-order-notes", params={"work_order_id": work_order_id, "limit": 500}
+            "GET",
+            "/api/v1/work-order-notes",
+            params={"work_order_id": work_order_id, "limit": 500},
         )
         return data if isinstance(data, list) else data.get("items", [])
 

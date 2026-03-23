@@ -204,7 +204,9 @@ def build_nas_device_payload(
         management_ip = cast(str | None, form.get("ip_address"))
         management_port = cast(int | None, form.get("ssh_port"))
         description = cast(str | None, form.get("description") or None)
-        pop_site_id = UUID(str(form["pop_site_id"])) if form.get("pop_site_id") else None
+        pop_site_id = (
+            UUID(str(form["pop_site_id"])) if form.get("pop_site_id") else None
+        )
         rack_position = cast(str | None, form.get("location") or None)
         status = NasDeviceStatus(str(form.get("status")))
         supported_types = [ct.value for ct in conn_types] if conn_types else None
@@ -345,15 +347,17 @@ def build_provisioning_template_payload(
         description = cast(str | None, form.get("description") or None)
         is_active = cast(bool | None, form.get("is_active"))
         if for_update:
-            payload: ProvisioningTemplateCreate | ProvisioningTemplateUpdate = ProvisioningTemplateUpdate(
-                name=name,
-                vendor=vendor,
-                action=action,
-                connection_type=connection_type,
-                template_content=template_content,
-                description=description,
-                placeholders=placeholder_list,
-                is_active=is_active,
+            payload: ProvisioningTemplateCreate | ProvisioningTemplateUpdate = (
+                ProvisioningTemplateUpdate(
+                    name=name,
+                    vendor=vendor,
+                    action=action,
+                    connection_type=connection_type,
+                    template_content=template_content,
+                    description=description,
+                    placeholders=placeholder_list,
+                    is_active=is_active,
+                )
             )
         else:
             payload = ProvisioningTemplateCreate(

@@ -45,8 +45,14 @@ def require_agent_or_admin(auth=Depends(require_user_auth)):
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("support:ticket:create"))],
 )
-def create_ticket(payload: TicketCreate, auth=Depends(require_user_auth), db: Session = Depends(get_db)):
-    return support_service.tickets.create(db, payload, actor_id=_actor_id(auth), request=None)
+def create_ticket(
+    payload: TicketCreate,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
+    return support_service.tickets.create(
+        db, payload, actor_id=_actor_id(auth), request=None
+    )
 
 
 @router.get(
@@ -67,7 +73,7 @@ def list_tickets(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
-    ):
+):
     return support_service.tickets.list_response(
         db,
         search,
@@ -113,7 +119,9 @@ def update_ticket(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return support_service.tickets.update(db, str(ticket_id), payload, actor_id=_actor_id(auth), request=None)
+    return support_service.tickets.update(
+        db, str(ticket_id), payload, actor_id=_actor_id(auth), request=None
+    )
 
 
 @router.delete(
@@ -121,8 +129,12 @@ def update_ticket(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("support:ticket:delete"))],
 )
-def soft_delete_ticket(ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)):
-    support_service.tickets.soft_delete(db, str(ticket_id), actor_id=_actor_id(auth), request=None)
+def soft_delete_ticket(
+    ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)
+):
+    support_service.tickets.soft_delete(
+        db, str(ticket_id), actor_id=_actor_id(auth), request=None
+    )
 
 
 @router.post(
@@ -135,7 +147,9 @@ def bulk_update_tickets(
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    items = support_service.tickets.bulk_update(db, payload, actor_id=_actor_id(auth), request=None)
+    items = support_service.tickets.bulk_update(
+        db, payload, actor_id=_actor_id(auth), request=None
+    )
     return {"items": items, "count": len(items), "limit": len(items), "offset": 0}
 
 
@@ -143,13 +157,20 @@ def bulk_update_tickets(
     "/tickets/{ticket_id}/auto-assign",
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
-def manual_auto_assign(ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)):
-    return support_service.tickets.manual_auto_assign(db, str(ticket_id), actor_id=_actor_id(auth), request=None)
+def manual_auto_assign(
+    ticket_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)
+):
+    return support_service.tickets.manual_auto_assign(
+        db, str(ticket_id), actor_id=_actor_id(auth), request=None
+    )
 
 
 @router.post(
     "/tickets/{ticket_id}/links",
-    dependencies=[Depends(require_permission("support:ticket:update")), Depends(require_agent_or_admin)],
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_agent_or_admin),
+    ],
 )
 def create_ticket_link(
     ticket_id: UUID,
@@ -170,7 +191,10 @@ def create_ticket_link(
 @router.post(
     "/tickets/{ticket_id}/merge",
     response_model=TicketRead,
-    dependencies=[Depends(require_permission("support:ticket:update")), Depends(require_agent_or_admin)],
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_agent_or_admin),
+    ],
 )
 def merge_ticket(
     ticket_id: UUID,
@@ -241,7 +265,9 @@ def list_comments(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    items = support_service.ticket_comments.list(db, str(ticket_id), limit=limit, offset=offset)
+    items = support_service.ticket_comments.list(
+        db, str(ticket_id), limit=limit, offset=offset
+    )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
 
@@ -272,7 +298,9 @@ def update_comment(
     comment = support_service.ticket_comments.get(db, str(comment_id))
     if str(comment.ticket_id) != str(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket comment not found")
-    return support_service.ticket_comments.update(db, comment=comment, payload=payload, actor_id=_actor_id(auth), request=None)
+    return support_service.ticket_comments.update(
+        db, comment=comment, payload=payload, actor_id=_actor_id(auth), request=None
+    )
 
 
 @router.delete(
@@ -280,11 +308,18 @@ def update_comment(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
-def delete_comment(ticket_id: UUID, comment_id: UUID, auth=Depends(require_user_auth), db: Session = Depends(get_db)):
+def delete_comment(
+    ticket_id: UUID,
+    comment_id: UUID,
+    auth=Depends(require_user_auth),
+    db: Session = Depends(get_db),
+):
     comment = support_service.ticket_comments.get(db, str(comment_id))
     if str(comment.ticket_id) != str(ticket_id):
         raise HTTPException(status_code=404, detail="Ticket comment not found")
-    support_service.ticket_comments.delete(db, comment=comment, actor_id=_actor_id(auth), request=None)
+    support_service.ticket_comments.delete(
+        db, comment=comment, actor_id=_actor_id(auth), request=None
+    )
 
 
 @router.post(
@@ -317,7 +352,9 @@ def list_sla_events(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ):
-    items = support_service.ticket_sla_events.list(db, str(ticket_id), limit=limit, offset=offset)
+    items = support_service.ticket_sla_events.list(
+        db, str(ticket_id), limit=limit, offset=offset
+    )
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 
 
@@ -326,7 +363,9 @@ def list_sla_events(
     response_model=TicketSlaEventRead,
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
-def update_sla_event(event_id: UUID, payload: TicketSlaEventUpdate, db: Session = Depends(get_db)):
+def update_sla_event(
+    event_id: UUID, payload: TicketSlaEventUpdate, db: Session = Depends(get_db)
+):
     event = support_service.ticket_sla_events.get(db, str(event_id))
     return support_service.ticket_sla_events.update(db, event, payload)
 

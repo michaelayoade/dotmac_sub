@@ -221,7 +221,11 @@ class DomainRoutingCache(TypedDict):
     redirect: str
 
 
-_domain_routing_cache: DomainRoutingCache = {"ts": 0.0, "selfcare": "", "redirect": "/portal/"}
+_domain_routing_cache: DomainRoutingCache = {
+    "ts": 0.0,
+    "selfcare": "",
+    "redirect": "/portal/",
+}
 
 
 def _load_domain_routing(db: Session) -> dict[str, str]:

@@ -69,7 +69,9 @@ def payment_providers_create(
             provider_type=web_billing_providers_service.parse_supported_provider_type(
                 provider_type
             ),
-            webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,
+            webhook_secret_ref=webhook_secret_ref.strip()
+            if webhook_secret_ref
+            else None,
             notes=notes.strip() if notes else None,
             is_active=is_active is not None,
         )
@@ -93,7 +95,9 @@ def payment_providers_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:provider:write"))],
 )
-def payment_providers_edit(request: Request, provider_id: UUID, db: Session = Depends(get_db)):
+def payment_providers_edit(
+    request: Request, provider_id: UUID, db: Session = Depends(get_db)
+):
     state = web_billing_providers_service.edit_data(db, provider_id=str(provider_id))
     if not state:
         return templates.TemplateResponse(
@@ -134,14 +138,18 @@ def payment_providers_update(
             provider_type=web_billing_providers_service.parse_supported_provider_type(
                 provider_type
             ),
-            webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,
+            webhook_secret_ref=webhook_secret_ref.strip()
+            if webhook_secret_ref
+            else None,
             notes=notes.strip() if notes else None,
             is_active=is_active is not None,
         )
         billing_service.payment_providers.update(db, str(provider_id), payload)
         return RedirectResponse(url="/admin/billing/payment-providers", status_code=303)
     except Exception as exc:
-        state = web_billing_providers_service.edit_data(db, provider_id=str(provider_id))
+        state = web_billing_providers_service.edit_data(
+            db, provider_id=str(provider_id)
+        )
         return templates.TemplateResponse(
             "admin/billing/payment_provider_form.html",
             {

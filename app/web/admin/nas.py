@@ -1,4 +1,5 @@
 """Admin NAS device management web routes."""
+
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -28,7 +29,9 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(
     prefix="/nas",
     tags=["web-admin-nas"],
-    dependencies=[Depends(require_method_permission("network:nas:read", "network:nas:write"))],
+    dependencies=[
+        Depends(require_method_permission("network:nas:read", "network:nas:write"))
+    ],
 )
 
 DEVICE_AUDIT_EXCLUDE_FIELDS = {
@@ -41,7 +44,9 @@ DEVICE_AUDIT_EXCLUDE_FIELDS = {
 }
 
 
-def _base_context(request: Request, db: Session, active_page: str, active_menu: str = "network"):
+def _base_context(
+    request: Request, db: Session, active_page: str, active_menu: str = "network"
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return {
@@ -67,7 +72,9 @@ def _validate_ipv4_address(value: str | None, field_label: str) -> str | None:
     return nas_service.validate_ipv4_address(value, field_label)
 
 
-def _merge_radius_pool_tags(existing_tags: list | None, radius_pool_ids: list[str]) -> list[str] | None:
+def _merge_radius_pool_tags(
+    existing_tags: list | None, radius_pool_ids: list[str]
+) -> list[str] | None:
     """Backward-compatible helper kept for existing tests/routes."""
     return nas_service.merge_radius_pool_tags(existing_tags, radius_pool_ids)
 
@@ -83,7 +90,6 @@ def _extract_enhanced_fields(tags: list | None) -> dict[str, str | list[str] | N
 def _exception_message(exc: Exception) -> str:
     detail = getattr(exc, "detail", None)
     return str(detail) if detail else str(exc)
-
 
 
 # ============== NAS Dashboard ==============
@@ -282,6 +288,7 @@ def device_create(
             raise ValueError("Invalid payload type: expected NasDeviceCreate")
         device = nas_service.NasDevices.create(db, payload)
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -292,7 +299,9 @@ def device_create(
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata={"name": device.name, "ip_address": device.ip_address},
         )
-        return RedirectResponse(f"/admin/network/nas/devices/{device.id}", status_code=303)
+        return RedirectResponse(
+            f"/admin/network/nas/devices/{device.id}", status_code=303
+        )
     except Exception as e:
         errors.append(str(e))
         return templates.TemplateResponse(
@@ -364,7 +373,9 @@ def device_form_edit(request: Request, device_id: str, db: Session = Depends(get
             "errors": [],
             "pop_site_label": _get_pop_site_label(device),
             "selected_radius_pool_ids": _radius_pool_ids_from_tags(device.tags),
-            "selected_partner_org_ids": _prefixed_values_from_tags(device.tags, "partner_org:"),
+            "selected_partner_org_ids": _prefixed_values_from_tags(
+                device.tags, "partner_org:"
+            ),
             "enhanced_fields": _extract_enhanced_fields(device.tags),
         },
     )
@@ -507,10 +518,13 @@ def device_update(
         if not isinstance(payload, NasDeviceUpdate):
             raise ValueError("Invalid payload type: expected NasDeviceUpdate")
         updated_device = nas_service.NasDevices.update(db, device_id, payload)
-        after_snapshot = model_to_dict(updated_device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS)
+        after_snapshot = model_to_dict(
+            updated_device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS
+        )
         changes = diff_dicts(before_snapshot, after_snapshot)
         metadata = {"changes": changes} if changes else None
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -521,7 +535,9 @@ def device_update(
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
-        return RedirectResponse(f"/admin/network/nas/devices/{device_id}", status_code=303)
+        return RedirectResponse(
+            f"/admin/network/nas/devices/{device_id}", status_code=303
+        )
     except Exception as e:
         errors.append(str(e))
         return templates.TemplateResponse(
@@ -545,6 +561,7 @@ def device_delete(request: Request, device_id: str, db: Session = Depends(get_db
     """Delete NAS device."""
     device = nas_service.NasDevices.get(db, device_id)
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -659,7 +676,9 @@ def device_connection_rule_delete(
 def device_test_mikrotik_api(device_id: str, db: Session = Depends(get_db)):
     """Run MikroTik API connection/status test."""
     try:
-        message = nas_service.refresh_mikrotik_status_for_device(db, device_id=device_id)
+        message = nas_service.refresh_mikrotik_status_for_device(
+            db, device_id=device_id
+        )
         return RedirectResponse(
             f"/admin/network/nas/devices/{device_id}?tab=vendor-specific&api_test_status=success&api_test_message={quote_plus(message)}",
             status_code=303,
@@ -671,8 +690,13 @@ def device_test_mikrotik_api(device_id: str, db: Session = Depends(get_db)):
         )
 
 
-@router.post("/devices/{device_id}/vendor/mikrotik/bootstrap-script", response_class=PlainTextResponse)
-def device_generate_mikrotik_bootstrap_script(device_id: str, db: Session = Depends(get_db)):
+@router.post(
+    "/devices/{device_id}/vendor/mikrotik/bootstrap-script",
+    response_class=PlainTextResponse,
+)
+def device_generate_mikrotik_bootstrap_script(
+    device_id: str, db: Session = Depends(get_db)
+):
     """Generate RouterOS bootstrap script and rotate app-side API credentials."""
     data = nas_service.generate_mikrotik_bootstrap_script_for_device(
         db,
@@ -751,6 +775,7 @@ def device_backup_trigger(
         if backup is None:
             raise ValueError("Backup trigger succeeded but returned no backup record")
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -900,12 +925,15 @@ def template_create(
 
     try:
         if not isinstance(payload, ProvisioningTemplateCreate):
-            raise ValueError("Invalid payload type: expected ProvisioningTemplateCreate")
+            raise ValueError(
+                "Invalid payload type: expected ProvisioningTemplateCreate"
+            )
         template, metadata = nas_service.create_provisioning_template_with_metadata(
             db,
             payload=payload,
         )
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -916,7 +944,9 @@ def template_create(
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
-        return RedirectResponse(f"/admin/network/nas/templates/{template.id}", status_code=303)
+        return RedirectResponse(
+            f"/admin/network/nas/templates/{template.id}", status_code=303
+        )
     except Exception as e:
         errors.append(str(e))
         return templates.TemplateResponse(
@@ -948,7 +978,9 @@ def template_detail(request: Request, template_id: str, db: Session = Depends(ge
 
 
 @router.get("/templates/{template_id}/edit", response_class=HTMLResponse)
-def template_form_edit(request: Request, template_id: str, db: Session = Depends(get_db)):
+def template_form_edit(
+    request: Request, template_id: str, db: Session = Depends(get_db)
+):
     """Edit provisioning template form."""
     page_data = nas_service.build_nas_template_form_data(db, template_id=template_id)
     return templates.TemplateResponse(
@@ -1003,13 +1035,18 @@ def template_update(
 
     try:
         if not isinstance(payload, ProvisioningTemplateUpdate):
-            raise ValueError("Invalid payload type: expected ProvisioningTemplateUpdate")
-        updated_template, metadata = nas_service.update_provisioning_template_with_metadata(
-            db,
-            template_id=template_id,
-            payload=payload,
+            raise ValueError(
+                "Invalid payload type: expected ProvisioningTemplateUpdate"
+            )
+        updated_template, metadata = (
+            nas_service.update_provisioning_template_with_metadata(
+                db,
+                template_id=template_id,
+                payload=payload,
+            )
         )
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -1020,7 +1057,9 @@ def template_update(
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata,
         )
-        return RedirectResponse(f"/admin/network/nas/templates/{template_id}", status_code=303)
+        return RedirectResponse(
+            f"/admin/network/nas/templates/{template_id}", status_code=303
+        )
     except Exception as e:
         errors.append(str(e))
         return templates.TemplateResponse(
@@ -1039,6 +1078,7 @@ def template_delete(request: Request, template_id: str, db: Session = Depends(ge
     """Delete provisioning template."""
     template = nas_service.ProvisioningTemplates.get(db, template_id)
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -1245,7 +1285,11 @@ def device_vlan_delete(
         entity_type="nas_device",
         entity_id=device_id,
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"vlan_id": vlan_id, "success": result["success"], "message": result["message"]},
+        metadata={
+            "vlan_id": vlan_id,
+            "success": result["success"],
+            "message": result["message"],
+        },
     )
 
     msg = quote_plus(result["message"])

@@ -30,4 +30,5 @@ def geocode_primary_address(
         db=db,
     )
 
+
 __all__ = ["router", "geocode_address", "geocode_primary_address"]

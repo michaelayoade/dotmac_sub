@@ -209,9 +209,8 @@ def detect_drift(db: Session, ont_id: str) -> DriftReport | None:
     if not ont or not ont.provisioning_profile_id:
         return None
 
-    stmt = (
-        select(OntProvisioningProfile)
-        .where(OntProvisioningProfile.id == ont.provisioning_profile_id)
+    stmt = select(OntProvisioningProfile).where(
+        OntProvisioningProfile.id == ont.provisioning_profile_id
     )
     profile = db.scalars(stmt).first()
     if not profile:

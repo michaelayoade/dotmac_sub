@@ -29,13 +29,16 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class WebhookEndpoints(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: WebhookEndpointCreate):
         if payload.connector_config_id:
             config = db.get(ConnectorConfig, coerce_uuid(payload.connector_config_id))
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         endpoint = WebhookEndpoint(**payload.model_dump())
         db.add(endpoint)
         db.commit()
@@ -97,7 +100,9 @@ class WebhookEndpoints(ListResponseMixin):
         if "connector_config_id" in data and data["connector_config_id"]:
             config = db.get(ConnectorConfig, coerce_uuid(data["connector_config_id"]))
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         for key, value in data.items():
             setattr(endpoint, key, value)
         db.commit()
@@ -129,7 +134,9 @@ class WebhookSubscriptions(ListResponseMixin):
     def get(db: Session, subscription_id: str):
         subscription = db.get(WebhookSubscription, coerce_uuid(subscription_id))
         if not subscription:
-            raise HTTPException(status_code=404, detail="Webhook subscription not found")
+            raise HTTPException(
+                status_code=404, detail="Webhook subscription not found"
+            )
         return subscription
 
     @staticmethod
@@ -203,12 +210,16 @@ class WebhookSubscriptions(ListResponseMixin):
     def update(db: Session, subscription_id: str, payload: WebhookSubscriptionUpdate):
         subscription = db.get(WebhookSubscription, coerce_uuid(subscription_id))
         if not subscription:
-            raise HTTPException(status_code=404, detail="Webhook subscription not found")
+            raise HTTPException(
+                status_code=404, detail="Webhook subscription not found"
+            )
         data = payload.model_dump(exclude_unset=True)
         if "endpoint_id" in data:
             endpoint = db.get(WebhookEndpoint, coerce_uuid(data["endpoint_id"]))
             if not endpoint:
-                raise HTTPException(status_code=404, detail="Webhook endpoint not found")
+                raise HTTPException(
+                    status_code=404, detail="Webhook endpoint not found"
+                )
         for key, value in data.items():
             setattr(subscription, key, value)
         db.commit()
@@ -219,7 +230,9 @@ class WebhookSubscriptions(ListResponseMixin):
     def delete(db: Session, subscription_id: str):
         subscription = db.get(WebhookSubscription, coerce_uuid(subscription_id))
         if not subscription:
-            raise HTTPException(status_code=404, detail="Webhook subscription not found")
+            raise HTTPException(
+                status_code=404, detail="Webhook subscription not found"
+            )
         subscription.is_active = False
         db.commit()
 
@@ -229,7 +242,9 @@ class WebhookDeliveries(ListResponseMixin):
     def create(db: Session, payload: WebhookDeliveryCreate):
         subscription = db.get(WebhookSubscription, coerce_uuid(payload.subscription_id))
         if not subscription:
-            raise HTTPException(status_code=404, detail="Webhook subscription not found")
+            raise HTTPException(
+                status_code=404, detail="Webhook subscription not found"
+            )
         delivery = WebhookDelivery(
             subscription_id=subscription.id,
             endpoint_id=subscription.endpoint_id,
@@ -263,7 +278,9 @@ class WebhookDeliveries(ListResponseMixin):
     ):
         query = db.query(WebhookDelivery)
         if endpoint_id:
-            query = query.filter(WebhookDelivery.endpoint_id == coerce_uuid(endpoint_id))
+            query = query.filter(
+                WebhookDelivery.endpoint_id == coerce_uuid(endpoint_id)
+            )
         if subscription_id:
             query = query.filter(
                 WebhookDelivery.subscription_id == coerce_uuid(subscription_id)

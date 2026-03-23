@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 # 4.25 Subscriber Growth Chart
 # ---------------------------------------------------------------------------
 
+
 def get_subscriber_growth_data(db: Session, *, days: int = 30) -> dict:
     """Daily subscriber counts by status over last N days."""
     from app.models.subscriber import SubscriberStatus
@@ -75,7 +76,8 @@ def get_subscriber_growth_data(db: Session, *, days: int = 30) -> dict:
             1
             for row in visible_subscribers
             if (
-                (created_at := subscriber_service.get_effective_created_at(row)) is not None
+                (created_at := subscriber_service.get_effective_created_at(row))
+                is not None
                 and created_at <= day
             )
         )
@@ -94,6 +96,7 @@ def get_subscriber_growth_data(db: Session, *, days: int = 30) -> dict:
 # ---------------------------------------------------------------------------
 # 4.26 Usage by Plan
 # ---------------------------------------------------------------------------
+
 
 def get_usage_by_plan_data(db: Session) -> dict:
     """Subscriber counts per catalog offer."""
@@ -122,6 +125,7 @@ def get_usage_by_plan_data(db: Session) -> dict:
 # 4.28 Upcoming Charges / Future Charges
 # ---------------------------------------------------------------------------
 
+
 def get_upcoming_charges_data(db: Session) -> dict:
     """Active subscriptions with upcoming billing."""
     try:
@@ -129,7 +133,12 @@ def get_upcoming_charges_data(db: Session) -> dict:
         from app.models.subscriber import Subscriber
 
         stmt = (
-            select((Subscriber.first_name + " " + Subscriber.last_name).label("full_name"), CatalogOffer.name, Subscription.unit_price, Subscription.start_at)
+            select(
+                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
+                CatalogOffer.name,
+                Subscription.unit_price,
+                Subscription.start_at,
+            )
             .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
             .join(Subscriber, Subscription.subscriber_id == Subscriber.id)
             .where(Subscription.status == "active")
@@ -146,14 +155,21 @@ def get_upcoming_charges_data(db: Session) -> dict:
         charges = []
 
     total_amount = sum(c["amount"] or Decimal("0") for c in charges)
-    return {"charges": charges, "total_amount": total_amount, "total_count": len(charges)}
+    return {
+        "charges": charges,
+        "total_amount": total_amount,
+        "total_count": len(charges),
+    }
 
 
 # ---------------------------------------------------------------------------
 # 4.29 Revenue Per Plan
 # ---------------------------------------------------------------------------
 
-def get_revenue_per_plan_data(db: Session, date_from: str | None = None, date_to: str | None = None) -> dict:
+
+def get_revenue_per_plan_data(
+    db: Session, date_from: str | None = None, date_to: str | None = None
+) -> dict:
     """Revenue aggregated by plan."""
     try:
         from app.models.billing import Invoice, InvoiceLine
@@ -167,7 +183,11 @@ def get_revenue_per_plan_data(db: Session, date_from: str | None = None, date_to
             )
             .select_from(CatalogOffer)
             .join(Subscription, Subscription.offer_id == CatalogOffer.id, isouter=True)
-            .join(InvoiceLine, InvoiceLine.subscription_id == Subscription.id, isouter=True)
+            .join(
+                InvoiceLine,
+                InvoiceLine.subscription_id == Subscription.id,
+                isouter=True,
+            )
             .join(Invoice, Invoice.id == InvoiceLine.invoice_id, isouter=True)
             .group_by(CatalogOffer.id, CatalogOffer.name)
             .order_by(func.coalesce(func.sum(InvoiceLine.amount), 0).desc())
@@ -199,7 +219,13 @@ def get_revenue_per_plan_data(db: Session, date_from: str | None = None, date_to
 # 4.30 Invoice Report
 # ---------------------------------------------------------------------------
 
-def get_invoice_report_data(db: Session, date_from: str | None = None, date_to: str | None = None, status: str | None = None) -> dict:
+
+def get_invoice_report_data(
+    db: Session,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    status: str | None = None,
+) -> dict:
     """Detailed invoice listing with tax breakdown."""
     try:
         from app.models.billing import Invoice
@@ -232,6 +258,7 @@ def get_invoice_report_data(db: Session, date_from: str | None = None, date_to: 
 # 4.31 Statements
 # ---------------------------------------------------------------------------
 
+
 def get_statements_data(db: Session) -> dict:
     """Customer financial summaries."""
     try:
@@ -245,8 +272,13 @@ def get_statements_data(db: Session) -> dict:
                 func.coalesce(func.sum(Invoice.total), 0).label("total"),
             )
             .join(Invoice, Invoice.account_id == Subscriber.id, isouter=True)
-            .group_by(Subscriber.id, (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"))
-            .order_by((Subscriber.first_name + " " + Subscriber.last_name).label("full_name"))
+            .group_by(
+                Subscriber.id,
+                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
+            )
+            .order_by(
+                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name")
+            )
             .limit(200)
         )
         rows = db.execute(stmt).all()
@@ -262,12 +294,18 @@ def get_statements_data(db: Session) -> dict:
 # 4.32 Tax Report
 # ---------------------------------------------------------------------------
 
+
 def get_tax_report_data(db: Session) -> dict:
     """Per-invoice tax details and totals."""
     try:
         from app.models.billing import Invoice
 
-        stmt = select(Invoice).where(Invoice.tax_total > 0).order_by(Invoice.issued_at.desc()).limit(200)
+        stmt = (
+            select(Invoice)
+            .where(Invoice.tax_total > 0)
+            .order_by(Invoice.issued_at.desc())
+            .limit(200)
+        )
         invoices = list(db.scalars(stmt).all())
     except Exception as exc:
         logger.warning("Could not query tax data: %s", exc)
@@ -280,6 +318,7 @@ def get_tax_report_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 # 4.36 MRR Net Change
 # ---------------------------------------------------------------------------
+
 
 def get_mrr_data(db: Session, year: int | None = None) -> dict:
     """Monthly recurring revenue movement with real subscription data."""
@@ -300,61 +339,84 @@ def get_mrr_data(db: Session, year: int | None = None) -> dict:
 
         # Skip future months
         if month_start > now:
-            months.append({
-                "month": f"{year}-{m:02d}",
-                "start_count": 0, "new": 0, "cancellations": 0,
-                "end_count": 0, "net_change": 0,
-            })
+            months.append(
+                {
+                    "month": f"{year}-{m:02d}",
+                    "start_count": 0,
+                    "new": 0,
+                    "cancellations": 0,
+                    "end_count": 0,
+                    "net_change": 0,
+                }
+            )
             continue
 
         # Active at start of month (created before month_start and not canceled before)
-        start_count = db.scalar(
-            select(func.count(Subscription.id)).where(
-                Subscription.created_at < month_start,
-                Subscription.status.in_([
-                    SubscriptionStatus.active,
-                    SubscriptionStatus.suspended,
-                    SubscriptionStatus.pending,
-                ]),
+        start_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.created_at < month_start,
+                    Subscription.status.in_(
+                        [
+                            SubscriptionStatus.active,
+                            SubscriptionStatus.suspended,
+                            SubscriptionStatus.pending,
+                        ]
+                    ),
+                )
             )
-        ) or 0
+            or 0
+        )
 
         # New subscriptions created this month
-        new_count = db.scalar(
-            select(func.count(Subscription.id)).where(
-                Subscription.created_at >= month_start,
-                Subscription.created_at < month_end,
+        new_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.created_at >= month_start,
+                    Subscription.created_at < month_end,
+                )
             )
-        ) or 0
+            or 0
+        )
 
         # Cancellations this month
-        cancel_count = db.scalar(
-            select(func.count(Subscription.id)).where(
-                Subscription.status == SubscriptionStatus.canceled,
-                Subscription.updated_at >= month_start,
-                Subscription.updated_at < month_end,
+        cancel_count = (
+            db.scalar(
+                select(func.count(Subscription.id)).where(
+                    Subscription.status == SubscriptionStatus.canceled,
+                    Subscription.updated_at >= month_start,
+                    Subscription.updated_at < month_end,
+                )
             )
-        ) or 0
+            or 0
+        )
 
         end_count = start_count + new_count - cancel_count
 
-        months.append({
-            "month": f"{year}-{m:02d}",
-            "start_count": start_count,
-            "new": new_count,
-            "cancellations": cancel_count,
-            "end_count": max(0, end_count),
-            "net_change": new_count - cancel_count,
-        })
-
-    total = db.scalar(
-        select(func.count(Subscription.id)).where(
-            Subscription.status.in_([
-                SubscriptionStatus.active,
-                SubscriptionStatus.suspended,
-            ]),
+        months.append(
+            {
+                "month": f"{year}-{m:02d}",
+                "start_count": start_count,
+                "new": new_count,
+                "cancellations": cancel_count,
+                "end_count": max(0, end_count),
+                "net_change": new_count - cancel_count,
+            }
         )
-    ) or 0
+
+    total = (
+        db.scalar(
+            select(func.count(Subscription.id)).where(
+                Subscription.status.in_(
+                    [
+                        SubscriptionStatus.active,
+                        SubscriptionStatus.suspended,
+                    ]
+                ),
+            )
+        )
+        or 0
+    )
 
     return {"months": months, "year": year, "total_subscribers": total}
 
@@ -363,14 +425,23 @@ def get_mrr_data(db: Session, year: int | None = None) -> dict:
 # 4.37 New Services
 # ---------------------------------------------------------------------------
 
-def get_new_services_data(db: Session, date_from: str | None = None, date_to: str | None = None) -> dict:
+
+def get_new_services_data(
+    db: Session, date_from: str | None = None, date_to: str | None = None
+) -> dict:
     """Recently activated subscriptions."""
     try:
         from app.models.catalog import CatalogOffer, Subscription
         from app.models.subscriber import Subscriber
 
         stmt = (
-            select((Subscriber.first_name + " " + Subscriber.last_name).label("full_name"), CatalogOffer.name, Subscription.unit_price, Subscription.start_at, Subscription.status)
+            select(
+                (Subscriber.first_name + " " + Subscriber.last_name).label("full_name"),
+                CatalogOffer.name,
+                Subscription.unit_price,
+                Subscription.start_at,
+                Subscription.status,
+            )
             .join(CatalogOffer, Subscription.offer_id == CatalogOffer.id)
             .join(Subscriber, Subscription.subscriber_id == Subscriber.id)
             .order_by(Subscription.start_at.desc())
@@ -384,17 +455,31 @@ def get_new_services_data(db: Session, date_from: str | None = None, date_to: st
             stmt = stmt.where(Subscription.start_at < d_to + timedelta(days=1))
 
         rows = db.execute(stmt).all()
-        services = [{"subscriber": r[0], "plan": r[1], "price": r[2], "start_date": r[3], "status": r[4]} for r in rows]
+        services = [
+            {
+                "subscriber": r[0],
+                "plan": r[1],
+                "price": r[2],
+                "start_date": r[3],
+                "status": r[4],
+            }
+            for r in rows
+        ]
     except Exception as exc:
         logger.warning("Could not query new services: %s", exc)
         services = []
 
-    return {"services": services, "date_from": date_from or "", "date_to": date_to or ""}
+    return {
+        "services": services,
+        "date_from": date_from or "",
+        "date_to": date_to or "",
+    }
 
 
 # ---------------------------------------------------------------------------
 # Bandwidth & Usage Analytics
 # ---------------------------------------------------------------------------
+
 
 def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
     """Network usage analytics — total usage, per-plan, top consumers."""
@@ -412,7 +497,9 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
             func.avg(BandwidthSample.tx_bps).label("avg_tx"),
             func.max(BandwidthSample.rx_bps).label("peak_rx"),
             func.max(BandwidthSample.tx_bps).label("peak_tx"),
-            func.count(func.distinct(BandwidthSample.subscription_id)).label("active_subs"),
+            func.count(func.distinct(BandwidthSample.subscription_id)).label(
+                "active_subs"
+            ),
         ).where(
             BandwidthSample.sample_at >= start,
             BandwidthSample.sample_at <= end,
@@ -425,7 +512,7 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
     peak_tx = float(row.peak_tx or 0) if row else 0
     active_subs = int(row.active_subs or 0) if row else 0
     span_seconds = max(0.0, (end - start).total_seconds())
-    total_gb = ((avg_rx + avg_tx) / 8.0 * span_seconds) / (1024 ** 3)
+    total_gb = ((avg_rx + avg_tx) / 8.0 * span_seconds) / (1024**3)
 
     # Daily usage trend
     bucket = func.date_trunc("day", BandwidthSample.sample_at)
@@ -434,10 +521,13 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
             bucket.label("day"),
             func.avg(BandwidthSample.rx_bps).label("rx"),
             func.avg(BandwidthSample.tx_bps).label("tx"),
-        ).where(
+        )
+        .where(
             BandwidthSample.sample_at >= start,
             BandwidthSample.sample_at <= end,
-        ).group_by(bucket).order_by(bucket)
+        )
+        .group_by(bucket)
+        .order_by(bucket)
     ).all()
     chart_labels = [r.day.strftime("%Y-%m-%d") if r.day else "" for r in daily_rows]
     chart_rx = [round(float(r.rx or 0) / 1_000_000, 2) for r in daily_rows]
@@ -447,10 +537,14 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
     top_rows = db.execute(
         select(
             BandwidthSample.subscription_id,
-            func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label("avg_total"),
-        ).where(
+            func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label(
+                "avg_total"
+            ),
+        )
+        .where(
             BandwidthSample.sample_at >= start,
-        ).group_by(BandwidthSample.subscription_id)
+        )
+        .group_by(BandwidthSample.subscription_id)
         .order_by(func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).desc())
         .limit(20)
     ).all()
@@ -461,30 +555,43 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
         subscriber_name = "Unknown"
         plan_name = "Unknown"
         if sub:
-            subscriber = db.get(Subscriber, sub.subscriber_id) if sub.subscriber_id else None
+            subscriber = (
+                db.get(Subscriber, sub.subscriber_id) if sub.subscriber_id else None
+            )
             if subscriber:
-                subscriber_name = f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip() or str(subscriber.id)[:8]
+                subscriber_name = (
+                    f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
+                    or str(subscriber.id)[:8]
+                )
             offer = db.get(CatalogOffer, sub.offer_id) if sub.offer_id else None
             if offer:
                 plan_name = offer.name
         avg_mbps = float(tr.avg_total or 0) / 1_000_000
-        usage_gb = (float(tr.avg_total or 0) / 8.0 * span_seconds) / (1024 ** 3)
-        top_consumers.append({
-            "subscriber": subscriber_name,
-            "plan": plan_name,
-            "avg_mbps": round(avg_mbps, 2),
-            "usage_gb": round(usage_gb, 2),
-        })
+        usage_gb = (float(tr.avg_total or 0) / 8.0 * span_seconds) / (1024**3)
+        top_consumers.append(
+            {
+                "subscriber": subscriber_name,
+                "plan": plan_name,
+                "avg_mbps": round(avg_mbps, 2),
+                "usage_gb": round(usage_gb, 2),
+            }
+        )
 
     # Usage by plan
     plan_rows = db.execute(
         select(
             CatalogOffer.name,
             func.avg(BandwidthSample.rx_bps + BandwidthSample.tx_bps).label("avg_bps"),
-            func.count(func.distinct(BandwidthSample.subscription_id)).label("sub_count"),
+            func.count(func.distinct(BandwidthSample.subscription_id)).label(
+                "sub_count"
+            ),
         )
         .select_from(BandwidthSample)
-        .join(Subscription, Subscription.id == BandwidthSample.subscription_id, isouter=True)
+        .join(
+            Subscription,
+            Subscription.id == BandwidthSample.subscription_id,
+            isouter=True,
+        )
         .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
         .where(BandwidthSample.sample_at >= start)
         .group_by(CatalogOffer.name)
@@ -519,6 +626,7 @@ def get_bandwidth_report_data(db: Session, *, days: int = 30) -> dict:
 # Revenue by Category (real data from invoice lines + offers)
 # ---------------------------------------------------------------------------
 
+
 def get_revenue_categories_data(db: Session) -> dict:
     """Revenue segmented by offer service type and plan category."""
     try:
@@ -534,7 +642,11 @@ def get_revenue_categories_data(db: Session) -> dict:
             )
             .select_from(InvoiceLine)
             .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
-            .join(Subscription, Subscription.id == InvoiceLine.subscription_id, isouter=True)
+            .join(
+                Subscription,
+                Subscription.id == InvoiceLine.subscription_id,
+                isouter=True,
+            )
             .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id, isouter=True)
             .where(Invoice.is_active.is_(True))
             .group_by(CatalogOffer.service_type)
@@ -543,7 +655,11 @@ def get_revenue_categories_data(db: Session) -> dict:
         rows = db.execute(stmt_service).all()
         categories = [
             {
-                "name": (r[0].value if hasattr(r[0], "value") else str(r[0] or "Uncategorized")),
+                "name": (
+                    r[0].value
+                    if hasattr(r[0], "value")
+                    else str(r[0] or "Uncategorized")
+                ),
                 "invoice_count": r[1],
                 "revenue": float(r[2] or 0),
             }
@@ -567,6 +683,7 @@ def get_revenue_categories_data(db: Session) -> dict:
 # Custom Pricing & Discounts (subscription add-ons and unit price overrides)
 # ---------------------------------------------------------------------------
 
+
 def get_custom_pricing_data(db: Session) -> dict:
     """Subscriptions with custom pricing overrides or active add-ons."""
     try:
@@ -576,7 +693,9 @@ def get_custom_pricing_data(db: Session) -> dict:
         # Subscriptions where unit_price differs from offer price
         stmt = (
             select(
-                (Subscriber.first_name + " " + Subscriber.last_name).label("subscriber"),
+                (Subscriber.first_name + " " + Subscriber.last_name).label(
+                    "subscriber"
+                ),
                 CatalogOffer.name.label("plan"),
                 Subscription.unit_price,
                 Subscription.status,
@@ -591,14 +710,18 @@ def get_custom_pricing_data(db: Session) -> dict:
         )
         rows = db.execute(stmt).all()
         overrides = [
-            {"subscriber": r[0], "plan": r[1], "price": float(r[2] or 0), "status": r[3].value if hasattr(r[3], "value") else str(r[3])}
+            {
+                "subscriber": r[0],
+                "plan": r[1],
+                "price": float(r[2] or 0),
+                "status": r[3].value if hasattr(r[3], "value") else str(r[3]),
+            }
             for r in rows
         ]
 
         # Active add-ons
-        addon_stmt = (
-            select(func.count(SubscriptionAddOn.id))
-            .where(SubscriptionAddOn.is_active.is_(True))
+        addon_stmt = select(func.count(SubscriptionAddOn.id)).where(
+            SubscriptionAddOn.is_active.is_(True)
         )
         addon_count = db.scalar(addon_stmt) or 0
     except Exception as exc:
@@ -612,6 +735,7 @@ def get_custom_pricing_data(db: Session) -> dict:
 # ---------------------------------------------------------------------------
 # Placeholder reports (no backing models yet)
 # ---------------------------------------------------------------------------
+
 
 def get_referrals_data(db: Session) -> dict:
     """Placeholder — referral tracking not yet implemented."""

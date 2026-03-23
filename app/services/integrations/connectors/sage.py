@@ -28,5 +28,7 @@ class SageAdapter:
     def sync_credit_notes(self, db: Session, connector: ConnectorConfig) -> int:
         raise NotImplementedError("Sage credit note sync is not yet implemented")
 
-    def get_sync_status(self, db: Session, connector: ConnectorConfig) -> dict[str, object]:
+    def get_sync_status(
+        self, db: Session, connector: ConnectorConfig
+    ) -> dict[str, object]:
         return {"provider": self.provider, "status": "not_implemented"}

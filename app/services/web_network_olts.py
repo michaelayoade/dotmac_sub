@@ -59,6 +59,8 @@ def _encrypt_if_set(values: Mapping[str, Any], key: str) -> str | None:
     if raw:
         return encrypt_credential(raw)
     return None
+
+
 _FALLBACK_OLT_BACKUP_DIR = Path("uploads/olt_config_backups")
 
 
@@ -354,7 +356,9 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         firmware_version=olt.firmware_version,
         software_version=olt.software_version,
         supported_pon_types=getattr(olt, "supported_pon_types", None),
-        status=olt.status.value if hasattr(olt.status, "value") else str(olt.status or "active"),
+        status=olt.status.value
+        if hasattr(olt.status, "value")
+        else str(olt.status or "active"),
         ssh_username=olt.ssh_username,
         ssh_password="",
         ssh_port=olt.ssh_port,
@@ -364,18 +368,28 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         notes=olt.notes,
         is_active=olt.is_active,
         # SNMP: prefer OLT's own fields, fall back to linked NetworkDevice
-        snmp_enabled=getattr(olt, "snmp_enabled", False) or bool(getattr(linked, "snmp_enabled", False)),
+        snmp_enabled=getattr(olt, "snmp_enabled", False)
+        or bool(getattr(linked, "snmp_enabled", False)),
         snmp_port=getattr(olt, "snmp_port", None) or getattr(linked, "snmp_port", 161),
-        snmp_version=getattr(olt, "snmp_version", None) or getattr(linked, "snmp_version", "v2c"),
+        snmp_version=getattr(olt, "snmp_version", None)
+        or getattr(linked, "snmp_version", "v2c"),
         snmp_community=(
             decrypt_credential(v)
             if (v := getattr(olt, "snmp_ro_community", None))
-            else (decrypt_credential(v) if (v := getattr(linked, "snmp_community", None)) else None)
+            else (
+                decrypt_credential(v)
+                if (v := getattr(linked, "snmp_community", None))
+                else None
+            )
         ),
         snmp_rw_community=(
             decrypt_credential(v)
             if (v := getattr(olt, "snmp_rw_community", None))
-            else (decrypt_credential(v) if (v := getattr(linked, "snmp_rw_community", None)) else None)
+            else (
+                decrypt_credential(v)
+                if (v := getattr(linked, "snmp_rw_community", None))
+                else None
+            )
         ),
         snmp_username=getattr(linked, "snmp_username", None),
         snmp_auth_protocol=getattr(linked, "snmp_auth_protocol", None),
@@ -437,7 +451,9 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     }
     if server.cwmp_username:
         acs_params["Device.ManagementServer.Username"] = server.cwmp_username
-        acs_params["InternetGatewayDevice.ManagementServer.Username"] = server.cwmp_username
+        acs_params["InternetGatewayDevice.ManagementServer.Username"] = (
+            server.cwmp_username
+        )
     if server.cwmp_password:
         password = decrypt_credential(server.cwmp_password)
         if password:
@@ -483,9 +499,13 @@ def update_olt(
             payload_values["ssh_password"] = current.ssh_password
         # Preserve SNMP fields when form doesn't submit new values
         if payload_values.get("snmp_community") is None:
-            payload_values["snmp_community"] = getattr(current, "snmp_ro_community", None)
+            payload_values["snmp_community"] = getattr(
+                current, "snmp_ro_community", None
+            )
         if payload_values.get("snmp_rw_community") is None:
-            payload_values["snmp_rw_community"] = getattr(current, "snmp_rw_community", None)
+            payload_values["snmp_rw_community"] = getattr(
+                current, "snmp_rw_community", None
+            )
         if payload_values.get("snmp_enabled") is None:
             payload_values["snmp_enabled"] = getattr(current, "snmp_enabled", False)
         if payload_values.get("snmp_port") is None:
@@ -542,7 +562,9 @@ def _auto_init_tr069_profile(olt: OLTDevice) -> None:
         if ok:
             logger.info("Auto-created TR-069 profile on %s", olt.name)
         else:
-            logger.warning("Auto TR-069 profile creation failed on %s: %s", olt.name, msg)
+            logger.warning(
+                "Auto TR-069 profile creation failed on %s: %s", olt.name, msg
+            )
     except Exception as exc:
         logger.warning("Auto TR-069 init error on %s: %s", olt.name, exc)
 
@@ -896,7 +918,10 @@ def authorize_autofind_ont(
             olt.name,
             fsp,
         )
-        return True, f"{msg}. Warning: ONT-ID could not be determined, so service-port provisioning was skipped"
+        return (
+            True,
+            f"{msg}. Warning: ONT-ID could not be determined, so service-port provisioning was skipped",
+        )
 
     # Step 2: Provision service-ports using neighbor-learning
     sp_ok, sp_msg = provision_ont_service_ports(db, olt_id, fsp, ont_id)
@@ -927,6 +952,7 @@ def provision_ont_service_ports(
 
     # Find the reference ONT (most common ONT-ID with most service-ports)
     from collections import Counter
+
     ont_counts = Counter(e.ont_id for e in entries)
     if not ont_counts:
         return False, "No existing service-ports to learn from"
@@ -948,7 +974,10 @@ def provision_ont_service_ports(
     reference_ports = [e for e in entries if e.ont_id == reference_ont_id]
     logger.info(
         "Learning service-port pattern from ONT %d (%d ports) for new ONT %d on %s",
-        reference_ont_id, len(reference_ports), ont_id, fsp,
+        reference_ont_id,
+        len(reference_ports),
+        ont_id,
+        fsp,
     )
 
     return olt_ssh_service.create_service_ports(olt, fsp, ont_id, reference_ports)
@@ -1005,7 +1034,9 @@ def trigger_olt_firmware_upgrade(
         return False, "Firmware image not found"
     if not image.is_active:
         return False, "Firmware image is not active"
-    return olt_ssh_service.upgrade_firmware(olt, image.file_url, method=image.upgrade_method or "sftp")
+    return olt_ssh_service.upgrade_firmware(
+        olt, image.file_url, method=image.upgrade_method or "sftp"
+    )
 
 
 def _parse_walk_composite(lines: list[str], *, suffix_parts: int = 4) -> dict[str, str]:
@@ -1022,7 +1053,11 @@ def _parse_walk_composite(lines: list[str], *, suffix_parts: int = 4) -> dict[st
             # Huawei packed index format: <packed_fsp>.<onu_id>
             index = f"{oid_tokens[-2]}.{oid_tokens[-1]}"
         else:
-            index = ".".join(oid_tokens[-suffix_parts:]) if len(oid_tokens) >= suffix_parts else oid_tokens[-1]
+            index = (
+                ".".join(oid_tokens[-suffix_parts:])
+                if len(oid_tokens) >= suffix_parts
+                else oid_tokens[-1]
+            )
         value = value_part.split(": ", 1)[-1].strip().strip('"')
         if value.lower().startswith("no such"):
             continue
@@ -1068,7 +1103,9 @@ def _parse_distance_m(raw: str | None) -> int | None:
     return value
 
 
-def _parse_online_status(raw: str | None) -> tuple[OnuOnlineStatus, OnuOfflineReason | None]:
+def _parse_online_status(
+    raw: str | None,
+) -> tuple[OnuOnlineStatus, OnuOfflineReason | None]:
     if not raw:
         return OnuOnlineStatus.unknown, None
     import re
@@ -1138,7 +1175,9 @@ def _pon_sort_key(hint: str) -> tuple[int, int, int]:
         return (10**9, 10**9, 10**9)
 
 
-def _build_packed_fsp_map(db: Session, linked: NetworkDevice, indexes: set[str]) -> dict[str, str]:
+def _build_packed_fsp_map(
+    db: Session, linked: NetworkDevice, indexes: set[str]
+) -> dict[str, str]:
     """Map Huawei packed FSP integers to detected PON hints (0/s/p)."""
     packed_values: list[int] = []
     for idx in indexes:
@@ -1158,19 +1197,19 @@ def _build_packed_fsp_map(db: Session, linked: NetworkDevice, indexes: set[str])
         ).all()
     )
     hints = sorted(
-        {
-            h
-            for name in iface_names
-            if (h := _extract_pon_hint(name))
-        },
+        {h for name in iface_names if (h := _extract_pon_hint(name))},
         key=_pon_sort_key,
     )
     if not hints:
         return {}
-    return {str(packed): hint for packed, hint in zip(unique_packed, hints, strict=False)}
+    return {
+        str(packed): hint for packed, hint in zip(unique_packed, hints, strict=False)
+    }
 
 
-def _run_simple_v2c_walk(linked: NetworkDevice, oid: str, *, timeout: int = 45, bulk: bool = False) -> list[str]:
+def _run_simple_v2c_walk(
+    linked: NetworkDevice, oid: str, *, timeout: int = 45, bulk: bool = False
+) -> list[str]:
     """Run SNMP walk with minimal flags for Huawei compatibility."""
     host = linked.mgmt_ip or linked.hostname
     if not host:
@@ -1179,13 +1218,15 @@ def _run_simple_v2c_walk(linked: NetworkDevice, oid: str, *, timeout: int = 45, 
         host = f"{host}:{linked.snmp_port}"
     if (linked.snmp_version or "v2c").lower() not in {"v2c", "2c"}:
         raise RuntimeError("Only SNMP v2c is supported for ONT sync")
-    community = decrypt_credential(linked.snmp_community) if linked.snmp_community else ""
+    community = (
+        decrypt_credential(linked.snmp_community) if linked.snmp_community else ""
+    )
     if not community:
         raise RuntimeError("SNMP community is not configured")
 
     cmd = "snmpbulkwalk" if bulk else "snmpwalk"
     args = [cmd, "-v2c", "-c", community, host, oid]
-    result = subprocess.run(
+    result = subprocess.run(  # noqa: S603 - SNMP command is executed with a fixed argv list
         args,
         capture_output=True,
         text=True,
@@ -1233,9 +1274,17 @@ def sync_onts_from_olt_snmp(
                 vendor=olt.vendor,
             )
         else:
-            return False, "No linked monitoring device and no SNMP community on OLT", {"discovered": 0, "created": 0, "updated": 0}
+            return (
+                False,
+                "No linked monitoring device and no SNMP community on OLT",
+                {"discovered": 0, "created": 0, "updated": 0},
+            )
     if not linked.snmp_enabled:
-        return False, "SNMP is disabled on the linked monitoring device", {"discovered": 0, "created": 0, "updated": 0}
+        return (
+            False,
+            "SNMP is disabled on the linked monitoring device",
+            {"discovered": 0, "created": 0, "updated": 0},
+        )
 
     vendor_text = str(linked.vendor or olt.vendor or "").lower()
     vendor_key = "generic"
@@ -1288,7 +1337,11 @@ def sync_onts_from_olt_snmp(
             )
         )
     except Exception as exc:
-        return False, f"SNMP walk failed: {exc!s}", {"discovered": 0, "created": 0, "updated": 0}
+        return (
+            False,
+            f"SNMP walk failed: {exc!s}",
+            {"discovered": 0, "created": 0, "updated": 0},
+        )
 
     # Optional tables: keep sync useful even when optical OIDs are slow/blocked.
     olt_rx_rows: dict[str, str] = {}
@@ -1328,9 +1381,15 @@ def sync_onts_from_olt_snmp(
     except Exception:
         distance_rows = {}
 
-    all_indexes = set(status_rows) | set(olt_rx_rows) | set(onu_rx_rows) | set(distance_rows)
+    all_indexes = (
+        set(status_rows) | set(olt_rx_rows) | set(onu_rx_rows) | set(distance_rows)
+    )
     if not all_indexes:
-        return False, "No ONUs discovered from SNMP on this OLT", {"discovered": 0, "created": 0, "updated": 0}
+        return (
+            False,
+            "No ONUs discovered from SNMP on this OLT",
+            {"discovered": 0, "created": 0, "updated": 0},
+        )
 
     existing_onts = list(
         db.scalars(select(OntUnit).where(OntUnit.olt_device_id == olt.id)).all()
@@ -1346,9 +1405,7 @@ def sync_onts_from_olt_snmp(
     olt_tag = str(olt.id).split("-")[0].upper()
 
     packed_fsp_map = (
-        _build_packed_fsp_map(db, linked, all_indexes)
-        if vendor_key == "huawei"
-        else {}
+        _build_packed_fsp_map(db, linked, all_indexes) if vendor_key == "huawei" else {}
     )
 
     vendor_serial_prefix = {
@@ -1443,7 +1500,11 @@ def sync_onts_from_olt_snmp(
         db.commit()
     except Exception as exc:
         db.rollback()
-        return False, f"Failed to save discovered ONTs: {exc!s}", {"discovered": len(all_indexes), "created": created, "updated": updated}
+        return (
+            False,
+            f"Failed to save discovered ONTs: {exc!s}",
+            {"discovered": len(all_indexes), "created": created, "updated": updated},
+        )
 
     # Auto-create OntAssignment records linking ONTs to PON ports
     assignment_created = 0
@@ -1557,7 +1618,12 @@ def sync_onts_from_olt_snmp(
             propagation_stats = _queue_acs_propagation(db, olt)
         except Exception as exc:
             logger.error("ACS propagation after ONT sync failed: %s", exc)
-            propagation_stats = {"attempted": 0, "propagated": 0, "unresolved": 0, "errors": 1}
+            propagation_stats = {
+                "attempted": 0,
+                "propagated": 0,
+                "unresolved": 0,
+                "errors": 1,
+            }
 
     message = (
         f"{vendor_key.title()} ONT sync complete: discovered {len(all_indexes)}, "
@@ -1679,9 +1745,7 @@ def unassign_vlan_from_olt(db: Session, olt_id: str, vlan_id: str) -> tuple[bool
     return True, f"VLAN {vlan.tag} unassigned"
 
 
-def assign_ip_pool_to_olt(
-    db: Session, olt_id: str, pool_id: str
-) -> tuple[bool, str]:
+def assign_ip_pool_to_olt(db: Session, olt_id: str, pool_id: str) -> tuple[bool, str]:
     """Assign an IP pool to an OLT."""
     from app.models.network import IpPool
 
@@ -1788,7 +1852,9 @@ def execute_cli_command(
     ok, message, output = olt_ssh_service.run_cli_command(olt, command.strip())
     logger.info(
         "CLI command on OLT %s: %s → %s",
-        olt.name, command.strip(), "ok" if ok else "failed",
+        olt.name,
+        command.strip(),
+        "ok" if ok else "failed",
     )
     return ok, message, output
 
@@ -1905,21 +1971,28 @@ def get_tr069_profiles_context(
         onu_index = _extract_onu_index(ont)
         if onu_index is None:
             continue
-        ont_rows.append({
-            "id": str(ont.id),
-            "serial_number": ont.serial_number,
-            "board": ont.board or "",
-            "port": ont.port or "",
-            "onu_index": onu_index,
-            "name": ont.name or "",
-            "online": ont.online_status.value if ont.online_status else "unknown",
-            "subscriber_name": getattr(ont, "address_or_comment", "") or "",
-        })
+        ont_rows.append(
+            {
+                "id": str(ont.id),
+                "serial_number": ont.serial_number,
+                "board": ont.board or "",
+                "port": ont.port or "",
+                "onu_index": onu_index,
+                "name": ont.name or "",
+                "online": ont.online_status.value if ont.online_status else "unknown",
+                "subscriber_name": getattr(ont, "address_or_comment", "") or "",
+            }
+        )
 
-    return ok, message, profiles_data, {
-        "acs_prefill": acs_prefill,
-        "onts": ont_rows,
-    }
+    return (
+        ok,
+        message,
+        profiles_data,
+        {
+            "acs_prefill": acs_prefill,
+            "onts": ont_rows,
+        },
+    )
 
 
 def handle_create_tr069_profile(
@@ -2019,8 +2092,13 @@ def olt_device_events_context(db: Session, olt_id: str) -> dict:
     from app.models.event_store import EventStore
 
     ont_event_types = [
-        "ont.online", "ont.offline", "ont.signal_degraded",
-        "ont.discovered", "ont.provisioned", "ont.config_updated", "ont.moved",
+        "ont.online",
+        "ont.offline",
+        "ont.signal_degraded",
+        "ont.discovered",
+        "ont.provisioned",
+        "ont.config_updated",
+        "ont.moved",
     ]
     stmt = (
         select(EventStore)

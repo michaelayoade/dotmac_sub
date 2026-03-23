@@ -26,7 +26,9 @@ def provision_ont_async(
     Returns:
         ProvisioningJobResult as a dict.
     """
-    logger.info("Starting async provisioning for ONT %s with profile %s", ont_id, profile_id)
+    logger.info(
+        "Starting async provisioning for ONT %s with profile %s", ont_id, profile_id
+    )
     db = SessionLocal()
     try:
         from app.services.network.ont_provisioning_orchestrator import (
@@ -45,7 +47,9 @@ def provision_ont_async(
         if result.success:
             logger.info("Async provisioning completed for ONT %s", ont_id)
         else:
-            logger.warning("Async provisioning failed for ONT %s: %s", ont_id, result.message)
+            logger.warning(
+                "Async provisioning failed for ONT %s: %s", ont_id, result.message
+            )
 
         return result.to_dict()
     except Exception as e:
@@ -141,7 +145,11 @@ def auto_link_profiles() -> dict[str, int]:
         else:
             logger.info("No ONTs needed profile auto-linking")
 
-        return {"linked": linked, "skipped": len(ont_ids) - linked - errors, "errors": errors}
+        return {
+            "linked": linked,
+            "skipped": len(ont_ids) - linked - errors,
+            "errors": errors,
+        }
     except Exception as e:
         logger.error("Error in auto-link profiles: %s", e)
         db.rollback()

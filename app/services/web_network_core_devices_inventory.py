@@ -24,14 +24,20 @@ def _network_device_is_olt_candidate(device: NetworkDevice) -> bool:
     return device.name.strip().lower().endswith("olt")
 
 
-def resolve_olt_device_for_network_device(db: Session, device: NetworkDevice) -> OLTDevice:
+def resolve_olt_device_for_network_device(
+    db: Session, device: NetworkDevice
+) -> OLTDevice:
     """Return a dedicated OLTDevice for a promoted NetworkDevice, creating one when missing."""
     if device.mgmt_ip:
-        matched = db.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == device.mgmt_ip)).first()
+        matched = db.scalars(
+            select(OLTDevice).where(OLTDevice.mgmt_ip == device.mgmt_ip)
+        ).first()
         if matched:
             return matched
     if device.hostname:
-        matched = db.scalars(select(OLTDevice).where(OLTDevice.hostname == device.hostname)).first()
+        matched = db.scalars(
+            select(OLTDevice).where(OLTDevice.hostname == device.hostname)
+        ).first()
         if matched:
             return matched
 
@@ -54,14 +60,20 @@ def resolve_olt_device_for_network_device(db: Session, device: NetworkDevice) ->
     except IntegrityError:
         db.rollback()
         if device.mgmt_ip:
-            matched = db.scalars(select(OLTDevice).where(OLTDevice.mgmt_ip == device.mgmt_ip)).first()
+            matched = db.scalars(
+                select(OLTDevice).where(OLTDevice.mgmt_ip == device.mgmt_ip)
+            ).first()
             if matched:
                 return matched
         if device.hostname:
-            matched = db.scalars(select(OLTDevice).where(OLTDevice.hostname == device.hostname)).first()
+            matched = db.scalars(
+                select(OLTDevice).where(OLTDevice.hostname == device.hostname)
+            ).first()
             if matched:
                 return matched
-        matched = db.scalars(select(OLTDevice).where(OLTDevice.name == device.name)).first()
+        matched = db.scalars(
+            select(OLTDevice).where(OLTDevice.name == device.name)
+        ).first()
         if matched:
             return matched
         raise
@@ -328,15 +340,21 @@ def olts_list_page_data(
 
     promoted_olts = [
         device
-        for device in db.scalars(select(NetworkDevice).order_by(NetworkDevice.name)).all()
+        for device in db.scalars(
+            select(NetworkDevice).order_by(NetworkDevice.name)
+        ).all()
         if device.is_active and _network_device_is_olt_candidate(device)
     ]
-    promoted_olt_records = [resolve_olt_device_for_network_device(db, device) for device in promoted_olts]
+    promoted_olt_records = [
+        resolve_olt_device_for_network_device(db, device) for device in promoted_olts
+    ]
     all_olts_by_id = {str(olt.id): olt for olt in raw_olts}
     for olt in promoted_olt_records:
         all_olts_by_id[str(olt.id)] = olt
 
-    all_olts = sorted(all_olts_by_id.values(), key=lambda olt: str(olt.name or "").lower())
+    all_olts = sorted(
+        all_olts_by_id.values(), key=lambda olt: str(olt.name or "").lower()
+    )
     monitoring_devices = list(db.scalars(select(NetworkDevice)).all())
 
     # Keep OLT list statuses fresh without forcing full live polls on every request.
@@ -464,23 +482,23 @@ def olts_list_page_data(
         )
         olts.append(
             {
-            "id": str(olt.id),
-            "name": olt.name,
-            "hostname": olt.hostname,
-            "vendor": olt.vendor,
-            "model": olt.model,
-            "mgmt_ip": olt.mgmt_ip,
-            "is_active": bool(olt.is_active),
-            "runtime_status_label": status_label,
-            "runtime_status_variant": status_variant,
-            "runtime_ping_label": ping_label,
-            "runtime_ping_state": ping_state,
-            "runtime_snmp_label": snmp_label,
-            "runtime_snmp_state": snmp_state,
-            "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
-            "detail_url": f"/admin/network/olts/{olt.id}",
-            "edit_url": f"/admin/network/olts/{olt.id}/edit",
-        }
+                "id": str(olt.id),
+                "name": olt.name,
+                "hostname": olt.hostname,
+                "vendor": olt.vendor,
+                "model": olt.model,
+                "mgmt_ip": olt.mgmt_ip,
+                "is_active": bool(olt.is_active),
+                "runtime_status_label": status_label,
+                "runtime_status_variant": status_variant,
+                "runtime_ping_label": ping_label,
+                "runtime_ping_state": ping_state,
+                "runtime_snmp_label": snmp_label,
+                "runtime_snmp_state": snmp_state,
+                "pon_ports": olt_stats.get(str(olt.id), {}).get("pon_ports", 0),
+                "detail_url": f"/admin/network/olts/{olt.id}",
+                "edit_url": f"/admin/network/olts/{olt.id}/edit",
+            }
         )
 
     term = (search or "").strip().lower()

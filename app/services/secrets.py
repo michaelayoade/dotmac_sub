@@ -134,7 +134,9 @@ def get_secret(path: str, field: str, *, default: str = "") -> str:
     try:
         return resolve_openbao_ref(f"bao://secret/{path}#{field}")
     except Exception:
-        logger.debug("OpenBao lookup failed for secret/%s#%s, using default", path, field)
+        logger.debug(
+            "OpenBao lookup failed for secret/%s#%s, using default", path, field
+        )
         return default
 
 
@@ -236,7 +238,10 @@ def write_secret(path: str, data: dict[str, str]) -> bool:
     try:
         addr, token, namespace, _kv = _openbao_config()
         url = f"{addr}/v1/secret/data/{path}"
-        headers: dict[str, str] = {"X-Vault-Token": token, "Content-Type": "application/json"}
+        headers: dict[str, str] = {
+            "X-Vault-Token": token,
+            "Content-Type": "application/json",
+        }
         if namespace:
             headers["X-Vault-Namespace"] = namespace
         resp = httpx.post(url, json={"data": data}, headers=headers, timeout=5.0)

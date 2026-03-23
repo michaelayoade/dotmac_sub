@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 
+
 class Contacts:
     @staticmethod
     def list(

@@ -11,6 +11,7 @@ from app.services import web_system_settings_views as web_system_settings_views_
 
 logger = logging.getLogger(__name__)
 
+
 def form_bool(value: str | None) -> bool:
     """Parse common HTML form boolean values."""
     if value is None:
@@ -58,7 +59,9 @@ def upsert_settings_from_specs(
                 value = raw
 
         if spec.allowed and value is not None and value not in spec.allowed:
-            errors.append(f"{spec.key}: Value must be one of {', '.join(sorted(spec.allowed))}.")
+            errors.append(
+                f"{spec.key}: Value must be one of {', '.join(sorted(spec.allowed))}."
+            )
             continue
 
         if isinstance(value, int):
@@ -74,7 +77,8 @@ def upsert_settings_from_specs(
         else:
             value_text, value_json_raw = settings_spec.normalize_for_db(spec, value)
             value_json = cast(
-                dict[object, object] | list[object] | bool | int | str | None, value_json_raw
+                dict[object, object] | list[object] | bool | int | str | None,
+                value_json_raw,
             )
 
         payload = DomainSettingUpdate(
@@ -99,7 +103,9 @@ def process_settings_update(
     errors: list[str] = []
     if domain_value == web_system_settings_views_service.ENFORCEMENT_DOMAIN:
         specs = web_system_settings_views_service.enforcement_specs()
-        domain_to_specs: dict[settings_spec.SettingDomain, list[settings_spec.SettingSpec]] = {}
+        domain_to_specs: dict[
+            settings_spec.SettingDomain, list[settings_spec.SettingSpec]
+        ] = {}
         for spec in specs:
             domain_to_specs.setdefault(spec.domain, []).append(spec)
         for spec_domain, domain_specs in domain_to_specs.items():
@@ -127,7 +133,9 @@ def process_settings_update(
         )
         errors.append("Use the Branding form to update logo settings.")
     else:
-        selected_domain = web_system_settings_views_service.resolve_settings_domain(domain_value)
+        selected_domain = web_system_settings_views_service.resolve_settings_domain(
+            domain_value
+        )
         specs = settings_spec.list_specs(selected_domain)
         service = settings_spec.DOMAIN_SETTINGS_SERVICE.get(selected_domain)
         if not service:

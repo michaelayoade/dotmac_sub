@@ -133,7 +133,9 @@ def evaluate_fup_rules() -> dict[str, int]:
         session.commit()
         logger.info(
             "FUP evaluation: %d processed, %d enforced, %d reset",
-            processed, enforced, reset,
+            processed,
+            enforced,
+            reset,
         )
         return {"processed": processed, "enforced": enforced, "reset": reset}
     except Exception:

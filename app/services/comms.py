@@ -28,6 +28,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class CustomerNotifications(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: CustomerNotificationCreate):
@@ -77,7 +78,10 @@ class CustomerNotifications(ListResponseMixin):
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail="Invalid status") from exc
         query = apply_ordering(
-            query, order_by, order_dir, {"created_at": CustomerNotificationEvent.created_at}
+            query,
+            order_by,
+            order_dir,
+            {"created_at": CustomerNotificationEvent.created_at},
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -118,7 +122,9 @@ class EtaUpdates(ListResponseMixin):
         offset: int = 0,
     ):
         query = db.query(EtaUpdate)
-        query = apply_ordering(query, order_by, order_dir, {"created_at": EtaUpdate.created_at})
+        query = apply_ordering(
+            query, order_by, order_dir, {"created_at": EtaUpdate.created_at}
+        )
         return apply_pagination(query, limit, offset).all()
 
 
@@ -152,7 +158,9 @@ class Surveys(ListResponseMixin):
             query = query.filter(Survey.is_active.is_(True))
         else:
             query = query.filter(Survey.is_active == is_active)
-        query = apply_ordering(query, order_by, order_dir, {"created_at": Survey.created_at})
+        query = apply_ordering(
+            query, order_by, order_dir, {"created_at": Survey.created_at}
+        )
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
@@ -205,7 +213,9 @@ class SurveyResponses(ListResponseMixin):
         query = db.query(SurveyResponse)
         if survey_id:
             query = query.filter(SurveyResponse.survey_id == survey_id)
-        query = apply_ordering(query, order_by, order_dir, {"created_at": SurveyResponse.created_at})
+        query = apply_ordering(
+            query, order_by, order_dir, {"created_at": SurveyResponse.created_at}
+        )
         return apply_pagination(query, limit, offset).all()
 
 

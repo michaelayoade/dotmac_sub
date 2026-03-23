@@ -58,10 +58,15 @@ def parse_acs_form(form) -> dict[str, object]:
         "cwmp_url": str(form.get("cwmp_url") or "").strip(),
         "cwmp_username": str(form.get("cwmp_username") or "").strip(),
         "cwmp_password": str(form.get("cwmp_password") or "").strip(),
-        "connection_request_username": str(form.get("connection_request_username") or "").strip(),
-        "connection_request_password": str(form.get("connection_request_password") or "").strip(),
+        "connection_request_username": str(
+            form.get("connection_request_username") or ""
+        ).strip(),
+        "connection_request_password": str(
+            form.get("connection_request_password") or ""
+        ).strip(),
         "base_url": str(form.get("base_url") or "").strip(),
-        "is_active": str(form.get("is_active") or "true").strip().lower() in ("1", "true", "on", "yes"),
+        "is_active": str(form.get("is_active") or "true").strip().lower()
+        in ("1", "true", "on", "yes"),
         "notes": str(form.get("notes") or "").strip() or None,
     }
 
@@ -97,7 +102,9 @@ def validate_acs_connection(values: dict[str, object]) -> str | None:
     return None
 
 
-def acs_form_snapshot(values: dict[str, object], *, acs_id: str | None = None) -> dict[str, object]:
+def acs_form_snapshot(
+    values: dict[str, object], *, acs_id: str | None = None
+) -> dict[str, object]:
     data = dict(values)
     if acs_id:
         data["id"] = acs_id
@@ -224,21 +231,27 @@ def tr069_dashboard_data(
     if not selected_server_id and servers:
         selected_server_id = str(servers[0].id)
 
-    devices = tr069_service.cpe_devices.list(
-        db=db,
-        acs_server_id=selected_server_id,
-        is_active=None,
-        order_by="serial_number",
-        order_dir="asc",
-        limit=5000,
-        offset=0,
-    ) if selected_server_id else []
+    devices = (
+        tr069_service.cpe_devices.list(
+            db=db,
+            acs_server_id=selected_server_id,
+            is_active=None,
+            order_by="serial_number",
+            order_dir="asc",
+            limit=5000,
+            offset=0,
+        )
+        if selected_server_id
+        else []
+    )
 
     search_q = str(search or "").strip().lower()
     if search_q:
         devices = [
-            item for item in devices
-            if search_q in " ".join(
+            item
+            for item in devices
+            if search_q
+            in " ".join(
                 [
                     str(item.serial_number or ""),
                     str(item.oui or ""),
@@ -263,7 +276,9 @@ def tr069_dashboard_data(
     cpe_by_id = {str(cpe.id): cpe for cpe in linked_cpes}
 
     for device in devices:
-        device.linked_cpe = cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
+        device.linked_cpe = (
+            cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
+        )
         device.display_serial_number = _display_serial_number(device.serial_number)
 
     unconfigured_devices = [item for item in devices if not item.cpe_device_id]
@@ -286,9 +301,9 @@ def tr069_dashboard_data(
         .limit(1000)
         .all()
     )
-    cpe_typeahead_map = { _cpe_search_label(cpe): str(cpe.id) for cpe in managed_cpes }
-    cpe_display_by_id = { str(cpe.id): _cpe_primary_label(cpe) for cpe in managed_cpes }
-    cpe_search_by_id = { str(cpe.id): _cpe_search_label(cpe) for cpe in managed_cpes }
+    cpe_typeahead_map = {_cpe_search_label(cpe): str(cpe.id) for cpe in managed_cpes}
+    cpe_display_by_id = {str(cpe.id): _cpe_primary_label(cpe) for cpe in managed_cpes}
+    cpe_search_by_id = {str(cpe.id): _cpe_search_label(cpe) for cpe in managed_cpes}
 
     now = datetime.now(UTC)
     seen_window = now - timedelta(hours=24)
@@ -321,7 +336,9 @@ def tr069_dashboard_data(
             "configured": len(configured_devices),
             "unconfigured": len(unconfigured_devices),
             "seen_24h": sum(1 for item in devices if _seen_recently(item)),
-            "jobs_failed": sum(1 for item in jobs if item.status == Tr069JobStatus.failed),
+            "jobs_failed": sum(
+                1 for item in jobs if item.status == Tr069JobStatus.failed
+            ),
         },
         "filters": {
             "search": str(search or "").strip(),
@@ -331,10 +348,14 @@ def tr069_dashboard_data(
 
 
 def sync_server(db: Session, *, acs_server_id: str) -> dict[str, int]:
-    return tr069_service.cpe_devices.sync_from_genieacs(db=db, acs_server_id=acs_server_id)
+    return tr069_service.cpe_devices.sync_from_genieacs(
+        db=db, acs_server_id=acs_server_id
+    )
 
 
-def create_ont_from_tr069_device(db: Session, *, tr069_device_id: str) -> tuple[OntUnit, bool]:
+def create_ont_from_tr069_device(
+    db: Session, *, tr069_device_id: str
+) -> tuple[OntUnit, bool]:
     """Create or resolve an ONT inventory record from a synced TR-069 device.
 
     Returns (ont, created_new).
@@ -343,7 +364,10 @@ def create_ont_from_tr069_device(db: Session, *, tr069_device_id: str) -> tuple[
     if not device:
         raise ValueError("TR-069 device not found")
 
-    display_serial = _display_serial_number(device.serial_number) or str(device.serial_number or "").strip()
+    display_serial = (
+        _display_serial_number(device.serial_number)
+        or str(device.serial_number or "").strip()
+    )
     if not display_serial:
         raise ValueError("TR-069 device has no usable serial number")
 
@@ -362,7 +386,9 @@ def create_ont_from_tr069_device(db: Session, *, tr069_device_id: str) -> tuple[
 
     payload = OntUnitCreate(
         serial_number=display_serial,
-        vendor="Huawei" if str(device.oui or "").upper().startswith(("48575443", "HWTC", "HWTT")) else None,
+        vendor="Huawei"
+        if str(device.oui or "").upper().startswith(("48575443", "HWTC", "HWTT"))
+        else None,
         model=device.product_class or None,
         is_active=False,
         name=display_serial,

@@ -113,7 +113,8 @@ def list_pppoe_servers(device: NasDevice) -> list[dict[str, Any]]:
                 "id": item.get("id") or item.get(".id"),
                 "service_name": item.get("service-name") or item.get("service_name"),
                 "interface": item.get("interface"),
-                "default_profile": item.get("default-profile") or item.get("default_profile"),
+                "default_profile": item.get("default-profile")
+                or item.get("default_profile"),
                 "disabled": str(item.get("disabled", "false")).lower() == "true",
             }
             for item in raw
@@ -162,7 +163,9 @@ def ensure_vlan_interface(
             if existing_vid == str(vlan_id) and existing_parent == parent_interface:
                 logger.info(
                     "VLAN %d already exists on %s/%s as '%s'",
-                    vlan_id, device.name, parent_interface,
+                    vlan_id,
+                    device.name,
+                    parent_interface,
                     item.get("name"),
                 )
                 return VlanProvisioningResult(
@@ -180,7 +183,10 @@ def ensure_vlan_interface(
         )
         logger.info(
             "Created VLAN %d (%s) on %s/%s",
-            vlan_id, iface_name, device.name, parent_interface,
+            vlan_id,
+            iface_name,
+            device.name,
+            parent_interface,
         )
         return VlanProvisioningResult(
             success=True,
@@ -189,9 +195,7 @@ def ensure_vlan_interface(
             details={"name": iface_name, "vlan_id": vlan_id},
         )
     except Exception as exc:
-        logger.error(
-            "Failed to create VLAN %d on %s: %s", vlan_id, device.name, exc
-        )
+        logger.error("Failed to create VLAN %d on %s: %s", vlan_id, device.name, exc)
         return VlanProvisioningResult(
             success=False, message=f"Failed to create VLAN: {exc}"
         )
@@ -230,7 +234,9 @@ def ensure_vlan_ip_address(
             if existing_addr == address and existing_iface == interface_name:
                 logger.info(
                     "IP %s already assigned to %s on %s",
-                    address, interface_name, device.name,
+                    address,
+                    interface_name,
+                    device.name,
                 )
                 return VlanProvisioningResult(
                     success=True,
@@ -242,7 +248,9 @@ def ensure_vlan_ip_address(
         ip_resource.add(address=address, interface=interface_name)
         logger.info(
             "Assigned IP %s to %s on %s",
-            address, interface_name, device.name,
+            address,
+            interface_name,
+            device.name,
         )
         return VlanProvisioningResult(
             success=True,
@@ -252,7 +260,10 @@ def ensure_vlan_ip_address(
     except Exception as exc:
         logger.error(
             "Failed to assign IP %s to %s on %s: %s",
-            address, interface_name, device.name, exc,
+            address,
+            interface_name,
+            device.name,
+            exc,
         )
         return VlanProvisioningResult(
             success=False, message=f"Failed to assign IP: {exc}"
@@ -295,7 +306,9 @@ def ensure_pppoe_server(
                 existing_svc = item.get("service-name") or item.get("service_name")
                 logger.info(
                     "PPPoE server already bound to %s on %s (service: %s)",
-                    interface_name, device.name, existing_svc,
+                    interface_name,
+                    device.name,
+                    existing_svc,
                 )
                 return VlanProvisioningResult(
                     success=True,
@@ -312,7 +325,10 @@ def ensure_pppoe_server(
         )
         logger.info(
             "Created PPPoE server '%s' on %s/%s (profile: %s)",
-            svc_name, device.name, interface_name, default_profile,
+            svc_name,
+            device.name,
+            interface_name,
+            default_profile,
         )
         return VlanProvisioningResult(
             success=True,
@@ -323,7 +339,9 @@ def ensure_pppoe_server(
     except Exception as exc:
         logger.error(
             "Failed to create PPPoE server on %s/%s: %s",
-            device.name, interface_name, exc,
+            device.name,
+            interface_name,
+            exc,
         )
         return VlanProvisioningResult(
             success=False, message=f"Failed to create PPPoE server: {exc}"
@@ -377,7 +395,9 @@ def provision_vlan_full(
     )
     if not result.success:
         if created_items:
-            result.message += f" (Note: {', '.join(created_items)} were created before this failure.)"
+            result.message += (
+                f" (Note: {', '.join(created_items)} were created before this failure.)"
+            )
         return result
     if result.created:
         created_items.append(f"IP {ip_address}")
@@ -391,7 +411,9 @@ def provision_vlan_full(
     )
     if not result.success:
         if created_items:
-            result.message += f" (Note: {', '.join(created_items)} were created before this failure.)"
+            result.message += (
+                f" (Note: {', '.join(created_items)} were created before this failure.)"
+            )
         return result
     if result.created:
         created_items.append("PPPoE server")
@@ -483,7 +505,10 @@ def remove_vlan_interface(
             vlan_resource.remove(id=vlan_row_id)
             logger.info(
                 "Removed VLAN %d (%s) from %s/%s",
-                vlan_id, vlan_name, device.name, parent_interface,
+                vlan_id,
+                vlan_name,
+                device.name,
+                parent_interface,
             )
 
         return VlanProvisioningResult(
@@ -492,9 +517,7 @@ def remove_vlan_interface(
             details={"vlan_id": vlan_id, "name": vlan_name},
         )
     except Exception as exc:
-        logger.error(
-            "Failed to remove VLAN %d from %s: %s", vlan_id, device.name, exc
-        )
+        logger.error("Failed to remove VLAN %d from %s: %s", vlan_id, device.name, exc)
         return VlanProvisioningResult(
             success=False, message=f"Failed to remove VLAN: {exc}"
         )
@@ -547,7 +570,10 @@ def get_vlan_status(
         # Check IP
         ips = cast(Any, api.get_resource("/ip/address")).get()
         for item in ips if isinstance(ips, list) else []:
-            if isinstance(item, dict) and str(item.get("interface") or "") == iface_name:
+            if (
+                isinstance(item, dict)
+                and str(item.get("interface") or "") == iface_name
+            ):
                 result["has_ip"] = True
                 result["ip_address"] = item.get("address")
                 break
@@ -555,9 +581,14 @@ def get_vlan_status(
         # Check PPPoE server
         pppoe_list = cast(Any, api.get_resource("/interface/pppoe-server/server")).get()
         for item in pppoe_list if isinstance(pppoe_list, list) else []:
-            if isinstance(item, dict) and str(item.get("interface") or "") == iface_name:
+            if (
+                isinstance(item, dict)
+                and str(item.get("interface") or "") == iface_name
+            ):
                 result["has_pppoe"] = True
-                result["pppoe_service"] = item.get("service-name") or item.get("service_name")
+                result["pppoe_service"] = item.get("service-name") or item.get(
+                    "service_name"
+                )
                 break
 
         return result

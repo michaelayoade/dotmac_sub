@@ -31,6 +31,7 @@ from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
 
+
 def active_servers(db: Session) -> list[RadiusServer]:
     """Return active RADIUS servers for client form select options."""
     return cast(
@@ -63,7 +64,9 @@ def validate_server_form(values: dict[str, object]) -> str | None:
     return None
 
 
-def build_server_payload(values: dict[str, object], *, current_server) -> tuple[RadiusServerUpdate | None, str | None]:
+def build_server_payload(
+    values: dict[str, object], *, current_server
+) -> tuple[RadiusServerUpdate | None, str | None]:
     """Build server update payload and validate optional ports."""
     auth_port = current_server.auth_port
     acct_port = current_server.acct_port
@@ -104,7 +107,9 @@ def server_form_data(values: dict[str, object], *, current_server) -> dict[str, 
     }
 
 
-def build_server_create_payload(values: dict[str, object]) -> tuple[RadiusServerCreate | None, str | None]:
+def build_server_create_payload(
+    values: dict[str, object],
+) -> tuple[RadiusServerCreate | None, str | None]:
     auth_port_raw = str(values.get("auth_port_raw") or "")
     acct_port_raw = str(values.get("acct_port_raw") or "")
     try:
@@ -147,7 +152,9 @@ def parse_client_form(form) -> dict[str, object]:
     }
 
 
-def validate_client_form(values: dict[str, object], *, require_secret: bool) -> str | None:
+def validate_client_form(
+    values: dict[str, object], *, require_secret: bool
+) -> str | None:
     """Validate required client fields."""
     if not values.get("server_id"):
         return "RADIUS server is required."
@@ -169,11 +176,15 @@ def build_client_update_payload(values: dict[str, object]) -> RadiusClientUpdate
     }
     shared_secret = str(values.get("shared_secret") or "")
     if shared_secret:
-        payload_data["shared_secret_hash"] = hashlib.sha256(shared_secret.encode("utf-8")).hexdigest()
+        payload_data["shared_secret_hash"] = hashlib.sha256(
+            shared_secret.encode("utf-8")
+        ).hexdigest()
     return RadiusClientUpdate.model_validate(payload_data)
 
 
-def client_form_data(values: dict[str, object], *, client_id: str | None = None) -> dict[str, object]:
+def client_form_data(
+    values: dict[str, object], *, client_id: str | None = None
+) -> dict[str, object]:
     """Build template-friendly client form data for re-renders."""
     data = {
         "server_id": values.get("server_id"),
@@ -226,14 +237,9 @@ def radius_page_data(db) -> dict[str, object]:
         .unique()
         .all()
     )
-    recent_errors = (
-        db.scalars(
-            select(RadiusAuthError)
-            .order_by(RadiusAuthError.occurred_at.desc())
-            .limit(5)
-        )
-        .all()
-    )
+    recent_errors = db.scalars(
+        select(RadiusAuthError).order_by(RadiusAuthError.occurred_at.desc()).limit(5)
+    ).all()
     return {
         "profiles": profiles,
         "servers": servers,
@@ -286,14 +292,17 @@ def radius_auth_errors_page_data(
     stmt = select(RadiusAuthError).order_by(RadiusAuthError.occurred_at.desc())
     if error_type:
         try:
-            stmt = stmt.where(RadiusAuthError.error_type == RadiusAuthErrorType(error_type))
+            stmt = stmt.where(
+                RadiusAuthError.error_type == RadiusAuthErrorType(error_type)
+            )
         except ValueError:
             pass
 
     total = db.scalar(select(func.count(RadiusAuthError.id))) or 0
     type_counts = db.execute(
-        select(RadiusAuthError.error_type, func.count(RadiusAuthError.id))
-        .group_by(RadiusAuthError.error_type)
+        select(RadiusAuthError.error_type, func.count(RadiusAuthError.id)).group_by(
+            RadiusAuthError.error_type
+        )
     ).all()
 
     return {

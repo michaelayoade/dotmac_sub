@@ -19,11 +19,7 @@ def active_monitoring_devices(db: Session) -> list:
     """Return active monitoring devices for health refresh jobs."""
     from app.models.network_monitoring import NetworkDevice
 
-    return (
-        db.query(NetworkDevice)
-        .filter(NetworkDevice.is_active.is_(True))
-        .all()
-    )
+    return db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
 
 
 def monitoring_page_data(
@@ -207,9 +203,7 @@ def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
     offline_results = _vm_range_query(
         'onu_status_total{status="offline"}', start, now, step
     )
-    low_signal_results = _vm_range_query(
-        'sum(onu_signal_low)', start, now, step
-    )
+    low_signal_results = _vm_range_query("sum(onu_signal_low)", start, now, step)
 
     def _extract_series(results: list[dict[str, Any]]) -> dict[str, list]:
         """Extract timestamps and values from a range query result."""
@@ -234,7 +228,9 @@ def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
     has_data = bool(online["values"] or offline["values"] or low_signal["values"])
 
     return {
-        "timestamps": online["timestamps"] or offline["timestamps"] or low_signal["timestamps"],
+        "timestamps": online["timestamps"]
+        or offline["timestamps"]
+        or low_signal["timestamps"],
         "online": online["values"],
         "offline": offline["values"],
         "low_signal": low_signal["values"],
@@ -462,7 +458,14 @@ def get_site_reachability(db: Session) -> list[dict[str, Any]]:
             continue
         subnet = f"{octets[0]}.{octets[1]}.0.0/16"
         if subnet not in sites:
-            sites[subnet] = {"subnet": subnet, "name": "", "total": 0, "online": 0, "degraded": 0, "offline": 0}
+            sites[subnet] = {
+                "subnet": subnet,
+                "name": "",
+                "total": 0,
+                "online": 0,
+                "degraded": 0,
+                "offline": 0,
+            }
         s = sites[subnet]
         s["total"] += 1
         status = d.status.value if d.status else "offline"
@@ -481,17 +484,21 @@ def get_site_reachability(db: Session) -> list[dict[str, Any]]:
         "160.119.0.0/16": "Core Infrastructure",
     }
     result = []
-    for subnet, data in sorted(sites.items(), key=lambda x: x[1]["total"], reverse=True):
+    for subnet, data in sorted(
+        sites.items(), key=lambda x: x[1]["total"], reverse=True
+    ):
         data["name"] = subnet_names.get(subnet, subnet)
-        pct = round(((data["online"] + data["degraded"]) / data["total"]) * 100) if data["total"] > 0 else 0
+        pct = (
+            round(((data["online"] + data["degraded"]) / data["total"]) * 100)
+            if data["total"] > 0
+            else 0
+        )
         data["reachable_pct"] = pct
         result.append(data)
     return result
 
 
-def _get_network_activity_feed(
-    db: Session, limit: int = 15
-) -> list[dict[str, Any]]:
+def _get_network_activity_feed(db: Session, limit: int = 15) -> list[dict[str, Any]]:
     """Fetch recent audit events for network-related entities."""
     from app.models.audit import AuditEvent
 
@@ -505,16 +512,20 @@ def _get_network_activity_feed(
 
     items: list[dict[str, Any]] = []
     for ev in events:
-        action_label = _ACTION_DISPLAY.get(ev.action, ev.action.replace("_", " ").title())
-        items.append({
-            "title": f"{ev.entity_type.replace('_', ' ').title()} {action_label}",
-            "entity_type": ev.entity_type,
-            "entity_id": ev.entity_id,
-            "action": ev.action,
-            "occurred_at": ev.occurred_at,
-            "actor_type": ev.actor_type.value if ev.actor_type else "system",
-            "is_success": ev.is_success,
-        })
+        action_label = _ACTION_DISPLAY.get(
+            ev.action, ev.action.replace("_", " ").title()
+        )
+        items.append(
+            {
+                "title": f"{ev.entity_type.replace('_', ' ').title()} {action_label}",
+                "entity_type": ev.entity_type,
+                "entity_id": ev.entity_id,
+                "action": ev.action,
+                "occurred_at": ev.occurred_at,
+                "actor_type": ev.actor_type.value if ev.actor_type else "system",
+                "is_success": ev.is_success,
+            }
+        )
 
     return items
 
@@ -571,7 +582,9 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
         ]:
             val = db.scalars(
                 select(DeviceMetric.value)
-                .where(DeviceMetric.device_id == device.id, DeviceMetric.metric_type == mt)
+                .where(
+                    DeviceMetric.device_id == device.id, DeviceMetric.metric_type == mt
+                )
                 .order_by(DeviceMetric.recorded_at.desc())
                 .limit(1)
             ).first()
@@ -585,13 +598,15 @@ def _get_device_health_table(db: Session, query: str | None = None) -> list[dict
 
 # ── Bulk actions on monitoring devices ────────────────────────────────
 
-_MONITORING_BULK_ACTIONS = frozenset({
-    "enable_monitoring",
-    "disable_monitoring",
-    "enable_notifications",
-    "disable_notifications",
-    "deactivate",
-})
+_MONITORING_BULK_ACTIONS = frozenset(
+    {
+        "enable_monitoring",
+        "disable_monitoring",
+        "enable_notifications",
+        "disable_notifications",
+        "deactivate",
+    }
+)
 
 _MAX_BULK = 50
 
@@ -620,14 +635,22 @@ def execute_device_bulk_action(
         return {"succeeded": 0, "failed": 0, "skipped": 0, "error": "Invalid action"}
 
     if not device_ids:
-        return {"succeeded": 0, "failed": 0, "skipped": 0, "error": "No devices selected"}
+        return {
+            "succeeded": 0,
+            "failed": 0,
+            "skipped": 0,
+            "error": "No devices selected",
+        }
 
     capped = device_ids[:_MAX_BULK]
     skipped = len(device_ids) - len(capped)
     if skipped:
         logger.warning(
             "Bulk %s: %d device IDs exceeded cap of %d, %d skipped",
-            action, len(device_ids), _MAX_BULK, skipped,
+            action,
+            len(device_ids),
+            _MAX_BULK,
+            skipped,
         )
     succeeded = 0
     failed = 0
@@ -663,7 +686,9 @@ def execute_device_bulk_action(
         except Exception:
             db.rollback()
             logger.exception(
-                "Bulk %s commit failed for %d devices", action, len(capped),
+                "Bulk %s commit failed for %d devices",
+                action,
+                len(capped),
             )
             return {
                 "succeeded": 0,

@@ -59,7 +59,11 @@ def vendor_login_submit(
 
         session_token = result.get("session_token")
         response = RedirectResponse(url="/vendor/dashboard", status_code=303)
-        max_age = vendor_portal.get_remember_max_age(db) if remember else vendor_portal.get_session_max_age(db)
+        max_age = (
+            vendor_portal.get_remember_max_age(db)
+            if remember
+            else vendor_portal.get_session_max_age(db)
+        )
         response.set_cookie(
             key=vendor_portal.SESSION_COOKIE_NAME,
             value=session_token,
@@ -109,7 +113,9 @@ def vendor_mfa_submit(
             httponly=True,
             secure=True,
             samesite="lax",
-            max_age=vendor_portal.get_remember_max_age(db) if remember else vendor_portal.get_session_max_age(db),
+            max_age=vendor_portal.get_remember_max_age(db)
+            if remember
+            else vendor_portal.get_session_max_age(db),
         )
         return response
     except Exception:
@@ -142,7 +148,11 @@ def vendor_refresh(request: Request):
         if not session:
             return Response(status_code=401)
 
-        max_age = vendor_portal.get_remember_max_age(db) if session.get("remember") else vendor_portal.get_session_max_age(db)
+        max_age = (
+            vendor_portal.get_remember_max_age(db)
+            if session.get("remember")
+            else vendor_portal.get_session_max_age(db)
+        )
     finally:
         db.close()
 

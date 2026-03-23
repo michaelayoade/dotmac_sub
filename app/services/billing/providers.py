@@ -40,6 +40,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class PaymentProviders(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PaymentProviderCreate):
@@ -67,7 +68,9 @@ class PaymentProviders(ListResponseMixin):
         return provider
 
     @staticmethod
-    def get_by_type(db: Session, provider_type: PaymentProviderType) -> PaymentProvider | None:
+    def get_by_type(
+        db: Session, provider_type: PaymentProviderType
+    ) -> PaymentProvider | None:
         """Return the first provider matching the requested provider type."""
         return (
             db.query(PaymentProvider)
@@ -203,9 +206,17 @@ class PaymentProviderEvents(ListResponseMixin):
             )
             if existing:
                 return existing
-        invoice = get_by_id(db, Invoice, payload.invoice_id) if payload.invoice_id else None
-        if invoice and payload.account_id and str(invoice.account_id) != str(payload.account_id):
-            raise HTTPException(status_code=400, detail="Invoice does not belong to account")
+        invoice = (
+            get_by_id(db, Invoice, payload.invoice_id) if payload.invoice_id else None
+        )
+        if (
+            invoice
+            and payload.account_id
+            and str(invoice.account_id) != str(payload.account_id)
+        ):
+            raise HTTPException(
+                status_code=400, detail="Invoice does not belong to account"
+            )
         account_id = payload.account_id or (invoice.account_id if invoice else None)
         payment = None
         if payload.payment_id:
@@ -222,7 +233,9 @@ class PaymentProviderEvents(ListResponseMixin):
         if not payment and payload.amount and account_id:
             _validate_account(db, str(account_id))
             if invoice:
-                _validate_invoice_currency(invoice, payload.currency or invoice.currency)
+                _validate_invoice_currency(
+                    invoice, payload.currency or invoice.currency
+                )
             channel = _resolve_payment_channel(
                 db,
                 None,
@@ -230,7 +243,9 @@ class PaymentProviderEvents(ListResponseMixin):
                 str(provider.id),
             )
             currency = payload.currency or (invoice.currency if invoice else "NGN")
-            collection_account = _resolve_collection_account(db, channel, currency, None)
+            collection_account = _resolve_collection_account(
+                db, channel, currency, None
+            )
             payment = Payment(
                 account_id=account_id,
                 amount=payload.amount,
@@ -239,7 +254,9 @@ class PaymentProviderEvents(ListResponseMixin):
                 external_id=payload.external_id,
                 status=PaymentStatus.pending,
                 payment_channel_id=channel.id if channel else None,
-                collection_account_id=collection_account.id if collection_account else None,
+                collection_account_id=collection_account.id
+                if collection_account
+                else None,
             )
             db.add(payment)
             db.flush()
@@ -252,6 +269,7 @@ class PaymentProviderEvents(ListResponseMixin):
                 db.add(allocation)
                 db.flush()
                 from app.services.billing.payments import _create_payment_ledger_entry
+
                 _create_payment_ledger_entry(db, payment, invoice, payment.amount)
         elif payment and payload.invoice_id and not payment.allocations:
             allocation = PaymentAllocation(
@@ -262,10 +280,12 @@ class PaymentProviderEvents(ListResponseMixin):
             db.add(allocation)
             db.flush()
             from app.services.billing.payments import _create_payment_ledger_entry
+
             _create_payment_ledger_entry(db, payment, invoice, payment.amount)
-        allocation_invoice_id = (
-            payload.invoice_id
-            or (str(payment.allocations[0].invoice_id) if payment and payment.allocations else None)
+        allocation_invoice_id = payload.invoice_id or (
+            str(payment.allocations[0].invoice_id)
+            if payment and payment.allocations
+            else None
         )
         event = PaymentProviderEvent(
             provider_id=provider.id,

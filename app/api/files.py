@@ -41,7 +41,9 @@ def download_file(
     except ObjectNotFoundError as exc:
         raise HTTPException(status_code=404, detail="File not found") from exc
 
-    headers = {"Content-Disposition": build_content_disposition(file_record.original_filename)}
+    headers = {
+        "Content-Disposition": build_content_disposition(file_record.original_filename)
+    }
     if stream.content_length is not None:
         headers["Content-Length"] = str(stream.content_length)
     return StreamingResponse(

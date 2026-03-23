@@ -9,6 +9,7 @@ from app.services.events.types import Event
 
 logger = logging.getLogger(__name__)
 
+
 class IntegrationHookHandler:
     """Dispatches emitted events to configured integration hooks."""
 
@@ -18,4 +19,3 @@ class IntegrationHookHandler:
             event_type=event.event_type.value,
             payload=event.to_dict(),
         )
-

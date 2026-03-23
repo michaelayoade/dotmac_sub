@@ -118,7 +118,9 @@ class LedgerEntries(ListResponseMixin):
         if not original:
             raise HTTPException(status_code=404, detail="Ledger entry not found")
         if not original.is_active:
-            raise HTTPException(status_code=400, detail="Ledger entry is already inactive")
+            raise HTTPException(
+                status_code=400, detail="Ledger entry is already inactive"
+            )
         reversed_type = _REVERSE_TYPE[original.entry_type]
         reversal = LedgerEntry(
             account_id=original.account_id,

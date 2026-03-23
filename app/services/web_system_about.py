@@ -51,27 +51,31 @@ def get_system_info(db: Session) -> dict:
 
     # Database size
     try:
-        db_size = db.scalar(
-            text("SELECT pg_size_pretty(pg_database_size(current_database()))")
-        ) or "unknown"
+        db_size = (
+            db.scalar(
+                text("SELECT pg_size_pretty(pg_database_size(current_database()))")
+            )
+            or "unknown"
+        )
     except Exception as exc:
         logger.warning("Failed to get database size: %s", exc)
         db_size = "unknown"
 
     # Active connections
     try:
-        active_connections = db.scalar(
-            text("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'")
-        ) or 0
+        active_connections = (
+            db.scalar(
+                text("SELECT count(*) FROM pg_stat_activity WHERE state = 'active'")
+            )
+            or 0
+        )
     except Exception as exc:
         logger.warning("Failed to get active connections: %s", exc)
         active_connections = 0
 
     # Subscriber count
     try:
-        subscriber_count = db.scalar(
-            select(func.count()).select_from(Subscriber)
-        ) or 0
+        subscriber_count = db.scalar(select(func.count()).select_from(Subscriber)) or 0
     except Exception as exc:
         logger.warning("Failed to get subscriber count: %s", exc)
         subscriber_count = 0

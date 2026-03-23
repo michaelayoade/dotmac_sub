@@ -41,11 +41,18 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
 
         config_prompt = r"[#)]\s*$"
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        output = core._run_huawei_cmd(channel, f"undo service-port {index}", prompt=config_prompt)
+        output = core._run_huawei_cmd(
+            channel, f"undo service-port {index}", prompt=config_prompt
+        )
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
-            logger.warning("Failed to delete service-port %d on OLT %s: %s", index, olt.name, output.strip()[-150:])
+            logger.warning(
+                "Failed to delete service-port %d on OLT %s: %s",
+                index,
+                olt.name,
+                output.strip()[-150:],
+            )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info("Deleted service-port %d on OLT %s", index, olt.name)
@@ -100,7 +107,11 @@ def create_single_service_port(
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
-            logger.warning("Service-port creation failed on OLT %s: %s", olt.name, output.strip()[-150:])
+            logger.warning(
+                "Service-port creation failed on OLT %s: %s",
+                olt.name,
+                output.strip()[-150:],
+            )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info(

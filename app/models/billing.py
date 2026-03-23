@@ -92,6 +92,7 @@ class LedgerSource(enum.Enum):
 
 class LedgerCategory(enum.Enum):
     """What the ledger entry is for (financial reporting category)."""
+
     internet_service = "internet_service"
     custom_service = "custom_service"
     voice_service = "voice_service"
@@ -526,7 +527,9 @@ class PaymentAllocation(Base):
     )
     amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     memo: Mapped[str | None] = mapped_column(Text)
-    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true"
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -844,9 +847,15 @@ class BankReconciliationRun(Base):
     imported_rows: Mapped[int] = mapped_column(Integer, default=0)
     unmatched_rows: Mapped[int] = mapped_column(Integer, default=0)
     system_payment_count: Mapped[int] = mapped_column(Integer, default=0)
-    statement_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
-    payment_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
-    difference_total: Mapped[Decimal] = mapped_column(Numeric(14, 2), default=Decimal("0.00"))
+    statement_total: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00")
+    )
+    payment_total: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00")
+    )
+    difference_total: Mapped[Decimal] = mapped_column(
+        Numeric(14, 2), default=Decimal("0.00")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

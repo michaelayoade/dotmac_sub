@@ -35,7 +35,9 @@ class TicketBase(BaseModel):
     ticket_type: str | None = Field(default=None, max_length=80)
     channel: TicketChannel = TicketChannel.web
     tags: list[str] = Field(default_factory=list)
-    metadata_: dict | None = Field(default=None, validation_alias="metadata", serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        default=None, validation_alias="metadata", serialization_alias="metadata"
+    )
 
     due_at: datetime | None = None
     resolved_at: datetime | None = None
@@ -69,7 +71,9 @@ class TicketUpdate(BaseModel):
     ticket_type: str | None = Field(default=None, max_length=80)
     channel: TicketChannel | None = None
     tags: list[str] | None = None
-    metadata_: dict | None = Field(default=None, validation_alias="metadata", serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        default=None, validation_alias="metadata", serialization_alias="metadata"
+    )
 
     due_at: datetime | None = None
     resolved_at: datetime | None = None
@@ -103,7 +107,9 @@ class TicketRead(BaseModel):
     ticket_type: str | None
     channel: TicketChannel
     tags: list[str] | None = None
-    metadata_: dict | None = Field(default=None, validation_alias="metadata", serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        default=None, validation_alias="metadata", serialization_alias="metadata"
+    )
     attachments: list[dict] | None = None
 
     due_at: datetime | None
@@ -159,7 +165,9 @@ class TicketSlaEventBase(BaseModel):
     event_type: str = Field(min_length=1, max_length=80)
     expected_at: datetime | None = None
     actual_at: datetime | None = None
-    metadata_: dict | None = Field(default=None, validation_alias="metadata", serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        default=None, validation_alias="metadata", serialization_alias="metadata"
+    )
 
 
 class TicketSlaEventCreate(TicketSlaEventBase):
@@ -170,7 +178,9 @@ class TicketSlaEventUpdate(BaseModel):
     event_type: str | None = Field(default=None, min_length=1, max_length=80)
     expected_at: datetime | None = None
     actual_at: datetime | None = None
-    metadata_: dict | None = Field(default=None, validation_alias="metadata", serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        default=None, validation_alias="metadata", serialization_alias="metadata"
+    )
 
 
 class TicketSlaEventRead(BaseModel):
@@ -181,7 +191,9 @@ class TicketSlaEventRead(BaseModel):
     event_type: str
     expected_at: datetime | None
     actual_at: datetime | None
-    metadata_: dict | None = Field(default=None, validation_alias="metadata", serialization_alias="metadata")
+    metadata_: dict | None = Field(
+        default=None, validation_alias="metadata", serialization_alias="metadata"
+    )
     created_at: datetime
 
 

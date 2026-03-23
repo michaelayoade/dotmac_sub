@@ -77,9 +77,7 @@ class NotificationHandler:
 
         templates = self._load_templates(db, template_code)
         if not templates:
-            logger.warning(
-                "No active notification template for code %s", template_code
-            )
+            logger.warning("No active notification template for code %s", template_code)
             return
 
         # Build enriched context and render
@@ -121,7 +119,10 @@ class NotificationHandler:
         """Load active templates for the event's base code and channel variants."""
         candidate_codes = {
             template_code,
-            *(f"{template_code}_{suffix}" for suffix in CHANNEL_TEMPLATE_SUFFIXES.values()),
+            *(
+                f"{template_code}_{suffix}"
+                for suffix in CHANNEL_TEMPLATE_SUFFIXES.values()
+            ),
         }
         templates = (
             db.query(NotificationTemplate)
@@ -136,7 +137,9 @@ class NotificationHandler:
         templates: Iterable[NotificationTemplate],
         template_code: str,
     ) -> list[NotificationTemplate]:
-        suffix_to_channel = {suffix: channel for channel, suffix in CHANNEL_TEMPLATE_SUFFIXES.items()}
+        suffix_to_channel = {
+            suffix: channel for channel, suffix in CHANNEL_TEMPLATE_SUFFIXES.items()
+        }
         ordered: dict[str, NotificationTemplate] = {}
 
         for template in templates:
@@ -171,12 +174,20 @@ class NotificationHandler:
             account = db.get(Subscriber, event.account_id)
             if channel == NotificationChannel.email and account and account.email:
                 return account.email
-            if channel in {NotificationChannel.sms, NotificationChannel.whatsapp} and account and account.phone:
+            if (
+                channel in {NotificationChannel.sms, NotificationChannel.whatsapp}
+                and account
+                and account.phone
+            ):
                 return account.phone
 
         if channel == NotificationChannel.email and isinstance(email, str) and email:
             return email
-        if channel in {NotificationChannel.sms, NotificationChannel.whatsapp} and isinstance(phone, str) and phone:
+        if (
+            channel in {NotificationChannel.sms, NotificationChannel.whatsapp}
+            and isinstance(phone, str)
+            and phone
+        ):
             return phone
 
         if isinstance(email, str) and email:
@@ -230,7 +241,9 @@ class NotificationHandler:
                     if invoice.total is not None:
                         context.setdefault("amount", f"₦{invoice.total:,.2f}")
                     if invoice.due_at:
-                        context.setdefault("due_date", invoice.due_at.strftime("%b %d, %Y"))
+                        context.setdefault(
+                            "due_date", invoice.due_at.strftime("%b %d, %Y")
+                        )
             except Exception:
                 logger.warning(
                     "Failed to resolve invoice details (invoice_id=%s)",
@@ -270,7 +283,9 @@ class NotificationHandler:
 
         return context
 
-    def _render_subject(self, template: NotificationTemplate, event: Event, context: dict[str, str]) -> str:
+    def _render_subject(
+        self, template: NotificationTemplate, event: Event, context: dict[str, str]
+    ) -> str:
         """Render the notification subject with event data."""
         if not template.subject:
             return f"Notification: {event.event_type.value}"
@@ -280,7 +295,9 @@ class NotificationHandler:
             subject = subject.replace(f"{{{key}}}", value)
         return subject
 
-    def _render_body(self, template: NotificationTemplate, event: Event, context: dict[str, str]) -> str:
+    def _render_body(
+        self, template: NotificationTemplate, event: Event, context: dict[str, str]
+    ) -> str:
         """Render the notification body with event data."""
         if not template.body:
             return f"Event: {event.event_type.value}\n{event.payload}"

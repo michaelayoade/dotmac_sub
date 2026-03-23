@@ -282,7 +282,8 @@ class OntWriteService:
         ont_number = _parse_ont_id_on_olt(ont.external_id)
         if ont_number is None:
             return ActionResult(
-                success=False, message="ONT external_id does not contain a usable ONT number."
+                success=False,
+                message="ONT external_id does not contain a usable ONT number.",
             )
 
         try:

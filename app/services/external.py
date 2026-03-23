@@ -21,6 +21,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class ExternalReferences(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: ExternalReferenceCreate):
@@ -75,7 +76,10 @@ class ExternalReferences(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": ExternalReference.created_at, "external_id": ExternalReference.external_id},
+            {
+                "created_at": ExternalReference.created_at,
+                "external_id": ExternalReference.external_id,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -86,9 +90,13 @@ class ExternalReferences(ListResponseMixin):
             raise HTTPException(status_code=404, detail="External reference not found")
         data = payload.model_dump(exclude_unset=True)
         if "connector_config_id" in data and data["connector_config_id"]:
-            connector = db.get(ConnectorConfig, coerce_uuid(data["connector_config_id"]))
+            connector = db.get(
+                ConnectorConfig, coerce_uuid(data["connector_config_id"])
+            )
             if not connector:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         for key, value in data.items():
             setattr(ref, key, value)
         db.commit()
@@ -107,7 +115,9 @@ class ExternalReferences(ListResponseMixin):
 external_references = ExternalReferences()
 
 
-def _get_reference_for_sync(db: Session, payload: ExternalReferenceSync) -> ExternalReference | None:
+def _get_reference_for_sync(
+    db: Session, payload: ExternalReferenceSync
+) -> ExternalReference | None:
     return (
         db.query(ExternalReference)
         .filter(ExternalReference.connector_config_id == payload.connector_config_id)

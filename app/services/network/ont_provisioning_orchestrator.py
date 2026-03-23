@@ -150,7 +150,9 @@ def _rollback_service_ports(
             deleted += 1
         else:
             errors += 1
-            logger.warning("Rollback: failed to delete service-port %d: %s", port.index, msg)
+            logger.warning(
+                "Rollback: failed to delete service-port %d: %s", port.index, msg
+            )
     return deleted, errors
 
 
@@ -178,27 +180,76 @@ class OntProvisioningOrchestrator:
 
         # 1. ONT exists and is active
         if not ont:
-            checks.append({"name": "ONT exists", "status": "fail", "message": "ONT not found", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "ONT exists",
+                    "status": "fail",
+                    "message": "ONT not found",
+                    "can_auto_fix": False,
+                }
+            )
             return {"ready": False, "checks": checks}
-        checks.append({"name": "ONT exists", "status": "ok", "message": f"{ont.serial_number} ({ont.vendor or ''} {ont.model or ''})", "can_auto_fix": False})
+        checks.append(
+            {
+                "name": "ONT exists",
+                "status": "ok",
+                "message": f"{ont.serial_number} ({ont.vendor or ''} {ont.model or ''})",
+                "can_auto_fix": False,
+            }
+        )
 
         # 2. OLT assigned
         if ont.olt_device_id:
             olt = db.get(OLTDevice, ont.olt_device_id)
-            checks.append({"name": "OLT assigned", "status": "ok", "message": olt.name if olt else str(ont.olt_device_id), "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "OLT assigned",
+                    "status": "ok",
+                    "message": olt.name if olt else str(ont.olt_device_id),
+                    "can_auto_fix": False,
+                }
+            )
         else:
-            checks.append({"name": "OLT assigned", "status": "fail", "message": "No OLT — assign ONT to an OLT first", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "OLT assigned",
+                    "status": "fail",
+                    "message": "No OLT — assign ONT to an OLT first",
+                    "can_auto_fix": False,
+                }
+            )
 
         # 3. Board + Port (FSP) set
         if ont.board and ont.port is not None:
-            checks.append({"name": "OLT position (F/S/P)", "status": "ok", "message": f"{ont.board}/{ont.port}", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "OLT position (F/S/P)",
+                    "status": "ok",
+                    "message": f"{ont.board}/{ont.port}",
+                    "can_auto_fix": False,
+                }
+            )
         else:
-            checks.append({"name": "OLT position (F/S/P)", "status": "fail", "message": "Board/port not set — discover from OLT or enter manually", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "OLT position (F/S/P)",
+                    "status": "fail",
+                    "message": "Board/port not set — discover from OLT or enter manually",
+                    "can_auto_fix": False,
+                }
+            )
 
         # 4. Provisioning profile
         if ont.provisioning_profile_id:
             profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
-            checks.append({"name": "Provisioning profile", "status": "ok", "message": profile.name if profile else "Set", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "Provisioning profile",
+                    "status": "ok",
+                    "message": profile.name if profile else "Set",
+                    "can_auto_fix": False,
+                }
+            )
         else:
             # Check for default
             default_profile = (
@@ -207,17 +258,45 @@ class OntProvisioningOrchestrator:
                 .first()
             )
             if default_profile:
-                checks.append({"name": "Provisioning profile", "status": "warn", "message": f"Not set — will use default: {default_profile.name}", "can_auto_fix": True})
+                checks.append(
+                    {
+                        "name": "Provisioning profile",
+                        "status": "warn",
+                        "message": f"Not set — will use default: {default_profile.name}",
+                        "can_auto_fix": True,
+                    }
+                )
             else:
-                checks.append({"name": "Provisioning profile", "status": "fail", "message": "No profile — create one in Catalog → Provisioning Profiles", "can_auto_fix": False})
+                checks.append(
+                    {
+                        "name": "Provisioning profile",
+                        "status": "fail",
+                        "message": "No profile — create one in Catalog → Provisioning Profiles",
+                        "can_auto_fix": False,
+                    }
+                )
 
         # 5. OLT SSH credentials
         if ont.olt_device_id:
             olt = db.get(OLTDevice, ont.olt_device_id)
             if olt and olt.ssh_username and olt.ssh_password:
-                checks.append({"name": "OLT SSH credentials", "status": "ok", "message": f"User: {olt.ssh_username}", "can_auto_fix": False})
+                checks.append(
+                    {
+                        "name": "OLT SSH credentials",
+                        "status": "ok",
+                        "message": f"User: {olt.ssh_username}",
+                        "can_auto_fix": False,
+                    }
+                )
             else:
-                checks.append({"name": "OLT SSH credentials", "status": "fail", "message": "SSH not configured on OLT", "can_auto_fix": False})
+                checks.append(
+                    {
+                        "name": "OLT SSH credentials",
+                        "status": "fail",
+                        "message": "SSH not configured on OLT",
+                        "can_auto_fix": False,
+                    }
+                )
 
         # 6. Subscriber assignment
         assignment = (
@@ -227,9 +306,21 @@ class OntProvisioningOrchestrator:
         )
         if assignment and assignment.subscriber_id:
             from app.models.subscriber import Subscriber
+
             sub = db.get(Subscriber, assignment.subscriber_id)
-            sub_name = f"{sub.first_name or ''} {sub.last_name or ''}".strip() if sub else str(assignment.subscriber_id)
-            checks.append({"name": "Subscriber assigned", "status": "ok", "message": sub_name, "can_auto_fix": False})
+            sub_name = (
+                f"{sub.first_name or ''} {sub.last_name or ''}".strip()
+                if sub
+                else str(assignment.subscriber_id)
+            )
+            checks.append(
+                {
+                    "name": "Subscriber assigned",
+                    "status": "ok",
+                    "message": sub_name,
+                    "can_auto_fix": False,
+                }
+            )
 
             # 7. Active subscription
             active_sub = (
@@ -241,9 +332,23 @@ class OntProvisioningOrchestrator:
                 .first()
             )
             if active_sub:
-                checks.append({"name": "Active subscription", "status": "ok", "message": str(active_sub.id)[:8] + "...", "can_auto_fix": False})
+                checks.append(
+                    {
+                        "name": "Active subscription",
+                        "status": "ok",
+                        "message": str(active_sub.id)[:8] + "...",
+                        "can_auto_fix": False,
+                    }
+                )
             else:
-                checks.append({"name": "Active subscription", "status": "warn", "message": "No active subscription", "can_auto_fix": False})
+                checks.append(
+                    {
+                        "name": "Active subscription",
+                        "status": "warn",
+                        "message": "No active subscription",
+                        "can_auto_fix": False,
+                    }
+                )
 
             # 8. PPPoE credentials
             cred = (
@@ -255,15 +360,45 @@ class OntProvisioningOrchestrator:
                 .first()
             )
             if cred:
-                checks.append({"name": "PPPoE credential", "status": "ok", "message": cred.username, "can_auto_fix": False})
+                checks.append(
+                    {
+                        "name": "PPPoE credential",
+                        "status": "ok",
+                        "message": cred.username,
+                        "can_auto_fix": False,
+                    }
+                )
             else:
-                pppoe_enabled = settings_spec.resolve_value(db, SettingDomain.radius, "pppoe_auto_generate_enabled")
+                pppoe_enabled = settings_spec.resolve_value(
+                    db, SettingDomain.radius, "pppoe_auto_generate_enabled"
+                )
                 if pppoe_enabled is True:
-                    checks.append({"name": "PPPoE credential", "status": "warn", "message": "None — will auto-generate", "can_auto_fix": True})
+                    checks.append(
+                        {
+                            "name": "PPPoE credential",
+                            "status": "warn",
+                            "message": "None — will auto-generate",
+                            "can_auto_fix": True,
+                        }
+                    )
                 else:
-                    checks.append({"name": "PPPoE credential", "status": "fail", "message": "None — auto-gen disabled", "can_auto_fix": False})
+                    checks.append(
+                        {
+                            "name": "PPPoE credential",
+                            "status": "fail",
+                            "message": "None — auto-gen disabled",
+                            "can_auto_fix": False,
+                        }
+                    )
         else:
-            checks.append({"name": "Subscriber assigned", "status": "warn", "message": "No subscriber — provisioning will skip PPPoE", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "Subscriber assigned",
+                    "status": "warn",
+                    "message": "No subscriber — provisioning will skip PPPoE",
+                    "can_auto_fix": False,
+                }
+            )
 
         # 9. TR-069 ACS
         acs_server_id = ont.tr069_acs_server_id
@@ -271,9 +406,23 @@ class OntProvisioningOrchestrator:
             olt = db.get(OLTDevice, ont.olt_device_id)
             acs_server_id = getattr(olt, "tr069_acs_server_id", None) if olt else None
         if acs_server_id:
-            checks.append({"name": "TR-069 ACS server", "status": "ok", "message": "Configured", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "TR-069 ACS server",
+                    "status": "ok",
+                    "message": "Configured",
+                    "can_auto_fix": False,
+                }
+            )
         else:
-            checks.append({"name": "TR-069 ACS server", "status": "warn", "message": "Not configured — TR-069 steps will be skipped", "can_auto_fix": False})
+            checks.append(
+                {
+                    "name": "TR-069 ACS server",
+                    "status": "warn",
+                    "message": "Not configured — TR-069 steps will be skipped",
+                    "can_auto_fix": False,
+                }
+            )
 
         ready = all(c["status"] != "fail" for c in checks)
         return {"ready": ready, "checks": checks}
@@ -306,20 +455,26 @@ class OntProvisioningOrchestrator:
         ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
 
         if not ont:
-            result.steps.append(ProvisioningStepResult(1, "Resolve Context", False, "ONT not found"))
+            result.steps.append(
+                ProvisioningStepResult(1, "Resolve Context", False, "ONT not found")
+            )
             result.message = "ONT not found"
             return result
 
         if not olt or not fsp or olt_ont_id is None:
             result.steps.append(
-                ProvisioningStepResult(1, "Resolve Context", False, "No OLT/FSP mapping — check assignment")
+                ProvisioningStepResult(
+                    1, "Resolve Context", False, "No OLT/FSP mapping — check assignment"
+                )
             )
             result.message = "Cannot resolve OLT context"
             return result
 
         profile = db.get(OntProvisioningProfile, profile_id)
         if not profile:
-            result.steps.append(ProvisioningStepResult(1, "Resolve Context", False, "Profile not found"))
+            result.steps.append(
+                ProvisioningStepResult(1, "Resolve Context", False, "Profile not found")
+            )
             result.message = "Provisioning profile not found"
             return result
 
@@ -344,14 +499,18 @@ class OntProvisioningOrchestrator:
 
                     sub = db.get(Subscriber, str(a.subscriber_id))
                     if sub:
-                        prov_ctx.subscriber_code = getattr(sub, "account_number", "") or ""
+                        prov_ctx.subscriber_code = (
+                            getattr(sub, "account_number", "") or ""
+                        )
                         prov_ctx.subscriber_name = getattr(sub, "full_name", "") or ""
                 break
 
         step_ms = int((time.monotonic() - step_start) * 1000)
         result.steps.append(
             ProvisioningStepResult(
-                1, "Resolve Context", True,
+                1,
+                "Resolve Context",
+                True,
                 f"ONT {ont.serial_number} on {olt.name} {fsp} ONT-ID {olt_ont_id}",
                 step_ms,
             )
@@ -359,7 +518,9 @@ class OntProvisioningOrchestrator:
 
         # ── Step 2: Generate commands ──
         step_start = time.monotonic()
-        spec = build_spec_from_profile(profile, prov_ctx, tr069_profile_id=tr069_olt_profile_id)
+        spec = build_spec_from_profile(
+            profile, prov_ctx, tr069_profile_id=tr069_olt_profile_id
+        )
         command_sets = HuaweiCommandGenerator.generate_full_provisioning(spec, prov_ctx)
         result.command_sets = command_sets
 
@@ -367,7 +528,9 @@ class OntProvisioningOrchestrator:
         total_cmds = sum(len(cs.commands) for cs in command_sets)
         result.steps.append(
             ProvisioningStepResult(
-                2, "Generate Commands", True,
+                2,
+                "Generate Commands",
+                True,
                 f"Generated {total_cmds} command(s) in {len(command_sets)} step(s)",
                 step_ms,
             )
@@ -378,7 +541,9 @@ class OntProvisioningOrchestrator:
             result.success = True
             result.message = f"Dry run complete — {total_cmds} command(s) generated"
             result.steps.append(
-                ProvisioningStepResult(3, "Dry Run", True, "Commands generated, not executed")
+                ProvisioningStepResult(
+                    3, "Dry Run", True, "Commands generated, not executed"
+                )
             )
             return result
 
@@ -424,7 +589,9 @@ class OntProvisioningOrchestrator:
                 else f"All {sp_errors} failed"
             )
             result.steps.append(
-                ProvisioningStepResult(4, "Create Service Ports", False, message, step_ms)
+                ProvisioningStepResult(
+                    4, "Create Service Ports", False, message, step_ms
+                )
             )
             if sp_created == 0:
                 result.message = "Service-port creation failed"
@@ -433,7 +600,9 @@ class OntProvisioningOrchestrator:
         else:
             result.steps.append(
                 ProvisioningStepResult(
-                    4, "Create Service Ports", True,
+                    4,
+                    "Create Service Ports",
+                    True,
                     f"Created {sp_created}, failed {sp_errors}",
                     step_ms,
                 )
@@ -443,7 +612,9 @@ class OntProvisioningOrchestrator:
         step_start = time.monotonic()
         if spec.mgmt_vlan_tag:
             ok, msg = configure_ont_iphost(
-                olt, fsp, olt_ont_id,
+                olt,
+                fsp,
+                olt_ont_id,
                 vlan_id=spec.mgmt_vlan_tag,
                 ip_mode=spec.mgmt_ip_mode,
                 ip_address=spec.mgmt_ip_address or None,
@@ -458,14 +629,22 @@ class OntProvisioningOrchestrator:
                 logger.warning("IPHOST config warning (continuing): %s", msg)
         else:
             result.steps.append(
-                ProvisioningStepResult(5, "Configure Management IP", True, "Skipped — no mgmt VLAN in profile")
+                ProvisioningStepResult(
+                    5,
+                    "Configure Management IP",
+                    True,
+                    "Skipped — no mgmt VLAN in profile",
+                )
             )
 
         # ── Step 6: Activate internet-config ──
         step_start = time.monotonic()
         if spec.internet_config_ip_index is not None:
             ok, msg = configure_ont_internet_config(
-                olt, fsp, olt_ont_id, ip_index=spec.internet_config_ip_index,
+                olt,
+                fsp,
+                olt_ont_id,
+                ip_index=spec.internet_config_ip_index,
             )
             step_ms = int((time.monotonic() - step_start) * 1000)
             result.steps.append(
@@ -475,14 +654,21 @@ class OntProvisioningOrchestrator:
                 logger.warning("Internet config warning (continuing): %s", msg)
         else:
             result.steps.append(
-                ProvisioningStepResult(6, "Activate Internet Config", True, "Skipped — not configured in profile")
+                ProvisioningStepResult(
+                    6,
+                    "Activate Internet Config",
+                    True,
+                    "Skipped — not configured in profile",
+                )
             )
 
         # ── Step 7: Set WAN route+NAT mode ──
         step_start = time.monotonic()
         if spec.wan_config_profile_id is not None:
             ok, msg = configure_ont_wan_config(
-                olt, fsp, olt_ont_id,
+                olt,
+                fsp,
+                olt_ont_id,
                 ip_index=spec.internet_config_ip_index or 0,
                 profile_id=spec.wan_config_profile_id,
             )
@@ -494,13 +680,20 @@ class OntProvisioningOrchestrator:
                 logger.warning("WAN config warning (continuing): %s", msg)
         else:
             result.steps.append(
-                ProvisioningStepResult(7, "Set WAN Route+NAT Mode", True, "Skipped — not configured in profile")
+                ProvisioningStepResult(
+                    7,
+                    "Set WAN Route+NAT Mode",
+                    True,
+                    "Skipped — not configured in profile",
+                )
             )
 
         # ── Step 8: Bind TR-069 profile ──
         step_start = time.monotonic()
         if tr069_olt_profile_id is not None:
-            ok, msg = bind_tr069_server_profile(olt, fsp, olt_ont_id, tr069_olt_profile_id)
+            ok, msg = bind_tr069_server_profile(
+                olt, fsp, olt_ont_id, tr069_olt_profile_id
+            )
             step_ms = int((time.monotonic() - step_start) * 1000)
             result.steps.append(
                 ProvisioningStepResult(8, "Bind TR-069 Profile", ok, msg, step_ms)
@@ -509,7 +702,12 @@ class OntProvisioningOrchestrator:
                 logger.warning("TR-069 binding warning (continuing): %s", msg)
         else:
             result.steps.append(
-                ProvisioningStepResult(8, "Bind TR-069 Profile", True, "Skipped — no TR-069 profile specified")
+                ProvisioningStepResult(
+                    8,
+                    "Bind TR-069 Profile",
+                    True,
+                    "Skipped — no TR-069 profile specified",
+                )
             )
 
         tr069_enabled = tr069_olt_profile_id is not None
@@ -522,12 +720,16 @@ class OntProvisioningOrchestrator:
 
             if device_found:
                 result.steps.append(
-                    ProvisioningStepResult(9, "TR-069 Bootstrap", True, "Device registered in ACS", step_ms)
+                    ProvisioningStepResult(
+                        9, "TR-069 Bootstrap", True, "Device registered in ACS", step_ms
+                    )
                 )
             else:
                 result.steps.append(
                     ProvisioningStepResult(
-                        9, "TR-069 Bootstrap", False,
+                        9,
+                        "TR-069 Bootstrap",
+                        False,
                         f"Device not found in ACS after {_BOOTSTRAP_TIMEOUT_SEC}s — remaining steps skipped",
                         step_ms,
                     )
@@ -539,7 +741,10 @@ class OntProvisioningOrchestrator:
         else:
             result.steps.append(
                 ProvisioningStepResult(
-                    9, "TR-069 Bootstrap", True, "Skipped — no TR-069 profile specified",
+                    9,
+                    "TR-069 Bootstrap",
+                    True,
+                    "Skipped — no TR-069 profile specified",
                 )
             )
 
@@ -555,38 +760,59 @@ class OntProvisioningOrchestrator:
             if not cr_pass:
                 cr_pass = cr_user  # noqa: S105
             cr_result = OntActions.set_connection_request_credentials(
-                db, ont_id, username=cr_user, password=cr_pass,
+                db,
+                ont_id,
+                username=cr_user,
+                password=cr_pass,
             )
             step_ms = int((time.monotonic() - step_start) * 1000)
             result.steps.append(
-                ProvisioningStepResult(10, "Set Connection Request Credentials", cr_result.success, cr_result.message, step_ms)
+                ProvisioningStepResult(
+                    10,
+                    "Set Connection Request Credentials",
+                    cr_result.success,
+                    cr_result.message,
+                    step_ms,
+                )
             )
             if not cr_result.success:
-                logger.warning("Connection request credentials warning (continuing): %s", cr_result.message)
+                logger.warning(
+                    "Connection request credentials warning (continuing): %s",
+                    cr_result.message,
+                )
         else:
             result.steps.append(
                 ProvisioningStepResult(
-                    10, "Set Connection Request Credentials", True,
+                    10,
+                    "Set Connection Request Credentials",
+                    True,
                     "Skipped — TR-069 not active",
                 )
             )
 
         # ── Step 11: Configure PPPoE via OMCI ──
         step_start = time.monotonic()
-        pppoe_services = [ws for ws in spec.wan_services if ws.connection_type == "pppoe"]
+        pppoe_services = [
+            ws for ws in spec.wan_services if ws.connection_type == "pppoe"
+        ]
         if spec.pppoe_omci_vlan and pppoe_services:
             omci_errors = 0
             omci_ok = 0
             for i, ws in enumerate(pppoe_services, start=1):
                 username, password, reason = _resolve_pppoe_service_credentials(
-                    db, assignment, ws, prov_ctx,
+                    db,
+                    assignment,
+                    ws,
+                    prov_ctx,
                 )
                 if not username or not password:
                     logger.warning("PPPoE OMCI skipped for service #%d: %s", i, reason)
                     omci_errors += 1
                     continue
                 ok, msg = configure_ont_pppoe_omci(
-                    olt, fsp, olt_ont_id,
+                    olt,
+                    fsp,
+                    olt_ont_id,
                     ip_index=i,
                     vlan_id=spec.pppoe_omci_vlan,
                     username=username,
@@ -602,23 +828,34 @@ class OntProvisioningOrchestrator:
             omci_success = omci_errors == 0 and omci_ok == len(pppoe_services)
             omci_msg = f"Configured {omci_ok}, failed {omci_errors}"
             result.steps.append(
-                ProvisioningStepResult(11, "Configure PPPoE via OMCI", omci_success, omci_msg, step_ms)
+                ProvisioningStepResult(
+                    11, "Configure PPPoE via OMCI", omci_success, omci_msg, step_ms
+                )
             )
         else:
             result.steps.append(
-                ProvisioningStepResult(11, "Configure PPPoE via OMCI", True, "Skipped — no OMCI VLAN or no PPPoE services")
+                ProvisioningStepResult(
+                    11,
+                    "Configure PPPoE via OMCI",
+                    True,
+                    "Skipped — no OMCI VLAN or no PPPoE services",
+                )
             )
 
         # ── Step 12: Push PPPoE credentials via TR-069 ──
         step_start = time.monotonic()
         if not pppoe_services:
             result.steps.append(
-                ProvisioningStepResult(12, "Push PPPoE Credentials", True, "Skipped — no PPPoE in profile")
+                ProvisioningStepResult(
+                    12, "Push PPPoE Credentials", True, "Skipped — no PPPoE in profile"
+                )
             )
         elif not tr069_enabled or not device_found:
             result.steps.append(
                 ProvisioningStepResult(
-                    12, "Push PPPoE Credentials", False,
+                    12,
+                    "Push PPPoE Credentials",
+                    False,
                     "PPPoE push requires a TR-069 profile and successful bootstrap",
                 )
             )
@@ -630,26 +867,36 @@ class OntProvisioningOrchestrator:
             for ws in pppoe_services:
                 pppoe_index += 1
                 username, password, reason = _resolve_pppoe_service_credentials(
-                    db, assignment, ws, prov_ctx,
+                    db,
+                    assignment,
+                    ws,
+                    prov_ctx,
                 )
                 step_ms = int((time.monotonic() - step_start) * 1000)
                 if not username or not password:
                     pppoe_results.append(
                         ProvisioningStepResult(
-                            12, "Push PPPoE Credentials", False,
-                            reason or f"Missing PPPoE credentials for service #{pppoe_index}",
+                            12,
+                            "Push PPPoE Credentials",
+                            False,
+                            reason
+                            or f"Missing PPPoE credentials for service #{pppoe_index}",
                             step_ms,
                         )
                     )
                     continue
 
                 pppoe_result = OntActions.set_pppoe_credentials(
-                    db, ont_id, username, password,
+                    db,
+                    ont_id,
+                    username,
+                    password,
                     instance_index=pppoe_index,
                 )
                 pppoe_results.append(
                     ProvisioningStepResult(
-                        12, "Push PPPoE Credentials",
+                        12,
+                        "Push PPPoE Credentials",
                         pppoe_result.success,
                         f"Service #{pppoe_index}: {pppoe_result.message}",
                         step_ms,
@@ -668,24 +915,36 @@ class OntProvisioningOrchestrator:
                 step_ms = int((time.monotonic() - step_start) * 1000)
                 result.steps.append(
                     ProvisioningStepResult(
-                        12, "Enable IPv6 Dual-Stack", v6_result.success,
-                        v6_result.message, step_ms,
+                        12,
+                        "Enable IPv6 Dual-Stack",
+                        v6_result.success,
+                        v6_result.message,
+                        step_ms,
                     )
                 )
             except Exception as exc:
-                logger.error("IPv6 dual-stack enable failed for ONT %s: %s", ont.serial_number, exc)
+                logger.error(
+                    "IPv6 dual-stack enable failed for ONT %s: %s",
+                    ont.serial_number,
+                    exc,
+                )
                 step_ms = int((time.monotonic() - step_start) * 1000)
                 result.steps.append(
                     ProvisioningStepResult(
-                        12, "Enable IPv6 Dual-Stack", False,
-                        f"IPv6 enable failed: {exc}", step_ms,
+                        12,
+                        "Enable IPv6 Dual-Stack",
+                        False,
+                        f"IPv6 enable failed: {exc}",
+                        step_ms,
                     )
                 )
 
         # Check for any failed required steps
         # Steps 6 (internet-config) and 7 (wan-config) are best-effort — not critical
         critical_steps = {4, 5, 8, 11, 12}
-        failed_steps = [s for s in result.steps if not s.success and s.step in critical_steps]
+        failed_steps = [
+            s for s in result.steps if not s.success and s.step in critical_steps
+        ]
 
         # ── Step 13: Finalize ──
         step_start = time.monotonic()
@@ -706,7 +965,9 @@ class OntProvisioningOrchestrator:
                 rollback_msg = "No service ports to roll back"
             result.steps.append(
                 ProvisioningStepResult(
-                    13, "Finalize", False,
+                    13,
+                    "Finalize",
+                    False,
                     f"ONT marked as failed ({failed_names}). {rollback_msg}",
                     step_ms,
                 )
@@ -715,7 +976,9 @@ class OntProvisioningOrchestrator:
             result.message = f"Provisioning incomplete — failed: {failed_names}"
         else:
             result.steps.append(
-                ProvisioningStepResult(13, "Finalize", True, "ONT marked as provisioned", step_ms)
+                ProvisioningStepResult(
+                    13, "Finalize", True, "ONT marked as provisioned", step_ms
+                )
             )
             result.success = True
             result.message = "Provisioning complete"
@@ -751,7 +1014,9 @@ def _resolve_pppoe_service_credentials(
             select(AccessCredential)
             .where(AccessCredential.subscriber_id == subscriber_id)
             .where(AccessCredential.is_active.is_(True))
-            .order_by(AccessCredential.updated_at.desc(), AccessCredential.created_at.desc())
+            .order_by(
+                AccessCredential.updated_at.desc(), AccessCredential.created_at.desc()
+            )
         )
         credential = db.scalars(stmt).first()
 
@@ -765,9 +1030,17 @@ def _resolve_pppoe_service_credentials(
         password = decrypt_credential(getattr(credential, "secret_hash", None)) or ""
 
     if not username:
-        return "", "", "PPPoE username could not be resolved from the profile or subscriber credential"
+        return (
+            "",
+            "",
+            "PPPoE username could not be resolved from the profile or subscriber credential",
+        )
     if not password:
-        return "", "", "PPPoE password could not be resolved for the selected password mode"
+        return (
+            "",
+            "",
+            "PPPoE password could not be resolved for the selected password mode",
+        )
     return username, password, None
 
 
@@ -783,15 +1056,14 @@ def _wait_for_tr069_bootstrap(db: Session, ont: OntUnit) -> bool:
         while time.monotonic() < deadline:
             resolved, reason = resolve_genieacs_with_reason(db, ont)
             if resolved:
-                logger.info(
-                    "TR-069 bootstrap complete for ONT %s", ont.serial_number
-                )
+                logger.info("TR-069 bootstrap complete for ONT %s", ont.serial_number)
                 return True
             time.sleep(_BOOTSTRAP_POLL_INTERVAL_SEC)
 
         logger.warning(
             "TR-069 bootstrap timeout for ONT %s after %ds",
-            ont.serial_number, _BOOTSTRAP_TIMEOUT_SEC,
+            ont.serial_number,
+            _BOOTSTRAP_TIMEOUT_SEC,
         )
         return False
     except Exception as e:

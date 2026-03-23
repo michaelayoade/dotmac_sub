@@ -67,9 +67,7 @@ def retry_failed_events():
                     )
             except Exception as exc:
                 failed += 1
-                logger.exception(
-                    f"Error retrying event {event_record.event_id}: {exc}"
-                )
+                logger.exception(f"Error retrying event {event_record.event_id}: {exc}")
                 session.rollback()
 
         result = {

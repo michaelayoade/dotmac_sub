@@ -43,7 +43,9 @@ class AccountingAdapter(Protocol):
 
     def sync_credit_notes(self, db: Session, connector: ConnectorConfig) -> int: ...
 
-    def get_sync_status(self, db: Session, connector: ConnectorConfig) -> dict[str, object]: ...
+    def get_sync_status(
+        self, db: Session, connector: ConnectorConfig
+    ) -> dict[str, object]: ...
 
 
 _ADAPTERS: dict[str, AccountingAdapter] = {
@@ -96,11 +98,16 @@ def run_sync_for_connector(db: Session, connector_id: str) -> SyncResult:
     connector = connector_service.connector_configs.get(db, connector_id)
     provider = _provider_for_connector(connector)
     if not provider:
-        raise HTTPException(status_code=400, detail="Connector is not configured as an accounting provider")
+        raise HTTPException(
+            status_code=400,
+            detail="Connector is not configured as an accounting provider",
+        )
 
     adapter = _ADAPTERS.get(provider)
     if not adapter:
-        raise HTTPException(status_code=400, detail=f"No adapter registered for provider: {provider}")
+        raise HTTPException(
+            status_code=400, detail=f"No adapter registered for provider: {provider}"
+        )
 
     try:
         invoices = adapter.sync_invoices(db, connector)
@@ -138,11 +145,16 @@ def run_sync_for_connector(db: Session, connector_id: str) -> SyncResult:
     )
 
 
-def save_field_mapping(db: Session, connector_id: str, mapping: dict[str, str]) -> ConnectorConfig:
+def save_field_mapping(
+    db: Session, connector_id: str, mapping: dict[str, str]
+) -> ConnectorConfig:
     connector = connector_service.connector_configs.get(db, connector_id)
     provider = _provider_for_connector(connector)
     if not provider:
-        raise HTTPException(status_code=400, detail="Connector is not configured as an accounting provider")
+        raise HTTPException(
+            status_code=400,
+            detail="Connector is not configured as an accounting provider",
+        )
     metadata = dict(connector.metadata_ or {})
     metadata["accounting_provider"] = provider
     metadata["field_mapping"] = mapping
@@ -187,8 +199,16 @@ def dashboard_state(db: Session) -> dict[str, object]:
             continue
 
         metadata = dict(connector.metadata_ or {})
-        sync_state = metadata.get("accounting_sync") if isinstance(metadata.get("accounting_sync"), dict) else {}
-        field_mapping = metadata.get("field_mapping") if isinstance(metadata.get("field_mapping"), dict) else {}
+        sync_state = (
+            metadata.get("accounting_sync")
+            if isinstance(metadata.get("accounting_sync"), dict)
+            else {}
+        )
+        field_mapping = (
+            metadata.get("field_mapping")
+            if isinstance(metadata.get("field_mapping"), dict)
+            else {}
+        )
         adapter = _ADAPTERS[provider]
         status = adapter.get_sync_status(db, connector)
         rows.append(

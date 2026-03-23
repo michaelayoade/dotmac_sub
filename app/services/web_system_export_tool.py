@@ -40,14 +40,54 @@ from app.services import settings_spec
 logger = logging.getLogger(__name__)
 
 EXPORT_CONFIG: dict[str, dict[str, Any]] = {
-    "subscribers": {"label": "Subscribers", "model": Subscriber, "date_field": "created_at", "status_field": "status"},
-    "subscriptions": {"label": "Subscriptions", "model": Subscription, "date_field": "created_at", "status_field": "status"},
-    "invoices": {"label": "Invoices", "model": Invoice, "date_field": "created_at", "status_field": "status"},
-    "payments": {"label": "Payments", "model": Payment, "date_field": "created_at", "status_field": "status"},
-    "nas_devices": {"label": "NAS Devices", "model": NasDevice, "date_field": "created_at", "status_field": "status"},
-    "service_orders": {"label": "Service Orders", "model": ServiceOrder, "date_field": "created_at", "status_field": "status"},
-    "audit_log": {"label": "Audit Log", "model": AuditEvent, "date_field": "occurred_at", "status_field": None},
-    "users": {"label": "System Users", "model": SystemUser, "date_field": "created_at", "status_field": None},
+    "subscribers": {
+        "label": "Subscribers",
+        "model": Subscriber,
+        "date_field": "created_at",
+        "status_field": "status",
+    },
+    "subscriptions": {
+        "label": "Subscriptions",
+        "model": Subscription,
+        "date_field": "created_at",
+        "status_field": "status",
+    },
+    "invoices": {
+        "label": "Invoices",
+        "model": Invoice,
+        "date_field": "created_at",
+        "status_field": "status",
+    },
+    "payments": {
+        "label": "Payments",
+        "model": Payment,
+        "date_field": "created_at",
+        "status_field": "status",
+    },
+    "nas_devices": {
+        "label": "NAS Devices",
+        "model": NasDevice,
+        "date_field": "created_at",
+        "status_field": "status",
+    },
+    "service_orders": {
+        "label": "Service Orders",
+        "model": ServiceOrder,
+        "date_field": "created_at",
+        "status_field": "status",
+    },
+    "audit_log": {
+        "label": "Audit Log",
+        "model": AuditEvent,
+        "date_field": "occurred_at",
+        "status_field": None,
+    },
+    "users": {
+        "label": "System Users",
+        "model": SystemUser,
+        "date_field": "created_at",
+        "status_field": None,
+    },
 }
 
 DELIMITER_OPTIONS = [
@@ -76,7 +116,9 @@ EXPORT_JOBS_DIR = Path("uploads/system_exports")
 
 
 def module_options() -> list[dict[str, str]]:
-    return [{"id": key, "label": value["label"]} for key, value in EXPORT_CONFIG.items()]
+    return [
+        {"id": key, "label": value["label"]} for key, value in EXPORT_CONFIG.items()
+    ]
 
 
 def _coerce_delimiter(value: str | None) -> str:
@@ -124,7 +166,9 @@ def _serialize_value(value: Any) -> str:
     return str(value)
 
 
-def _date_filters(date_from: str | None, date_to: str | None) -> tuple[datetime | None, datetime | None]:
+def _date_filters(
+    date_from: str | None, date_to: str | None
+) -> tuple[datetime | None, datetime | None]:
     start_dt: datetime | None = None
     end_dt: datetime | None = None
     if date_from:
@@ -163,7 +207,9 @@ def export_csv(
     if include_headers:
         writer.writerow(fields)
     for row in rows:
-        writer.writerow([_serialize_value(getattr(row, field, None)) for field in fields])
+        writer.writerow(
+            [_serialize_value(getattr(row, field, None)) for field in fields]
+        )
 
     return output.getvalue(), len(rows)
 
@@ -249,7 +295,10 @@ def count_rows(
 
 
 def _table_rows(rows: list[Any], fields: list[str]) -> list[list[str]]:
-    return [[_serialize_value(getattr(row, field, None)) for field in fields] for row in rows]
+    return [
+        [_serialize_value(getattr(row, field, None)) for field in fields]
+        for row in rows
+    ]
 
 
 def _xlsx_col_name(index: int) -> str:
@@ -261,7 +310,9 @@ def _xlsx_col_name(index: int) -> str:
     return out
 
 
-def _render_xlsx(fields: list[str], data_rows: list[list[str]], include_headers: bool) -> bytes:
+def _render_xlsx(
+    fields: list[str], data_rows: list[list[str]], include_headers: bool
+) -> bytes:
     sheet_rows: list[list[str]] = []
     if include_headers:
         sheet_rows.append(fields)
@@ -331,7 +382,12 @@ def _escape_pdf_text(value: str) -> str:
     return ascii_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
 
 
-def _render_pdf(module_label: str, fields: list[str], data_rows: list[list[str]], include_headers: bool) -> bytes:
+def _render_pdf(
+    module_label: str,
+    fields: list[str],
+    data_rows: list[list[str]],
+    include_headers: bool,
+) -> bytes:
     lines: list[str] = [f"{module_label} Export", f"Rows: {len(data_rows)}", ""]
     if include_headers:
         lines.append(" | ".join(fields))
@@ -358,7 +414,9 @@ def _render_pdf(module_label: str, fields: list[str], data_rows: list[list[str]]
     objects.append(
         b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
     )
-    objects.append(b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n")
+    objects.append(
+        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+    )
     objects.append(
         b"5 0 obj << /Length "
         + str(len(stream_data)).encode("ascii")
@@ -379,7 +437,9 @@ def _render_pdf(module_label: str, fields: list[str], data_rows: list[list[str]]
     for offset in offsets[1:]:
         out.write(f"{offset:010d} 00000 n \n".encode("ascii"))
     out.write(
-        f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode("ascii")
+        f"trailer << /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n".encode(
+            "ascii"
+        )
     )
     return out.getvalue()
 
@@ -422,15 +482,24 @@ def export_content(
         )
         return text.encode("utf-8"), "text/csv", "csv", count
     if normalized == "json":
-        payload = [{field: row[idx] for idx, field in enumerate(fields)} for row in data_rows]
+        payload = [
+            {field: row[idx] for idx, field in enumerate(fields)} for row in data_rows
+        ]
         body = json.dumps(payload, indent=2)
         return body.encode("utf-8"), "application/json", "json", len(data_rows)
     if normalized == "xlsx":
         body = _render_xlsx(fields, data_rows, include_headers=include_headers)
-        return body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx", len(data_rows)
+        return (
+            body,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            "xlsx",
+            len(data_rows),
+        )
     if normalized == "pdf":
         module_label = EXPORT_CONFIG[module]["label"]
-        body = _render_pdf(module_label, fields, data_rows, include_headers=include_headers)
+        body = _render_pdf(
+            module_label, fields, data_rows, include_headers=include_headers
+        )
         return body, "application/pdf", "pdf", len(data_rows)
     raise ValueError("Unsupported export format")
 
@@ -465,7 +534,9 @@ def _parse_template_setting(setting: DomainSetting) -> dict[str, Any]:
     return {
         "id": template_id,
         "name": str(payload.get("name") or template_id),
-        "config": payload.get("config") if isinstance(payload.get("config"), dict) else {},
+        "config": payload.get("config")
+        if isinstance(payload.get("config"), dict)
+        else {},
         "created_at": setting.created_at,
         "updated_at": setting.updated_at,
     }
@@ -489,7 +560,9 @@ def _parse_export_job_setting(setting: DomainSetting) -> dict[str, Any]:
         "queued_at": str(payload.get("queued_at") or ""),
         "started_at": str(payload.get("started_at") or ""),
         "completed_at": str(payload.get("completed_at") or ""),
-        "config": payload.get("config") if isinstance(payload.get("config"), dict) else {},
+        "config": payload.get("config")
+        if isinstance(payload.get("config"), dict)
+        else {},
     }
 
 
@@ -558,7 +631,9 @@ def _normalize_export_config(
     include_headers: bool,
 ) -> dict[str, Any]:
     valid_fields = module_fields(module)
-    filtered_fields = [field for field in (selected_fields or []) if field in valid_fields]
+    filtered_fields = [
+        field for field in (selected_fields or []) if field in valid_fields
+    ]
     if not filtered_fields:
         raise ValueError("Select at least one valid field")
     normalized_format = (export_format or "csv").strip().lower()
@@ -607,7 +682,9 @@ def create_export_template(
         status=status,
         include_headers=include_headers,
     )
-    template_id = f"{_slugify(normalized_name)[:60]}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+    template_id = (
+        f"{_slugify(normalized_name)[:60]}-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+    )
     key = f"{EXPORT_TEMPLATE_KEY_PREFIX}{template_id}"
     setting = DomainSetting(
         domain=SettingDomain.imports,
@@ -696,7 +773,9 @@ def create_export_job(
     return _parse_export_job_setting(setting)
 
 
-def _set_export_job_state(db: Session, *, job_id: str, updates: dict[str, Any]) -> dict[str, Any]:
+def _set_export_job_state(
+    db: Session, *, job_id: str, updates: dict[str, Any]
+) -> dict[str, Any]:
     key = f"{EXPORT_JOB_KEY_PREFIX}{job_id.strip()}"
     setting = (
         db.query(DomainSetting)
@@ -793,7 +872,11 @@ def process_export_job(db: Session, *, job_id: str) -> dict[str, Any]:
     _set_export_job_state(
         db,
         job_id=job_id,
-        updates={"status": "running", "started_at": datetime.now(UTC).isoformat(), "error": None},
+        updates={
+            "status": "running",
+            "started_at": datetime.now(UTC).isoformat(),
+            "error": None,
+        },
     )
     try:
         content, media_type, extension, row_count = export_content(
@@ -809,7 +892,9 @@ def process_export_job(db: Session, *, job_id: str) -> dict[str, Any]:
             max_rows=None,
         )
         file_path = _write_export_job_file(job_id, extension, content)
-        filename = _build_export_filename(str(config.get("module") or "export"), extension, row_count)
+        filename = _build_export_filename(
+            str(config.get("module") or "export"), extension, row_count
+        )
         base = _resolve_export_link_base(db)
         relative = f"/admin/system/export/jobs/{job_id}/download"
         download_url = f"{base}{relative}" if base else relative
@@ -952,7 +1037,9 @@ def create_export_schedule(
     return task
 
 
-def set_export_schedule_enabled(db: Session, *, schedule_id: str, enabled: bool) -> ScheduledTask:
+def set_export_schedule_enabled(
+    db: Session, *, schedule_id: str, enabled: bool
+) -> ScheduledTask:
     task = db.get(ScheduledTask, schedule_id)
     if task is None or task.task_name != EXPORT_SCHEDULE_TASK_NAME:
         raise ValueError("Scheduled export not found")
@@ -988,7 +1075,9 @@ def _send_export_email(
     config = email_service.get_smtp_config(db, activity="notification_queue")
     msg = MIMEMultipart("mixed")
     msg["Subject"] = subject
-    msg["From"] = f"{config.get('from_name', 'DotMac SM')} <{config.get('from_email', 'noreply@example.com')}>"
+    msg["From"] = (
+        f"{config.get('from_name', 'DotMac SM')} <{config.get('from_email', 'noreply@example.com')}>"
+    )
     msg["To"] = to_email
     alt = MIMEMultipart("alternative")
     alt.attach(MIMEText(body_html, "html"))

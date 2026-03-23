@@ -7,6 +7,7 @@ Provides REST API for:
 - Provisioning templates
 - Device provisioning execution
 """
+
 from typing import Any
 from uuid import UUID
 
@@ -46,6 +47,7 @@ router = APIRouter(prefix="/nas", tags=["nas-devices"])
 # =============================================================================
 # NAS DEVICE ENDPOINTS
 # =============================================================================
+
 
 @router.get("/devices", response_model=dict)
 def list_nas_devices(
@@ -133,6 +135,7 @@ def ping_nas_device(
 # CONFIG BACKUP ENDPOINTS
 # =============================================================================
 
+
 @router.get("/devices/{device_id}/backups", response_model=dict)
 def list_device_backups(
     device_id: UUID,
@@ -151,7 +154,9 @@ def list_device_backups(
     )
 
 
-@router.post("/devices/{device_id}/backups", response_model=NasConfigBackupRead, status_code=201)
+@router.post(
+    "/devices/{device_id}/backups", response_model=NasConfigBackupRead, status_code=201
+)
 def create_device_backup(
     device_id: UUID,
     db: Session = Depends(get_db),
@@ -165,7 +170,11 @@ def create_device_backup(
     return DeviceProvisioner.backup_config(db, device_id, triggered_by)
 
 
-@router.post("/devices/{device_id}/backups/manual", response_model=NasConfigBackupRead, status_code=201)
+@router.post(
+    "/devices/{device_id}/backups/manual",
+    response_model=NasConfigBackupRead,
+    status_code=201,
+)
 def upload_device_backup(
     device_id: UUID,
     payload: NasConfigBackupCreate,
@@ -218,6 +227,7 @@ def compare_backups(
 # =============================================================================
 # PROVISIONING TEMPLATE ENDPOINTS
 # =============================================================================
+
 
 @router.get("/templates", response_model=dict)
 def list_provisioning_templates(
@@ -300,6 +310,7 @@ def preview_template(
 # PROVISIONING EXECUTION ENDPOINTS
 # =============================================================================
 
+
 @router.post("/devices/{device_id}/provision", response_model=ProvisioningLogRead)
 def provision_device(
     device_id: UUID,
@@ -338,6 +349,7 @@ def provision_device(
 # =============================================================================
 # PROVISIONING LOG ENDPOINTS
 # =============================================================================
+
 
 @router.get("/logs", response_model=dict)
 def list_provisioning_logs(
@@ -394,14 +406,12 @@ def list_device_provisioning_logs(
 # UTILITY ENDPOINTS
 # =============================================================================
 
+
 @router.get("/vendors")
 def list_vendors():
     """List all supported NAS vendors."""
     return {
-        "vendors": [
-            {"value": v.value, "label": v.value.title()}
-            for v in NasVendor
-        ]
+        "vendors": [{"value": v.value, "label": v.value.title()} for v in NasVendor]
     }
 
 
@@ -417,7 +427,11 @@ def list_connection_types():
     }
     return {
         "connection_types": [
-            {"value": ct.value, "label": ct.value.upper(), "description": descriptions.get(ct.value, "")}
+            {
+                "value": ct.value,
+                "label": ct.value.upper(),
+                "description": descriptions.get(ct.value, ""),
+            }
             for ct in ConnectionType
         ]
     }
@@ -439,7 +453,6 @@ def list_backup_methods():
     """List all supported configuration backup methods."""
     return {
         "methods": [
-            {"value": m.value, "label": m.value.upper()}
-            for m in ConfigBackupMethod
+            {"value": m.value, "label": m.value.upper()} for m in ConfigBackupMethod
         ]
     }

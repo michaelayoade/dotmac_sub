@@ -16,6 +16,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class BillingRuns(ListResponseMixin):
     @staticmethod
     def get(db: Session, run_id: str):
@@ -36,8 +37,7 @@ class BillingRuns(ListResponseMixin):
         query = db.query(BillingRun)
         if status:
             query = query.filter(
-                BillingRun.status
-                == validate_enum(status, BillingRunStatus, "status")
+                BillingRun.status == validate_enum(status, BillingRunStatus, "status")
             )
         query = apply_ordering(
             query,

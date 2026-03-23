@@ -57,7 +57,10 @@ class BandwidthSamples(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": BandwidthSample.created_at, "sample_at": BandwidthSample.sample_at},
+            {
+                "created_at": BandwidthSample.created_at,
+                "sample_at": BandwidthSample.sample_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -152,7 +155,11 @@ class BandwidthSamples(ListResponseMixin):
             agg,
         )
         return [
-            {"bucket_start": row.bucket_start, "rx_bps": row.rx_bps, "tx_bps": row.tx_bps}
+            {
+                "bucket_start": row.bucket_start,
+                "rx_bps": row.rx_bps,
+                "tx_bps": row.tx_bps,
+            }
             for row in rows
         ]
 
@@ -178,7 +185,6 @@ class BandwidthSamples(ListResponseMixin):
             agg,
         )
         return list_response(rows, len(rows), 0)
-
 
     @staticmethod
     def check_subscription_access(
@@ -218,10 +224,14 @@ class BandwidthSamples(ListResponseMixin):
             or user.get("subscriber_id")
             or user.get("principal_id")
         )
-        if owner_subscriber_id and str(subscription.subscriber_id) == str(owner_subscriber_id):
+        if owner_subscriber_id and str(subscription.subscriber_id) == str(
+            owner_subscriber_id
+        ):
             return subscription
 
-        raise HTTPException(status_code=403, detail="Access denied to this subscription")
+        raise HTTPException(
+            status_code=403, detail="Access denied to this subscription"
+        )
 
     @staticmethod
     def determine_source_and_step(
@@ -309,7 +319,9 @@ class BandwidthSamples(ListResponseMixin):
                     )
                     rx_points = {p.timestamp: p.value for p in vm_result.get("rx", [])}
                     tx_points = {p.timestamp: p.value for p in vm_result.get("tx", [])}
-                    all_timestamps = sorted(set(rx_points.keys()) | set(tx_points.keys()))
+                    all_timestamps = sorted(
+                        set(rx_points.keys()) | set(tx_points.keys())
+                    )
                     data = [
                         {
                             "timestamp": ts,
@@ -403,10 +415,14 @@ class BandwidthSamples(ListResponseMixin):
             current = await metrics_store.get_current_bandwidth(str(subscription_id))
 
             # Get peak bandwidth
-            peak = await metrics_store.get_peak_bandwidth(str(subscription_id), start, end)
+            peak = await metrics_store.get_peak_bandwidth(
+                str(subscription_id), start, end
+            )
 
             # Get total bytes
-            total = await metrics_store.get_total_bytes(str(subscription_id), start, end)
+            total = await metrics_store.get_total_bytes(
+                str(subscription_id), start, end
+            )
 
             # Get sample count from PostgreSQL for recent period
             sample_count = (
@@ -468,7 +484,9 @@ class BandwidthSamples(ListResponseMixin):
             }
 
         except Exception as exc:
-            logger.error("Failed to compute bandwidth stats, falling back to PostgreSQL: %s", exc)
+            logger.error(
+                "Failed to compute bandwidth stats, falling back to PostgreSQL: %s", exc
+            )
             # Fallback to PostgreSQL-only stats
             stats = (
                 db.query(
@@ -539,11 +557,13 @@ class BandwidthSamples(ListResponseMixin):
                             full_name = f"{subscriber.first_name} {subscriber.last_name}".strip()
                             account_name = full_name or subscriber.display_name
 
-                enriched.append({
-                    "subscription_id": sub_id or "unknown",
-                    "total_bps": r["total_bps"],
-                    "account_name": account_name,
-                })
+                enriched.append(
+                    {
+                        "subscription_id": sub_id or "unknown",
+                        "total_bps": r["total_bps"],
+                        "account_name": account_name,
+                    }
+                )
 
             return enriched
 
@@ -571,7 +591,9 @@ class BandwidthSamples(ListResponseMixin):
             or user.get("principal_id")
         )
         if not subscriber_id:
-            raise HTTPException(status_code=403, detail="No account associated with user")
+            raise HTTPException(
+                status_code=403, detail="No account associated with user"
+            )
 
         subscription = (
             db.query(Subscription)
@@ -595,7 +617,9 @@ class BandwidthSamples(ListResponseMixin):
         )
 
         if not subscription:
-            raise HTTPException(status_code=404, detail="No portal-visible subscription found")
+            raise HTTPException(
+                status_code=404, detail="No portal-visible subscription found"
+            )
 
         return subscription
 

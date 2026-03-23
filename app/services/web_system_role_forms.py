@@ -14,6 +14,7 @@ from app.services import rbac as rbac_service
 
 logger = logging.getLogger(__name__)
 
+
 def get_permissions_for_form(db: Session):
     """Return permission options for role forms."""
     return rbac_service.permissions.list(
@@ -82,7 +83,9 @@ def get_role_edit_data(db: Session, role_id: str):
     selected_permission_ids = {
         str(permission_id)
         for permission_id in db.execute(
-            select(RolePermission.permission_id).where(RolePermission.role_id == role.id)
+            select(RolePermission.permission_id).where(
+                RolePermission.role_id == role.id
+            )
         ).scalars()
     }
     return {
@@ -105,7 +108,10 @@ def normalize_permission_ids(permission_ids: list[str]) -> set[str]:
 
 def sync_role_permissions(db: Session, *, role_id, permission_ids: list[str]) -> None:
     """Replace role-permission links with desired set."""
-    desired_ids = {UUID(permission_id) for permission_id in normalize_permission_ids(permission_ids)}
+    desired_ids = {
+        UUID(permission_id)
+        for permission_id in normalize_permission_ids(permission_ids)
+    }
     if desired_ids:
         found_ids = {
             str(permission_id)
@@ -117,9 +123,11 @@ def sync_role_permissions(db: Session, *, role_id, permission_ids: list[str]) ->
         if missing:
             raise ValueError("One or more permissions were not found.")
 
-    existing_links = db.execute(
-        select(RolePermission).where(RolePermission.role_id == role_id)
-    ).scalars().all()
+    existing_links = (
+        db.execute(select(RolePermission).where(RolePermission.role_id == role_id))
+        .scalars()
+        .all()
+    )
     existing_ids = {link.permission_id: link for link in existing_links}
 
     for permission_id, link in existing_ids.items():

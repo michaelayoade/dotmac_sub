@@ -61,7 +61,9 @@ class CrmSyncHandler:
             EventType.subscriber_reactivated,
         ):
             status = event.payload.get("to_status") or (
-                "blocked" if event.event_type == EventType.subscriber_suspended else "active"
+                "blocked"
+                if event.event_type == EventType.subscriber_suspended
+                else "active"
             )
             push_status_change(splynx_id, status, name)
 
@@ -73,7 +75,9 @@ class CrmSyncHandler:
             EventType.subscription_upgraded,
             EventType.subscription_downgraded,
         ):
-            subscription_id = event.subscription_id or event.payload.get("subscription_id")
+            subscription_id = event.subscription_id or event.payload.get(
+                "subscription_id"
+            )
             if not subscription_id:
                 return
             subscription = db.get(Subscription, subscription_id)

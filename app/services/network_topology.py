@@ -63,28 +63,35 @@ class TopologyLinks:
         limit: int = 500,
         offset: int = 0,
     ) -> list[NetworkTopologyLink]:
-        stmt = (
-            select(NetworkTopologyLink)
-            .options(
-                joinedload(NetworkTopologyLink.source_device),
-                joinedload(NetworkTopologyLink.target_device),
-                joinedload(NetworkTopologyLink.source_interface),
-                joinedload(NetworkTopologyLink.target_interface),
-            )
+        stmt = select(NetworkTopologyLink).options(
+            joinedload(NetworkTopologyLink.source_device),
+            joinedload(NetworkTopologyLink.target_device),
+            joinedload(NetworkTopologyLink.source_interface),
+            joinedload(NetworkTopologyLink.target_interface),
         )
         if source_device_id:
-            stmt = stmt.where(NetworkTopologyLink.source_device_id == coerce_uuid(source_device_id))
+            stmt = stmt.where(
+                NetworkTopologyLink.source_device_id == coerce_uuid(source_device_id)
+            )
         if target_device_id:
-            stmt = stmt.where(NetworkTopologyLink.target_device_id == coerce_uuid(target_device_id))
+            stmt = stmt.where(
+                NetworkTopologyLink.target_device_id == coerce_uuid(target_device_id)
+            )
         if link_role:
-            stmt = stmt.where(NetworkTopologyLink.link_role == TopologyLinkRole(link_role))
+            stmt = stmt.where(
+                NetworkTopologyLink.link_role == TopologyLinkRole(link_role)
+            )
         if topology_group:
             stmt = stmt.where(NetworkTopologyLink.topology_group == topology_group)
         if bundle_key:
             stmt = stmt.where(NetworkTopologyLink.bundle_key == bundle_key)
         if is_active is not None:
             stmt = stmt.where(NetworkTopologyLink.is_active.is_(is_active))
-        stmt = stmt.order_by(NetworkTopologyLink.created_at.desc()).offset(offset).limit(limit)
+        stmt = (
+            stmt.order_by(NetworkTopologyLink.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         return list(db.scalars(stmt).unique().all())
 
     @staticmethod
@@ -128,9 +135,13 @@ class TopologyLinks:
 def _normalize_link_data(data: dict) -> dict:
     return {
         "source_device_id": coerce_uuid(data["source_device_id"]),
-        "source_interface_id": coerce_uuid(data.get("source_interface_id")) if data.get("source_interface_id") else None,
+        "source_interface_id": coerce_uuid(data.get("source_interface_id"))
+        if data.get("source_interface_id")
+        else None,
         "target_device_id": coerce_uuid(data["target_device_id"]),
-        "target_interface_id": coerce_uuid(data.get("target_interface_id")) if data.get("target_interface_id") else None,
+        "target_interface_id": coerce_uuid(data.get("target_interface_id"))
+        if data.get("target_interface_id")
+        else None,
         "link_role": TopologyLinkRole(data.get("link_role", "unknown")),
         "medium": TopologyLinkMedium(data.get("medium", "unknown")),
         "capacity_bps": int(data["capacity_bps"]) if data.get("capacity_bps") else None,
@@ -141,7 +152,9 @@ def _normalize_link_data(data: dict) -> dict:
     }
 
 
-def _validate_link_data(db: Session, data: dict, *, current_link_id: str | None = None) -> None:
+def _validate_link_data(
+    db: Session, data: dict, *, current_link_id: str | None = None
+) -> None:
     """Validate that endpoints exist and interfaces aren't reused."""
     src_dev = db.get(NetworkDevice, data["source_device_id"])
     if not src_dev:
@@ -150,7 +163,8 @@ def _validate_link_data(db: Session, data: dict, *, current_link_id: str | None 
     if not tgt_dev:
         raise ValueError("Target device not found")
     if data["source_device_id"] == data["target_device_id"] and (
-        not data.get("source_interface_id") or data.get("source_interface_id") == data.get("target_interface_id")
+        not data.get("source_interface_id")
+        or data.get("source_interface_id") == data.get("target_interface_id")
     ):
         raise ValueError("Source and target endpoints must be distinct")
 
@@ -172,7 +186,9 @@ def _validate_link_data(db: Session, data: dict, *, current_link_id: str | None 
         if existing:
             iface = db.get(DeviceInterface, iface_id)
             iface_name = iface.name if iface else str(iface_id)[:8]
-            raise ValueError(f"Interface {iface_name} is already used in another active link")
+            raise ValueError(
+                f"Interface {iface_name} is already used in another active link"
+            )
 
 
 # ── Graph Projection ─────────────────────────────────────────────────
@@ -195,7 +211,9 @@ def list_nodes_and_edges(
             "bundles": {"key": [edge_ids]},
         }
     """
-    links = TopologyLinks.list(db, topology_group=topology_group, is_active=True, limit=2000)
+    links = TopologyLinks.list(
+        db, topology_group=topology_group, is_active=True, limit=2000
+    )
 
     # Collect unique device IDs
     device_ids: set[UUID] = set()
@@ -240,25 +258,37 @@ def list_nodes_and_edges(
     nodes = []
     for dev in devices:
         pop_name = dev.pop_site.name if dev.pop_site else "Unassigned"
-        location_parts = [part for part in [getattr(dev.pop_site, "city", None), getattr(dev.pop_site, "region", None)] if part]
-        nodes.append({
-            "id": str(dev.id),
-            "name": dev.name or str(dev.id)[:8],
-            "status": dev.status.value if dev.status else "unknown",
-            "device_type": str(dev.device_type or ""),
-            "vendor": str(dev.vendor or ""),
-            "ip": str(dev.mgmt_ip or dev.hostname or ""),
-            "pop_site_id": str(dev.pop_site_id) if dev.pop_site_id else "",
-            "pop_site_name": pop_name,
-            "location_label": ", ".join(location_parts) if location_parts else pop_name,
-        })
+        location_parts = [
+            part
+            for part in [
+                getattr(dev.pop_site, "city", None),
+                getattr(dev.pop_site, "region", None),
+            ]
+            if part
+        ]
+        nodes.append(
+            {
+                "id": str(dev.id),
+                "name": dev.name or str(dev.id)[:8],
+                "status": dev.status.value if dev.status else "unknown",
+                "device_type": str(dev.device_type or ""),
+                "vendor": str(dev.vendor or ""),
+                "ip": str(dev.mgmt_ip or dev.hostname or ""),
+                "pop_site_id": str(dev.pop_site_id) if dev.pop_site_id else "",
+                "pop_site_name": pop_name,
+                "location_label": ", ".join(location_parts)
+                if location_parts
+                else pop_name,
+            }
+        )
 
     # Build edge list
     edges = []
     bundles: dict[str, list[str]] = {}
     for link in links:
         if allowed_device_ids and (
-            link.source_device_id not in allowed_device_ids or link.target_device_id not in allowed_device_ids
+            link.source_device_id not in allowed_device_ids
+            or link.target_device_id not in allowed_device_ids
         ):
             continue
         edge = _link_to_edge(db, link, include_utilization=include_utilization)
@@ -283,7 +313,10 @@ def list_nodes_and_edges(
         "nodes": nodes,
         "edges": edges,
         "bundles": bundles,
-        "site_summaries": sorted(site_summaries.values(), key=lambda item: (-item["node_count"], item["pop_site_name"])),
+        "site_summaries": sorted(
+            site_summaries.values(),
+            key=lambda item: (-item["node_count"], item["pop_site_name"]),
+        ),
         "stats": {
             "node_count": len(nodes),
             "edge_count": len(edges),
@@ -452,7 +485,9 @@ def get_device_links(db: Session, device_id: str) -> list[NetworkTopologyLink]:
                     | (NetworkTopologyLink.target_device_id == uid)
                 ),
             )
-        ).unique().all()
+        )
+        .unique()
+        .all()
     )
 
 
@@ -473,12 +508,25 @@ def node_summary(db: Session, device_id: str) -> dict:
             "ip": str(device.mgmt_ip or device.hostname or ""),
             "vendor": str(device.vendor or ""),
             "snmp_enabled": bool(device.snmp_enabled),
-            "last_snmp_ok": bool(device.last_snmp_ok) if device.last_snmp_ok is not None else None,
-            "last_snmp_at": device.last_snmp_at.isoformat() if device.last_snmp_at else None,
+            "last_snmp_ok": bool(device.last_snmp_ok)
+            if device.last_snmp_ok is not None
+            else None,
+            "last_snmp_at": device.last_snmp_at.isoformat()
+            if device.last_snmp_at
+            else None,
             "pop_site_name": device.pop_site.name if device.pop_site else "Unassigned",
             "location_label": ", ".join(
-                [part for part in [getattr(device.pop_site, "city", None), getattr(device.pop_site, "region", None)] if part]
-            ) if device.pop_site else "Unassigned",
+                [
+                    part
+                    for part in [
+                        getattr(device.pop_site, "city", None),
+                        getattr(device.pop_site, "region", None),
+                    ]
+                    if part
+                ]
+            )
+            if device.pop_site
+            else "Unassigned",
         },
         "links": [_link_to_edge(db, link) for link in links],
         "interfaces": interfaces,
@@ -501,7 +549,9 @@ def get_form_options(db: Session) -> dict:
         ).all()
     )
     return {
-        "devices": [{"id": str(d.id), "name": d.name or str(d.id)[:8]} for d in devices],
+        "devices": [
+            {"id": str(d.id), "name": d.name or str(d.id)[:8]} for d in devices
+        ],
         "link_roles": [r.value for r in TopologyLinkRole],
         "mediums": [m.value for m in TopologyLinkMedium],
         "admin_statuses": [s.value for s in TopologyLinkAdminStatus],
@@ -516,14 +566,19 @@ def get_device_interfaces(db: Session, device_id: str) -> list[dict]:
         db.scalars(
             select(DeviceInterface)
             .where(DeviceInterface.device_id == coerce_uuid(device_id))
-            .order_by(DeviceInterface.snmp_index.asc().nulls_last(), DeviceInterface.name.asc())
+            .order_by(
+                DeviceInterface.snmp_index.asc().nulls_last(),
+                DeviceInterface.name.asc(),
+            )
         ).all()
     )
     return [
         {
             "id": str(i.id),
             "name": i.name or str(i.id)[:8],
-            "status": i.status.value if hasattr(i.status, "value") else (i.status or ""),
+            "status": i.status.value
+            if hasattr(i.status, "value")
+            else (i.status or ""),
             "speed_mbps": i.speed_mbps,
             "monitored": bool(i.monitored),
         }

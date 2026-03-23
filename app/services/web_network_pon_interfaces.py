@@ -44,11 +44,27 @@ def _normalize_pon_key(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", text.lower())
 
 
-def _resolve_monitoring_devices(db: Session, olts: list[OLTDevice]) -> dict[str, NetworkDevice]:
-    devices = list(db.scalars(select(NetworkDevice).where(NetworkDevice.is_active.is_(True))).all())
-    by_ip = {str(device.mgmt_ip).strip(): device for device in devices if getattr(device, "mgmt_ip", None)}
-    by_hostname = {str(device.hostname).strip().lower(): device for device in devices if getattr(device, "hostname", None)}
-    by_name = {str(device.name).strip().lower(): device for device in devices if getattr(device, "name", None)}
+def _resolve_monitoring_devices(
+    db: Session, olts: list[OLTDevice]
+) -> dict[str, NetworkDevice]:
+    devices = list(
+        db.scalars(select(NetworkDevice).where(NetworkDevice.is_active.is_(True))).all()
+    )
+    by_ip = {
+        str(device.mgmt_ip).strip(): device
+        for device in devices
+        if getattr(device, "mgmt_ip", None)
+    }
+    by_hostname = {
+        str(device.hostname).strip().lower(): device
+        for device in devices
+        if getattr(device, "hostname", None)
+    }
+    by_name = {
+        str(device.name).strip().lower(): device
+        for device in devices
+        if getattr(device, "name", None)
+    }
 
     resolved: dict[str, NetworkDevice] = {}
     for olt in olts:
@@ -107,7 +123,7 @@ def parse_pon_port_notes(notes: str | None) -> tuple[str | None, str | None]:
     for line in text.splitlines():
         stripped = line.strip()
         if stripped.startswith(_ALIAS_PREFIX) and stripped.endswith(_ALIAS_SUFFIX):
-            alias_value = stripped[len(_ALIAS_PREFIX):-len(_ALIAS_SUFFIX)].strip()
+            alias_value = stripped[len(_ALIAS_PREFIX) : -len(_ALIAS_SUFFIX)].strip()
             alias = alias_value or None
             continue
         cleaned_lines.append(line)
@@ -150,7 +166,11 @@ def build_page_data(
         "olt_id": (olt_id or "").strip(),
     }
 
-    olt_stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name.asc())
+    olt_stmt = (
+        select(OLTDevice)
+        .where(OLTDevice.is_active.is_(True))
+        .order_by(OLTDevice.name.asc())
+    )
     if filters["olt_id"]:
         olt_stmt = olt_stmt.where(OLTDevice.id == coerce_uuid(filters["olt_id"]))
     olts = list(db.scalars(olt_stmt).all())
@@ -176,7 +196,9 @@ def build_page_data(
     monitoring_interfaces = _load_monitoring_interfaces(db, monitoring_devices)
 
     assignment_counts: dict[str, int] = defaultdict(int)
-    for assignment in db.scalars(select(OntAssignment).where(OntAssignment.active.is_(True))).all():
+    for assignment in db.scalars(
+        select(OntAssignment).where(OntAssignment.active.is_(True))
+    ).all():
         if getattr(assignment, "pon_port_id", None):
             assignment_counts[str(assignment.pon_port_id)] += 1
 
@@ -211,7 +233,8 @@ def build_page_data(
             "olt_ip": getattr(olt, "mgmt_ip", None),
             "name": port.name,
             "alias": parse_pon_port_notes(getattr(port, "notes", None))[0],
-            "description": (iface_match.description if iface_match else None) or parse_pon_port_notes(getattr(port, "notes", None))[1],
+            "description": (iface_match.description if iface_match else None)
+            or parse_pon_port_notes(getattr(port, "notes", None))[1],
             "status": status_value,
             "status_label": _status_label(status_value),
             "subscriber_count": assignment_counts.get(str(port.id), 0),
@@ -236,8 +259,14 @@ def build_page_data(
                     "name": iface.name,
                     "alias": None,
                     "description": iface.description,
-                    "status": iface.status.value if iface.status else InterfaceStatus.unknown.value,
-                    "status_label": _status_label(iface.status.value if iface.status else InterfaceStatus.unknown.value),
+                    "status": iface.status.value
+                    if iface.status
+                    else InterfaceStatus.unknown.value,
+                    "status_label": _status_label(
+                        iface.status.value
+                        if iface.status
+                        else InterfaceStatus.unknown.value
+                    ),
                     "subscriber_count": 0,
                     "monitoring_seen": True,
                     "onts_url": f"/admin/network/onts?olt_id={olt_key}&pon_hint={_extract_pon_hint(iface.name) or iface.name}",
@@ -251,13 +280,15 @@ def build_page_data(
     if filters["olt_id"]:
         rows = [row for row in rows if row.get("olt_id") == filters["olt_id"]]
 
-    rows.sort(key=lambda row: (
-        str(row.get("olt_name") or "").lower(),
-        0 if row.get("kind") == "modeled" else 1,
-        0 if row.get("alias") else 1,
-        str(row.get("alias") or "").lower(),
-        str(row.get("name") or "").lower(),
-    ))
+    rows.sort(
+        key=lambda row: (
+            str(row.get("olt_name") or "").lower(),
+            0 if row.get("kind") == "modeled" else 1,
+            0 if row.get("alias") else 1,
+            str(row.get("alias") or "").lower(),
+            str(row.get("name") or "").lower(),
+        )
+    )
 
     stats = {
         "total": len(rows),

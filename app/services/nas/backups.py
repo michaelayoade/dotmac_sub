@@ -1,4 +1,5 @@
 """NAS configuration backup service."""
+
 from __future__ import annotations
 
 import hashlib
@@ -88,16 +89,22 @@ class NasConfigBackups(ListResponseMixin):
         keep_daily_cutoff = now - timedelta(days=keep_daily_days)
         keep_weekly_cutoff = now - timedelta(days=keep_weekly_days)
 
-        device_ids = db.execute(select(NasConfigBackup.nas_device_id).distinct()).scalars().all()
+        device_ids = (
+            db.execute(select(NasConfigBackup.nas_device_id).distinct()).scalars().all()
+        )
         deleted = 0
         kept = 0
 
         for device_id in device_ids:
-            backups = db.execute(
-                select(NasConfigBackup)
-                .where(NasConfigBackup.nas_device_id == device_id)
-                .order_by(NasConfigBackup.created_at.desc())
-            ).scalars().all()
+            backups = (
+                db.execute(
+                    select(NasConfigBackup)
+                    .where(NasConfigBackup.nas_device_id == device_id)
+                    .order_by(NasConfigBackup.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
 
             keep_ids: set[UUID] = set()
             daily_kept: set[str] = set()

@@ -82,12 +82,19 @@ def validate_chain(
         sub = db.get(Subscription, str(assignment.subscription_id))
         if sub and hasattr(sub, "offer") and sub.offer:
             offer = sub.offer
-            if hasattr(offer, "provisioning_profile_id") and offer.provisioning_profile_id:
-                profile = db.get(OntProvisioningProfile, str(offer.provisioning_profile_id))
+            if (
+                hasattr(offer, "provisioning_profile_id")
+                and offer.provisioning_profile_id
+            ):
+                profile = db.get(
+                    OntProvisioningProfile, str(offer.provisioning_profile_id)
+                )
 
     if not profile:
         result.warnings.append(
-            VlanChainWarning("info", "No provisioning profile linked — VLAN check skipped")
+            VlanChainWarning(
+                "info", "No provisioning profile linked — VLAN check skipped"
+            )
         )
         return result
 
@@ -107,7 +114,9 @@ def validate_chain(
 
     # Compare with actual service-ports if provided
     if actual_service_ports is not None:
-        actual: set[int] = {sp["vlan_id"] for sp in actual_service_ports if sp.get("vlan_id")}
+        actual: set[int] = {
+            sp["vlan_id"] for sp in actual_service_ports if sp.get("vlan_id")
+        }
         result.actual_vlans = sorted(actual)
 
         missing = desired - actual

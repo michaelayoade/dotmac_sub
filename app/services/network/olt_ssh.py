@@ -75,7 +75,9 @@ def resolve_policy(olt: OLTDevice) -> OltSshPolicy:
             return _POLICIES["huawei_ma5800"]
         if "ma5600" in model:
             return _POLICIES["huawei_ma5600"]
-    raise ValueError(f"No SSH driver policy found for vendor={olt.vendor!r}, model={olt.model!r}")
+    raise ValueError(
+        f"No SSH driver policy found for vendor={olt.vendor!r}, model={olt.model!r}"
+    )
 
 
 def _apply_preferred_algorithms(transport: Transport, policy: OltSshPolicy) -> None:
@@ -84,11 +86,17 @@ def _apply_preferred_algorithms(transport: Transport, policy: OltSshPolicy) -> N
     opts.key_types = list(policy.host_key_types) + [
         item for item in opts.key_types if item not in policy.host_key_types
     ]
-    opts.ciphers = list(policy.ciphers) + [item for item in opts.ciphers if item not in policy.ciphers]
-    opts.digests = list(policy.macs) + [item for item in opts.digests if item not in policy.macs]
+    opts.ciphers = list(policy.ciphers) + [
+        item for item in opts.ciphers if item not in policy.ciphers
+    ]
+    opts.digests = list(policy.macs) + [
+        item for item in opts.digests if item not in policy.macs
+    ]
 
 
-def _read_until_prompt(channel: Channel, prompt_regex: str, timeout_sec: float = 8.0) -> str:
+def _read_until_prompt(
+    channel: Channel, prompt_regex: str, timeout_sec: float = 8.0
+) -> str:
     import time
 
     compiled = re.compile(prompt_regex)
@@ -147,11 +155,17 @@ def _auto_bind_tr069_after_authorize(
                 break
         if dotmac_id is None:
             return
-        ok, msg = bind_tr069_server_profile(olt, fsp=fsp, ont_id=ont_id, profile_id=dotmac_id)
+        ok, msg = bind_tr069_server_profile(
+            olt, fsp=fsp, ont_id=ont_id, profile_id=dotmac_id
+        )
         if ok:
-            logger.info("Auto-bound ONT %d on %s to TR-069 profile %d", ont_id, fsp, dotmac_id)
+            logger.info(
+                "Auto-bound ONT %d on %s to TR-069 profile %d", ont_id, fsp, dotmac_id
+            )
         else:
-            logger.warning("Auto-bind TR-069 failed for ONT %d on %s: %s", ont_id, fsp, msg)
+            logger.warning(
+                "Auto-bind TR-069 failed for ONT %d on %s: %s", ont_id, fsp, msg
+            )
     except Exception as exc:
         logger.warning("Auto-bind TR-069 error for ONT %d: %s", ont_id, exc)
 
@@ -237,17 +251,19 @@ def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
         sn_match = re.search(r"\(([^)]+)\)", sn_raw)
         serial_display = sn_match.group(1) if sn_match else sn_raw.split()[0]
         serial_hex = sn_raw.split()[0] if " " in sn_raw else sn_raw
-        entries.append(AutofindEntry(
-            fsp=current.get("F/S/P", ""),
-            serial_number=serial_display,
-            serial_hex=serial_hex,
-            vendor_id=current.get("VendorID", ""),
-            model=current.get("Ont EquipmentID", ""),
-            software_version=current.get("Ont SoftwareVersion", ""),
-            mac=current.get("Ont MAC", ""),
-            equipment_sn=current.get("Ont Equipment SN", ""),
-            autofind_time=current.get("Ont autofind time", ""),
-        ))
+        entries.append(
+            AutofindEntry(
+                fsp=current.get("F/S/P", ""),
+                serial_number=serial_display,
+                serial_hex=serial_hex,
+                vendor_id=current.get("VendorID", ""),
+                model=current.get("Ont EquipmentID", ""),
+                software_version=current.get("Ont SoftwareVersion", ""),
+                mac=current.get("Ont MAC", ""),
+                equipment_sn=current.get("Ont Equipment SN", ""),
+                autofind_time=current.get("Ont autofind time", ""),
+            )
+        )
         current = {}
     return entries
 
@@ -342,7 +358,9 @@ def authorize_ont(
 
         # Authorize the ONT — sn-auth uses the serial without dashes
         sn_clean = serial_number.replace("-", "")
-        channel.send(f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id 1 ont-srvprofile-id 1\n")
+        channel.send(
+            f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id 1 ont-srvprofile-id 1\n"
+        )
         # Huawei may prompt "{ <cr>|desc<K>|ont-type<K> }:" — send CR to confirm
         initial = _read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
         if "<cr>" in initial:
@@ -364,7 +382,9 @@ def authorize_ont(
         if "success" in output.lower() or "ont-id" in output.lower():
             logger.info(
                 "Authorized ONT %s on OLT %s port %s",
-                serial_number, olt.name, fsp,
+                serial_number,
+                olt.name,
+                fsp,
             )
             # Auto-bind to DotMac-ACS TR-069 profile if it exists
             _auto_bind_tr069_after_authorize(olt, fsp, ont_id)
@@ -376,20 +396,26 @@ def authorize_ont(
         if is_error_output(output):
             logger.warning(
                 "Failed to authorize ONT %s on OLT %s: %s",
-                serial_number, olt.name, output.strip(),
+                serial_number,
+                olt.name,
+                output.strip(),
             )
             return False, f"OLT rejected command: {output.strip()[-200:]}", None
 
         # Ambiguous — return output for inspection
         logger.info(
             "ONT authorize command sent for %s on OLT %s, output: %s",
-            serial_number, olt.name, output.strip(),
+            serial_number,
+            olt.name,
+            output.strip(),
         )
         return True, f"Command sent for {serial_number} on port {fsp}", ont_id
     except Exception as exc:
         logger.error(
             "Error authorizing ONT %s on OLT %s: %s",
-            serial_number, olt.name, exc,
+            serial_number,
+            olt.name,
+            exc,
         )
         return False, f"Error: {exc}", None
     finally:
@@ -452,15 +478,17 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
                 if i + 1 < len(parts):
                     flow_para = parts[i + 1]
                 break
-        entries.append(ServicePortEntry(
-            index=index,
-            vlan_id=vlan_id,
-            ont_id=ont_id,
-            gem_index=gem_index,
-            flow_type=flow_type,
-            flow_para=flow_para,
-            state=state,
-        ))
+        entries.append(
+            ServicePortEntry(
+                index=index,
+                vlan_id=vlan_id,
+                ont_id=ont_id,
+                gem_index=gem_index,
+                flow_type=flow_type,
+                flow_para=flow_para,
+                state=state,
+            )
+        )
     return entries
 
 
@@ -487,9 +515,7 @@ def is_error_output(output: str) -> bool:
     return any(pattern in lower for pattern in _HUAWEI_ERROR_PATTERNS)
 
 
-def _run_huawei_cmd(
-    channel: Channel, command: str, prompt: str = r"#\s*$"
-) -> str:
+def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
     """Send a command to a Huawei shell, handling interactive {<cr>} prompts."""
     channel.send(f"{command}\n")
     out = _read_until_prompt(channel, rf"{prompt}|<cr>", timeout_sec=12)
@@ -600,7 +626,10 @@ def create_service_ports(
             if is_error_output(output):
                 logger.warning(
                     "Service-port VLAN %d GEM %d failed on OLT %s: %s",
-                    sp.vlan_id, sp.gem_index, olt.name, output.strip()[-150:],
+                    sp.vlan_id,
+                    sp.gem_index,
+                    olt.name,
+                    output.strip()[-150:],
                 )
                 errors += 1
             else:
@@ -614,9 +643,7 @@ def create_service_ports(
         logger.info(msg)
         return errors == 0, msg
     except Exception as exc:
-        logger.error(
-            "Error creating service-ports on OLT %s: %s", olt.name, exc
-        )
+        logger.error("Error creating service-ports on OLT %s: %s", olt.name, exc)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -644,7 +671,9 @@ def upgrade_firmware(
     except (SSHException, OSError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
     except Exception as exc:
-        logger.error("Error connecting to OLT %s for firmware upgrade: %s", olt.name, exc)
+        logger.error(
+            "Error connecting to OLT %s for firmware upgrade: %s", olt.name, exc
+        )
         return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
@@ -663,10 +692,11 @@ def upgrade_firmware(
             output += _read_until_prompt(channel, r"#\s*$", timeout_sec=30)
 
         if "success" in output.lower() or "download" in output.lower():
-            logger.info(
-                "Firmware upgrade initiated on OLT %s: %s", olt.name, file_url
+            logger.info("Firmware upgrade initiated on OLT %s: %s", olt.name, file_url)
+            return (
+                True,
+                "Firmware upgrade initiated — OLT will reboot when download completes",
             )
-            return True, "Firmware upgrade initiated — OLT will reboot when download completes"
         if is_error_output(output):
             logger.warning(
                 "Firmware upgrade failed on OLT %s: %s", olt.name, output.strip()[-200:]
@@ -675,7 +705,8 @@ def upgrade_firmware(
 
         logger.info(
             "Firmware upgrade command sent to OLT %s, output: %s",
-            olt.name, output.strip()[-200:],
+            olt.name,
+            output.strip()[-200:],
         )
         return True, "Firmware upgrade command sent"
     except Exception as exc:
@@ -714,7 +745,11 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         config_text = "\n".join(lines).strip()
 
         if len(config_text) < 50:
-            return False, "Config output too short — device may not support this command", config_text
+            return (
+                False,
+                "Config output too short — device may not support this command",
+                config_text,
+            )
         return True, "Configuration retrieved", config_text
     except Exception as exc:
         logger.error("Error fetching config from OLT %s: %s", olt.name, exc)
@@ -786,9 +821,7 @@ def get_service_ports_for_ont(
     return True, f"Found {len(filtered)} service-port(s) for ONT {ont_id}", filtered
 
 
-def delete_service_port(
-    olt: OLTDevice, index: int
-) -> tuple[bool, str]:
+def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
     """Delete a service-port from the OLT by index.
 
     Args:
@@ -822,7 +855,9 @@ def delete_service_port(
         if is_error_output(output):
             logger.warning(
                 "Failed to delete service-port %d on OLT %s: %s",
-                index, olt.name, output.strip()[-150:],
+                index,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
@@ -876,15 +911,13 @@ def create_single_service_port(
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
 
-        cmd = (
-            build_service_port_command(
-                fsp=fsp,
-                ont_id=ont_id,
-                gem_index=gem_index,
-                vlan_id=vlan_id,
-                user_vlan=user_vlan,
-                tag_transform=tag_transform,
-            )
+        cmd = build_service_port_command(
+            fsp=fsp,
+            ont_id=ont_id,
+            gem_index=gem_index,
+            vlan_id=vlan_id,
+            user_vlan=user_vlan,
+            tag_transform=tag_transform,
         )
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
 
@@ -893,13 +926,18 @@ def create_single_service_port(
         if is_error_output(output):
             logger.warning(
                 "Service-port creation failed on OLT %s: %s",
-                olt.name, output.strip()[-150:],
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info(
             "Created service-port VLAN %d GEM %d for ONT %d on OLT %s %s",
-            vlan_id, gem_index, ont_id, olt.name, fsp,
+            vlan_id,
+            gem_index,
+            ont_id,
+            olt.name,
+            fsp,
         )
         return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})"
     except Exception as exc:
@@ -960,10 +998,7 @@ def configure_ont_iphost(
         _run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
 
         if ip_mode == "dhcp":
-            cmd = (
-                f"ont ipconfig {port_num} {ont_id} "
-                f"ip-index 0 dhcp vlan {vlan_id}"
-            )
+            cmd = f"ont ipconfig {port_num} {ont_id} ip-index 0 dhcp vlan {vlan_id}"
         else:
             if not ip_address or not subnet or not gateway:
                 return False, "Static IP mode requires ip_address, subnet, and gateway"
@@ -981,13 +1016,18 @@ def configure_ont_iphost(
         if is_error_output(output):
             logger.warning(
                 "IPHOST config failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-150:],
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info(
             "Configured IPHOST for ONT %d on OLT %s (%s VLAN %d)",
-            ont_id, olt.name, ip_mode, vlan_id,
+            ont_id,
+            olt.name,
+            ip_mode,
+            vlan_id,
         )
         return True, f"Management IP configured ({ip_mode} on VLAN {vlan_id})"
     except Exception as exc:
@@ -1048,9 +1088,7 @@ def get_ont_iphost_config(
         transport.close()
 
 
-def reboot_ont_omci(
-    olt: OLTDevice, fsp: str, ont_id: int
-) -> tuple[bool, str]:
+def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
     """Reboot an ONT via OMCI from the OLT.
 
     Args:
@@ -1087,7 +1125,9 @@ def reboot_ont_omci(
 
         # ont reset may ask for Y/N confirmation
         channel.send(f"ont reset {port_num} {ont_id}\n")
-        output = _read_until_prompt(channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10)
+        output = _read_until_prompt(
+            channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10
+        )
         if "y/n" in output.lower():
             channel.send("y\n")
             output += _read_until_prompt(channel, config_prompt, timeout_sec=10)
@@ -1096,7 +1136,12 @@ def reboot_ont_omci(
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if is_error_output(output):
-            logger.warning("ONT reset failed for %d on OLT %s: %s", ont_id, olt.name, output.strip()[-150:])
+            logger.warning(
+                "ONT reset failed for %d on OLT %s: %s",
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
+            )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
         logger.info("ONT %d reset via OMCI on OLT %s", ont_id, olt.name)
@@ -1169,7 +1214,9 @@ def bind_tr069_server_profile(
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             logger.warning(
                 "TR-069 profile bind failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, output.strip()[-150:],
+                ont_id,
+                olt.name,
+                output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
@@ -1187,18 +1234,28 @@ def bind_tr069_server_profile(
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
             logger.warning(
                 "TR-069 profile bound but ONT reset failed for ONT %d on OLT %s: %s",
-                ont_id, olt.name, reset_out.strip()[-150:],
+                ont_id,
+                olt.name,
+                reset_out.strip()[-150:],
             )
-            return False, f"TR-069 profile bound but reset failed: {reset_out.strip()[-150:]}"
+            return (
+                False,
+                f"TR-069 profile bound but reset failed: {reset_out.strip()[-150:]}",
+            )
 
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         logger.info(
             "Bound TR-069 profile %d to ONT %d on OLT %s (reset triggered)",
-            profile_id, ont_id, olt.name,
+            profile_id,
+            ont_id,
+            olt.name,
         )
-        return True, f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)"
+        return (
+            True,
+            f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)",
+        )
     except Exception as exc:
         logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc)
         return False, f"Error: {exc}"
@@ -1217,7 +1274,9 @@ class OltProfileEntry:
     extra: dict[str, str] = field(default_factory=dict)
 
 
-def _parse_profile_table(output: str, id_col: int = 0, name_col: int = 1) -> list[OltProfileEntry]:
+def _parse_profile_table(
+    output: str, id_col: int = 0, name_col: int = 1
+) -> list[OltProfileEntry]:
     """Parse Huawei profile display output into structured entries."""
     entries: list[OltProfileEntry] = []
     for line in output.splitlines():
@@ -1354,14 +1413,23 @@ def get_tr069_server_profiles(
                 f"display ont tr069-server-profile profile-id {entry.profile_id}",
             )
             detail = _parse_tr069_profile_detail(detail_output)
-            profiles.append(Tr069ServerProfile(
-                profile_id=entry.profile_id,
-                name=detail.get("profile-name", entry.name),
-                acs_url=detail.get("url", detail.get("acs url", detail.get("acs-url", ""))),
-                acs_username=detail.get("user name", detail.get("acs username", "")),
-                inform_interval=int(detail.get("inform interval", "0") or "0"),
-                binding_count=int(detail.get("binding times", detail.get("bindnumber", "0")) or "0"),
-            ))
+            profiles.append(
+                Tr069ServerProfile(
+                    profile_id=entry.profile_id,
+                    name=detail.get("profile-name", entry.name),
+                    acs_url=detail.get(
+                        "url", detail.get("acs url", detail.get("acs-url", ""))
+                    ),
+                    acs_username=detail.get(
+                        "user name", detail.get("acs username", "")
+                    ),
+                    inform_interval=int(detail.get("inform interval", "0") or "0"),
+                    binding_count=int(
+                        detail.get("binding times", detail.get("bindnumber", "0"))
+                        or "0"
+                    ),
+                )
+            )
 
         return True, f"Found {len(profiles)} TR-069 server profile(s)", profiles
     except Exception as exc:
@@ -1394,8 +1462,17 @@ def create_tr069_server_profile(
         Tuple of (success, message).
     """
     if not _TR069_PROFILE_NAME_RE.match(profile_name):
-        return False, "Invalid profile name (alphanumeric, dashes, dots, spaces, max 64 chars)"
-    if not acs_url or "\n" in acs_url or "\r" in acs_url or ";" in acs_url or "|" in acs_url:
+        return (
+            False,
+            "Invalid profile name (alphanumeric, dashes, dots, spaces, max 64 chars)",
+        )
+    if (
+        not acs_url
+        or "\n" in acs_url
+        or "\r" in acs_url
+        or ";" in acs_url
+        or "|" in acs_url
+    ):
         return False, "Invalid ACS URL"
     if username and ("\n" in username or ";" in username or "|" in username):
         return False, "Invalid username"
@@ -1465,13 +1542,18 @@ def create_tr069_server_profile(
         )
         if profile_name.lower() not in verify_output.lower():
             _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            return False, f"Profile '{profile_name}' not found after creation. OLT may have rejected it."
+            return (
+                False,
+                f"Profile '{profile_name}' not found after creation. OLT may have rejected it.",
+            )
 
         _run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         logger.info(
             "Created TR-069 profile '%s' on OLT %s with ACS URL %s",
-            profile_name, olt.name, acs_url,
+            profile_name,
+            olt.name,
+            acs_url,
         )
         return True, f"TR-069 profile '{profile_name}' created successfully"
     except Exception as exc:

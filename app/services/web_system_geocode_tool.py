@@ -41,6 +41,7 @@ def _now() -> datetime:
 
 def _parse_date(value: str | None, *, end: bool = False) -> datetime | None:
     from app.services.common import parse_date_filter
+
     return parse_date_filter(value, end_of_day=end)
 
 
@@ -60,7 +61,9 @@ def _setting_json(db: Session, key: str, default: Any) -> Any:
     return default
 
 
-def _upsert_json(db: Session, key: str, payload: dict[str, Any] | list[dict[str, Any]]) -> None:
+def _upsert_json(
+    db: Session, key: str, payload: dict[str, Any] | list[dict[str, Any]]
+) -> None:
     domain_settings_service.geocoding_settings.upsert_by_key(
         db,
         key,
@@ -122,7 +125,9 @@ def _query_candidates(db: Session, filters: GeocodeFilters) -> list[Address]:
 
     if filters.subscriber_status:
         try:
-            stmt = stmt.where(Subscriber.status == SubscriberStatus(filters.subscriber_status))
+            stmt = stmt.where(
+                Subscriber.status == SubscriberStatus(filters.subscriber_status)
+            )
         except ValueError:
             return []
 
@@ -140,7 +145,9 @@ def _query_candidates(db: Session, filters: GeocodeFilters) -> list[Address]:
     return db.scalars(stmt.order_by(Address.created_at.desc())).all()
 
 
-def create_job(db: Session, *, filters: GeocodeFilters, actor_id: str | None) -> dict[str, Any]:
+def create_job(
+    db: Session, *, filters: GeocodeFilters, actor_id: str | None
+) -> dict[str, Any]:
     candidates = _query_candidates(db, filters)
     job = {
         "job_id": str(uuid.uuid4()),
@@ -225,12 +232,16 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
     skipped = 0
 
     for index, address in enumerate(candidates, start=1):
-        subscriber_name = address.subscriber.full_name if address.subscriber else "Subscriber"
+        subscriber_name = (
+            address.subscriber.full_name if address.subscriber else "Subscriber"
+        )
         line = {
             "job_id": job_id,
             "subscriber_id": str(address.subscriber_id),
             "subscriber_name": subscriber_name,
-            "address": ", ".join([p for p in [address.address_line1, address.city, address.region] if p]),
+            "address": ", ".join(
+                [p for p in [address.address_line1, address.city, address.region] if p]
+            ),
             "latitude": address.latitude,
             "longitude": address.longitude,
             "status": "skipped",
@@ -238,13 +249,19 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
             "created_at": _now().isoformat(),
         }
 
-        if (not filters.overwrite_existing) and address.latitude is not None and address.longitude is not None:
+        if (
+            (not filters.overwrite_existing)
+            and address.latitude is not None
+            and address.longitude is not None
+        ):
             skipped += 1
             line["status"] = "skipped"
             line["message"] = "Coordinates already exist"
         else:
             try:
-                result = geocoding_service.geocode_address(db, _address_payload(address))
+                result = geocoding_service.geocode_address(
+                    db, _address_payload(address)
+                )
                 lat = result.get("latitude")
                 lon = result.get("longitude")
                 if lat is None or lon is None:
@@ -306,5 +323,6 @@ def build_page_state(db: Session) -> dict[str, Any]:
         "log_rows": list_log_rows(db, limit=200),
         "subscriber_statuses": [status.value for status in SubscriberStatus],
         "providers": ["nominatim", "google", "mapbox"],
-        "current_provider": geocoding_service._setting_value(db, "provider") or "nominatim",  # noqa: SLF001
+        "current_provider": geocoding_service._setting_value(db, "provider")
+        or "nominatim",  # noqa: SLF001
     }

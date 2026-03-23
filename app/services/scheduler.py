@@ -13,6 +13,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 def _validate_schedule_type(value):
     if value is None:
         return None

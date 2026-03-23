@@ -41,7 +41,9 @@ _PORTAL_VISIBLE_SERVICE_STATUSES = [
 ]
 
 
-def _get_fup_status(db: Session, offer_id: str | None, subscription_id: str) -> dict | None:
+def _get_fup_status(
+    db: Session, offer_id: str | None, subscription_id: str
+) -> dict | None:
     """Get FUP status for a subscription's offer, if a policy exists."""
     if not offer_id:
         return None
@@ -84,8 +86,10 @@ def _get_fup_status(db: Session, offer_id: str | None, subscription_id: str) -> 
             )
             if rows and (rows.rx or rows.tx):
                 span_seconds = max(0, (now - period_start).total_seconds())
-                total_bytes = ((float(rows.rx or 0) + float(rows.tx or 0)) / 8.0) * span_seconds
-                usage_gb = total_bytes / (1024 ** 3)
+                total_bytes = (
+                    (float(rows.rx or 0) + float(rows.tx or 0)) / 8.0
+                ) * span_seconds
+                usage_gb = total_bytes / (1024**3)
 
         # Get the data cap from the first active rule
         allowance_gb = None
@@ -93,6 +97,7 @@ def _get_fup_status(db: Session, offer_id: str | None, subscription_id: str) -> 
         active_rules.sort(key=lambda r: r.sort_order or 0)
         if active_rules:
             from app.services.fup import _threshold_gb
+
             allowance_gb = max(_threshold_gb(rule) for rule in active_rules)
 
         usage_pct = 0.0
@@ -196,7 +201,9 @@ def _get_pppoe_credentials(db: Session, subscriber_id: str | None) -> dict | Non
             "has_password": bool(cred.secret_hash),
         }
     except Exception as exc:
-        logger.warning("Failed to get PPPoE credentials for subscriber %s: %s", subscriber_id, exc)
+        logger.warning(
+            "Failed to get PPPoE credentials for subscriber %s: %s", subscriber_id, exc
+        )
         return None
 
 
@@ -289,7 +296,7 @@ def _daily_bandwidth_usage(
             rx_bps = float(rows.rx_bps or 0) if rows else 0.0
             tx_bps = float(rows.tx_bps or 0) if rows else 0.0
             total_bytes = ((rx_bps + tx_bps) / 8.0) * span_seconds
-            total_gb = total_bytes / (1024 ** 3)
+            total_gb = total_bytes / (1024**3)
 
         daily_records.append(
             SimpleNamespace(
@@ -319,19 +326,14 @@ def _usage_summary_stats(
     end_at: datetime,
 ) -> dict[str, float]:
     subscription_uuid = coerce_uuid(subscription_id)
-    avg_rx_bps, avg_tx_bps = (
-        db.query(
-            func.avg(BandwidthSample.rx_bps),
-            func.avg(BandwidthSample.tx_bps),
-        )
-        .filter(
-            BandwidthSample.subscription_id == subscription_uuid,
-            BandwidthSample.sample_at >= start_at,
-            BandwidthSample.sample_at <= end_at,
-        )
-        .first()
-        or (0, 0)
-    )
+    avg_rx_bps, avg_tx_bps = db.query(
+        func.avg(BandwidthSample.rx_bps),
+        func.avg(BandwidthSample.tx_bps),
+    ).filter(
+        BandwidthSample.subscription_id == subscription_uuid,
+        BandwidthSample.sample_at >= start_at,
+        BandwidthSample.sample_at <= end_at,
+    ).first() or (0, 0)
 
     bucket = func.date_trunc("day", BandwidthSample.sample_at)
     rows = (
@@ -373,7 +375,7 @@ def _usage_summary_stats(
         total_bytes += ((rx_bps + tx_bps) / 8.0) * span_seconds
         day += timedelta(days=1)
 
-    avg_daily_usage_gb = (total_bytes / (1024 ** 3)) / total_days
+    avg_daily_usage_gb = (total_bytes / (1024**3)) / total_days
     average_download_mbps = float(avg_rx_bps or 0) / 1_000_000
     average_upload_mbps = float(avg_tx_bps or 0) / 1_000_000
     average_speed_mbps = average_download_mbps + average_upload_mbps
@@ -416,9 +418,8 @@ def get_usage_page(
     subscription = db.get(Subscription, coerce_uuid(subscription_id_str))
     activated_at = None
     if subscription:
-        activated_at = (
-            _as_utc(getattr(subscription, "start_at", None))
-            or _as_utc(getattr(subscription, "created_at", None))
+        activated_at = _as_utc(getattr(subscription, "start_at", None)) or _as_utc(
+            getattr(subscription, "created_at", None)
         )
     start_at, end_at = _usage_period_bounds(period, activated_at=activated_at)
 
@@ -539,8 +540,12 @@ def get_service_detail(
     next_billing_date = _resolve_next_billing_date(db, subscription)
     copy = get_plan_change_copy(subscription)
 
-    fup_status = _get_fup_status(db, str(current_offer.id) if current_offer else None, subscription_id)
-    pppoe_creds = _get_pppoe_credentials(db, str(subscription.subscriber_id) if subscription else None)
+    fup_status = _get_fup_status(
+        db, str(current_offer.id) if current_offer else None, subscription_id
+    )
+    pppoe_creds = _get_pppoe_credentials(
+        db, str(subscription.subscriber_id) if subscription else None
+    )
 
     return {
         "subscription": subscription,

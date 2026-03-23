@@ -15,7 +15,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException
-from sqlalchemy import select, text
+from sqlalchemy import MetaData, Table, func, select, text
 from sqlalchemy.orm import Session
 
 from app.models.auth import AuthProvider, UserCredential
@@ -37,7 +37,9 @@ def _now() -> datetime:
 def _secret() -> str:
     secret = os.getenv("JWT_SECRET")
     if not secret:
-        raise RuntimeError("JWT_SECRET environment variable is required for DB inspector")
+        raise RuntimeError(
+            "JWT_SECRET environment variable is required for DB inspector"
+        )
     return secret
 
 
@@ -67,10 +69,14 @@ def validate_select_query(query: str | None) -> str:
         raise HTTPException(status_code=400, detail="Only SELECT queries are allowed")
 
     if FORBIDDEN_SQL_PATTERN.search(comment_stripped):
-        raise HTTPException(status_code=400, detail="Query contains forbidden statements")
+        raise HTTPException(
+            status_code=400, detail="Query contains forbidden statements"
+        )
 
     if ";" in normalized:
-        raise HTTPException(status_code=400, detail="Multiple statements are not allowed")
+        raise HTTPException(
+            status_code=400, detail="Multiple statements are not allowed"
+        )
 
     return normalized
 
@@ -81,7 +87,9 @@ def _safe_limit(value: int | None) -> int:
     return max(1, min(MAX_ROWS, int(value)))
 
 
-def _run_wrapped_select(db: Session, query: str, *, row_limit: int) -> tuple[list[str], list[dict[str, Any]], bool]:
+def _run_wrapped_select(
+    db: Session, query: str, *, row_limit: int
+) -> tuple[list[str], list[dict[str, Any]], bool]:
     statement = text(f"SELECT * FROM ({query}) AS inspector_result LIMIT :row_limit")  # noqa: S608
     result = db.execute(statement, {"row_limit": row_limit + 1})
     rows = result.mappings().all()
@@ -92,7 +100,9 @@ def _run_wrapped_select(db: Session, query: str, *, row_limit: int) -> tuple[lis
     return columns, [dict(row) for row in rows], truncated
 
 
-def run_select_query(db: Session, query: str, *, row_limit: int | None = None) -> dict[str, Any]:
+def run_select_query(
+    db: Session, query: str, *, row_limit: int | None = None
+) -> dict[str, Any]:
     validated = validate_select_query(query)
     limit = _safe_limit(row_limit)
     columns, rows, truncated = _run_wrapped_select(db, validated, row_limit=limit)
@@ -130,7 +140,9 @@ def _verify_local_password(db: Session, *, principal_id: str, password: str) -> 
 def issue_confirmation_token(*, principal_id: str) -> str:
     issued = int(_now().timestamp())
     payload = f"{principal_id}:{issued}"
-    signature = hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+    signature = hmac.new(
+        _secret().encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
     return f"{payload}:{signature}"
 
 
@@ -145,14 +157,18 @@ def validate_confirmation_token(*, principal_id: str, token: str | None) -> bool
     if token_principal != principal_id:
         return False
     payload = f"{token_principal}:{issued_at_raw}"
-    expected = hmac.new(_secret().encode(), payload.encode(), hashlib.sha256).hexdigest()
+    expected = hmac.new(
+        _secret().encode(), payload.encode(), hashlib.sha256
+    ).hexdigest()
     if not hmac.compare_digest(signature, expected):
         return False
     try:
         issued_at = int(issued_at_raw)
     except ValueError:
         return False
-    return (_now() - datetime.fromtimestamp(issued_at, tz=UTC)).total_seconds() <= CONFIRM_TTL_SECONDS
+    return (
+        _now() - datetime.fromtimestamp(issued_at, tz=UTC)
+    ).total_seconds() <= CONFIRM_TTL_SECONDS
 
 
 def confirm_access(db: Session, *, principal_id: str, password: str) -> str:
@@ -236,11 +252,16 @@ def _table_stats(db: Session) -> list[dict[str, Any]]:
         )
         return [dict(row) for row in result.mappings().all()]
 
-    tables = db.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"))
+    tables = db.execute(
+        text(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        )
+    )
     rows: list[dict[str, Any]] = []
     for item in tables.mappings().all():
         table_name = str(item.get("name"))
-        count_result = db.execute(text(f"SELECT COUNT(*) AS c FROM {_quote_identifier(table_name)}"))  # noqa: S608
+        table = Table(table_name, MetaData())
+        count_result = db.execute(select(func.count()).select_from(table))
         row_count = int(count_result.scalar() or 0)
         rows.append(
             {
@@ -318,6 +339,6 @@ def query_result_to_csv(result_payload: dict[str, Any]) -> str:
     writer = csv.writer(output)
     columns = [str(col) for col in (result_payload.get("columns") or [])]
     writer.writerow(columns)
-    for row in (result_payload.get("rows") or []):
+    for row in result_payload.get("rows") or []:
         writer.writerow([row.get(col) for col in columns])
     return output.getvalue()

@@ -9,6 +9,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
 def _read_first_line(path: str) -> str | None:
     try:
         with open(path, encoding="utf-8") as handle:

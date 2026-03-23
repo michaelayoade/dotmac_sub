@@ -8,6 +8,7 @@ from app.services import settings_spec
 
 logger = logging.getLogger(__name__)
 
+
 def _format_number(prefix: str | None, padding: int | None, value: int) -> str:
     prefix_value = prefix or ""
     pad = max(int(padding or 0), 0)

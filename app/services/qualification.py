@@ -43,9 +43,12 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 def _extract_polygon(geometry: dict) -> list[tuple[float, float]]:
     if not isinstance(geometry, dict):
-        raise HTTPException(status_code=400, detail="geometry_geojson must be an object")
+        raise HTTPException(
+            status_code=400, detail="geometry_geojson must be an object"
+        )
     geom_type = geometry.get("type")
     coords = geometry.get("coordinates")
     if geom_type == "Polygon":
@@ -54,7 +57,9 @@ def _extract_polygon(geometry: dict) -> list[tuple[float, float]]:
         ring = coords[0]
     elif geom_type == "MultiPolygon":
         if not coords or not isinstance(coords, list):
-            raise HTTPException(status_code=400, detail="Invalid MultiPolygon coordinates")
+            raise HTTPException(
+                status_code=400, detail="Invalid MultiPolygon coordinates"
+            )
         ring = coords[0][0]
     else:
         raise HTTPException(status_code=400, detail="Geometry type must be Polygon")
@@ -80,7 +85,9 @@ def _polygon_bounds(points: list[tuple[float, float]]) -> dict:
     }
 
 
-def _point_in_polygon(lon: float, lat: float, points: list[tuple[float, float]]) -> bool:
+def _point_in_polygon(
+    lon: float, lat: float, points: list[tuple[float, float]]
+) -> bool:
     inside = False
     j = len(points) - 1
     for i in range(len(points)):
@@ -201,7 +208,9 @@ class ServiceQualifications(ListResponseMixin):
     def get(db: Session, qualification_id: str):
         qualification = db.get(ServiceQualification, qualification_id)
         if not qualification:
-            raise HTTPException(status_code=404, detail="Service qualification not found")
+            raise HTTPException(
+                status_code=404, detail="Service qualification not found"
+            )
         return qualification
 
     @staticmethod
@@ -221,12 +230,17 @@ class ServiceQualifications(ListResponseMixin):
                 == validate_enum(status, QualificationStatus, "status")
             )
         if coverage_area_id:
-            query = query.filter(ServiceQualification.coverage_area_id == coverage_area_id)
+            query = query.filter(
+                ServiceQualification.coverage_area_id == coverage_area_id
+            )
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": ServiceQualification.created_at, "status": ServiceQualification.status},
+            {
+                "created_at": ServiceQualification.created_at,
+                "status": ServiceQualification.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -239,7 +253,9 @@ class ServiceQualifications(ListResponseMixin):
             if not address:
                 raise HTTPException(status_code=404, detail="Address not found")
             if address.latitude is None or address.longitude is None:
-                raise HTTPException(status_code=400, detail="Address missing coordinates")
+                raise HTTPException(
+                    status_code=400, detail="Address missing coordinates"
+                )
             lat = address.latitude
             lon = address.longitude
         if lat is None or lon is None:
@@ -248,7 +264,9 @@ class ServiceQualifications(ListResponseMixin):
         query = db.query(CoverageArea).filter(CoverageArea.is_active.is_(True))
         if payload.zone_key:
             query = query.filter(CoverageArea.zone_key == payload.zone_key)
-        candidates = query.order_by(CoverageArea.priority.desc(), CoverageArea.created_at.desc()).all()
+        candidates = query.order_by(
+            CoverageArea.priority.desc(), CoverageArea.created_at.desc()
+        ).all()
 
         matches: list[CoverageArea] = []
         for candidate in candidates:
@@ -289,16 +307,17 @@ class ServiceQualifications(ListResponseMixin):
                 reasons.append("capacity_unavailable")
             max_distance_km = constraints.get("max_distance_km")
             if max_distance_km is not None:
-                centroid_lon, centroid_lat = _centroid(_extract_polygon(area.geometry_geojson))
+                centroid_lon, centroid_lat = _centroid(
+                    _extract_polygon(area.geometry_geojson)
+                )
                 distance = _haversine_km(lon, lat, centroid_lon, centroid_lat)
                 if distance > float(max_distance_km):
                     reasons.append("distance_exceeds")
 
             if not reasons:
                 status = QualificationStatus.eligible
-            elif (
-                area.buildout_status != BuildoutStatus.ready
-                and all(reason.startswith("buildout_status") for reason in reasons)
+            elif area.buildout_status != BuildoutStatus.ready and all(
+                reason.startswith("buildout_status") for reason in reasons
             ):
                 status = QualificationStatus.needs_buildout
 
@@ -330,7 +349,9 @@ class ServiceQualifications(ListResponseMixin):
                 return qualification
             existing_request = (
                 db.query(BuildoutRequest)
-                .filter(BuildoutRequest.coverage_area_id == qualification.coverage_area_id)
+                .filter(
+                    BuildoutRequest.coverage_area_id == qualification.coverage_area_id
+                )
                 .filter(BuildoutRequest.address_id == qualification.address_id)
                 .filter(
                     BuildoutRequest.status.in_(
@@ -405,7 +426,10 @@ class BuildoutRequests(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": BuildoutRequest.created_at, "status": BuildoutRequest.status},
+            {
+                "created_at": BuildoutRequest.created_at,
+                "status": BuildoutRequest.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -488,7 +512,10 @@ class BuildoutProjects(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": BuildoutProject.created_at, "status": BuildoutProject.status},
+            {
+                "created_at": BuildoutProject.created_at,
+                "status": BuildoutProject.status,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -558,7 +585,10 @@ class BuildoutMilestones(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": BuildoutMilestone.created_at, "order_index": BuildoutMilestone.order_index},
+            {
+                "created_at": BuildoutMilestone.created_at,
+                "order_index": BuildoutMilestone.order_index,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

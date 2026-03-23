@@ -17,6 +17,7 @@ from app.services.common import parse_date_filter as _parse_date
 
 logger = logging.getLogger(__name__)
 
+
 def _format_size(size: int) -> str:
     if size >= 1024 * 1024 * 1024:
         return f"{size / (1024 * 1024 * 1024):.2f} GB"
@@ -93,7 +94,11 @@ def build_cache_page_state(
         accounts = db.scalars(
             select(Subscriber)
             .where(Subscriber.id.in_(account_ids))
-            .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc(), Subscriber.email.asc())
+            .order_by(
+                Subscriber.first_name.asc(),
+                Subscriber.last_name.asc(),
+                Subscriber.email.asc(),
+            )
         ).all()
 
     return {
@@ -127,7 +132,9 @@ def clear_cache_from_form(
         from_dt = _parse_date(date_from)
         to_dt_base = _parse_date(date_to)
         to_dt = (to_dt_base + timedelta(days=1)) if to_dt_base else None
-        return billing_invoice_pdf_service.clear_cache(db, date_from=from_dt, date_to=to_dt)
+        return billing_invoice_pdf_service.clear_cache(
+            db, date_from=from_dt, date_to=to_dt
+        )
     if selected_mode == "account":
         if not account_id:
             return {"invalidated": 0, "bytes_cleared": 0}

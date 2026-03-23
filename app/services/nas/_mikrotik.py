@@ -1,4 +1,5 @@
 """MikroTik vendor-specific helpers for NAS device management."""
+
 import logging
 import re
 import secrets
@@ -87,7 +88,10 @@ def _mikrotik_rest_auth(
     """Build MikroTik REST auth context."""
 
     if device.vendor != NasVendor.mikrotik:
-        raise HTTPException(status_code=400, detail="Vendor-specific API status is only available for MikroTik devices.")
+        raise HTTPException(
+            status_code=400,
+            detail="Vendor-specific API status is only available for MikroTik devices.",
+        )
     if not device.api_url:
         raise HTTPException(status_code=400, detail="API URL is not configured.")
 
@@ -100,7 +104,9 @@ def _mikrotik_rest_auth(
         password = cast(str, decrypt_credential(device.api_password))
         auth = (username, password)
     else:
-        raise HTTPException(status_code=400, detail="API credentials are not configured.")
+        raise HTTPException(
+            status_code=400, detail="API credentials are not configured."
+        )
 
     base_url = device.api_url.rstrip("/")
     verify_tls = device.api_verify_tls if device.api_verify_tls is not None else False
@@ -109,13 +115,18 @@ def _mikrotik_rest_auth(
 
 def _mikrotik_routeros_auth(device: NasDevice) -> tuple[str, int, str, str]:
     if device.vendor != NasVendor.mikrotik:
-        raise HTTPException(status_code=400, detail="Vendor-specific API status is only available for MikroTik devices.")
+        raise HTTPException(
+            status_code=400,
+            detail="Vendor-specific API status is only available for MikroTik devices.",
+        )
 
     host = device.management_ip or device.ip_address
     if not host:
         raise HTTPException(status_code=400, detail="Management IP is not configured.")
     if not (device.api_username and device.api_password):
-        raise HTTPException(status_code=400, detail="API credentials are not configured.")
+        raise HTTPException(
+            status_code=400, detail="API credentials are not configured."
+        )
     username = cast(str, device.api_username)
     password = cast(str, decrypt_credential(device.api_password))
     return host, _mikrotik_api_port(device), username, password
@@ -159,7 +170,11 @@ def _select_primary_mac(interfaces: object) -> str | None:
         if not mac:
             continue
         name = str(item.get("name") or "").strip().lower()
-        default_name = str(item.get("default-name") or item.get("default_name") or "").strip().lower()
+        default_name = (
+            str(item.get("default-name") or item.get("default_name") or "")
+            .strip()
+            .lower()
+        )
         disabled = str(item.get("disabled") or "").lower() == "true"
         running = str(item.get("running") or "").lower() == "true"
 
@@ -228,28 +243,54 @@ def _mikrotik_status_from_rest(device: NasDevice) -> dict[str, object]:
                 break
     if version is None and isinstance(resource_data, dict):
         version = resource_data.get("version")
-    uptime_raw = resource_data.get("uptime") if isinstance(resource_data, dict) else None
+    uptime_raw = (
+        resource_data.get("uptime") if isinstance(resource_data, dict) else None
+    )
     uptime_seconds = _parse_routeros_uptime_to_seconds(uptime_raw)
     serial_number = None
     if isinstance(routerboard_data, dict):
-        serial_number = routerboard_data.get("serial-number") or routerboard_data.get("serial_number")
+        serial_number = routerboard_data.get("serial-number") or routerboard_data.get(
+            "serial_number"
+        )
     primary_mac = _select_primary_mac(interfaces_raw)
 
     return {
-        "platform": resource_data.get("platform") if isinstance(resource_data, dict) else None,
-        "board_name": resource_data.get("board-name") if isinstance(resource_data, dict) else None,
+        "platform": resource_data.get("platform")
+        if isinstance(resource_data, dict)
+        else None,
+        "board_name": resource_data.get("board-name")
+        if isinstance(resource_data, dict)
+        else None,
         "routeros_version": version,
         "serial_number": serial_number,
         "primary_mac": primary_mac,
-        "architecture_name": resource_data.get("architecture-name") if isinstance(resource_data, dict) else None,
-        "cpu_model": resource_data.get("cpu") if isinstance(resource_data, dict) else None,
-        "cpu_count": resource_data.get("cpu-count") if isinstance(resource_data, dict) else None,
-        "cpu_frequency": resource_data.get("cpu-frequency") if isinstance(resource_data, dict) else None,
-        "total_hdd_space": resource_data.get("total-hdd-space") if isinstance(resource_data, dict) else None,
-        "free_hdd_space": resource_data.get("free-hdd-space") if isinstance(resource_data, dict) else None,
-        "cpu_usage": resource_data.get("cpu-load") if isinstance(resource_data, dict) else None,
-        "total_memory": resource_data.get("total-memory") if isinstance(resource_data, dict) else None,
-        "free_memory": resource_data.get("free-memory") if isinstance(resource_data, dict) else None,
+        "architecture_name": resource_data.get("architecture-name")
+        if isinstance(resource_data, dict)
+        else None,
+        "cpu_model": resource_data.get("cpu")
+        if isinstance(resource_data, dict)
+        else None,
+        "cpu_count": resource_data.get("cpu-count")
+        if isinstance(resource_data, dict)
+        else None,
+        "cpu_frequency": resource_data.get("cpu-frequency")
+        if isinstance(resource_data, dict)
+        else None,
+        "total_hdd_space": resource_data.get("total-hdd-space")
+        if isinstance(resource_data, dict)
+        else None,
+        "free_hdd_space": resource_data.get("free-hdd-space")
+        if isinstance(resource_data, dict)
+        else None,
+        "cpu_usage": resource_data.get("cpu-load")
+        if isinstance(resource_data, dict)
+        else None,
+        "total_memory": resource_data.get("total-memory")
+        if isinstance(resource_data, dict)
+        else None,
+        "free_memory": resource_data.get("free-memory")
+        if isinstance(resource_data, dict)
+        else None,
         "uptime": uptime_raw,
         "uptime_seconds": uptime_seconds,
         "ipv6_status": (
@@ -262,7 +303,9 @@ def _mikrotik_status_from_rest(device: NasDevice) -> dict[str, object]:
     }
 
 
-def _mikrotik_routeros_query(device: NasDevice) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+def _mikrotik_routeros_query(
+    device: NasDevice,
+) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
     from routeros_api import RouterOsApiPool
 
     host, port, username, password = _mikrotik_routeros_auth(device)
@@ -280,7 +323,9 @@ def _mikrotik_routeros_query(device: NasDevice) -> tuple[dict[str, object], list
     try:
         api = pool.get_api()
         raw_resource = cast(Any, api.get_resource("/system/resource")).get()
-        resource = raw_resource[0] if isinstance(raw_resource, list) and raw_resource else {}
+        resource = (
+            raw_resource[0] if isinstance(raw_resource, list) and raw_resource else {}
+        )
         raw_interfaces = cast(Any, api.get_resource("/interface")).get()
         interfaces = _as_dict_list(raw_interfaces)
         try:
@@ -297,7 +342,9 @@ def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
     resource_data, interfaces, _ppp_active = _mikrotik_routeros_query(device)
     uptime_raw = resource_data.get("uptime")
     uptime_seconds = _parse_routeros_uptime_to_seconds(uptime_raw)
-    serial_number = resource_data.get("serial-number") or resource_data.get("serial_number")
+    serial_number = resource_data.get("serial-number") or resource_data.get(
+        "serial_number"
+    )
     if not serial_number:
         try:
             from routeros_api import RouterOsApiPool
@@ -318,7 +365,9 @@ def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
                 api = pool.get_api()
                 rb = cast(Any, api.get_resource("/system/routerboard")).get()
                 if isinstance(rb, list) and rb and isinstance(rb[0], dict):
-                    serial_number = rb[0].get("serial-number") or rb[0].get("serial_number")
+                    serial_number = rb[0].get("serial-number") or rb[0].get(
+                        "serial_number"
+                    )
             finally:
                 pool.disconnect()
         except Exception:
@@ -363,7 +412,9 @@ def _record_mikrotik_auth_attempt(
             action=ProvisioningAction.get_user_info,
             command_sent=f"mikrotik_auth:{method}",
             response_received="connected" if success else None,
-            status=ProvisioningLogStatus.success if success else ProvisioningLogStatus.failed,
+            status=ProvisioningLogStatus.success
+            if success
+            else ProvisioningLogStatus.failed,
             error_message=error,
             execution_time_ms=execution_time_ms,
             triggered_by="system",
@@ -377,7 +428,9 @@ def _record_mikrotik_auth_attempt(
         session.close()
 
 
-def get_mikrotik_api_status(device: NasDevice, *, db: Session | None = None) -> dict[str, object]:
+def get_mikrotik_api_status(
+    device: NasDevice, *, db: Session | None = None
+) -> dict[str, object]:
     """Test MikroTik API and return basic runtime status fields."""
     rest_error: Exception | None = None
     started = time.perf_counter()
@@ -433,7 +486,9 @@ def get_mikrotik_api_status(device: NasDevice, *, db: Session | None = None) -> 
         ) from api_exc
 
 
-def get_mikrotik_api_telemetry(device: NasDevice, *, db: Session | None = None) -> dict[str, object]:
+def get_mikrotik_api_telemetry(
+    device: NasDevice, *, db: Session | None = None
+) -> dict[str, object]:
     """Fetch MikroTik telemetry with REST-first, RouterOS-API fallback."""
     status = get_mikrotik_api_status(device, db=db)
     source = str(status.get("api_source") or "")
@@ -456,7 +511,9 @@ def get_mikrotik_api_telemetry(device: NasDevice, *, db: Session | None = None) 
 
     if source != "rest":
         try:
-            _resource, routeros_interfaces, routeros_ppp_active = _mikrotik_routeros_query(device)
+            _resource, routeros_interfaces, routeros_ppp_active = (
+                _mikrotik_routeros_query(device)
+            )
         except Exception:
             interfaces: list[dict[str, object]] = []
             ppp_active: list[dict[str, object]] = []
@@ -548,21 +605,57 @@ def refresh_mikrotik_status_for_device(db: Session, *, device_id: str) -> str:
     device = NasDevices.get(db, device_id)
     status = get_mikrotik_api_status(device, db=db)
     tags = device.tags
-    tags = merge_single_tag(tags, "mikrotik_status_platform:", str(status.get("platform") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_board_name:", str(status.get("board_name") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_routeros_version:", str(status.get("routeros_version") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_serial_number:", str(status.get("serial_number") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_primary_mac:", str(status.get("primary_mac") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_architecture_name:", str(status.get("architecture_name") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_cpu_model:", str(status.get("cpu_model") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_cpu_count:", str(status.get("cpu_count") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_cpu_frequency:", str(status.get("cpu_frequency") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_total_hdd_space:", str(status.get("total_hdd_space") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_free_hdd_space:", str(status.get("free_hdd_space") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_cpu_usage:", str(status.get("cpu_usage") or "-"))
-    tags = merge_single_tag(tags, "mikrotik_status_ipv6_status:", str(status.get("ipv6_status") or "-"))
+    tags = merge_single_tag(
+        tags, "mikrotik_status_platform:", str(status.get("platform") or "-")
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_board_name:", str(status.get("board_name") or "-")
+    )
+    tags = merge_single_tag(
+        tags,
+        "mikrotik_status_routeros_version:",
+        str(status.get("routeros_version") or "-"),
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_serial_number:", str(status.get("serial_number") or "-")
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_primary_mac:", str(status.get("primary_mac") or "-")
+    )
+    tags = merge_single_tag(
+        tags,
+        "mikrotik_status_architecture_name:",
+        str(status.get("architecture_name") or "-"),
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_cpu_model:", str(status.get("cpu_model") or "-")
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_cpu_count:", str(status.get("cpu_count") or "-")
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_cpu_frequency:", str(status.get("cpu_frequency") or "-")
+    )
+    tags = merge_single_tag(
+        tags,
+        "mikrotik_status_total_hdd_space:",
+        str(status.get("total_hdd_space") or "-"),
+    )
+    tags = merge_single_tag(
+        tags,
+        "mikrotik_status_free_hdd_space:",
+        str(status.get("free_hdd_space") or "-"),
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_cpu_usage:", str(status.get("cpu_usage") or "-")
+    )
+    tags = merge_single_tag(
+        tags, "mikrotik_status_ipv6_status:", str(status.get("ipv6_status") or "-")
+    )
     last_check = status.get("last_status_check")
-    tags = merge_single_tag(tags, "mikrotik_status_last_check:", str(last_check) if last_check else "-")
+    tags = merge_single_tag(
+        tags, "mikrotik_status_last_check:", str(last_check) if last_check else "-"
+    )
     NasDevices.update(
         db,
         device_id,
@@ -599,7 +692,10 @@ def generate_mikrotik_bootstrap_script_for_device(
     device = NasDevices.get(db, device_id)
     host = (device.management_ip or device.ip_address or "").strip()
     if not host:
-        raise HTTPException(status_code=400, detail="Management IP is not configured for this NAS device.")
+        raise HTTPException(
+            status_code=400,
+            detail="Management IP is not configured for this NAS device.",
+        )
 
     username = (username or "dotmacapi").strip().lower() or "dotmacapi"
     api_port = max(1, min(int(api_port or 8728), 65535))
@@ -629,7 +725,7 @@ def generate_mikrotik_bootstrap_script_for_device(
         f"# Generated: {datetime.now(UTC).isoformat()}",
         "",
         f':local existing [/user find where name="{username}"]',
-        ':if ([:len $existing] = 0) do={',
+        ":if ([:len $existing] = 0) do={",
         f'    /user add name="{username}" password="{password}" group=read comment="dotmac-api"',
         "} else={",
         f'    /user set $existing password="{password}" group=read',

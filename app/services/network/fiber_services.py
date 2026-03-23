@@ -58,7 +58,9 @@ class FiberStrands(CRUDManager[FiberStrand]):
             if not segment:
                 raise HTTPException(status_code=404, detail="Fiber segment not found")
         data = payload.model_dump(exclude={"segment_id"})
-        if segment and (not payload.cable_name or payload.cable_name.startswith("segment-")):
+        if segment and (
+            not payload.cable_name or payload.cable_name.startswith("segment-")
+        ):
             data["cable_name"] = segment.name
         fields_set = payload.model_fields_set
         if "status" not in fields_set:
@@ -66,7 +68,9 @@ class FiberStrands(CRUDManager[FiberStrand]):
                 db, SettingDomain.network, "default_fiber_strand_status"
             )
             if default_status:
-                data["status"] = validate_enum(default_status, FiberStrandStatus, "status")
+                data["status"] = validate_enum(
+                    default_status, FiberStrandStatus, "status"
+                )
         strand = FiberStrand(**data)
         db.add(strand)
         db.commit()
@@ -111,7 +115,10 @@ class FiberStrands(CRUDManager[FiberStrand]):
             query,
             order_by,
             order_dir,
-            {"created_at": FiberStrand.created_at, "strand_number": FiberStrand.strand_number},
+            {
+                "created_at": FiberStrand.created_at,
+                "strand_number": FiberStrand.strand_number,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -147,7 +154,10 @@ class FiberSpliceClosures(CRUDManager[FiberSpliceClosure]):
             query,
             order_by,
             order_dir,
-            {"created_at": FiberSpliceClosure.created_at, "name": FiberSpliceClosure.name},
+            {
+                "created_at": FiberSpliceClosure.created_at,
+                "name": FiberSpliceClosure.name,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -179,7 +189,9 @@ class FiberSplices(CRUDManager[FiberSplice]):
         tray_id: str | None = None,
     ):
         query = db.query(FiberSplice)
-        query = apply_optional_equals(query, {FiberSplice.tray_id: coerce_uuid(tray_id)})
+        query = apply_optional_equals(
+            query, {FiberSplice.tray_id: coerce_uuid(tray_id)}
+        )
         query = apply_ordering(
             query,
             order_by,
@@ -201,7 +213,9 @@ class FiberSplices(CRUDManager[FiberSplice]):
         return super().delete(db, splice_id)
 
     @staticmethod
-    def trace_response(db: Session, strand_id: str, max_hops: int = 25) -> dict[str, object]:
+    def trace_response(
+        db: Session, strand_id: str, max_hops: int = 25
+    ) -> dict[str, object]:
         """Build a minimal fiber path response for a strand."""
         try:
             strand_uuid = UUID(strand_id)
@@ -249,12 +263,17 @@ class FiberSpliceTrays(CRUDManager[FiberSpliceTray]):
         closure_id: str | None = None,
     ):
         query = db.query(FiberSpliceTray)
-        query = apply_optional_equals(query, {FiberSpliceTray.closure_id: coerce_uuid(closure_id)})
+        query = apply_optional_equals(
+            query, {FiberSpliceTray.closure_id: coerce_uuid(closure_id)}
+        )
         query = apply_ordering(
             query,
             order_by,
             order_dir,
-            {"created_at": FiberSpliceTray.created_at, "tray_number": FiberSpliceTray.tray_number},
+            {
+                "created_at": FiberSpliceTray.created_at,
+                "tray_number": FiberSpliceTray.tray_number,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

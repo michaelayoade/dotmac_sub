@@ -87,15 +87,24 @@ def get_tr069_server_profiles(
                 core.Tr069ServerProfile(
                     profile_id=entry.profile_id,
                     name=detail.get("profile-name", entry.name),
-                    acs_url=detail.get("url", detail.get("acs url", detail.get("acs-url", ""))),
-                    acs_username=detail.get("user name", detail.get("acs username", "")),
+                    acs_url=detail.get(
+                        "url", detail.get("acs url", detail.get("acs-url", ""))
+                    ),
+                    acs_username=detail.get(
+                        "user name", detail.get("acs username", "")
+                    ),
                     inform_interval=int(detail.get("inform interval", "0") or "0"),
-                    binding_count=int(detail.get("binding times", detail.get("bindnumber", "0")) or "0"),
+                    binding_count=int(
+                        detail.get("binding times", detail.get("bindnumber", "0"))
+                        or "0"
+                    ),
                 )
             )
         return True, f"Found {len(profiles)} TR-069 server profile(s)", profiles
     except Exception as exc:
-        logger.error("Error reading TR-069 server profiles from OLT %s: %s", olt.name, exc)
+        logger.error(
+            "Error reading TR-069 server profiles from OLT %s: %s", olt.name, exc
+        )
         return False, f"Error: {exc}", []
     finally:
         transport.close()

@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 
 logger = logging.getLogger(__name__)
 
+
 class EventType(enum.Enum):
     """All event types supported by the event system (~40 events).
 
@@ -105,7 +106,7 @@ class EventType(enum.Enum):
     customer_login = "customer.login"
     customer_logout = "customer.logout"
     customer_ticket_created = "customer.ticket_created"
-    customer_password_changed = "customer.password_changed"
+    customer_password_changed = "customer.password_changed"  # noqa: S105 - event name, not a password
 
     # Reseller events (3)
     reseller_login = "reseller.login"
@@ -130,6 +131,7 @@ class EventType(enum.Enum):
     # Custom event type for extensibility
     custom = "custom"
 
+
 # Mapping from EventType to LifecycleEventType for subscription events
 SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_activated: "activate",
@@ -139,6 +141,7 @@ SUBSCRIPTION_LIFECYCLE_MAP = {
     EventType.subscription_upgraded: "upgrade",
     EventType.subscription_downgraded: "downgrade",
 }
+
 
 @dataclass
 class Event:
@@ -163,6 +166,7 @@ class Event:
 
     def to_dict(self) -> dict[str, Any]:
         """Convert event to dictionary for JSON serialization."""
+
         def _serialize(value: Any) -> Any:
             if isinstance(value, UUID):
                 return str(value)
@@ -181,10 +185,16 @@ class Event:
             "payload": _serialize(self.payload),
             "context": {
                 "actor": self.actor,
-                "subscriber_id": str(self.subscriber_id) if self.subscriber_id else None,
+                "subscriber_id": str(self.subscriber_id)
+                if self.subscriber_id
+                else None,
                 "account_id": str(self.account_id) if self.account_id else None,
-                "subscription_id": str(self.subscription_id) if self.subscription_id else None,
+                "subscription_id": str(self.subscription_id)
+                if self.subscription_id
+                else None,
                 "invoice_id": str(self.invoice_id) if self.invoice_id else None,
-                "service_order_id": str(self.service_order_id) if self.service_order_id else None,
+                "service_order_id": str(self.service_order_id)
+                if self.service_order_id
+                else None,
             },
         }

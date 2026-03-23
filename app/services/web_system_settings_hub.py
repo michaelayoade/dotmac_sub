@@ -20,16 +20,56 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "slate",
         "description": "Core system configuration and security",
         "links": [
-            {"name": "Preferences & Security", "url": "/admin/system/config/preferences", "description": "Landing page, 2FA, portal title"},
-            {"name": "Branding & Assets", "url": "/admin/system/branding", "description": "Sidebar logos, dark logo, favicon"},
-            {"name": "Company Information", "url": "/admin/system/company-info", "description": "Company name, address, bank details"},
-            {"name": "Data Retention", "url": "/admin/system/config/data-retention", "description": "Log rotation and data cleanup policies"},
-            {"name": "Email / SMTP", "url": "/admin/system/email", "description": "Outbound email transport settings"},
-            {"name": "Users & Roles", "url": "/admin/system/users", "description": "Admin accounts, roles, permissions"},
-            {"name": "API Keys", "url": "/admin/system/api-keys", "description": "Manage API access tokens"},
-            {"name": "Secrets (OpenBao)", "url": "/admin/system/secrets", "description": "Encrypted secrets vault — API keys, passwords, tokens"},
-            {"name": "Webhooks", "url": "/admin/system/webhooks", "description": "Event delivery endpoints"},
-            {"name": "System Information", "url": "/admin/system/about", "description": "Version, environment, diagnostics"},
+            {
+                "name": "Preferences & Security",
+                "url": "/admin/system/config/preferences",
+                "description": "Landing page, 2FA, portal title",
+            },
+            {
+                "name": "Branding & Assets",
+                "url": "/admin/system/branding",
+                "description": "Sidebar logos, dark logo, favicon",
+            },
+            {
+                "name": "Company Information",
+                "url": "/admin/system/company-info",
+                "description": "Company name, address, bank details",
+            },
+            {
+                "name": "Data Retention",
+                "url": "/admin/system/config/data-retention",
+                "description": "Log rotation and data cleanup policies",
+            },
+            {
+                "name": "Email / SMTP",
+                "url": "/admin/system/email",
+                "description": "Outbound email transport settings",
+            },
+            {
+                "name": "Users & Roles",
+                "url": "/admin/system/users",
+                "description": "Admin accounts, roles, permissions",
+            },
+            {
+                "name": "API Keys",
+                "url": "/admin/system/api-keys",
+                "description": "Manage API access tokens",
+            },
+            {
+                "name": "Secrets (OpenBao)",
+                "url": "/admin/system/secrets",
+                "description": "Encrypted secrets vault — API keys, passwords, tokens",
+            },
+            {
+                "name": "Webhooks",
+                "url": "/admin/system/webhooks",
+                "description": "Event delivery endpoints",
+            },
+            {
+                "name": "System Information",
+                "url": "/admin/system/about",
+                "description": "Version, environment, diagnostics",
+            },
         ],
     },
     {
@@ -39,19 +79,71 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "emerald",
         "description": "Tenant-wide billing configuration, payment rails, and finance setup",
         "links": [
-            {"name": "Billing Settings", "url": "/admin/system/config/billing", "description": "Billing day, periods, invoice numbering"},
-            {"name": "Finance Automation", "url": "/admin/system/config/finance-automation", "description": "Auto-invoicing, blocking rules"},
-            {"name": "Payment Methods", "url": "/admin/system/config/payment-methods", "description": "Available customer payment methods and entry points"},
-            {"name": "Payment Providers", "url": "/admin/billing/payment-providers", "description": "Gateway integrations and failover"},
-            {"name": "Payment Channels", "url": "/admin/billing/payment-channels", "description": "Customer-facing payment options and defaults"},
-            {"name": "Collection Accounts", "url": "/admin/billing/collection-accounts", "description": "Bank and cash accounts where funds settle"},
-            {"name": "Channel Mappings", "url": "/admin/billing/payment-channel-accounts", "description": "Map channels to settlement accounts"},
-            {"name": "Tax Rates", "url": "/admin/billing/tax-rates", "description": "Operational tax rate records used by billing"},
-            {"name": "Tax Configuration", "url": "/admin/system/config/tax", "description": "Tax configuration overview and policy"},
-            {"name": "Billing Reminders", "url": "/admin/system/config/reminders", "description": "Multi-wave reminder schedule"},
-            {"name": "Billing Notifications", "url": "/admin/system/config/billing-notifications", "description": "Notification copy and recurring/prepaid billing events"},
-            {"name": "Plan Change Rules", "url": "/admin/system/config/plan-change", "description": "Refund policy, upgrade/downgrade fees"},
-            {"name": "Ledger", "url": "/admin/billing/ledger", "description": "Finance ledger entries and exports"},
+            {
+                "name": "Billing Settings",
+                "url": "/admin/system/config/billing",
+                "description": "Billing day, periods, invoice numbering",
+            },
+            {
+                "name": "Finance Automation",
+                "url": "/admin/system/config/finance-automation",
+                "description": "Auto-invoicing, blocking rules",
+            },
+            {
+                "name": "Payment Methods",
+                "url": "/admin/system/config/payment-methods",
+                "description": "Available customer payment methods and entry points",
+            },
+            {
+                "name": "Payment Providers",
+                "url": "/admin/billing/payment-providers",
+                "description": "Gateway integrations and failover",
+            },
+            {
+                "name": "Payment Channels",
+                "url": "/admin/billing/payment-channels",
+                "description": "Customer-facing payment options and defaults",
+            },
+            {
+                "name": "Collection Accounts",
+                "url": "/admin/billing/collection-accounts",
+                "description": "Bank and cash accounts where funds settle",
+            },
+            {
+                "name": "Channel Mappings",
+                "url": "/admin/billing/payment-channel-accounts",
+                "description": "Map channels to settlement accounts",
+            },
+            {
+                "name": "Tax Rates",
+                "url": "/admin/billing/tax-rates",
+                "description": "Operational tax rate records used by billing",
+            },
+            {
+                "name": "Tax Configuration",
+                "url": "/admin/system/config/tax",
+                "description": "Tax configuration overview and policy",
+            },
+            {
+                "name": "Billing Reminders",
+                "url": "/admin/system/config/reminders",
+                "description": "Multi-wave reminder schedule",
+            },
+            {
+                "name": "Billing Notifications",
+                "url": "/admin/system/config/billing-notifications",
+                "description": "Notification copy and recurring/prepaid billing events",
+            },
+            {
+                "name": "Plan Change Rules",
+                "url": "/admin/system/config/plan-change",
+                "description": "Refund policy, upgrade/downgrade fees",
+            },
+            {
+                "name": "Ledger",
+                "url": "/admin/billing/ledger",
+                "description": "Finance ledger entries and exports",
+            },
         ],
     },
     {
@@ -61,12 +153,36 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "blue",
         "description": "RADIUS, CPE, monitoring, and IP management",
         "links": [
-            {"name": "RADIUS Configuration", "url": "/admin/system/config/radius", "description": "Reject IPs, MAC binding, debug"},
-            {"name": "CPE Management", "url": "/admin/system/config/cpe", "description": "QoS, blocking, DHCP defaults"},
-            {"name": "Monitoring", "url": "/admin/system/config/monitoring", "description": "Vendors, device types, alert groups"},
-            {"name": "NAS Types", "url": "/admin/system/config/nas-types", "description": "Supported NAS vendor types"},
-            {"name": "IPv6 Settings", "url": "/admin/system/config/ipv6", "description": "Auto-assignment, dual-stack"},
-            {"name": "Fair Usage Policy", "url": "/admin/system/config/fup", "description": "FUP thresholds and reset schedules"},
+            {
+                "name": "RADIUS Configuration",
+                "url": "/admin/system/config/radius",
+                "description": "Reject IPs, MAC binding, debug",
+            },
+            {
+                "name": "CPE Management",
+                "url": "/admin/system/config/cpe",
+                "description": "QoS, blocking, DHCP defaults",
+            },
+            {
+                "name": "Monitoring",
+                "url": "/admin/system/config/monitoring",
+                "description": "Vendors, device types, alert groups",
+            },
+            {
+                "name": "NAS Types",
+                "url": "/admin/system/config/nas-types",
+                "description": "Supported NAS vendor types",
+            },
+            {
+                "name": "IPv6 Settings",
+                "url": "/admin/system/config/ipv6",
+                "description": "Auto-assignment, dual-stack",
+            },
+            {
+                "name": "Fair Usage Policy",
+                "url": "/admin/system/config/fup",
+                "description": "FUP thresholds and reset schedules",
+            },
         ],
     },
     {
@@ -76,9 +192,21 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "rose",
         "description": "Email, SMS, and notification templates",
         "links": [
-            {"name": "Notification Templates", "url": "/admin/system/config/templates", "description": "Email and SMS templates with variables"},
-            {"name": "Billing Notifications", "url": "/admin/system/config/billing-notifications", "description": "Prepaid and recurring notification waves"},
-            {"name": "Email / SMTP", "url": "/admin/system/email", "description": "SMTP transport and rate limits"},
+            {
+                "name": "Notification Templates",
+                "url": "/admin/system/config/templates",
+                "description": "Email and SMS templates with variables",
+            },
+            {
+                "name": "Billing Notifications",
+                "url": "/admin/system/config/billing-notifications",
+                "description": "Prepaid and recurring notification waves",
+            },
+            {
+                "name": "Email / SMTP",
+                "url": "/admin/system/email",
+                "description": "SMTP transport and rate limits",
+            },
         ],
     },
     {
@@ -88,9 +216,21 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "violet",
         "description": "Subscriber defaults, portal, catalog options",
         "links": [
-            {"name": "Subscriber Settings", "url": "/admin/system/config/subscribers", "description": "Login format, welcome message, defaults"},
-            {"name": "Customer Portal", "url": "/admin/system/config/portal", "description": "Portal branding, menu, field permissions"},
-            {"name": "Catalog Settings", "url": "/admin/catalog/settings", "description": "Region zones, SLA profiles, usage"},
+            {
+                "name": "Subscriber Settings",
+                "url": "/admin/system/config/subscribers",
+                "description": "Login format, welcome message, defaults",
+            },
+            {
+                "name": "Customer Portal",
+                "url": "/admin/system/config/portal",
+                "description": "Portal branding, menu, field permissions",
+            },
+            {
+                "name": "Catalog Settings",
+                "url": "/admin/catalog/settings",
+                "description": "Region zones, SLA profiles, usage",
+            },
         ],
     },
     {
@@ -100,9 +240,21 @@ SETTINGS_CATEGORIES: list[dict] = [
         "color": "amber",
         "description": "Audit trails, delivery logs, and system events",
         "links": [
-            {"name": "Log Center", "url": "/admin/system/logs", "description": "All log viewers in one place"},
-            {"name": "Audit Log", "url": "/admin/system/audit", "description": "Admin operations audit trail"},
-            {"name": "Scheduler", "url": "/admin/system/scheduler", "description": "Background task logs and schedule"},
+            {
+                "name": "Log Center",
+                "url": "/admin/system/logs",
+                "description": "All log viewers in one place",
+            },
+            {
+                "name": "Audit Log",
+                "url": "/admin/system/audit",
+                "description": "Admin operations audit trail",
+            },
+            {
+                "name": "Scheduler",
+                "url": "/admin/system/scheduler",
+                "description": "Background task logs and schedule",
+            },
         ],
     },
 ]

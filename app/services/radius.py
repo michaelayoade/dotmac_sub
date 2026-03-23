@@ -7,7 +7,18 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import HTTPException
-from sqlalchemy import create_engine, or_, text
+from sqlalchemy import (
+    Column,
+    Integer,
+    MetaData,
+    String,
+    Table,
+    create_engine,
+    delete,
+    insert,
+    or_,
+    select,
+)
 from sqlalchemy.orm import Session
 
 from app.metrics import observe_job
@@ -178,13 +189,27 @@ def _latest_sync_eligible_subscription_for_subscriber(
 def _read_external_radius_credentials(config: dict) -> list[dict[str, str]]:
     radcheck = config["radcheck_table"]
     engine = create_engine(config["db_url"])
-    query = text(
-        f"""
-        SELECT username, attribute, op, value
-        FROM {radcheck}
-        WHERE lower(attribute) IN ('cleartext-password', 'crypt-password')
-        ORDER BY username
-        """  # noqa: S608 — radcheck is from admin settings, not user input
+    radcheck_table = _external_radius_table(
+        radcheck,
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    query = (
+        select(
+            radcheck_table.c.username,
+            radcheck_table.c.attribute,
+            radcheck_table.c.op,
+            radcheck_table.c.value,
+        )
+        .where(
+            or_(
+                radcheck_table.c.attribute.ilike("cleartext-password"),
+                radcheck_table.c.attribute.ilike("crypt-password"),
+            )
+        )
+        .order_by(radcheck_table.c.username)
     )
     selected: dict[str, dict[str, str]] = {}
     priority = {"cleartext-password": 2, "crypt-password": 1}
@@ -195,7 +220,11 @@ def _read_external_radius_credentials(config: dict) -> list[dict[str, str]]:
                 continue
             attribute = str(row.attribute or "").strip()
             current = selected.get(username)
-            current_priority = priority.get(str(current.get("attribute") or "").lower(), 0) if current else 0
+            current_priority = (
+                priority.get(str(current.get("attribute") or "").lower(), 0)
+                if current
+                else 0
+            )
             new_priority = priority.get(attribute.lower(), 0)
             if current is None or new_priority > current_priority:
                 selected[username] = {
@@ -217,7 +246,13 @@ def _mask_external_radius_value(attribute: str, value: str) -> str:
     return text
 
 
-def _read_external_radius_user_records(config: dict, username: str) -> dict[str, list[dict[str, str]]]:
+def _external_radius_table(name: str, *columns: Column[Any]) -> Table:
+    return Table(name, MetaData(), *columns)
+
+
+def _read_external_radius_user_records(
+    config: dict, username: str
+) -> dict[str, list[dict[str, str]]]:
     username_text = str(username or "").strip()
     if not username_text:
         return {"radcheck": [], "radreply": [], "radusergroup": []}
@@ -226,6 +261,26 @@ def _read_external_radius_user_records(config: dict, username: str) -> dict[str,
     radreply = config["radreply_table"]
     radusergroup = config["radusergroup_table"]
     engine = create_engine(config["db_url"])
+    radcheck_table = _external_radius_table(
+        radcheck,
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radreply_table = _external_radius_table(
+        radreply,
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radusergroup_table = _external_radius_table(
+        radusergroup,
+        Column("username", String),
+        Column("groupname", String),
+        Column("priority", Integer),
+    )
     result: dict[str, list[dict[str, str]]] = {
         "radcheck": [],
         "radreply": [],
@@ -234,10 +289,14 @@ def _read_external_radius_user_records(config: dict, username: str) -> dict[str,
 
     with engine.begin() as conn:
         for row in conn.execute(
-            text(
-                f"SELECT username, attribute, op, value FROM {radcheck} WHERE username = :u ORDER BY attribute, value"
-            ),  # noqa: S608
-            {"u": username_text},
+            select(
+                radcheck_table.c.username,
+                radcheck_table.c.attribute,
+                radcheck_table.c.op,
+                radcheck_table.c.value,
+            )
+            .where(radcheck_table.c.username == username_text)
+            .order_by(radcheck_table.c.attribute, radcheck_table.c.value)
         ):
             result["radcheck"].append(
                 {
@@ -251,10 +310,14 @@ def _read_external_radius_user_records(config: dict, username: str) -> dict[str,
                 }
             )
         for row in conn.execute(
-            text(
-                f"SELECT username, attribute, op, value FROM {radreply} WHERE username = :u ORDER BY attribute, value"
-            ),  # noqa: S608
-            {"u": username_text},
+            select(
+                radreply_table.c.username,
+                radreply_table.c.attribute,
+                radreply_table.c.op,
+                radreply_table.c.value,
+            )
+            .where(radreply_table.c.username == username_text)
+            .order_by(radreply_table.c.attribute, radreply_table.c.value)
         ):
             result["radreply"].append(
                 {
@@ -265,22 +328,29 @@ def _read_external_radius_user_records(config: dict, username: str) -> dict[str,
                 }
             )
         for row in conn.execute(
-            text(
-                f"SELECT username, groupname, priority FROM {radusergroup} WHERE username = :u ORDER BY priority, groupname"
-            ),  # noqa: S608
-            {"u": username_text},
+            select(
+                radusergroup_table.c.username,
+                radusergroup_table.c.groupname,
+                radusergroup_table.c.priority,
+            )
+            .where(radusergroup_table.c.username == username_text)
+            .order_by(radusergroup_table.c.priority, radusergroup_table.c.groupname)
         ):
             result["radusergroup"].append(
                 {
                     "username": str(row.username or "").strip(),
                     "groupname": str(row.groupname or "").strip(),
-                    "priority": str(row.priority if row.priority is not None else "").strip(),
+                    "priority": str(
+                        row.priority if row.priority is not None else ""
+                    ).strip(),
                 }
             )
     return result
 
 
-def read_external_radius_rows_for_username(db: Session, username: str) -> list[dict[str, Any]]:
+def read_external_radius_rows_for_username(
+    db: Session, username: str
+) -> list[dict[str, Any]]:
     username_text = str(username or "").strip()
     if not username_text:
         return []
@@ -380,20 +450,22 @@ def import_access_credentials_from_external_radius(
         if linked_subscriber and linked_subscriber.is_active:
             subscriptions_by_login.setdefault(login, []).append(linked_subscriber)
 
-    subscribers = (
-        db.query(Subscriber)
-        .filter(Subscriber.is_active.is_(True))
-        .all()
-    )
+    subscribers = db.query(Subscriber).filter(Subscriber.is_active.is_(True)).all()
     subscribers_by_number: dict[str, list[Subscriber]] = {}
     subscribers_by_account_number: dict[str, list[Subscriber]] = {}
     for subscriber_record in subscribers:
-        subscriber_number = str(subscriber_record.subscriber_number or "").strip().lower()
+        subscriber_number = (
+            str(subscriber_record.subscriber_number or "").strip().lower()
+        )
         if subscriber_number:
-            subscribers_by_number.setdefault(subscriber_number, []).append(subscriber_record)
+            subscribers_by_number.setdefault(subscriber_number, []).append(
+                subscriber_record
+            )
         account_number = str(subscriber_record.account_number or "").strip().lower()
         if account_number:
-            subscribers_by_account_number.setdefault(account_number, []).append(subscriber_record)
+            subscribers_by_account_number.setdefault(account_number, []).append(
+                subscriber_record
+            )
 
     created = 0
     updated = 0
@@ -496,11 +568,12 @@ def import_access_credentials_from_external_radius(
 
         if match_source in {"subscriber_number", "account_number"}:
             matched_subscription: Subscription | None = (
-                _latest_sync_eligible_subscription_for_subscriber(
-                db, subscriber.id
+                _latest_sync_eligible_subscription_for_subscriber(db, subscriber.id)
             )
-            )
-            if matched_subscription and not str(matched_subscription.login or "").strip():
+            if (
+                matched_subscription
+                and not str(matched_subscription.login or "").strip()
+            ):
                 matched_subscription.login = username
 
     db.commit()
@@ -634,7 +707,10 @@ class RadiusClients(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"created_at": RadiusClient.created_at, "client_ip": RadiusClient.client_ip},
+            {
+                "created_at": RadiusClient.created_at,
+                "client_ip": RadiusClient.client_ip,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 
@@ -663,7 +739,9 @@ def _hash_secret(value: str) -> str:
 
 
 def _radius_client_ip_for_nas(nas_device: NasDevice) -> str:
-    return (nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address or "").strip()
+    return (
+        nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address or ""
+    ).strip()
 
 
 def _active_radius_servers(db: Session) -> list[RadiusServer]:
@@ -708,7 +786,9 @@ def _container_safe_external_db_url(value: str | None) -> str | None:
     if password:
         auth = f"{auth}:{password}"
     netloc = f"{auth}@{host}:{port}" if auth else f"{host}:{port}"
-    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+    return urlunsplit(
+        (parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment)
+    )
 
 
 def _bundled_external_db_config() -> dict | None:
@@ -723,11 +803,15 @@ def _bundled_external_db_config() -> dict | None:
         from app.services.secrets import get_env_or_secret
 
         password = get_env_or_secret(
-            "RADIUS_DB_PASS", "radius", "db_password",
+            "RADIUS_DB_PASS",
+            "radius",
+            "db_password",
             default="l2f3clS-Ws9WgTXcsW3HoznBnEq3n7N-",
         ).strip()
         if host and database and username and password:
-            db_url = f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+            db_url = (
+                f"postgresql+psycopg://{username}:{password}@{host}:5432/{database}"
+            )
     if not db_url:
         return None
     return {
@@ -826,7 +910,9 @@ def ensure_radius_clients_for_nas(db: Session, nas_device: NasDevice) -> int:
     return changed
 
 
-def ensure_radius_users_for_subscription(db: Session, subscription: Subscription) -> int:
+def ensure_radius_users_for_subscription(
+    db: Session, subscription: Subscription
+) -> int:
     """Ensure internal RadiusUser rows exist for active credentials on a subscription."""
     if subscription.status != SubscriptionStatus.active:
         return 0
@@ -835,7 +921,9 @@ def ensure_radius_users_for_subscription(db: Session, subscription: Subscription
         db.query(AccessCredential)
         .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
         .filter(AccessCredential.is_active.is_(True))
-        .order_by(AccessCredential.updated_at.desc(), AccessCredential.created_at.desc())
+        .order_by(
+            AccessCredential.updated_at.desc(), AccessCredential.created_at.desc()
+        )
         .all()
     )
     if not credentials:
@@ -918,7 +1006,11 @@ def reconcile_subscription_connectivity(
     )
     external_configs = _active_external_sync_configs(db)
     if external_configs:
-        nas_devices = [nas_device] if subscription.provisioning_nas_device_id and nas_device else []
+        nas_devices = (
+            [nas_device]
+            if subscription.provisioning_nas_device_id and nas_device
+            else []
+        )
         for config in external_configs:
             if nas_devices:
                 external_nas_synced += _external_sync_nas(config, nas_devices).get(
@@ -1017,6 +1109,26 @@ def _external_sync_users(
     default_reply_op = config["default_reply_op"]
 
     engine = create_engine(config["db_url"])
+    radcheck_table = _external_radius_table(
+        radcheck,
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radreply_table = _external_radius_table(
+        radreply,
+        Column("username", String),
+        Column("attribute", String),
+        Column("op", String),
+        Column("value", String),
+    )
+    radusergroup_table = _external_radius_table(
+        radusergroup,
+        Column("username", String),
+        Column("groupname", String),
+        Column("priority", Integer),
+    )
     created = 0
     profile_cache: dict[str, RadiusProfile | None] = {}
     with engine.begin() as conn:
@@ -1027,11 +1139,17 @@ def _external_sync_users(
             if not subscription:
                 continue
             username = credential.username
-            conn.execute(text(f"DELETE FROM {radcheck} WHERE username = :u"), {"u": username})  # noqa: S608
-            conn.execute(text(f"DELETE FROM {radreply} WHERE username = :u"), {"u": username})  # noqa: S608
+            conn.execute(
+                delete(radcheck_table).where(radcheck_table.c.username == username)
+            )
+            conn.execute(
+                delete(radreply_table).where(radreply_table.c.username == username)
+            )
             if use_group:
                 conn.execute(
-                    text(f"DELETE FROM {radusergroup} WHERE username = :u"), {"u": username}  # noqa: S608
+                    delete(radusergroup_table).where(
+                        radusergroup_table.c.username == username
+                    )
                 )
             password_row = _external_password_row(
                 credential,
@@ -1040,13 +1158,12 @@ def _external_sync_users(
             )
             if password_row:
                 conn.execute(
-                    text(f"INSERT INTO {radcheck} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
-                    {
-                        "u": username,
-                        "attr": password_row[0],
-                        "op": password_row[1],
-                        "val": password_row[2],
-                    },
+                    insert(radcheck_table).values(
+                        username=username,
+                        attribute=password_row[0],
+                        op=password_row[1],
+                        value=password_row[2],
+                    )
                 )
 
             # Resolve profile from credential or subscription
@@ -1060,13 +1177,18 @@ def _external_sync_users(
 
             if use_group and profile:
                 conn.execute(
-                    text(f"INSERT INTO {radusergroup} (username, groupname, priority) VALUES (:u, :g, :p)"),  # noqa: S608
-                    {"u": username, "g": profile.name, "p": group_priority},
+                    insert(radusergroup_table).values(
+                        username=username,
+                        groupname=profile.name,
+                        priority=group_priority,
+                    )
                 )
 
             # Build connection-type-aware RADIUS reply attributes
             reply_attrs = build_radius_reply_attributes(
-                db, subscription, profile=profile,
+                db,
+                subscription,
+                profile=profile,
             )
             seen: set[str] = set()
             for attr_dict in reply_attrs:
@@ -1075,13 +1197,12 @@ def _external_sync_users(
                     continue
                 seen.add(attr_key)
                 conn.execute(
-                    text(f"INSERT INTO {radreply} (username, attribute, op, value) VALUES (:u, :attr, :op, :val)"),  # noqa: S608
-                    {
-                        "u": username,
-                        "attr": attr_dict["attribute"],
-                        "op": attr_dict.get("op") or default_reply_op,
-                        "val": attr_dict["value"],
-                    },
+                    insert(radreply_table).values(
+                        username=username,
+                        attribute=attr_dict["attribute"],
+                        op=attr_dict.get("op") or default_reply_op,
+                        value=attr_dict["value"],
+                    )
                 )
             created += 1
     return {"external_users_synced": created}
@@ -1093,6 +1214,14 @@ def _external_sync_nas(
 ) -> dict[str, int]:
     nas_table = config["nas_table"]
     engine = create_engine(config["db_url"])
+    nas_sql_table = _external_radius_table(
+        nas_table,
+        Column("nasname", String),
+        Column("shortname", String),
+        Column("type", String),
+        Column("secret", String),
+        Column("description", String),
+    )
     created = 0
     with engine.begin() as conn:
         for device in nas_devices:
@@ -1105,18 +1234,18 @@ def _external_sync_nas(
             if not secret:
                 continue
             conn.execute(
-                text(f"DELETE FROM {nas_table} WHERE nasname = :ip"),  # noqa: S608
-                {"ip": client_ip},
+                delete(nas_sql_table).where(nas_sql_table.c.nasname == client_ip)
             )
             conn.execute(
-                text(f"INSERT INTO {nas_table} (nasname, shortname, type, secret, description) VALUES (:ip, :name, :type, :secret, :desc)"),  # noqa: S608
-                {
-                    "ip": client_ip,
-                    "name": (device.name or "")[:32],
-                    "type": device.vendor.value if hasattr(device.vendor, "value") else "other",
-                    "secret": secret,
-                    "desc": device.description,
-                },
+                insert(nas_sql_table).values(
+                    nasname=client_ip,
+                    shortname=(device.name or "")[:32],
+                    type=device.vendor.value
+                    if hasattr(device.vendor, "value")
+                    else "other",
+                    secret=secret,
+                    description=device.description,
+                )
             )
             created += 1
     return {"external_nas_synced": created}
@@ -1165,7 +1294,9 @@ class RadiusSyncJobs(ListResponseMixin):
         if payload.connector_config_id:
             config = db.get(ConnectorConfig, payload.connector_config_id)
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         data = payload.model_dump()
         fields_set = payload.model_fields_set
         if "sync_users" not in fields_set:
@@ -1231,7 +1362,9 @@ class RadiusSyncJobs(ListResponseMixin):
         if "connector_config_id" in data and data["connector_config_id"]:
             config = db.get(ConnectorConfig, data["connector_config_id"])
             if not config:
-                raise HTTPException(status_code=404, detail="Connector config not found")
+                raise HTTPException(
+                    status_code=404, detail="Connector config not found"
+                )
         for key, value in data.items():
             setattr(job, key, value)
         db.commit()
@@ -1274,9 +1407,7 @@ class RadiusSyncJobs(ListResponseMixin):
             external_config = _external_db_config(db, job)
             if job.sync_nas_clients:
                 nas_devices = (
-                    db.query(NasDevice)
-                    .filter(NasDevice.is_active.is_(True))
-                    .all()
+                    db.query(NasDevice).filter(NasDevice.is_active.is_(True)).all()
                 )
                 for device in nas_devices:
                     client_ip = _radius_client_ip_for_nas(device)
@@ -1359,7 +1490,9 @@ class RadiusSyncJobs(ListResponseMixin):
                 db.commit()
                 details["credentials_scanned"] = len(credentials)
                 if external_config:
-                    details.update(_external_sync_users(db, external_config, credentials))
+                    details.update(
+                        _external_sync_users(db, external_config, credentials)
+                    )
         except Exception as exc:
             db.rollback()
             status = RadiusSyncStatus.failed
@@ -1376,7 +1509,9 @@ class RadiusSyncJobs(ListResponseMixin):
             run.details = details
             job.last_run_at = finished_at
             db.commit()
-            observe_job("radius_sync", status.value, (finished_at - started_at).total_seconds())
+            observe_job(
+                "radius_sync", status.value, (finished_at - started_at).total_seconds()
+            )
             db.refresh(run)
         return run
 
@@ -1531,19 +1666,34 @@ def remove_external_radius_credentials(db: Session, account_id) -> int:
         radusergroup = config.get("radusergroup_table", "radusergroup")
         try:
             engine = create_engine(config["db_url"])
+            radcheck_table = _external_radius_table(
+                radcheck,
+                Column("username", String),
+            )
+            radreply_table = _external_radius_table(
+                radreply,
+                Column("username", String),
+            )
+            radusergroup_table = _external_radius_table(
+                radusergroup,
+                Column("username", String),
+            )
             with engine.begin() as conn:
                 for credential in credentials:
                     conn.execute(
-                        text(f"DELETE FROM {radcheck} WHERE username = :u"),  # noqa: S608
-                        {"u": credential.username},
+                        delete(radcheck_table).where(
+                            radcheck_table.c.username == credential.username
+                        )
                     )
                     conn.execute(
-                        text(f"DELETE FROM {radreply} WHERE username = :u"),  # noqa: S608
-                        {"u": credential.username},
+                        delete(radreply_table).where(
+                            radreply_table.c.username == credential.username
+                        )
                     )
                     conn.execute(
-                        text(f"DELETE FROM {radusergroup} WHERE username = :u"),  # noqa: S608
-                        {"u": credential.username},
+                        delete(radusergroup_table).where(
+                            radusergroup_table.c.username == credential.username
+                        )
                     )
                     removed += 1
             logger.info(

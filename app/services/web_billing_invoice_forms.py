@@ -29,11 +29,17 @@ def _build_invoice_form_config(
         currency = str(invoice.currency).upper()
     return {
         "accountId": str(invoice.account_id) if invoice and invoice.account_id else "",
-        "invoiceNumber": invoice.invoice_number if invoice and invoice.invoice_number else "",
+        "invoiceNumber": invoice.invoice_number
+        if invoice and invoice.invoice_number
+        else "",
         "status": invoice.status.value if invoice and invoice.status else "draft",
         "currency": currency or "NGN",
-        "issuedAt": invoice.issued_at.strftime("%Y-%m-%d") if invoice and invoice.issued_at else "",
-        "dueAt": invoice.due_at.strftime("%Y-%m-%d") if invoice and invoice.due_at else "",
+        "issuedAt": invoice.issued_at.strftime("%Y-%m-%d")
+        if invoice and invoice.issued_at
+        else "",
+        "dueAt": invoice.due_at.strftime("%Y-%m-%d")
+        if invoice and invoice.due_at
+        else "",
         "memo": invoice.memo if invoice and invoice.memo else "",
         "taxRates": tax_rates_json or [],
         "lineItems": existing_line_items or [],
@@ -63,7 +69,9 @@ def new_form_state(db: Session, *, account_id: str | None) -> dict[str, object]:
         invoice_config["accountId"] = str(selected_account.id)
 
     payment_due_days = resolve_payment_due_days(db)
-    default_currency = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
+    default_currency = settings_spec.resolve_value(
+        db, SettingDomain.billing, "default_currency"
+    )
     if default_currency is None:
         default_currency = "NGN"
     today = datetime.now(UTC).date()
@@ -74,10 +82,14 @@ def new_form_state(db: Session, *, account_id: str | None) -> dict[str, object]:
         "tax_rates_json": tax_rates_json,
         "invoice_config": invoice_config,
         "default_issue_date": today.strftime("%Y-%m-%d"),
-        "default_due_date": (today + timedelta(days=payment_due_days)).strftime("%Y-%m-%d"),
+        "default_due_date": (today + timedelta(days=payment_due_days)).strftime(
+            "%Y-%m-%d"
+        ),
         "default_currency": default_currency,
         "account_locked": bool(selected_account),
-        "account_label": web_billing_customers_service.account_label(selected_account) if selected_account else None,
+        "account_label": web_billing_customers_service.account_label(selected_account)
+        if selected_account
+        else None,
         "account_number": selected_account.account_number if selected_account else None,
         "selected_account_id": str(selected_account.id) if selected_account else None,
         "account_x_model": "accountId",
@@ -107,7 +119,9 @@ def edit_form_state(db: Session, *, invoice_id: str) -> dict[str, object] | None
         {"id": str(rate.id), "name": rate.name, "rate": float(rate.rate or 0)}
         for rate in tax_rates or []
     ]
-    invoice_config = _build_invoice_form_config(invoice, tax_rates_json, existing_line_items, 30)
+    invoice_config = _build_invoice_form_config(
+        invoice, tax_rates_json, existing_line_items, 30
+    )
     return {
         "invoice": invoice,
         "accounts": None,
@@ -119,6 +133,8 @@ def edit_form_state(db: Session, *, invoice_id: str) -> dict[str, object] | None
         "account_locked": True,
         "account_label": web_billing_customers_service.account_label(selected_account),
         "account_number": selected_account.account_number if selected_account else None,
-        "selected_account_id": str(selected_account.id) if selected_account else str(invoice.account_id),
+        "selected_account_id": str(selected_account.id)
+        if selected_account
+        else str(invoice.account_id),
         "account_x_model": "accountId",
     }

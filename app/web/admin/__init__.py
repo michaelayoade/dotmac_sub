@@ -280,12 +280,16 @@ router.include_router(
 )
 router.include_router(
     integrations_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("integrations"))],
+    dependencies=[
+        Depends(module_manager_service.require_module_enabled("integrations"))
+    ],
 )
 router.include_router(resellers_router)
 router.include_router(
     notifications_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("notifications"))],
+    dependencies=[
+        Depends(module_manager_service.require_module_enabled("notifications"))
+    ],
 )
 router.include_router(support_tickets_router)
 router.include_router(
@@ -324,6 +328,8 @@ router.include_router(configuration_router, prefix="/system")
 router.include_router(admin_hub_router, prefix="/system")
 router.include_router(
     provisioning_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("provisioning"))],
+    dependencies=[
+        Depends(module_manager_service.require_module_enabled("provisioning"))
+    ],
 )
 __all__ = ["router"]

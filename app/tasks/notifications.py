@@ -57,10 +57,7 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 ),
             )
         )
-        .filter(
-            (Notification.send_at.is_(None))
-            | (Notification.send_at <= now)
-        )
+        .filter((Notification.send_at.is_(None)) | (Notification.send_at <= now))
         .order_by(Notification.created_at.asc())
         .limit(batch_size)
         .all()
@@ -104,10 +101,14 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 )
                 success = bool(result.get("ok"))
                 if not success:
-                    notification.last_error = str(result.get("response") or "whatsapp_send_failed")
+                    notification.last_error = str(
+                        result.get("response") or "whatsapp_send_failed"
+                    )
             else:
                 success = False
-                notification.last_error = f"unsupported_channel:{notification.channel.value}"
+                notification.last_error = (
+                    f"unsupported_channel:{notification.channel.value}"
+                )
         except Exception as exc:
             success = False
             notification.last_error = str(exc)
@@ -124,7 +125,9 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 failed += 1
                 logger.warning(
                     "Notification %s permanently failed after %d retries: %s",
-                    notification.id, notification.retry_count, notification.last_error,
+                    notification.id,
+                    notification.retry_count,
+                    notification.last_error,
                 )
             else:
                 # Schedule for retry — set back to failed, will be picked up next run
@@ -132,7 +135,9 @@ def _deliver_notification_queue_stats(db, batch_size: int = 50) -> dict[str, int
                 retried += 1
                 logger.info(
                     "Notification %s retry %d/%d scheduled",
-                    notification.id, notification.retry_count, MAX_RETRIES,
+                    notification.id,
+                    notification.retry_count,
+                    MAX_RETRIES,
                 )
             if not notification.last_error:
                 notification.last_error = "send_failed"
@@ -153,7 +158,9 @@ def deliver_notification_queue() -> dict[str, int]:
         result = _deliver_notification_queue_stats(session)
         logger.info(
             "Notification queue processed: delivered=%d, retried=%d, failed=%d",
-            result["delivered"], result["retried"], result["failed"],
+            result["delivered"],
+            result["retried"],
+            result["failed"],
         )
         return result
     except Exception:

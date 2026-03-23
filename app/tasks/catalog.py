@@ -46,7 +46,10 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
             from app.models.domain_settings import SettingDomain
             from app.services.settings_spec import resolve_value
 
-            days_before = int(resolve_value(session, SettingDomain.billing, "expiry_reminder_days") or 7)
+            days_before = int(
+                resolve_value(session, SettingDomain.billing, "expiry_reminder_days")
+                or 7
+            )
 
         logger.info("Starting send_expiry_reminders (days_before=%d)", days_before)
         now = datetime.now(UTC)
@@ -76,7 +79,9 @@ def send_expiry_reminders(days_before: int | None = None) -> dict:
                     EventType.subscription_expiring,
                     {
                         "days_remaining": str(days_left),
-                        "end_date": sub.end_at.strftime("%b %d, %Y") if sub.end_at else "",
+                        "end_date": sub.end_at.strftime("%b %d, %Y")
+                        if sub.end_at
+                        else "",
                         "plan_name": sub.offer.name if sub.offer else "your plan",
                     },
                     subscription_id=sub.id,

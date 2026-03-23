@@ -60,9 +60,14 @@ def test_connection(olt: OLTDevice) -> tuple[bool, str, list[str]]:
             capabilities = [str(c) for c in mgr.server_capabilities]
             logger.info(
                 "NETCONF connection to OLT %s successful: %d capabilities",
-                olt.name, len(capabilities),
+                olt.name,
+                len(capabilities),
             )
-            return True, f"NETCONF connected — {len(capabilities)} capabilities", capabilities
+            return (
+                True,
+                f"NETCONF connected — {len(capabilities)} capabilities",
+                capabilities,
+            )
     except SSHError as exc:
         return False, f"NETCONF SSH error: {exc}", []
     except ValueError as exc:

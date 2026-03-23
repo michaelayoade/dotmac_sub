@@ -28,13 +28,22 @@ def _normalize_portal_notification(item: object) -> SimpleNamespace:
     status_value = getattr(getattr(notification, "status", None), "value", "pending")
     if status_value == NotificationStatus.delivered.value:
         status_value = "sent"
-    elif status_value in {NotificationStatus.queued.value, NotificationStatus.sending.value}:
+    elif status_value in {
+        NotificationStatus.queued.value,
+        NotificationStatus.sending.value,
+    }:
         status_value = "pending"
     return SimpleNamespace(
-        channel=getattr(getattr(notification, "channel", None), "value", getattr(notification, "channel", "")),
+        channel=getattr(
+            getattr(notification, "channel", None),
+            "value",
+            getattr(notification, "channel", ""),
+        ),
         created_at=getattr(notification, "created_at", None),
         entity_type=getattr(template, "code", None) or "notification",
-        message=getattr(notification, "body", None) or getattr(notification, "subject", "") or "",
+        message=getattr(notification, "body", None)
+        or getattr(notification, "subject", "")
+        or "",
         status=SimpleNamespace(value=status_value),
     )
 
@@ -46,8 +55,12 @@ def get_notifications_page(
     page: int,
     per_page: int,
 ) -> dict[str, object]:
-    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get("subscriber_id")
-    subscriber = db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    subscriber_id = customer.get("subscriber_id") or customer.get("session", {}).get(
+        "subscriber_id"
+    )
+    subscriber = (
+        db.get(Subscriber, coerce_uuid(subscriber_id)) if subscriber_id else None
+    )
 
     recipients: list[str] = []
     if subscriber:

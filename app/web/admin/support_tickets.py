@@ -44,7 +44,14 @@ _ALLOWED_ATTACHMENT_TYPES = {
     "application/pdf",
 }
 _MAX_ATTACHMENT_BYTES = 5 * 1024 * 1024
-_DEFAULT_VISIBLE_COLUMNS = ["number", "ticket_type", "priority", "status", "customer", "created_at"]
+_DEFAULT_VISIBLE_COLUMNS = [
+    "number",
+    "ticket_type",
+    "priority",
+    "status",
+    "customer",
+    "created_at",
+]
 _TICKET_COLUMNS = [
     {"key": "number", "label": "Ticket ID"},
     {"key": "ticket_type", "label": "Ticket Type"},
@@ -137,7 +144,9 @@ def _upload_ticket_attachments(
                 continue
             if len(payload) > _MAX_ATTACHMENT_BYTES:
                 raise ValueError(f"{filename}: max file size is 5 MB")
-            content_type = (attachment.content_type or "application/octet-stream").lower()
+            content_type = (
+                attachment.content_type or "application/octet-stream"
+            ).lower()
             if content_type not in _ALLOWED_ATTACHMENT_TYPES:
                 raise ValueError(f"{filename}: unsupported file type")
 
@@ -175,32 +184,66 @@ def _upload_ticket_attachments(
         raise
 
 
-def _build_form_context(request: Request, db: Session, *, ticket: Ticket | None = None) -> dict:
+def _build_form_context(
+    request: Request, db: Session, *, ticket: Ticket | None = None
+) -> dict:
     people = support_service.list_people(db)
     teams = _service_team_options()
 
     current_assignees: list[str] = []
     if ticket and ticket.assignees:
-        current_assignees = [str(row.person_id) for row in ticket.assignees if row.person_id]
+        current_assignees = [
+            str(row.person_id) for row in ticket.assignees if row.person_id
+        ]
 
     prefill = {
         "title": ticket.title if ticket else request.query_params.get("title", ""),
-        "description": ticket.description if ticket else request.query_params.get("description", ""),
-        "subscriber_id": str(ticket.subscriber_id) if ticket and ticket.subscriber_id else request.query_params.get("subscriber_id", ""),
-        "customer_account_id": str(ticket.customer_account_id) if ticket and ticket.customer_account_id else request.query_params.get("customer_account_id", ""),
-        "customer_person_id": str(ticket.customer_person_id) if ticket and ticket.customer_person_id else request.query_params.get("customer_person_id", ""),
+        "description": ticket.description
+        if ticket
+        else request.query_params.get("description", ""),
+        "subscriber_id": str(ticket.subscriber_id)
+        if ticket and ticket.subscriber_id
+        else request.query_params.get("subscriber_id", ""),
+        "customer_account_id": str(ticket.customer_account_id)
+        if ticket and ticket.customer_account_id
+        else request.query_params.get("customer_account_id", ""),
+        "customer_person_id": str(ticket.customer_person_id)
+        if ticket and ticket.customer_person_id
+        else request.query_params.get("customer_person_id", ""),
         "region": ticket.region if ticket else request.query_params.get("region", ""),
-        "ticket_type": ticket.ticket_type if ticket else request.query_params.get("ticket_type", ""),
-        "priority": ticket.priority.value if ticket else request.query_params.get("priority", TicketPriority.normal.value),
-        "channel": ticket.channel.value if ticket else request.query_params.get("channel", TicketChannel.web.value),
-        "status": ticket.status.value if ticket else request.query_params.get("status", TicketStatus.open.value),
-        "due_at": ticket.due_at.strftime("%Y-%m-%dT%H:%M") if ticket and ticket.due_at else "",
-        "tags": ",".join(ticket.tags or []) if ticket else request.query_params.get("tags", ""),
-        "related_outage_ticket_id": request.query_params.get("related_outage_ticket_id", ""),
-        "technician_person_id": str(ticket.technician_person_id) if ticket and ticket.technician_person_id else "",
-        "ticket_manager_person_id": str(ticket.ticket_manager_person_id) if ticket and ticket.ticket_manager_person_id else "",
-        "site_coordinator_person_id": str(ticket.site_coordinator_person_id) if ticket and ticket.site_coordinator_person_id else "",
-        "service_team_id": str(ticket.service_team_id) if ticket and ticket.service_team_id else "",
+        "ticket_type": ticket.ticket_type
+        if ticket
+        else request.query_params.get("ticket_type", ""),
+        "priority": ticket.priority.value
+        if ticket
+        else request.query_params.get("priority", TicketPriority.normal.value),
+        "channel": ticket.channel.value
+        if ticket
+        else request.query_params.get("channel", TicketChannel.web.value),
+        "status": ticket.status.value
+        if ticket
+        else request.query_params.get("status", TicketStatus.open.value),
+        "due_at": ticket.due_at.strftime("%Y-%m-%dT%H:%M")
+        if ticket and ticket.due_at
+        else "",
+        "tags": ",".join(ticket.tags or [])
+        if ticket
+        else request.query_params.get("tags", ""),
+        "related_outage_ticket_id": request.query_params.get(
+            "related_outage_ticket_id", ""
+        ),
+        "technician_person_id": str(ticket.technician_person_id)
+        if ticket and ticket.technician_person_id
+        else "",
+        "ticket_manager_person_id": str(ticket.ticket_manager_person_id)
+        if ticket and ticket.ticket_manager_person_id
+        else "",
+        "site_coordinator_person_id": str(ticket.site_coordinator_person_id)
+        if ticket and ticket.site_coordinator_person_id
+        else "",
+        "service_team_id": str(ticket.service_team_id)
+        if ticket and ticket.service_team_id
+        else "",
         "assignee_person_ids": current_assignees,
     }
 
@@ -216,7 +259,11 @@ def _build_form_context(request: Request, db: Session, *, ticket: Ticket | None 
     }
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:read"))])
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
 def tickets_list(
     request: Request,
     search: str | None = Query(default=None),
@@ -249,13 +296,21 @@ def tickets_list(
         offset=offset,
     )
 
-    raw_columns = request.cookies.get("ticket_columns", ",".join(_DEFAULT_VISIBLE_COLUMNS)).split(",")
-    visible_columns = [col for col in raw_columns if any(col == item["key"] for item in _TICKET_COLUMNS)]
+    raw_columns = request.cookies.get(
+        "ticket_columns", ",".join(_DEFAULT_VISIBLE_COLUMNS)
+    ).split(",")
+    visible_columns = [
+        col
+        for col in raw_columns
+        if any(col == item["key"] for item in _TICKET_COLUMNS)
+    ]
     if not visible_columns:
         visible_columns = list(_DEFAULT_VISIBLE_COLUMNS)
 
     context = _ctx(request, db)
-    people_lookup = {item["id"]: item["label"] for item in support_service.list_people(db)}
+    people_lookup = {
+        item["id"]: item["label"] for item in support_service.list_people(db)
+    }
     context.update(
         {
             "tickets": tickets,
@@ -287,7 +342,11 @@ def tickets_list(
     return templates.TemplateResponse("admin/support/tickets/index.html", context)
 
 
-@router.get("/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:create"))])
+@router.get(
+    "/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:create"))],
+)
 def ticket_new(request: Request, db: Session = Depends(get_db)):
     context = _ctx(request, db)
     context.update(_build_form_context(request, db))
@@ -295,8 +354,14 @@ def ticket_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/support/tickets/new.html", context)
 
 
-@router.get("/{ticket_lookup}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:update"))])
-def ticket_edit_page(request: Request, ticket_lookup: str, db: Session = Depends(get_db)):
+@router.get(
+    "/{ticket_lookup}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def ticket_edit_page(
+    request: Request, ticket_lookup: str, db: Session = Depends(get_db)
+):
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
     context = _ctx(request, db)
     context.update(_build_form_context(request, db, ticket=ticket))
@@ -304,7 +369,11 @@ def ticket_edit_page(request: Request, ticket_lookup: str, db: Session = Depends
     return templates.TemplateResponse("admin/support/tickets/new.html", context)
 
 
-@router.post("", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:create"))])
+@router.post(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:create"))],
+)
 def ticket_create(
     request: Request,
     title: str = Form(...),
@@ -349,11 +418,17 @@ def ticket_create(
         status=status,
         due_at=_parse_dt_or_none(due_at),
         tags=tag_list,
-        assignee_person_ids=[uid for uid in (_parse_uuid_or_none(item) for item in assignee_person_ids) if uid],
+        assignee_person_ids=[
+            uid
+            for uid in (_parse_uuid_or_none(item) for item in assignee_person_ids)
+            if uid
+        ],
         related_outage_ticket_id=_parse_uuid_or_none(related_outage_ticket_id),
     )
 
-    ticket = support_service.tickets.create(db, payload, actor_id=actor_id, request=request)
+    ticket = support_service.tickets.create(
+        db, payload, actor_id=actor_id, request=request
+    )
     if attachments:
         uploaded = _upload_ticket_attachments(
             db,
@@ -367,11 +442,19 @@ def ticket_create(
     return RedirectResponse(url=f"/admin/support/tickets/{ticket.id}", status_code=303)
 
 
-@router.get("/{ticket_lookup}", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:read"))])
+@router.get(
+    "/{ticket_lookup}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
 def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(get_db)):
     ticket = support_service.tickets.get_by_lookup(db, ticket_lookup)
-    comments = support_service.ticket_comments.list(db, str(ticket.id), limit=500, offset=0)
-    sla_events = support_service.ticket_sla_events.list(db, str(ticket.id), limit=200, offset=0)
+    comments = support_service.ticket_comments.list(
+        db, str(ticket.id), limit=500, offset=0
+    )
+    sla_events = support_service.ticket_sla_events.list(
+        db, str(ticket.id), limit=200, offset=0
+    )
     links = support_service.tickets.list_links(db, str(ticket.id), limit=100)
 
     from app.services.audit_helpers import build_audit_activities
@@ -391,13 +474,19 @@ def ticket_detail(request: Request, ticket_lookup: str, db: Session = Depends(ge
             "all_channels": [item.value for item in TicketChannel],
             "people_options": support_service.list_people(db),
             "service_team_options": _service_team_options(),
-            "is_merged_source": bool(ticket.merged_into_ticket_id or ticket.status.value == "merged"),
+            "is_merged_source": bool(
+                ticket.merged_into_ticket_id or ticket.status.value == "merged"
+            ),
         }
     )
     return templates.TemplateResponse("admin/support/tickets/detail.html", context)
 
 
-@router.post("/{ticket_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:update"))])
+@router.post(
+    "/{ticket_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
 def ticket_edit(
     request: Request,
     ticket_id: UUID,
@@ -437,13 +526,23 @@ def ticket_edit(
         ticket_manager_person_id=_parse_uuid_or_none(ticket_manager_person_id),
         site_coordinator_person_id=_parse_uuid_or_none(site_coordinator_person_id),
         service_team_id=_parse_uuid_or_none(service_team_id),
-        assignee_person_ids=[uid for uid in (_parse_uuid_or_none(item) for item in assignee_person_ids) if uid],
+        assignee_person_ids=[
+            uid
+            for uid in (_parse_uuid_or_none(item) for item in assignee_person_ids)
+            if uid
+        ],
     )
-    support_service.tickets.update(db, str(ticket_id), payload, actor_id=_actor_id(request), request=request)
+    support_service.tickets.update(
+        db, str(ticket_id), payload, actor_id=_actor_id(request), request=request
+    )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
-@router.post("/{ticket_id}/comment", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:update"))])
+@router.post(
+    "/{ticket_id}/comment",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
 def ticket_add_comment(
     request: Request,
     ticket_id: UUID,
@@ -465,17 +564,31 @@ def ticket_add_comment(
         author_person_id=_parse_uuid_or_none(_actor_id(request)),
         attachments=[AttachmentMeta(**item) for item in uploaded],
     )
-    support_service.tickets.create_comment(db, str(ticket_id), payload, actor_id=_actor_id(request), request=request)
+    support_service.tickets.create_comment(
+        db, str(ticket_id), payload, actor_id=_actor_id(request), request=request
+    )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
-@router.post("/{ticket_id}/auto-assign", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:update"))])
-def ticket_auto_assign(request: Request, ticket_id: UUID, db: Session = Depends(get_db)):
-    support_service.tickets.manual_auto_assign(db, str(ticket_id), actor_id=_actor_id(request), request=request)
+@router.post(
+    "/{ticket_id}/auto-assign",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def ticket_auto_assign(
+    request: Request, ticket_id: UUID, db: Session = Depends(get_db)
+):
+    support_service.tickets.manual_auto_assign(
+        db, str(ticket_id), actor_id=_actor_id(request), request=request
+    )
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
-@router.post("/{ticket_id}/link", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:update"))])
+@router.post(
+    "/{ticket_id}/link",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
 def ticket_link(
     request: Request,
     ticket_id: UUID,
@@ -495,7 +608,11 @@ def ticket_link(
     return RedirectResponse(url=f"/admin/support/tickets/{ticket_id}", status_code=303)
 
 
-@router.post("/{ticket_id}/merge", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:update"))])
+@router.post(
+    "/{ticket_id}/merge",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
 def ticket_merge(
     request: Request,
     ticket_id: UUID,
@@ -513,9 +630,15 @@ def ticket_merge(
     return RedirectResponse(url=f"/admin/support/tickets/{target.id}", status_code=303)
 
 
-@router.post("/{ticket_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("support:ticket:delete"))])
+@router.post(
+    "/{ticket_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:delete"))],
+)
 def ticket_delete(request: Request, ticket_id: UUID, db: Session = Depends(get_db)):
-    support_service.tickets.soft_delete(db, str(ticket_id), actor_id=_actor_id(request), request=request)
+    support_service.tickets.soft_delete(
+        db, str(ticket_id), actor_id=_actor_id(request), request=request
+    )
     if request.headers.get("HX-Request"):
         headers = {
             "HX-Redirect": "/admin/support/tickets",
@@ -544,4 +667,6 @@ def legacy_ticket_index():
 
 @legacy_router.get("/{ticket_lookup}", response_class=HTMLResponse)
 def legacy_ticket_detail(ticket_lookup: str):
-    return RedirectResponse(url=f"/admin/support/tickets/{ticket_lookup}", status_code=307)
+    return RedirectResponse(
+        url=f"/admin/support/tickets/{ticket_lookup}", status_code=307
+    )

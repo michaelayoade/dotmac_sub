@@ -12,8 +12,10 @@ from app.models.scheduler import ScheduledTask
 
 logger = logging.getLogger(__name__)
 
+
 def get_admin_hub_counts(db: Session) -> dict[str, int]:
     """Return summary counts for admin hub overview cards."""
+
     def _count(model) -> int:
         return db.scalar(select(func.count()).select_from(model)) or 0
 

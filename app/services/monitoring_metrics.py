@@ -47,8 +47,7 @@ def poll_custom_snmp_oids(db: Session, device: NetworkDevice) -> dict[str, int]:
     """
     oids = list(
         db.scalars(
-            select(NetworkDeviceSnmpOid)
-            .where(
+            select(NetworkDeviceSnmpOid).where(
                 NetworkDeviceSnmpOid.device_id == device.id,
                 NetworkDeviceSnmpOid.is_enabled.is_(True),
             )
@@ -192,15 +191,20 @@ def poll_interface_traffic(db: Session, device: NetworkDevice) -> dict[str, int]
                     tx_bps = max(0, (out_octets - prev_out) * 8 / elapsed)
 
                     # Store metrics
-                    for mt, val in [(MetricType.rx_bps, rx_bps), (MetricType.tx_bps, tx_bps)]:
-                        db.add(DeviceMetric(
-                            device_id=device.id,
-                            interface_id=iface.id,
-                            metric_type=mt,
-                            value=val,
-                            unit="bps",
-                            recorded_at=now,
-                        ))
+                    for mt, val in [
+                        (MetricType.rx_bps, rx_bps),
+                        (MetricType.tx_bps, tx_bps),
+                    ]:
+                        db.add(
+                            DeviceMetric(
+                                device_id=device.id,
+                                interface_id=iface.id,
+                                metric_type=mt,
+                                value=val,
+                                unit="bps",
+                                recorded_at=now,
+                            )
+                        )
                     updated += 1
 
             # Store current counters for next delta calculation
@@ -209,7 +213,12 @@ def poll_interface_traffic(db: Session, device: NetworkDevice) -> dict[str, int]
             iface.last_counter_at = now
 
         except Exception as exc:
-            logger.debug("Interface traffic poll failed for %s/%s: %s", device.name, iface.name, exc)
+            logger.debug(
+                "Interface traffic poll failed for %s/%s: %s",
+                device.name,
+                iface.name,
+                exc,
+            )
 
     return {"interfaces_polled": polled, "updated": updated}
 
@@ -240,14 +249,18 @@ def push_metrics_to_victoriametrics(metrics_lines: list[str]) -> bool:
         )
         if resp.status_code in (200, 204):
             return True
-        logger.warning("VictoriaMetrics push returned %d: %s", resp.status_code, resp.text[:200])
+        logger.warning(
+            "VictoriaMetrics push returned %d: %s", resp.status_code, resp.text[:200]
+        )
         return False
     except Exception as exc:
         logger.warning("VictoriaMetrics push failed: %s", exc)
         return False
 
 
-def push_device_health_metrics(device: NetworkDevice, metrics: dict[str, float]) -> None:
+def push_device_health_metrics(
+    device: NetworkDevice, metrics: dict[str, float]
+) -> None:
     """Push a device's health metrics to VictoriaMetrics.
 
     Args:
@@ -291,17 +304,22 @@ def count_affected_subscribers(db: Session, device: NetworkDevice) -> int:
         try:
             from app.models.usage import AccountingStatus, RadiusAccountingSession
 
-            count = db.scalar(
-                select(func.count())
-                .select_from(RadiusAccountingSession)
-                .where(
-                    RadiusAccountingSession.nas_device_id == linked_nas.id,
-                    RadiusAccountingSession.session_end.is_(None),
-                    RadiusAccountingSession.status_type != AccountingStatus.stop,
+            count = (
+                db.scalar(
+                    select(func.count())
+                    .select_from(RadiusAccountingSession)
+                    .where(
+                        RadiusAccountingSession.nas_device_id == linked_nas.id,
+                        RadiusAccountingSession.session_end.is_(None),
+                        RadiusAccountingSession.status_type != AccountingStatus.stop,
+                    )
                 )
-            ) or 0
+                or 0
+            )
         except Exception as exc:
-            logger.warning("Could not count RADIUS sessions for device %s: %s", device.name, exc)
+            logger.warning(
+                "Could not count RADIUS sessions for device %s: %s", device.name, exc
+            )
 
     return count
 
@@ -347,7 +365,11 @@ def cleanup_old_device_metrics(db: Session, retention_days: int = 90) -> int:
             break
 
     if total_deleted > 0:
-        logger.info("Cleaned up %d device metrics older than %d days", total_deleted, retention_days)
+        logger.info(
+            "Cleaned up %d device metrics older than %d days",
+            total_deleted,
+            retention_days,
+        )
 
     return total_deleted
 
@@ -436,7 +458,9 @@ def sync_nas_to_monitoring(db: Session, nas_id: str) -> NetworkDevice:
     nas.network_device_id = device.id
     db.flush()
 
-    logger.info("Created monitoring device %s from NAS %s (%s)", device.id, nas.name, mgmt_ip)
+    logger.info(
+        "Created monitoring device %s from NAS %s (%s)", device.id, nas.name, mgmt_ip
+    )
     return device
 
 
@@ -465,9 +489,7 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
     from app.models.catalog import NasDevice
 
     nas_devices = list(
-        db.scalars(
-            select(NasDevice).where(NasDevice.is_active.is_(True))
-        ).all()
+        db.scalars(select(NasDevice).where(NasDevice.is_active.is_(True))).all()
     )
 
     synced = 0
@@ -490,7 +512,12 @@ def sync_all_nas_to_monitoring(db: Session) -> dict[str, int]:
             logger.warning("Failed to sync NAS %s to monitoring: %s", nas.name, exc)
 
     db.commit()
-    logger.info("NAS monitoring sync complete: synced=%d skipped=%d errors=%d", synced, skipped, errors)
+    logger.info(
+        "NAS monitoring sync complete: synced=%d skipped=%d errors=%d",
+        synced,
+        skipped,
+        errors,
+    )
     return {"synced": synced, "skipped": skipped, "errors": errors}
 
 
@@ -520,7 +547,9 @@ _VENDOR_HEALTH_OIDS: dict[str, dict[str, str]] = {
 }
 
 # Huawei OLT OIDs for ONT optical signal monitoring
-_HUAWEI_ONT_SIGNAL_OID = ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4"  # hwGponOntOpticalDdmRxPower
+_HUAWEI_ONT_SIGNAL_OID = (
+    ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4"  # hwGponOntOpticalDdmRxPower
+)
 
 
 def poll_device_system_metrics(
@@ -605,22 +634,34 @@ def poll_device_system_metrics(
 
     if stored > 0:
         db.flush()
-        push_device_health_metrics(device, {
-            k: v for k, v in [
-                ("cpu", _latest_metric_value(db, device.id, MetricType.cpu)),
-                ("memory", _latest_metric_value(db, device.id, MetricType.memory)),
-                ("temperature", _latest_metric_value(db, device.id, MetricType.temperature)),
-            ] if v is not None
-        })
+        push_device_health_metrics(
+            device,
+            {
+                k: v
+                for k, v in [
+                    ("cpu", _latest_metric_value(db, device.id, MetricType.cpu)),
+                    ("memory", _latest_metric_value(db, device.id, MetricType.memory)),
+                    (
+                        "temperature",
+                        _latest_metric_value(db, device.id, MetricType.temperature),
+                    ),
+                ]
+                if v is not None
+            },
+        )
 
     return {"polled": polled, "stored": stored, "errors": errors}
 
 
-def _latest_metric_value(db: Session, device_id, metric_type: MetricType) -> float | None:
+def _latest_metric_value(
+    db: Session, device_id, metric_type: MetricType
+) -> float | None:
     """Get the most recent metric value for a device."""
     row = db.scalars(
         select(DeviceMetric.value)
-        .where(DeviceMetric.device_id == device_id, DeviceMetric.metric_type == metric_type)
+        .where(
+            DeviceMetric.device_id == device_id, DeviceMetric.metric_type == metric_type
+        )
         .order_by(DeviceMetric.recorded_at.desc())
         .limit(1)
     ).first()
@@ -663,7 +704,9 @@ def poll_onu_signal_strength(
 
             community = decrypt_credential(olt.snmp_ro_community)
         except Exception as exc:
-            logger.warning("Failed to decrypt OLT SNMP community for %s: %s", olt.name, exc)
+            logger.warning(
+                "Failed to decrypt OLT SNMP community for %s: %s", olt.name, exc
+            )
             return {"polled": 0, "stored": 0, "low_signal": 0, "errors": 1}
 
     result = olt_polling_service.poll_olt_ont_signals(db, olt, community=community)
@@ -673,16 +716,19 @@ def poll_onu_signal_strength(
     # Count low-signal ONTs directly from updated inventory.
     from app.models.network import OntUnit
 
-    low_signal = db.scalar(
-        select(func.count())
-        .select_from(OntUnit)
-        .where(
-            OntUnit.is_active.is_(True),
-            OntUnit.olt_device_id == olt.id,
-            OntUnit.olt_rx_signal_dbm.is_not(None),
-            OntUnit.olt_rx_signal_dbm < warning_threshold,
+    low_signal = (
+        db.scalar(
+            select(func.count())
+            .select_from(OntUnit)
+            .where(
+                OntUnit.is_active.is_(True),
+                OntUnit.olt_device_id == olt.id,
+                OntUnit.olt_rx_signal_dbm.is_not(None),
+                OntUnit.olt_rx_signal_dbm < warning_threshold,
+            )
         )
-    ) or 0
+        or 0
+    )
 
     return {
         "polled": int(result.get("polled", 0)),

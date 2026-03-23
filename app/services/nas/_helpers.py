@@ -3,6 +3,7 @@ NAS helper functions for form options, tag manipulation, and device metadata.
 
 Extracted from the monolithic nas.py service to improve maintainability.
 """
+
 import ipaddress
 import logging
 from typing import Any
@@ -55,7 +56,9 @@ RADIUS_REQUIRED_CONNECTION_TYPES = {
 TEMPLATE_AUDIT_EXCLUDE_FIELDS = {"template_content"}
 
 
-def list_pop_sites(db: Session, *, is_active: bool = True, limit: int = 500) -> list[PopSite]:
+def list_pop_sites(
+    db: Session, *, is_active: bool = True, limit: int = 500
+) -> list[PopSite]:
     """Return POP sites for NAS form/dropdown usage."""
     query = db.query(PopSite)
     if is_active:
@@ -105,9 +108,15 @@ def get_nas_form_options(db: Session) -> dict[str, object]:
         "ip_pools": ip_pools,
         "organizations": organizations,
         "vendors": [{"value": v.value, "label": v.value.title()} for v in NasVendor],
-        "statuses": [{"value": s.value, "label": s.value.title()} for s in NasDeviceStatus],
-        "connection_types": [{"value": ct.value, "label": ct.value.upper()} for ct in ConnectionType],
-        "backup_methods": [{"value": m.value, "label": m.value.upper()} for m in ConfigBackupMethod],
+        "statuses": [
+            {"value": s.value, "label": s.value.title()} for s in NasDeviceStatus
+        ],
+        "connection_types": [
+            {"value": ct.value, "label": ct.value.upper()} for ct in ConnectionType
+        ],
+        "backup_methods": [
+            {"value": m.value, "label": m.value.upper()} for m in ConfigBackupMethod
+        ],
         "provisioning_actions": [
             {"value": a.value, "label": a.value.replace("_", " ").title()}
             for a in ProvisioningAction
@@ -146,27 +155,37 @@ def radius_pool_ids_from_tags(tags: list[str] | None) -> list[str]:
     return prefixed_values_from_tags(tags, "radius_pool:")
 
 
-def upsert_prefixed_tags(existing_tags: list[str] | None, prefix: str, values: list[str]) -> list[str]:
+def upsert_prefixed_tags(
+    existing_tags: list[str] | None, prefix: str, values: list[str]
+) -> list[str]:
     base = [tag for tag in (existing_tags or []) if not tag.startswith(prefix)]
     return base + [f"{prefix}{value}" for value in values if value]
 
 
-def merge_single_tag(existing_tags: list[str] | None, prefix: str, value: str | None) -> list[str] | None:
+def merge_single_tag(
+    existing_tags: list[str] | None, prefix: str, value: str | None
+) -> list[str] | None:
     merged = upsert_prefixed_tags(existing_tags, prefix, [value] if value else [])
     return merged or None
 
 
-def merge_radius_pool_tags(existing_tags: list[str] | None, radius_pool_ids: list[str]) -> list[str] | None:
+def merge_radius_pool_tags(
+    existing_tags: list[str] | None, radius_pool_ids: list[str]
+) -> list[str] | None:
     merged = upsert_prefixed_tags(existing_tags, "radius_pool:", radius_pool_ids)
     return merged or None
 
 
-def merge_partner_org_tags(existing_tags: list[str] | None, partner_org_ids: list[str]) -> list[str] | None:
+def merge_partner_org_tags(
+    existing_tags: list[str] | None, partner_org_ids: list[str]
+) -> list[str] | None:
     merged = upsert_prefixed_tags(existing_tags, "partner_org:", partner_org_ids)
     return merged or None
 
 
-def extract_enhanced_fields(tags: list[str] | None) -> dict[str, str | list[str] | None]:
+def extract_enhanced_fields(
+    tags: list[str] | None,
+) -> dict[str, str | list[str] | None]:
     return {
         "partner_org_ids": prefixed_values_from_tags(tags, "partner_org:"),
         "authorization_type": prefixed_value_from_tags(tags, "authorization_type:"),
@@ -180,8 +199,12 @@ def extract_enhanced_fields(tags: list[str] | None) -> dict[str, str | list[str]
         "shaper_target": prefixed_value_from_tags(tags, "shaper_target:"),
         "shaping_type": prefixed_value_from_tags(tags, "shaping_type:"),
         "wireless_access_list": prefixed_value_from_tags(tags, "wireless_access_list:"),
-        "disabled_customers_address_list": prefixed_value_from_tags(tags, "disabled_customers_address_list:"),
-        "blocking_rules_enabled": prefixed_value_from_tags(tags, "blocking_rules_enabled:"),
+        "disabled_customers_address_list": prefixed_value_from_tags(
+            tags, "disabled_customers_address_list:"
+        ),
+        "blocking_rules_enabled": prefixed_value_from_tags(
+            tags, "blocking_rules_enabled:"
+        ),
     }
 
 
@@ -189,18 +212,32 @@ def extract_mikrotik_status(tags: list[str] | None) -> dict[str, str | None]:
     return {
         "platform": prefixed_value_from_tags(tags, "mikrotik_status_platform:"),
         "board_name": prefixed_value_from_tags(tags, "mikrotik_status_board_name:"),
-        "routeros_version": prefixed_value_from_tags(tags, "mikrotik_status_routeros_version:"),
-        "serial_number": prefixed_value_from_tags(tags, "mikrotik_status_serial_number:"),
+        "routeros_version": prefixed_value_from_tags(
+            tags, "mikrotik_status_routeros_version:"
+        ),
+        "serial_number": prefixed_value_from_tags(
+            tags, "mikrotik_status_serial_number:"
+        ),
         "primary_mac": prefixed_value_from_tags(tags, "mikrotik_status_primary_mac:"),
-        "architecture_name": prefixed_value_from_tags(tags, "mikrotik_status_architecture_name:"),
+        "architecture_name": prefixed_value_from_tags(
+            tags, "mikrotik_status_architecture_name:"
+        ),
         "cpu_model": prefixed_value_from_tags(tags, "mikrotik_status_cpu_model:"),
         "cpu_count": prefixed_value_from_tags(tags, "mikrotik_status_cpu_count:"),
-        "cpu_frequency": prefixed_value_from_tags(tags, "mikrotik_status_cpu_frequency:"),
-        "total_hdd_space": prefixed_value_from_tags(tags, "mikrotik_status_total_hdd_space:"),
-        "free_hdd_space": prefixed_value_from_tags(tags, "mikrotik_status_free_hdd_space:"),
+        "cpu_frequency": prefixed_value_from_tags(
+            tags, "mikrotik_status_cpu_frequency:"
+        ),
+        "total_hdd_space": prefixed_value_from_tags(
+            tags, "mikrotik_status_total_hdd_space:"
+        ),
+        "free_hdd_space": prefixed_value_from_tags(
+            tags, "mikrotik_status_free_hdd_space:"
+        ),
         "cpu_usage": prefixed_value_from_tags(tags, "mikrotik_status_cpu_usage:"),
         "ipv6_status": prefixed_value_from_tags(tags, "mikrotik_status_ipv6_status:"),
-        "last_status_check": prefixed_value_from_tags(tags, "mikrotik_status_last_check:"),
+        "last_status_check": prefixed_value_from_tags(
+            tags, "mikrotik_status_last_check:"
+        ),
     }
 
 

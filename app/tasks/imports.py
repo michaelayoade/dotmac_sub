@@ -47,7 +47,9 @@ def run_import_job(
             {
                 "job_id": job_id,
                 "module": module,
-                "module_label": import_wizard_service.ENTITY_CONFIG.get(module, {}).get("label", module),
+                "module_label": import_wizard_service.ENTITY_CONFIG.get(module, {}).get(
+                    "label", module
+                ),
                 "source_name": source_name,
                 "status": "running",
                 "queued_at": started_at,
@@ -154,7 +156,9 @@ def run_import_job(
                 {
                     "job_id": job_id,
                     "status": "failed",
-                    "progress_percent": tracker["last_pct"] if tracker["last_pct"] > 0 else 0,
+                    "progress_percent": tracker["last_pct"]
+                    if tracker["last_pct"] > 0
+                    else 0,
                     "completed_at": datetime.now(UTC).isoformat(),
                     "error": str(exc),
                 },

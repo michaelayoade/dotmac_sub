@@ -24,6 +24,7 @@ from app.services.common import coerce_uuid, validate_enum
 
 logger = logging.getLogger(__name__)
 
+
 def get_dashboard_data(db: Session) -> dict[str, object]:
     records = usage_service.usage_records.list(
         db=db,
@@ -78,22 +79,32 @@ def get_dashboard_data(db: Session) -> dict[str, object]:
         "staged_count": len(staged_charges),
         "needs_review_count": len(needs_review_charges),
         "posted_count": len(posted_charges),
-        "total_staged_amount": sum(float(charge.amount or 0) for charge in staged_charges),
+        "total_staged_amount": sum(
+            float(charge.amount or 0) for charge in staged_charges
+        ),
         "recent_runs": recent_runs,
     }
 
 
 def get_calculator_data(db: Session) -> dict[str, object]:
-    usage_allowances = db.execute(
-        select(UsageAllowance)
-        .where(UsageAllowance.is_active.is_(True))
-        .order_by(UsageAllowance.name)
-    ).scalars().all()
-    radius_profiles = db.execute(
-        select(RadiusProfile)
-        .where(RadiusProfile.is_active.is_(True))
-        .order_by(RadiusProfile.name)
-    ).scalars().all()
+    usage_allowances = (
+        db.execute(
+            select(UsageAllowance)
+            .where(UsageAllowance.is_active.is_(True))
+            .order_by(UsageAllowance.name)
+        )
+        .scalars()
+        .all()
+    )
+    radius_profiles = (
+        db.execute(
+            select(RadiusProfile)
+            .where(RadiusProfile.is_active.is_(True))
+            .order_by(RadiusProfile.name)
+        )
+        .scalars()
+        .all()
+    )
     currency_symbol = (
         settings_spec.resolve_value(db, SettingDomain.billing, "currency_symbol") or "₦"
     )
@@ -119,11 +130,15 @@ def get_records_page_data(
         )
     total = db.scalar(select(func.count()).select_from(records_stmt.subquery())) or 0
     total_pages = (total + per_page - 1) // per_page if total else 1
-    records = db.execute(
-        records_stmt.order_by(UsageRecord.recorded_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    ).scalars().all()
+    records = (
+        db.execute(
+            records_stmt.order_by(UsageRecord.recorded_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+        .scalars()
+        .all()
+    )
     subscriptions = catalog_service.subscriptions.list(
         db=db,
         subscriber_id=None,
@@ -165,11 +180,15 @@ def get_charges_page_data(
         )
     total = db.scalar(select(func.count()).select_from(charges_stmt.subquery())) or 0
     total_pages = (total + per_page - 1) // per_page if total else 1
-    charges = db.execute(
-        charges_stmt.order_by(UsageCharge.created_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    ).scalars().all()
+    charges = (
+        db.execute(
+            charges_stmt.order_by(UsageCharge.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+        .scalars()
+        .all()
+    )
     return {
         "charges": charges,
         "status": status,
@@ -193,15 +212,20 @@ def get_rating_runs_page_data(
     runs_stmt = select(UsageRatingRun)
     if status:
         runs_stmt = runs_stmt.where(
-            UsageRatingRun.status == validate_enum(status, UsageRatingRunStatus, "status")
+            UsageRatingRun.status
+            == validate_enum(status, UsageRatingRunStatus, "status")
         )
     total = db.scalar(select(func.count()).select_from(runs_stmt.subquery())) or 0
     total_pages = (total + per_page - 1) // per_page if total else 1
-    runs = db.execute(
-        runs_stmt.order_by(UsageRatingRun.run_at.desc())
-        .offset(offset)
-        .limit(per_page)
-    ).scalars().all()
+    runs = (
+        db.execute(
+            runs_stmt.order_by(UsageRatingRun.run_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+        .scalars()
+        .all()
+    )
 
     now = datetime.now(UTC)
     default_period_start = datetime(now.year, now.month, 1, tzinfo=UTC)

@@ -30,9 +30,7 @@ def get_onu_types(db: Session) -> list[Any]:
 def get_olt_devices(db: Session) -> list[OLTDevice]:
     """Fetch active OLT devices for form dropdowns."""
     stmt = (
-        select(OLTDevice)
-        .where(OLTDevice.is_active.is_(True))
-        .order_by(OLTDevice.name)
+        select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
     )
     return list(db.scalars(stmt).all())
 
@@ -50,11 +48,7 @@ def get_zones(db: Session) -> list[Any]:
 
 def get_splitters(db: Session) -> list[Splitter]:
     """Fetch splitters for form dropdowns."""
-    stmt = (
-        select(Splitter)
-        .where(Splitter.is_active.is_(True))
-        .order_by(Splitter.name)
-    )
+    stmt = select(Splitter).where(Splitter.is_active.is_(True)).order_by(Splitter.name)
     return list(db.scalars(stmt).all())
 
 
@@ -187,24 +181,32 @@ def execute_bulk_action(
                 succeeded += 1
             else:
                 failed += 1
-            results.append({
-                "ont_id": ont_id,
-                "success": result.success,
-                "message": result.message,
-            })
+            results.append(
+                {
+                    "ont_id": ont_id,
+                    "success": result.success,
+                    "message": result.message,
+                }
+            )
         except Exception as exc:
             failed += 1
-            results.append({
-                "ont_id": ont_id,
-                "success": False,
-                "message": str(exc),
-            })
+            results.append(
+                {
+                    "ont_id": ont_id,
+                    "success": False,
+                    "message": str(exc),
+                }
+            )
             logger.error("Bulk %s failed for ONT %s: %s", action, ont_id, exc)
 
     skipped = len(ont_ids) - len(capped_ids)
     logger.info(
         "Bulk %s: %d succeeded, %d failed, %d skipped (of %d requested)",
-        action, succeeded, failed, skipped, len(ont_ids),
+        action,
+        succeeded,
+        failed,
+        skipped,
+        len(ont_ids),
     )
     return {
         "succeeded": succeeded,

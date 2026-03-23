@@ -28,22 +28,51 @@ def gis_index(request: Request, tab: str = "locations", db: Session = Depends(ge
 
     # Get GIS data
     locations = gis_service.geo_locations.list(
-        db=db, location_type=None, address_id=None, pop_site_id=None, is_active=None,
-        min_latitude=None, min_longitude=None, max_latitude=None, max_longitude=None,
-        order_by="created_at", order_dir="desc", limit=100, offset=0
+        db=db,
+        location_type=None,
+        address_id=None,
+        pop_site_id=None,
+        is_active=None,
+        min_latitude=None,
+        min_longitude=None,
+        max_latitude=None,
+        max_longitude=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=100,
+        offset=0,
     )
     areas = gis_service.geo_areas.list(
-        db=db, area_type=None, is_active=None,
-        min_latitude=None, min_longitude=None, max_latitude=None, max_longitude=None,
-        order_by="created_at", order_dir="desc", limit=100, offset=0
+        db=db,
+        area_type=None,
+        is_active=None,
+        min_latitude=None,
+        min_longitude=None,
+        max_latitude=None,
+        max_longitude=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=100,
+        offset=0,
     )
     layers = gis_service.geo_layers.list(
-        db=db, layer_type=None, source_type=None, is_active=None,
-        order_by="created_at", order_dir="desc", limit=100, offset=0
+        db=db,
+        layer_type=None,
+        source_type=None,
+        is_active=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=100,
+        offset=0,
     )
 
     # Count coverage areas
-    coverage_areas = sum(1 for a in areas if a.area_type == GeoAreaType.coverage or a.area_type == GeoAreaType.service_area)
+    coverage_areas = sum(
+        1
+        for a in areas
+        if a.area_type == GeoAreaType.coverage
+        or a.area_type == GeoAreaType.service_area
+    )
 
     # Build GeoJSON markers for the map
     map_markers = []
@@ -51,37 +80,53 @@ def gis_index(request: Request, tab: str = "locations", db: Session = Depends(ge
         lat = getattr(loc, "latitude", None)
         lon = getattr(loc, "longitude", None)
         if lat is not None and lon is not None:
-            loc_type = loc.location_type.value if hasattr(loc.location_type, "value") else str(loc.location_type or "")
-            map_markers.append({
-                "lat": float(lat),
-                "lon": float(lon),
-                "name": str(loc.name or ""),
-                "type": loc_type,
-                "id": str(loc.id),
-            })
+            loc_type = (
+                loc.location_type.value
+                if hasattr(loc.location_type, "value")
+                else str(loc.location_type or "")
+            )
+            map_markers.append(
+                {
+                    "lat": float(lat),
+                    "lon": float(lon),
+                    "name": str(loc.name or ""),
+                    "type": loc_type,
+                    "id": str(loc.id),
+                }
+            )
 
     area_features = []
     for area in areas:
         if getattr(area, "geometry_geojson", None):
-            area_type = area.area_type.value if hasattr(area.area_type, "value") else str(area.area_type or "")
-            area_features.append({
-                "type": "Feature",
-                "geometry": area.geometry_geojson,
-                "properties": {
-                    "id": str(area.id),
-                    "name": str(area.name or ""),
-                    "area_type": area_type,
-                    "is_active": bool(area.is_active),
-                },
-            })
+            area_type = (
+                area.area_type.value
+                if hasattr(area.area_type, "value")
+                else str(area.area_type or "")
+            )
+            area_features.append(
+                {
+                    "type": "Feature",
+                    "geometry": area.geometry_geojson,
+                    "properties": {
+                        "id": str(area.id),
+                        "name": str(area.name or ""),
+                        "area_type": area_type,
+                        "is_active": bool(area.is_active),
+                    },
+                }
+            )
 
     layer_overlays = [
         {
             "id": str(layer.id),
             "name": str(layer.name or ""),
             "layer_key": str(layer.layer_key or ""),
-            "layer_type": layer.layer_type.value if hasattr(layer.layer_type, "value") else str(layer.layer_type or ""),
-            "source_type": layer.source_type.value if hasattr(layer.source_type, "value") else str(layer.source_type or ""),
+            "layer_type": layer.layer_type.value
+            if hasattr(layer.layer_type, "value")
+            else str(layer.layer_type or ""),
+            "source_type": layer.source_type.value
+            if hasattr(layer.source_type, "value")
+            else str(layer.source_type or ""),
             "style": layer.style or {},
             "is_active": bool(layer.is_active),
         }
@@ -160,7 +205,9 @@ def gis_location_create(
 
 
 @router.get("/locations/{location_id}/edit", response_class=HTMLResponse)
-def gis_location_edit(request: Request, location_id: str, db: Session = Depends(get_db)):
+def gis_location_edit(
+    request: Request, location_id: str, db: Session = Depends(get_db)
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     location = gis_service.geo_locations.get(db=db, location_id=location_id)
@@ -200,7 +247,9 @@ def gis_location_update(
             notes=notes or None,
             is_active=is_active == "true",
         )
-        gis_service.geo_locations.update(db=db, location_id=location_id, payload=payload)
+        gis_service.geo_locations.update(
+            db=db, location_id=location_id, payload=payload
+        )
         return RedirectResponse(url="/admin/gis?tab=locations", status_code=303)
     except Exception as e:
         location = gis_service.geo_locations.get(db=db, location_id=location_id)
@@ -239,7 +288,9 @@ def _gis_context(request: Request, db: Session, **extra) -> dict:
 
 @router.get("/areas/new", response_class=HTMLResponse)
 def gis_area_new(request: Request, db: Session = Depends(get_db)):
-    ctx = _gis_context(request, db, area=None, action_url="/admin/gis/areas/new", error=None)
+    ctx = _gis_context(
+        request, db, area=None, action_url="/admin/gis/areas/new", error=None
+    )
     ctx["area_types"] = [t.value for t in GeoAreaType]
     return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
@@ -258,14 +309,18 @@ def gis_area_create(
         payload = GeoAreaCreate(
             name=name,
             area_type=GeoAreaType(area_type),
-            geometry_geojson=json.loads(geometry_geojson) if geometry_geojson.strip() else None,
+            geometry_geojson=json.loads(geometry_geojson)
+            if geometry_geojson.strip()
+            else None,
             notes=notes or None,
             is_active=is_active == "true",
         )
         gis_service.geo_areas.create(db=db, payload=payload)
         return RedirectResponse(url="/admin/gis?tab=areas", status_code=303)
     except Exception as e:
-        ctx = _gis_context(request, db, area=None, action_url="/admin/gis/areas/new", error=str(e))
+        ctx = _gis_context(
+            request, db, area=None, action_url="/admin/gis/areas/new", error=str(e)
+        )
         ctx["area_types"] = [t.value for t in GeoAreaType]
         return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
@@ -273,7 +328,13 @@ def gis_area_create(
 @router.get("/areas/{area_id}/edit", response_class=HTMLResponse)
 def gis_area_edit(request: Request, area_id: str, db: Session = Depends(get_db)):
     area = gis_service.geo_areas.get(db=db, area_id=area_id)
-    ctx = _gis_context(request, db, area=area, action_url=f"/admin/gis/areas/{area_id}/edit", error=None)
+    ctx = _gis_context(
+        request,
+        db,
+        area=area,
+        action_url=f"/admin/gis/areas/{area_id}/edit",
+        error=None,
+    )
     ctx["area_types"] = [t.value for t in GeoAreaType]
     return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
@@ -295,7 +356,9 @@ def gis_area_update(
         payload = GeoAreaUpdate(
             name=name,
             area_type=GeoAreaType(area_type),
-            geometry_geojson=json.loads(geometry_geojson) if geometry_geojson.strip() else None,
+            geometry_geojson=json.loads(geometry_geojson)
+            if geometry_geojson.strip()
+            else None,
             notes=notes or None,
             is_active=is_active == "true",
         )
@@ -303,7 +366,13 @@ def gis_area_update(
         return RedirectResponse(url="/admin/gis?tab=areas", status_code=303)
     except Exception as e:
         area = gis_service.geo_areas.get(db=db, area_id=area_id)
-        ctx = _gis_context(request, db, area=area, action_url=f"/admin/gis/areas/{area_id}/edit", error=str(e))
+        ctx = _gis_context(
+            request,
+            db,
+            area=area,
+            action_url=f"/admin/gis/areas/{area_id}/edit",
+            error=str(e),
+        )
         ctx["area_types"] = [t.value for t in GeoAreaType]
         return templates.TemplateResponse("admin/gis/area_form.html", ctx)
 
@@ -319,7 +388,9 @@ def gis_area_delete(area_id: str, db: Session = Depends(get_db)):
 
 @router.get("/layers/new", response_class=HTMLResponse)
 def gis_layer_new(request: Request, db: Session = Depends(get_db)):
-    ctx = _gis_context(request, db, layer=None, action_url="/admin/gis/layers/new", error=None)
+    ctx = _gis_context(
+        request, db, layer=None, action_url="/admin/gis/layers/new", error=None
+    )
     ctx["layer_types"] = [t.value for t in GeoLayerType]
     ctx["source_types"] = [t.value for t in GeoLayerSource]
     return templates.TemplateResponse("admin/gis/layer_form.html", ctx)
@@ -352,7 +423,9 @@ def gis_layer_create(
         gis_service.geo_layers.create(db=db, payload=payload)
         return RedirectResponse(url="/admin/gis?tab=layers", status_code=303)
     except Exception as e:
-        ctx = _gis_context(request, db, layer=None, action_url="/admin/gis/layers/new", error=str(e))
+        ctx = _gis_context(
+            request, db, layer=None, action_url="/admin/gis/layers/new", error=str(e)
+        )
         ctx["layer_types"] = [t.value for t in GeoLayerType]
         ctx["source_types"] = [t.value for t in GeoLayerSource]
         return templates.TemplateResponse("admin/gis/layer_form.html", ctx)

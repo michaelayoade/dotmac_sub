@@ -67,7 +67,9 @@ def set_wifi_ssid(db: Session, cpe_id: str, ssid: str) -> ActionResult:
 def set_wifi_password(db: Session, cpe_id: str, password: str) -> ActionResult:
     """Set WiFi password on CPE device via TR-069."""
     if not password or len(password) < 8:
-        return ActionResult(success=False, message="WiFi password must be at least 8 characters.")
+        return ActionResult(
+            success=False, message="WiFi password must be at least 8 characters."
+        )
 
     cpe, error = get_cpe_or_error(db, cpe_id)
     if error:
@@ -91,13 +93,17 @@ def set_wifi_password(db: Session, cpe_id: str, password: str) -> ActionResult:
         )
     except GenieACSError as exc:
         logger.error("Set WiFi password failed for CPE %s: %s", cpe.serial_number, exc)
-        return ActionResult(success=False, message=f"Failed to set WiFi password: {exc}")
+        return ActionResult(
+            success=False, message=f"Failed to set WiFi password: {exc}"
+        )
 
 
 def toggle_lan_port(db: Session, cpe_id: str, port: int, enabled: bool) -> ActionResult:
     """Enable or disable a CPE LAN port via TR-069."""
     if port < 1 or port > 4:
-        return ActionResult(success=False, message="Port number must be between 1 and 4.")
+        return ActionResult(
+            success=False, message="Port number must be between 1 and 4."
+        )
 
     cpe, error = get_cpe_or_error(db, cpe_id)
     if error:
@@ -123,5 +129,7 @@ def toggle_lan_port(db: Session, cpe_id: str, port: int, enabled: bool) -> Actio
             data=result,
         )
     except GenieACSError as exc:
-        logger.error("Toggle LAN port %d failed for CPE %s: %s", port, cpe.serial_number, exc)
+        logger.error(
+            "Toggle LAN port %d failed for CPE %s: %s", port, cpe.serial_number, exc
+        )
         return ActionResult(success=False, message=f"Failed to toggle LAN port: {exc}")

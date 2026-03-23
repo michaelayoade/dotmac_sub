@@ -33,7 +33,9 @@ _VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
 
 def _summarize_provisioning_run(run: ProvisioningRun) -> dict[str, object]:
     payload = run.output_payload if isinstance(run.output_payload, dict) else {}
-    raw_results = payload.get("results") if isinstance(payload.get("results"), list) else []
+    raw_results = (
+        payload.get("results") if isinstance(payload.get("results"), list) else []
+    )
     step_results: list[dict[str, str]] = []
     success_count = 0
     failed_count = 0
@@ -91,7 +93,9 @@ def _extract_tx_power_dbm(*values: object) -> float | None:
         if not value:
             continue
         text = str(value)
-        tx_match = re.search(r"tx[^-0-9]*(-?\d+(?:\.\d+)?)\s*d?bm", text, flags=re.IGNORECASE)
+        tx_match = re.search(
+            r"tx[^-0-9]*(-?\d+(?:\.\d+)?)\s*d?bm", text, flags=re.IGNORECASE
+        )
         if tx_match:
             try:
                 return float(tx_match.group(1))
@@ -209,7 +213,9 @@ def _parse_composite_index(raw_index: str) -> tuple[str, ...]:
     return tuple(parts)
 
 
-def _snmp_index_to_fsp(raw_index: str, packed_fsp_map: dict[str, str] | None = None) -> str | None:
+def _snmp_index_to_fsp(
+    raw_index: str, packed_fsp_map: dict[str, str] | None = None
+) -> str | None:
     """Best-effort map SNMP composite index to frame/slot/port string."""
     parts = _parse_composite_index(raw_index)
     if len(parts) >= 3:
@@ -219,7 +225,9 @@ def _snmp_index_to_fsp(raw_index: str, packed_fsp_map: dict[str, str] | None = N
     return None
 
 
-def _parse_snmp_signal_dbm(raw_value: str | None, *, scale: float = 0.01) -> float | None:
+def _parse_snmp_signal_dbm(
+    raw_value: str | None, *, scale: float = 0.01
+) -> float | None:
     """Parse SNMP integer optical power into dBm."""
     if not raw_value:
         return None
@@ -238,7 +246,9 @@ def _parse_snmp_signal_dbm(raw_value: str | None, *, scale: float = 0.01) -> flo
     return None
 
 
-def _parse_walk_composite(lines: Sequence[str], *, suffix_parts: int = 4) -> dict[str, str]:
+def _parse_walk_composite(
+    lines: Sequence[str], *, suffix_parts: int = 4
+) -> dict[str, str]:
     """Parse SNMP walk lines while preserving composite table indexes."""
     parsed: dict[str, str] = {}
     for line in lines:
@@ -252,7 +262,11 @@ def _parse_walk_composite(lines: Sequence[str], *, suffix_parts: int = 4) -> dic
             # Huawei packed index format: <packed_fsp>.<onu_id>
             index = f"{oid_tokens[-2]}.{oid_tokens[-1]}"
         else:
-            index = ".".join(oid_tokens[-suffix_parts:]) if len(oid_tokens) >= suffix_parts else oid_tokens[-1]
+            index = (
+                ".".join(oid_tokens[-suffix_parts:])
+                if len(oid_tokens) >= suffix_parts
+                else oid_tokens[-1]
+            )
         value = value_part.split(": ", 1)[-1].strip().strip('"')
         if value.lower().startswith("no such"):
             continue
@@ -268,7 +282,9 @@ def _pon_sort_key(hint: str) -> tuple[int, int, int]:
         return (10**9, 10**9, 10**9)
 
 
-def _build_packed_fsp_map(indexes: Sequence[str], pon_hints: Sequence[str]) -> dict[str, str]:
+def _build_packed_fsp_map(
+    indexes: Sequence[str], pon_hints: Sequence[str]
+) -> dict[str, str]:
     packed_values: list[int] = []
     for idx in indexes:
         parts = [p for p in str(idx).split(".") if p.isdigit()]
@@ -287,7 +303,9 @@ def _huawei_snmp_pon_live_stats(
     pon_hints: Sequence[str] | None = None,
 ) -> tuple[dict[str, int], dict[str, float]]:
     """Return per-PON ONU count and average OLT RX dBm using Huawei SNMP OIDs."""
-    if monitoring_device is None or not getattr(monitoring_device, "snmp_enabled", False):
+    if monitoring_device is None or not getattr(
+        monitoring_device, "snmp_enabled", False
+    ):
         return {}, {}
     vendor = str(getattr(monitoring_device, "vendor", "") or "").lower()
     if "huawei" not in vendor:
@@ -396,16 +414,14 @@ def _get_olt_health(olt_name: str) -> dict[str, Any]:
             )
             resp.raise_for_status()
             data = resp.json()
-            if (
-                isinstance(data, dict)
-                and data.get("status") == "success"
-            ):
+            if isinstance(data, dict) and data.get("status") == "success":
                 results = data.get("data", {}).get("result", [])
                 if results and results[0].get("value"):
                     val = float(results[0]["value"][1])
                     result[key] = val
                     result["has_data"] = True
         except Exception:
+            logger.debug("Skipping metric %s for OLT %s", key, olt_name, exc_info=True)
             continue
 
     # Build display strings
@@ -515,7 +531,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             if quality in ("warning", "critical"):
                 p_low_signal += 1
         avg_signal = (p_signal_total / p_signal_count) if p_signal_count > 0 else None
-        online_pct = int(round((p_online / len(active_assignments)) * 100)) if active_assignments else 0
+        online_pct = (
+            int(round((p_online / len(active_assignments)) * 100))
+            if active_assignments
+            else 0
+        )
         port_stats[str(port.id)] = {
             "total": len(active_assignments),
             "online": p_online,
@@ -536,11 +556,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             .order_by(OntUnit.serial_number.asc())
         ).all()
     )
-    onts_by_id = {
-        str(ont.id): ont
-        for ont in direct_onts
-        if getattr(ont, "id", None)
-    }
+    onts_by_id = {str(ont.id): ont for ont in direct_onts if getattr(ont, "id", None)}
     for a in ont_assignments:
         ont = getattr(a, "ont_unit", None)
         if ont and getattr(ont, "id", None):
@@ -701,23 +717,37 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     monitoring_data: dict[str, object] | None = None
     live_board_inventory: list[dict[str, object]] = []
     resolved_device_info = {
-        "hostname": monitoring_device.hostname if monitoring_device and monitoring_device.hostname else olt.hostname,
-        "mgmt_ip": monitoring_device.mgmt_ip if monitoring_device and monitoring_device.mgmt_ip else olt.mgmt_ip,
-        "vendor": monitoring_device.vendor if monitoring_device and monitoring_device.vendor else olt.vendor,
-        "model": monitoring_device.model if monitoring_device and monitoring_device.model else olt.model,
+        "hostname": monitoring_device.hostname
+        if monitoring_device and monitoring_device.hostname
+        else olt.hostname,
+        "mgmt_ip": monitoring_device.mgmt_ip
+        if monitoring_device and monitoring_device.mgmt_ip
+        else olt.mgmt_ip,
+        "vendor": monitoring_device.vendor
+        if monitoring_device and monitoring_device.vendor
+        else olt.vendor,
+        "model": monitoring_device.model
+        if monitoring_device and monitoring_device.model
+        else olt.model,
         "serial_number": monitoring_device.serial_number
         if monitoring_device and monitoring_device.serial_number
         else olt.serial_number,
         "firmware_version": olt.firmware_version,
         "software_version": olt.software_version,
         "supported_pon_types": getattr(olt, "supported_pon_types", None),
-        "status": monitoring_device.status.value if monitoring_device and monitoring_device.status else ("active" if olt.is_active else "inactive"),
+        "status": monitoring_device.status.value
+        if monitoring_device and monitoring_device.status
+        else ("active" if olt.is_active else "inactive"),
         "last_ping_at": monitoring_device.last_ping_at if monitoring_device else None,
         "last_snmp_at": monitoring_device.last_snmp_at if monitoring_device else None,
         "last_ping_ok": monitoring_device.last_ping_ok if monitoring_device else None,
         "last_snmp_ok": monitoring_device.last_snmp_ok if monitoring_device else None,
-        "ping_enabled": bool(monitoring_device.ping_enabled) if monitoring_device else False,
-        "snmp_enabled": bool(monitoring_device.snmp_enabled) if monitoring_device else False,
+        "ping_enabled": bool(monitoring_device.ping_enabled)
+        if monitoring_device
+        else False,
+        "snmp_enabled": bool(monitoring_device.snmp_enabled)
+        if monitoring_device
+        else False,
     }
 
     if monitoring_device is not None:
@@ -756,13 +786,27 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                     _run_snmpwalk,
                 )
 
-                sys_name = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.5.0"))
-                sys_descr = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.1.0"))
-                sys_object_id = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.2.0"))
-                sys_uptime = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.3.0"))
-                sys_contact = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.4.0"))
-                sys_location = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.6.0"))
-                if_number = _parse_scalar(_run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.2.1.0"))
+                sys_name = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.5.0")
+                )
+                sys_descr = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.1.0")
+                )
+                sys_object_id = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.2.0")
+                )
+                sys_uptime = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.3.0")
+                )
+                sys_contact = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.4.0")
+                )
+                sys_location = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.1.6.0")
+                )
+                if_number = _parse_scalar(
+                    _run_snmpwalk(monitoring_device, ".1.3.6.1.2.1.2.1.0")
+                )
 
                 snmp_system = {
                     "sys_name": sys_name,
@@ -842,7 +886,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                             "subrack",
                             "rack",
                         )
-                    ) or (cls_code in {9} and not looks_optics_like and not looks_chassis_like)
+                    ) or (
+                        cls_code in {9}
+                        and not looks_optics_like
+                        and not looks_chassis_like
+                    )
                     if looks_chassis_like and not slot_match:
                         looks_like_card = False
                     if not looks_like_card:
@@ -850,7 +898,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
                     live_board_inventory.append(
                         {
                             "index": idx,
-                            "slot_number": int(slot_match.group(1)) if slot_match else None,
+                            "slot_number": int(slot_match.group(1))
+                            if slot_match
+                            else None,
                             "card_type": merged[:120],
                             "category": "card",
                         }
@@ -872,7 +922,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             str(item.get("card_type") or "").lower(),
         )
     )
-    live_board_cards = [item for item in live_board_inventory if item.get("category") == "card"]
+    live_board_cards = [
+        item for item in live_board_inventory if item.get("category") == "card"
+    ]
     live_board_others: list[dict[str, object]] = []
 
     db_pon_count = len(pon_ports)
@@ -885,7 +937,11 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
 
     pon_port_table_rows: list[dict[str, object]] = []
     pon_snmp_by_norm_name: dict[str, dict[str, object]] = {}
-    for iface in (monitoring_data.get("pon_interfaces", []) if isinstance(monitoring_data, dict) else []):
+    for iface in (
+        monitoring_data.get("pon_interfaces", [])
+        if isinstance(monitoring_data, dict)
+        else []
+    ):
         norm = _normalize_port_name(str(iface.get("name") or ""))
         if norm and norm not in pon_snmp_by_norm_name:
             pon_snmp_by_norm_name[norm] = iface
@@ -902,7 +958,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         )
         if ont_port_index is None:
             continue
-        ont_count_by_port_index[ont_port_index] = ont_count_by_port_index.get(ont_port_index, 0) + 1
+        ont_count_by_port_index[ont_port_index] = (
+            ont_count_by_port_index.get(ont_port_index, 0) + 1
+        )
         ont_signal = getattr(ont, "olt_rx_signal_dbm", None)
         if ont_signal is None:
             continue
@@ -919,15 +977,23 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
 
     for port_idx, port in enumerate(pon_ports):
         ps = port_stats.get(str(port.id), {})
-        iface = pon_snmp_by_norm_name.get(_normalize_port_name(getattr(port, "name", None)))
+        iface = pon_snmp_by_norm_name.get(
+            _normalize_port_name(getattr(port, "name", None))
+        )
         row_port_index = _extract_port_index(getattr(port, "port_number", None))
         if row_port_index is None:
             row_port_index = _extract_port_index(getattr(port, "name", None))
         assigned_total = int(ps.get("total", 0) or 0)
-        fallback_total = ont_count_by_port_index.get(row_port_index, 0) if row_port_index is not None else 0
+        fallback_total = (
+            ont_count_by_port_index.get(row_port_index, 0)
+            if row_port_index is not None
+            else 0
+        )
         resolved_total = assigned_total if assigned_total > 0 else fallback_total
         card_port = getattr(port, "olt_card_port", None)
-        sfp_modules = list(getattr(card_port, "sfp_modules", []) or []) if card_port else []
+        sfp_modules = (
+            list(getattr(card_port, "sfp_modules", []) or []) if card_port else []
+        )
         active_sfps = [m for m in sfp_modules if getattr(m, "is_active", True)]
         tx_power_dbm = None
         for sfp in active_sfps:
@@ -952,10 +1018,16 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             getattr(card_port, "name", None),
         )
         description = getattr(port, "notes", None) or (
-            str(iface.get("description") or "").strip() if isinstance(iface, dict) else None
+            str(iface.get("description") or "").strip()
+            if isinstance(iface, dict)
+            else None
         )
 
-        status_val = str((iface or {}).get("status") or "").lower() if isinstance(iface, dict) else ""
+        status_val = (
+            str((iface or {}).get("status") or "").lower()
+            if isinstance(iface, dict)
+            else ""
+        )
         if status_val not in {"up", "down"}:
             if int(ps.get("online", 0) or 0) > 0:
                 status_val = "up"
@@ -973,7 +1045,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         if avg_signal_dbm is None and row_port_index is not None:
             signal_count = ont_signal_count_by_port_index.get(row_port_index, 0)
             if signal_count > 0:
-                avg_signal_dbm = ont_signal_sum_by_port_index[row_port_index] / signal_count
+                avg_signal_dbm = (
+                    ont_signal_sum_by_port_index[row_port_index] / signal_count
+                )
 
         pon_port_table_rows.append(
             {
@@ -1014,9 +1088,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             matched_onts: list[Any] = []
             if pon_hint:
                 matched_onts = [
-                    ont
-                    for ont in ont_candidates
-                    if pon_hint in _ont_pon_hints(ont)
+                    ont for ont in ont_candidates if pon_hint in _ont_pon_hints(ont)
                 ]
 
             signal_values = [
@@ -1111,9 +1183,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
 
     olt_vlans = list(
         db.scalars(
-            select(Vlan)
-            .where(Vlan.olt_device_id == olt.id)
-            .order_by(Vlan.tag.asc())
+            select(Vlan).where(Vlan.olt_device_id == olt.id).order_by(Vlan.tag.asc())
         ).all()
     )
     olt_ip_pools = list(
@@ -1439,7 +1509,9 @@ def onts_list_page_data(
                 "olt_id": str(olt.id) if olt else "",
                 "pon_port_name": getattr(pon_port, "name", None),
                 "pon_port_display": pon_display,
-                "subscriber_name": _subscriber_display_name(subscriber) if subscriber else "",
+                "subscriber_name": _subscriber_display_name(subscriber)
+                if subscriber
+                else "",
                 "subscriber_customer_url": (
                     f"/admin/customers/organization/{subscriber.organization_id}"
                     if subscriber and getattr(subscriber, "organization_id", None)
@@ -1585,7 +1657,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             if hasattr(link, "splitter_port") and link.splitter_port:
                 sp = link.splitter_port
                 if hasattr(sp, "splitter") and sp.splitter:
-                    network_path["splitter_name"] = sp.splitter.name or str(sp.splitter.id)[:8]
+                    network_path["splitter_name"] = (
+                        sp.splitter.name or str(sp.splitter.id)[:8]
+                    )
 
     # Subscriber and subscription info
     subscriber_info: dict[str, object] = {}
@@ -1607,7 +1681,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         subscription = assignment.subscription
         subscriber_info["subscription_id"] = str(subscription.id)
         subscriber_info["plan_name"] = (
-            subscription.offer.name if hasattr(subscription, "offer") and subscription.offer else None
+            subscription.offer.name
+            if hasattr(subscription, "offer") and subscription.offer
+            else None
         )
         subscriber_info["subscription_status"] = (
             subscription.status.value if subscription.status else "unknown"
@@ -1631,7 +1707,11 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         if drift:
             provisioning_info["has_drift"] = drift.has_drift
             provisioning_info["drifted_fields"] = [
-                {"field": f.field_name, "desired": str(f.desired), "observed": str(f.observed)}
+                {
+                    "field": f.field_name,
+                    "desired": str(f.desired),
+                    "observed": str(f.observed),
+                }
                 for f in drift.drifted_fields
             ]
 
@@ -1641,12 +1721,16 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     available_profiles = ont_provisioning_profiles.list(db, is_active=True, limit=50)
 
     provisioning_runs: list[dict[str, object]] = []
-    subscription_id = getattr(assignment, "subscription_id", None) if assignment else None
+    subscription_id = (
+        getattr(assignment, "subscription_id", None) if assignment else None
+    )
     if subscription_id:
         raw_runs = (
             db.query(ProvisioningRun)
             .filter(ProvisioningRun.subscription_id == subscription_id)
-            .order_by(ProvisioningRun.started_at.desc(), ProvisioningRun.created_at.desc())
+            .order_by(
+                ProvisioningRun.started_at.desc(), ProvisioningRun.created_at.desc()
+            )
             .limit(5)
             .all()
         )
@@ -1742,7 +1826,9 @@ def consolidated_page_data(
     """Return consolidated network-devices page payload."""
     term = (search or "").strip().lower()
 
-    all_monitoring_devices = list(db.scalars(select(NetworkDevice).order_by(NetworkDevice.name)).all())
+    all_monitoring_devices = list(
+        db.scalars(select(NetworkDevice).order_by(NetworkDevice.name)).all()
+    )
     promoted_olts = [
         resolve_olt_device_for_network_device(db, device)
         for device in all_monitoring_devices
@@ -1790,7 +1876,9 @@ def consolidated_page_data(
     olts_by_id = {str(olt.id): olt for olt in raw_olts}
     for olt in promoted_olts:
         olts_by_id[str(olt.id)] = olt
-    olts = sorted(olts_by_id.values(), key=lambda olt: str(getattr(olt, "name", "") or "").lower())
+    olts = sorted(
+        olts_by_id.values(), key=lambda olt: str(getattr(olt, "name", "") or "").lower()
+    )
     monitoring_devices = all_monitoring_devices
     by_mgmt_ip = {d.mgmt_ip: d for d in monitoring_devices if d.mgmt_ip}
     by_hostname = {d.hostname: d for d in monitoring_devices if d.hostname}
@@ -1800,7 +1888,9 @@ def consolidated_page_data(
     if monitoring_device_ids:
         iface_rows = list(
             db.scalars(
-                select(DeviceInterface).where(DeviceInterface.device_id.in_(monitoring_device_ids))
+                select(DeviceInterface).where(
+                    DeviceInterface.device_id.in_(monitoring_device_ids)
+                )
             ).all()
         )
         for iface in iface_rows:
@@ -2004,7 +2094,9 @@ def backup_overview_page_data(
     status_filter = (status or "all").strip().lower()
     device_type_filter = (device_type or "all").strip().lower()
 
-    nas_devices = list(db.scalars(select(NasDevice).order_by(NasDevice.name.asc())).all())
+    nas_devices = list(
+        db.scalars(select(NasDevice).order_by(NasDevice.name.asc())).all()
+    )
     for device in nas_devices:
         latest = db.execute(
             select(NasConfigBackup)
@@ -2036,7 +2128,9 @@ def backup_overview_page_data(
                 "device_name": device.name,
                 "device_type": "nas",
                 "group": device.pop_site.name if device.pop_site else "-",
-                "vendor": device.vendor.value if getattr(device, "vendor", None) else None,
+                "vendor": device.vendor.value
+                if getattr(device, "vendor", None)
+                else None,
                 "model": device.model,
                 "ip_address": device.management_ip or device.ip_address or "-",
                 "port": device.management_port or "-",
@@ -2044,7 +2138,9 @@ def backup_overview_page_data(
                 "last_message": last_message,
                 "backup_status": backup_status,
                 "device_url": f"/admin/network/nas/devices/{device.id}",
-                "backup_url": f"/admin/network/nas/backups/{latest.id}" if latest else None,
+                "backup_url": f"/admin/network/nas/backups/{latest.id}"
+                if latest
+                else None,
                 "history_url": f"/admin/network/nas/devices/{device.id}/backups",
             }
         )
@@ -2101,7 +2197,8 @@ def backup_overview_page_data(
         rows = [
             row
             for row in rows
-            if term in " ".join(
+            if term
+            in " ".join(
                 str(value or "").lower()
                 for value in (
                     row["device_name"],
@@ -2132,9 +2229,15 @@ def backup_overview_page_data(
     return {
         "rows": rows,
         "stats": stats,
-        "status_filter": status_filter if status_filter in {"success", "stale", "failed"} else "all",
-        "device_type_filter": device_type_filter if device_type_filter in {"nas", "olt"} else "all",
+        "status_filter": status_filter
+        if status_filter in {"success", "stale", "failed"}
+        else "all",
+        "device_type_filter": device_type_filter
+        if device_type_filter in {"nas", "olt"}
+        else "all",
         "search_filter": search or "",
         "stale_hours": max(stale_hours, 1),
-        "sort_filter": sort if sort in {"last_backup_asc", "last_backup_desc"} else "last_backup_asc",
+        "sort_filter": sort
+        if sort in {"last_backup_asc", "last_backup_desc"}
+        else "last_backup_asc",
     }

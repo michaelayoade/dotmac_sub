@@ -15,6 +15,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class SyncResult(ListResponseMixin):
     created: int = 0
@@ -111,9 +112,7 @@ class GeoSync(ListResponseMixin):
                 continue
             seen_ids.add(pop.id)
             existing = (
-                db.query(GeoLocation)
-                .filter(GeoLocation.pop_site_id == pop.id)
-                .first()
+                db.query(GeoLocation).filter(GeoLocation.pop_site_id == pop.id).first()
             )
             if existing:
                 existing.name = pop.name

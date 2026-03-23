@@ -33,7 +33,6 @@ def _mask_secret(value: str) -> str:
     return f"{'*' * (len(value) - 4)}{value[-4:]}"
 
 
-
 def _read_templates(db: Session) -> list[dict[str, Any]]:
     raw = resolve_value(db, SettingDomain.comms, "whatsapp_message_templates")
     if isinstance(raw, list):
@@ -46,7 +45,6 @@ def _read_templates(db: Session) -> list[dict[str, Any]]:
         except json.JSONDecodeError:
             return []
     return []
-
 
 
 def build_config_state(db: Session) -> dict[str, Any]:
@@ -64,7 +62,6 @@ def build_config_state(db: Session) -> dict[str, Any]:
             "message_templates_json": json.dumps(config.get("templates", []), indent=2),
         },
     }
-
 
 
 def save_config(
@@ -87,34 +84,52 @@ def save_config(
             parsed = json.loads(message_templates_json)
         except json.JSONDecodeError as exc:
             raise ValueError("Message templates must be valid JSON") from exc
-        if not isinstance(parsed, list) or any(not isinstance(item, dict) for item in parsed):
+        if not isinstance(parsed, list) or any(
+            not isinstance(item, dict) for item in parsed
+        ):
             raise ValueError("Message templates must be a JSON array of objects")
         templates_value = parsed
 
     settings = domain_settings_service.comms_settings
 
-    existing_encrypted_key = str(resolve_value(db, SettingDomain.comms, "whatsapp_api_key") or "")
-    existing_encrypted_secret = str(resolve_value(db, SettingDomain.comms, "whatsapp_api_secret") or "")
+    existing_encrypted_key = str(
+        resolve_value(db, SettingDomain.comms, "whatsapp_api_key") or ""
+    )
+    existing_encrypted_secret = str(
+        resolve_value(db, SettingDomain.comms, "whatsapp_api_secret") or ""
+    )
 
-    encrypted_key = encrypt_credential(api_key.strip()) if api_key.strip() else existing_encrypted_key
+    encrypted_key = (
+        encrypt_credential(api_key.strip())
+        if api_key.strip()
+        else existing_encrypted_key
+    )
     encrypted_secret = (
-        encrypt_credential(api_secret.strip()) if api_secret.strip() else existing_encrypted_secret
+        encrypt_credential(api_secret.strip())
+        if api_secret.strip()
+        else existing_encrypted_secret
     )
 
     settings.upsert_by_key(
         db,
         "whatsapp_provider",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text=provider_value),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text=provider_value
+        ),
     )
     settings.upsert_by_key(
         db,
         "whatsapp_phone_number",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text=phone_number.strip()),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text=phone_number.strip()
+        ),
     )
     settings.upsert_by_key(
         db,
         "whatsapp_webhook_url",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text=webhook_url.strip()),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text=webhook_url.strip()
+        ),
     )
     settings.upsert_by_key(
         db,
@@ -143,7 +158,6 @@ def save_config(
             value_text=None,
         ),
     )
-
 
 
 def run_test_send(

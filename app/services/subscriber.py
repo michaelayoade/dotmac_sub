@@ -82,7 +82,9 @@ def is_splynx_deleted_import(subscriber: Subscriber) -> bool:
 
 
 def _metadata_text_clause(key: str):
-    return func.lower(func.trim(func.coalesce(Subscriber.metadata_[key].as_string(), "")))
+    return func.lower(
+        func.trim(func.coalesce(Subscriber.metadata_[key].as_string(), ""))
+    )
 
 
 def splynx_deleted_import_clause():
@@ -148,7 +150,9 @@ def _update_restricted_status_metadata(
             metadata["restricted_since"] = now.isoformat()
         metadata["restricted_status"] = next_status.value if next_status else None
     elif was_restricted:
-        metadata["last_restricted_status"] = previous_status.value if previous_status else None
+        metadata["last_restricted_status"] = (
+            previous_status.value if previous_status else None
+        )
         metadata["last_restricted_ended_at"] = now.isoformat()
 
     subscriber.metadata_ = metadata
@@ -159,7 +163,10 @@ def get_effective_created_at(subscriber: Subscriber) -> datetime | None:
     source_created = _metadata_datetime(metadata, "splynx_date_add")
     if source_created is not None:
         return source_created
-    if getattr(subscriber, "splynx_customer_id", None) and subscriber.account_start_date:
+    if (
+        getattr(subscriber, "splynx_customer_id", None)
+        and subscriber.account_start_date
+    ):
         return _coerce_utc_datetime(subscriber.account_start_date)
     return _coerce_utc_datetime(subscriber.created_at)
 
@@ -311,7 +318,9 @@ class Subscribers(ListResponseMixin):
                 setattr(subscriber, key, value)
             if category is not None:
                 subscriber.category = (
-                    category if isinstance(category, SubscriberCategory) else str(category)
+                    category
+                    if isinstance(category, SubscriberCategory)
+                    else str(category)
                 )
             if not subscriber.subscriber_number:
                 generated = numbering.generate_number(
@@ -431,8 +440,13 @@ class Subscribers(ListResponseMixin):
             if normalized_status == "inactive":
                 query = query.filter(Subscriber.is_active.is_(False))
             elif normalized_status in (
-                "active", "blocked", "suspended", "disabled",
-                "canceled", "new", "delinquent",
+                "active",
+                "blocked",
+                "suspended",
+                "disabled",
+                "canceled",
+                "new",
+                "delinquent",
             ):
                 query = query.filter(Subscriber.status == normalized_status)
         # Full-text search across subscriber + related tables
@@ -465,12 +479,14 @@ class Subscribers(ListResponseMixin):
                 # Subscription fields (IP, login, MAC)
                 sub_match = (
                     db.query(Subscription.subscriber_id)
-                    .filter(or_(
-                        Subscription.login.ilike(like),
-                        Subscription.ipv4_address.ilike(like),
-                        Subscription.ipv6_address.ilike(like),
-                        Subscription.mac_address.ilike(like),
-                    ))
+                    .filter(
+                        or_(
+                            Subscription.login.ilike(like),
+                            Subscription.ipv4_address.ilike(like),
+                            Subscription.ipv6_address.ilike(like),
+                            Subscription.mac_address.ilike(like),
+                        )
+                    )
                     .correlate(Subscriber)
                     .exists()
                 )
@@ -528,27 +544,33 @@ class Subscribers(ListResponseMixin):
                         ),
                     )
                 )
-                query = query.filter(or_(
-                    direct_conditions,
-                    Subscriber.id.in_(
-                        db.query(Subscription.subscriber_id).filter(or_(
-                            Subscription.login.ilike(like),
-                            Subscription.ipv4_address.ilike(like),
-                            Subscription.ipv6_address.ilike(like),
-                            Subscription.mac_address.ilike(like),
-                        ))
-                    ),
-                    cred_match,
-                    ont_match,
-                    nas_match,
-                    pop_site_match,
-                    cabinet_match,
-                ))
+                query = query.filter(
+                    or_(
+                        direct_conditions,
+                        Subscriber.id.in_(
+                            db.query(Subscription.subscriber_id).filter(
+                                or_(
+                                    Subscription.login.ilike(like),
+                                    Subscription.ipv4_address.ilike(like),
+                                    Subscription.ipv6_address.ilike(like),
+                                    Subscription.mac_address.ilike(like),
+                                )
+                            )
+                        ),
+                        cred_match,
+                        ont_match,
+                        nas_match,
+                        pop_site_match,
+                        cabinet_match,
+                    )
+                )
         # Backwards-compat: allow filtering by legacy "person_id" keyword.
         if person_id:
             query = query.filter(Subscriber.id == coerce_uuid(person_id))
         if organization_id:
-            query = query.filter(Subscriber.organization_id == coerce_uuid(organization_id))
+            query = query.filter(
+                Subscriber.organization_id == coerce_uuid(organization_id)
+            )
         if subscriber_type:
             normalized = subscriber_type.strip().lower()
             if normalized == "person":
@@ -693,8 +715,13 @@ class Subscribers(ListResponseMixin):
             if normalized_status == "inactive":
                 query = query.filter(Subscriber.is_active.is_(False))
             elif normalized_status in (
-                "active", "blocked", "suspended", "disabled",
-                "canceled", "new", "delinquent",
+                "active",
+                "blocked",
+                "suspended",
+                "disabled",
+                "canceled",
+                "new",
+                "delinquent",
             ):
                 query = query.filter(Subscriber.status == normalized_status)
         if search:
@@ -710,66 +737,73 @@ class Subscribers(ListResponseMixin):
                 from app.models.network_monitoring import PopSite
 
                 like = f"%{term}%"
-                query = query.filter(or_(
-                    Subscriber.first_name.ilike(like),
-                    Subscriber.last_name.ilike(like),
-                    Subscriber.display_name.ilike(like),
-                    Subscriber.email.ilike(like),
-                    Subscriber.phone.ilike(like),
-                    Subscriber.subscriber_number.ilike(like),
-                    Subscriber.account_number.ilike(like),
-                    Subscriber.address_line1.ilike(like),
-                    Subscriber.city.ilike(like),
-                    Subscriber.notes.ilike(like),
-                    Subscriber.id.in_(
-                        db.query(Subscription.subscriber_id).filter(or_(
-                            Subscription.login.ilike(like),
-                            Subscription.ipv4_address.ilike(like),
-                            Subscription.ipv6_address.ilike(like),
-                            Subscription.mac_address.ilike(like),
-                        ))
-                    ),
-                    Subscriber.id.in_(
-                        db.query(AccessCredential.subscriber_id).filter(
-                            AccessCredential.username.ilike(like),
-                        )
-                    ),
-                    Subscriber.id.in_(
-                        db.query(OntAssignment.subscriber_id).join(
-                            OntUnit, OntUnit.id == OntAssignment.ont_unit_id,
-                        ).filter(OntUnit.serial_number.ilike(like))
-                    ),
-                    Subscriber.subscriptions.any(
-                        Subscription.provisioning_nas_device.has(
-                            or_(
-                                NasDevice.name.ilike(like),
-                                NasDevice.code.ilike(like),
-                            )
-                        )
-                    ),
-                    Subscriber.subscriptions.any(
-                        Subscription.provisioning_nas_device.has(
-                            NasDevice.pop_site.has(
+                query = query.filter(
+                    or_(
+                        Subscriber.first_name.ilike(like),
+                        Subscriber.last_name.ilike(like),
+                        Subscriber.display_name.ilike(like),
+                        Subscriber.email.ilike(like),
+                        Subscriber.phone.ilike(like),
+                        Subscriber.subscriber_number.ilike(like),
+                        Subscriber.account_number.ilike(like),
+                        Subscriber.address_line1.ilike(like),
+                        Subscriber.city.ilike(like),
+                        Subscriber.notes.ilike(like),
+                        Subscriber.id.in_(
+                            db.query(Subscription.subscriber_id).filter(
                                 or_(
-                                    PopSite.name.ilike(like),
-                                    PopSite.code.ilike(like),
+                                    Subscription.login.ilike(like),
+                                    Subscription.ipv4_address.ilike(like),
+                                    Subscription.ipv6_address.ilike(like),
+                                    Subscription.mac_address.ilike(like),
                                 )
                             )
-                        )
-                    ),
-                    Subscriber.ont_assignments.any(
-                        OntAssignment.ont_unit.has(
-                            OntUnit.splitter.has(
-                                Splitter.fdh.has(
+                        ),
+                        Subscriber.id.in_(
+                            db.query(AccessCredential.subscriber_id).filter(
+                                AccessCredential.username.ilike(like),
+                            )
+                        ),
+                        Subscriber.id.in_(
+                            db.query(OntAssignment.subscriber_id)
+                            .join(
+                                OntUnit,
+                                OntUnit.id == OntAssignment.ont_unit_id,
+                            )
+                            .filter(OntUnit.serial_number.ilike(like))
+                        ),
+                        Subscriber.subscriptions.any(
+                            Subscription.provisioning_nas_device.has(
+                                or_(
+                                    NasDevice.name.ilike(like),
+                                    NasDevice.code.ilike(like),
+                                )
+                            )
+                        ),
+                        Subscriber.subscriptions.any(
+                            Subscription.provisioning_nas_device.has(
+                                NasDevice.pop_site.has(
                                     or_(
-                                        FdhCabinet.name.ilike(like),
-                                        FdhCabinet.code.ilike(like),
+                                        PopSite.name.ilike(like),
+                                        PopSite.code.ilike(like),
                                     )
                                 )
-                            ),
-                        )
-                    ),
-                ))
+                            )
+                        ),
+                        Subscriber.ont_assignments.any(
+                            OntAssignment.ont_unit.has(
+                                OntUnit.splitter.has(
+                                    Splitter.fdh.has(
+                                        or_(
+                                            FdhCabinet.name.ilike(like),
+                                            FdhCabinet.code.ilike(like),
+                                        )
+                                    )
+                                ),
+                            )
+                        ),
+                    )
+                )
         if organization_id:
             query = query.filter(
                 Subscriber.organization_id == coerce_uuid(organization_id)
@@ -809,7 +843,8 @@ class Subscribers(ListResponseMixin):
 
         # New this month
         new_this_month = sum(
-            1 for s in dashboard_subs
+            1
+            for s in dashboard_subs
             if (
                 (created_at := get_effective_created_at(s)) is not None
                 and created_at >= month_start
@@ -828,7 +863,8 @@ class Subscribers(ListResponseMixin):
         # Churn rate: canceled in last 30 days / active at start of period
         thirty_days_ago = now - timedelta(days=30)
         churned_recent = sum(
-            1 for s in dashboard_subs
+            1
+            for s in dashboard_subs
             if (
                 getattr(s, "status", None) == SubscriberStatus.canceled
                 and (updated_at := get_effective_updated_at(s)) is not None
@@ -860,7 +896,8 @@ class Subscribers(ListResponseMixin):
                 year -= 1
             labels.append(calendar.month_abbr[month])
             count = sum(
-                1 for s in dashboard_subs
+                1
+                for s in dashboard_subs
                 if (
                     (created_at := get_effective_created_at(s)) is not None
                     and created_at.year == year
@@ -874,7 +911,9 @@ class Subscribers(ListResponseMixin):
         # Recent subscribers
         recent = sorted(
             dashboard_subs,
-            key=lambda s: get_effective_created_at(s) or datetime.min.replace(tzinfo=UTC),
+            key=lambda s: (
+                get_effective_created_at(s) or datetime.min.replace(tzinfo=UTC)
+            ),
             reverse=True,
         )[:10]
 
@@ -1088,7 +1127,9 @@ class SubscriberCustomFields(ListResponseMixin):
     def get(db: Session, custom_field_id: str):
         custom_field = db.get(SubscriberCustomField, custom_field_id)
         if not custom_field:
-            raise HTTPException(status_code=404, detail="Subscriber custom field not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber custom field not found"
+            )
         return custom_field
 
     @staticmethod
@@ -1123,7 +1164,9 @@ class SubscriberCustomFields(ListResponseMixin):
     def update(db: Session, custom_field_id: str, payload: SubscriberCustomFieldUpdate):
         custom_field = db.get(SubscriberCustomField, custom_field_id)
         if not custom_field:
-            raise HTTPException(status_code=404, detail="Subscriber custom field not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber custom field not found"
+            )
         data = payload.model_dump(exclude_unset=True)
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
@@ -1139,7 +1182,9 @@ class SubscriberCustomFields(ListResponseMixin):
     def delete(db: Session, custom_field_id: str):
         custom_field = db.get(SubscriberCustomField, custom_field_id)
         if not custom_field:
-            raise HTTPException(status_code=404, detail="Subscriber custom field not found")
+            raise HTTPException(
+                status_code=404, detail="Subscriber custom field not found"
+            )
         custom_field.is_active = False
         db.commit()
 

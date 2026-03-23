@@ -60,7 +60,9 @@ class EnforcementHandler:
         elif event.event_type == EventType.invoice_overdue:
             self._handle_invoice_overdue(db, event)
 
-    def _handle_subscription_block(self, db: Session, event: Event, reason: str) -> None:
+    def _handle_subscription_block(
+        self, db: Session, event: Event, reason: str
+    ) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
             logger.warning("Skipping session disconnect: missing subscription_id.")
@@ -77,7 +79,9 @@ class EnforcementHandler:
                 db, str(subscription_id), reject_reason=reject_reason
             )
             if ip_result.get("ok"):
-                radius_service.reconcile_subscription_connectivity(db, str(subscription_id))
+                radius_service.reconcile_subscription_connectivity(
+                    db, str(subscription_id)
+                )
             # Remove credentials from external RADIUS so subscriber cannot re-authenticate
             if subscription:
                 radius_service.remove_external_radius_credentials(
@@ -114,9 +118,13 @@ class EnforcementHandler:
                 db, str(subscription_id)
             )
             if ip_result.get("ok"):
-                radius_service.reconcile_subscription_connectivity(db, str(subscription_id))
+                radius_service.reconcile_subscription_connectivity(
+                    db, str(subscription_id)
+                )
             if refresh_enabled:
-                disconnect_subscription_sessions(db, str(subscription_id), reason="restore")
+                disconnect_subscription_sessions(
+                    db, str(subscription_id), reason="restore"
+                )
             remove_subscription_address_list_block(db, str(subscription_id))
         except Exception as exc:
             logger.warning(
@@ -129,20 +137,26 @@ class EnforcementHandler:
         """Handle mid-session speed change via CoA-Update."""
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
-            logger.warning("Skipping speed change enforcement: missing subscription_id.")
+            logger.warning(
+                "Skipping speed change enforcement: missing subscription_id."
+            )
             return
         try:
             updated = update_subscription_sessions(
-                db, str(subscription_id), reason=event.event_type.value,
+                db,
+                str(subscription_id),
+                reason=event.event_type.value,
             )
             logger.info(
                 "Speed change enforcement: %s sessions updated for subscription %s.",
-                updated, subscription_id,
+                updated,
+                subscription_id,
             )
         except Exception as exc:
             logger.warning(
                 "Failed to apply speed change for subscription %s: %s",
-                subscription_id, exc,
+                subscription_id,
+                exc,
             )
 
     def _handle_account_throttle(self, db: Session, event: Event) -> None:
@@ -170,7 +184,10 @@ class EnforcementHandler:
         if not subscription_id or not account_id:
             logger.warning("Skipping FUP enforcement: missing subscription/account.")
             return
-        action = settings_spec.resolve_value(db, SettingDomain.usage, "fup_action") or "throttle"
+        action = (
+            settings_spec.resolve_value(db, SettingDomain.usage, "fup_action")
+            or "throttle"
+        )
         if action not in {"throttle", "suspend", "block", "none"}:
             action = "throttle"
         if action == "none":
@@ -183,11 +200,17 @@ class EnforcementHandler:
 
         if action == "block":
             try:
-                disconnect_subscription_sessions(db, str(subscription_id), reason="fup_block")
+                disconnect_subscription_sessions(
+                    db, str(subscription_id), reason="fup_block"
+                )
                 apply_subscription_address_list_block(db, str(subscription_id))
                 self._persist_fup_state(
-                    db, str(subscription_id), offer_id, rule_id,
-                    action_status="blocked", cap_resets_at=cap_resets_at_raw,
+                    db,
+                    str(subscription_id),
+                    offer_id,
+                    rule_id,
+                    action_status="blocked",
+                    cap_resets_at=cap_resets_at_raw,
                     notes="FUP block applied",
                 )
             except Exception as exc:
@@ -217,8 +240,12 @@ class EnforcementHandler:
                     account_id=subscription.subscriber_id,
                 )
                 self._persist_fup_state(
-                    db, str(subscription_id), offer_id, rule_id,
-                    action_status="blocked", cap_resets_at=cap_resets_at_raw,
+                    db,
+                    str(subscription_id),
+                    offer_id,
+                    rule_id,
+                    action_status="blocked",
+                    cap_resets_at=cap_resets_at_raw,
                     notes="FUP suspension applied",
                 )
             return
@@ -236,11 +263,21 @@ class EnforcementHandler:
                 refresh = settings_spec.resolve_value(
                     db, SettingDomain.radius, "refresh_sessions_on_profile_change"
                 )
-                refresh_enabled = str(refresh).lower() not in {"0", "false", "no", "off"}
+                refresh_enabled = str(refresh).lower() not in {
+                    "0",
+                    "false",
+                    "no",
+                    "off",
+                }
                 if refresh_enabled:
-                    disconnect_account_sessions(db, str(account_id), reason="fup_throttle")
+                    disconnect_account_sessions(
+                        db, str(account_id), reason="fup_throttle"
+                    )
                 self._persist_fup_state(
-                    db, str(subscription_id), offer_id, rule_id,
+                    db,
+                    str(subscription_id),
+                    offer_id,
+                    rule_id,
                     action_status="throttled",
                     throttle_profile_id=str(throttle_profile_id),
                     cap_resets_at=cap_resets_at_raw,
@@ -290,6 +327,7 @@ class EnforcementHandler:
             parsed_resets_at = None
             if cap_resets_at:
                 from datetime import datetime
+
                 try:
                     parsed_resets_at = datetime.fromisoformat(cap_resets_at)
                 except (ValueError, TypeError):
@@ -322,7 +360,9 @@ class EnforcementHandler:
 
             invoice_id = event.payload.get("invoice_id")
             restored = collections_service.restore_account_services(
-                db, str(account_id), invoice_id=str(invoice_id) if invoice_id else None,
+                db,
+                str(account_id),
+                invoice_id=str(invoice_id) if invoice_id else None,
             )
             if restored:
                 logger.info(
@@ -372,7 +412,9 @@ class EnforcementHandler:
                     due_aware = invoice.due_at
                     if due_aware.tzinfo is None:
                         due_aware = due_aware.replace(tzinfo=UTC)
-                    hours_overdue = (datetime.now(UTC) - due_aware).total_seconds() / 3600
+                    hours_overdue = (
+                        datetime.now(UTC) - due_aware
+                    ).total_seconds() / 3600
 
                     if hours_overdue < grace_hours:
                         metadata = dict(invoice.metadata_ or {})
@@ -391,12 +433,16 @@ class EnforcementHandler:
                             },
                             account_id=subscriber.id,
                         )
-                        metadata["suspension_warning_sent_at"] = datetime.now(UTC).isoformat()
+                        metadata["suspension_warning_sent_at"] = datetime.now(
+                            UTC
+                        ).isoformat()
                         invoice.metadata_ = metadata
                         db.flush()
                         logger.info(
                             "Sent suspension warning for account %s (%.1f hrs overdue, grace=%d hrs)",
-                            account_id, hours_overdue, grace_hours,
+                            account_id,
+                            hours_overdue,
+                            grace_hours,
                         )
                         return
 

@@ -1,4 +1,5 @@
 """NAS connection rules service."""
+
 import logging
 from typing import cast
 from uuid import UUID
@@ -34,10 +35,14 @@ class NasConnectionRules(ListResponseMixin):
         is_active: bool | None = None,
     ) -> list[NasConnectionRule]:
         device_id = coerce_uuid(nas_device_id)
-        query = select(NasConnectionRule).where(NasConnectionRule.nas_device_id == device_id)
+        query = select(NasConnectionRule).where(
+            NasConnectionRule.nas_device_id == device_id
+        )
         if is_active is not None:
             query = query.where(NasConnectionRule.is_active == is_active)
-        query = query.order_by(NasConnectionRule.priority.asc(), NasConnectionRule.name.asc())
+        query = query.order_by(
+            NasConnectionRule.priority.asc(), NasConnectionRule.name.asc()
+        )
         return list(db.execute(query).scalars().all())
 
     @staticmethod
@@ -103,7 +108,9 @@ class NasConnectionRules(ListResponseMixin):
         rule = NasConnectionRules.get(db, rule_id)
         device_id = coerce_uuid(nas_device_id)
         if rule.nas_device_id != device_id:
-            raise HTTPException(status_code=404, detail="Connection rule not found for NAS device")
+            raise HTTPException(
+                status_code=404, detail="Connection rule not found for NAS device"
+            )
         rule.is_active = is_active
         db.commit()
         db.refresh(rule)
@@ -114,7 +121,9 @@ class NasConnectionRules(ListResponseMixin):
         rule = NasConnectionRules.get(db, rule_id)
         device_id = coerce_uuid(nas_device_id)
         if rule.nas_device_id != device_id:
-            raise HTTPException(status_code=404, detail="Connection rule not found for NAS device")
+            raise HTTPException(
+                status_code=404, detail="Connection rule not found for NAS device"
+            )
         db.delete(rule)
         db.commit()
 

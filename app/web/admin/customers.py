@@ -79,9 +79,8 @@ def _get_subscriber(db: Session, subscriber_id: str):
 
 
 def _load_tax_rates(db: Session):
-    query = getattr(db, "query")
     return (
-        query(TaxRate)
+        db.query(TaxRate)
         .filter(TaxRate.is_active.is_(True))
         .order_by(TaxRate.name.asc())
         .all()
@@ -104,9 +103,8 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
     if customer_type == "person":
         subscriber = customer
     else:
-        query = getattr(db, "query")
         subscriber = (
-            query(Subscriber)
+            db.query(Subscriber)
             .filter(Subscriber.organization_id == customer.id)
             .order_by(Subscriber.created_at.asc())
             .first()
@@ -114,9 +112,7 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
         if not subscriber:
             return defaults
         others = (
-            query(Subscriber)
-            .filter(Subscriber.organization_id == customer.id)
-            .all()
+            db.query(Subscriber).filter(Subscriber.organization_id == customer.id).all()
         )
         comparable_fields = (
             "billing_enabled",
@@ -135,8 +131,12 @@ def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[st
         {
             "billing_enabled_override": (
                 "true" if subscriber.billing_enabled else "false"
-            ) if subscriber.billing_enabled is not None else "",
-            "captive_redirect_enabled": "true" if subscriber.captive_redirect_enabled else "false",
+            )
+            if subscriber.billing_enabled is not None
+            else "",
+            "captive_redirect_enabled": "true"
+            if subscriber.captive_redirect_enabled
+            else "false",
             "billing_day": str(subscriber.billing_day or ""),
             "payment_due_days": str(subscriber.payment_due_days or ""),
             "grace_period_days": str(subscriber.grace_period_days or ""),
@@ -170,7 +170,9 @@ def _toast_response(
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
-def _contacts_base_context(request: Request, db: Session, active_page: str = "contacts"):
+def _contacts_base_context(
+    request: Request, db: Session, active_page: str = "contacts"
+):
     """Base context for contacts pages."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -183,7 +185,11 @@ def _contacts_base_context(request: Request, db: Session, active_page: str = "co
     }
 
 
-@contacts_router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@contacts_router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def contacts_list(
     request: Request,
     search: str | None = None,
@@ -206,16 +212,28 @@ def contacts_list(
         )
     )
     # HTMX requests should return only the table+pagination partial.
-    template_name = "admin/contacts/_table.html" if request.headers.get("HX-Request") == "true" else "admin/contacts/index.html"
+    template_name = (
+        "admin/contacts/_table.html"
+        if request.headers.get("HX-Request") == "true"
+        else "admin/contacts/index.html"
+    )
     return templates.TemplateResponse(template_name, context)
 
 
-@contacts_router.get("/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@contacts_router.get(
+    "/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def contacts_new_redirect() -> RedirectResponse:
     return RedirectResponse(url="/admin/crm/contacts/new", status_code=302)
 
 
-@contacts_router.post("/{person_id}/convert", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@contacts_router.post(
+    "/{person_id}/convert",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def contacts_convert_to_subscriber(
     request: Request,
     person_id: uuid.UUID,
@@ -241,7 +259,11 @@ def contacts_convert_to_subscriber(
     return RedirectResponse(url=redirect_url, status_code=303)
 
 
-@router.get("", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def customers_list(
     request: Request,
     search: str | None = None,
@@ -277,6 +299,7 @@ def customers_list(
 
     # Get sidebar stats and current user
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -295,7 +318,12 @@ def customers_list(
 
 # Note: /new routes must be defined BEFORE /{customer_id} to avoid path matching issues
 
-@router.get("/wizard", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+
+@router.get(
+    "/wizard",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def customer_wizard_form(
     request: Request,
     db: Session = Depends(get_db),
@@ -330,23 +358,38 @@ def customer_wizard_create(
 ):
     """Create a customer from wizard (JSON submission)."""
     try:
-        created_type, created_id = web_customer_actions_service.create_customer_from_wizard(
-            db=db,
-            data=data,
+        created_type, created_id = (
+            web_customer_actions_service.create_customer_from_wizard(
+                db=db,
+                data=data,
+            )
         )
-        return {"success": True, "redirect": f"/admin/customers/{created_type}/{created_id}"}
+        return {
+            "success": True,
+            "redirect": f"/admin/customers/{created_type}/{created_id}",
+        }
 
     except ValueError as exc:
         return {"success": False, "message": str(exc)}
     except IntegrityError:
         db.rollback()
-        return {"success": False, "message": "A customer with this information already exists."}
+        return {
+            "success": False,
+            "message": "A customer with this information already exists.",
+        }
     except Exception as exc:
         logger.error("Customer wizard error: %s", exc)
-        return {"success": False, "message": "An unexpected error occurred. Please try again."}
+        return {
+            "success": False,
+            "message": "An unexpected error occurred. Please try again.",
+        }
 
 
-@router.get("/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.get(
+    "/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def customer_new(
     request: Request,
     type: str | None = "person",
@@ -359,7 +402,7 @@ def customer_new(
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
     pop_sites = (
-        getattr(db, "query")(PopSite)
+        db.query(PopSite)
         .filter(PopSite.is_active.is_(True))
         .order_by(PopSite.name)
         .all()
@@ -379,7 +422,11 @@ def customer_new(
     )
 
 
-@router.post("/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.post(
+    "/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def customer_create(
     request: Request,
     customer_type: str = Form(...),
@@ -474,11 +521,13 @@ def customer_create(
             "org_account_start_date": org_account_start_date,
             "metadata_json": _parse_json(metadata, "metadata"),
         }
-        created_type, created_id = web_customer_actions_service.create_customer_from_form(
-            db=db,
-            customer_type=customer_type,
-            form_data=form_data,
-            contact_columns=contact_columns,
+        created_type, created_id = (
+            web_customer_actions_service.create_customer_from_form(
+                db=db,
+                customer_type=customer_type,
+                form_data=form_data,
+                contact_columns=contact_columns,
+            )
         )
 
         return RedirectResponse(
@@ -491,6 +540,7 @@ def customer_create(
         # Ensure failed transactions don't break error-page queries/rendering.
         db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         contact_rows = []
@@ -526,7 +576,11 @@ def customer_create(
         )
 
 
-@router.get("/person/{customer_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/person/{customer_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def person_detail(
     request: Request,
     customer_id: str,
@@ -549,6 +603,7 @@ def person_detail(
         raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -563,7 +618,11 @@ def person_detail(
     )
 
 
-@router.get("/organization/{customer_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:read"))])
+@router.get(
+    "/organization/{customer_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def organization_detail(
     request: Request,
     customer_id: str,
@@ -586,6 +645,7 @@ def organization_detail(
         raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -828,7 +888,11 @@ def customer_user_activate_login(
             entity_type="customer",
             entity_id=str(customer_id),
             actor_id=actor_id,
-            metadata={"customer_type": customer_type, "login_active": True, "error": str(exc)},
+            metadata={
+                "customer_type": customer_type,
+                "login_active": True,
+                "error": str(exc),
+            },
             status_code=500,
             is_success=False,
         )
@@ -887,7 +951,11 @@ def customer_user_deactivate_login(
             entity_type="customer",
             entity_id=str(customer_id),
             actor_id=actor_id,
-            metadata={"customer_type": customer_type, "login_active": False, "error": str(exc)},
+            metadata={
+                "customer_type": customer_type,
+                "login_active": False,
+                "error": str(exc),
+            },
             status_code=500,
             is_success=False,
         )
@@ -976,7 +1044,11 @@ def organization_impersonate(
     return response
 
 
-@router.get("/person/{customer_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.get(
+    "/person/{customer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def person_edit(
     request: Request,
     customer_id: str,
@@ -996,6 +1068,7 @@ def person_edit(
         raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -1014,7 +1087,11 @@ def person_edit(
     )
 
 
-@router.get("/organization/{customer_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.get(
+    "/organization/{customer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def organization_edit(
     request: Request,
     customer_id: str,
@@ -1022,7 +1099,9 @@ def organization_edit(
 ):
     """Edit organization form."""
     try:
-        customer = subscriber_service.organizations.get(db=db, organization_id=customer_id)
+        customer = subscriber_service.organizations.get(
+            db=db, organization_id=customer_id
+        )
     except HTTPException:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1034,6 +1113,7 @@ def organization_edit(
         raise
 
     from app.web.admin import get_current_user, get_sidebar_stats
+
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
 
@@ -1052,7 +1132,11 @@ def organization_edit(
     )
 
 
-@router.post("/person/{customer_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.post(
+    "/person/{customer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def person_update(
     request: Request,
     customer_id: str,
@@ -1127,10 +1211,13 @@ def person_update(
             captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             payment_method=payment_method,
-            metadata_json=_parse_json(metadata, "metadata") if metadata is not None else None,
+            metadata_json=_parse_json(metadata, "metadata")
+            if metadata is not None
+            else None,
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -1149,6 +1236,7 @@ def person_update(
         raise
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         try:
@@ -1172,7 +1260,11 @@ def person_update(
         )
 
 
-@router.post("/organization/{customer_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.post(
+    "/organization/{customer_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def organization_update(
     request: Request,
     customer_id: str,
@@ -1216,6 +1308,7 @@ def organization_update(
         )
         metadata_payload = build_changes_metadata(before, after)
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -1232,10 +1325,13 @@ def organization_update(
         )
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         try:
-            customer = subscriber_service.organizations.get(db=db, organization_id=customer_id)
+            customer = subscriber_service.organizations.get(
+                db=db, organization_id=customer_id
+            )
         except Exception:
             customer = None
         return templates.TemplateResponse(
@@ -1255,7 +1351,11 @@ def organization_update(
         )
 
 
-@router.post("/person/{customer_id}/deactivate", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.post(
+    "/person/{customer_id}/deactivate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def person_deactivate(
     request: Request,
     customer_id: str,
@@ -1268,6 +1368,7 @@ def person_deactivate(
     )
     metadata_payload = build_changes_metadata(before, after)
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -1280,10 +1381,16 @@ def person_deactivate(
     )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
-    return RedirectResponse(url=f"/admin/customers/person/{customer_id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/customers/person/{customer_id}", status_code=303
+    )
 
 
-@router.post("/organization/{customer_id}/deactivate", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.post(
+    "/organization/{customer_id}/deactivate",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def organization_deactivate(
     request: Request,
     customer_id: str,
@@ -1295,6 +1402,7 @@ def organization_deactivate(
         customer_id=customer_id,
     )
     from app.web.admin import get_current_user
+
     current_user = get_current_user(request)
     log_audit_event(
         db=db,
@@ -1307,11 +1415,21 @@ def organization_deactivate(
     )
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Refresh": "true"})
-    return RedirectResponse(url=f"/admin/customers/organization/{customer_id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/customers/organization/{customer_id}", status_code=303
+    )
 
 
-@router.delete("/person/{customer_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:delete"))])
-@router.post("/person/{customer_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:delete"))])
+@router.delete(
+    "/person/{customer_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:delete"))],
+)
+@router.post(
+    "/person/{customer_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:delete"))],
+)
 def person_delete(
     request: Request,
     customer_id: str,
@@ -1319,8 +1437,11 @@ def person_delete(
 ):
     """Delete a person."""
     try:
-        web_customer_actions_service.delete_person_customer(db=db, customer_id=customer_id)
+        web_customer_actions_service.delete_person_customer(
+            db=db, customer_id=customer_id
+        )
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -1345,17 +1466,31 @@ def person_delete(
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
             "admin/errors/500.html",
-            {"request": request, "error": str(e), "current_user": current_user, "sidebar_stats": sidebar_stats},
+            {
+                "request": request,
+                "error": str(e),
+                "current_user": current_user,
+                "sidebar_stats": sidebar_stats,
+            },
             status_code=500,
         )
 
 
-@router.delete("/organization/{customer_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:delete"))])
-@router.post("/organization/{customer_id}/delete", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:delete"))])
+@router.delete(
+    "/organization/{customer_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:delete"))],
+)
+@router.post(
+    "/organization/{customer_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:delete"))],
+)
 def organization_delete(
     request: Request,
     customer_id: str,
@@ -1368,6 +1503,7 @@ def organization_delete(
             customer_id=customer_id,
         )
         from app.web.admin import get_current_user
+
         current_user = get_current_user(request)
         log_audit_event(
             db=db,
@@ -1392,11 +1528,17 @@ def organization_delete(
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
             "admin/errors/500.html",
-            {"request": request, "error": str(e), "current_user": current_user, "sidebar_stats": sidebar_stats},
+            {
+                "request": request,
+                "error": str(e),
+                "current_user": current_user,
+                "sidebar_stats": sidebar_stats,
+            },
             status_code=500,
         )
 
@@ -1405,7 +1547,12 @@ def organization_delete(
 # Address Management Routes
 # ============================================================================
 
-@router.post("/addresses", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+
+@router.post(
+    "/addresses",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def create_address(
     request: Request,
     subscriber_id: str = Form(...),
@@ -1446,11 +1593,17 @@ def create_address(
 
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
             "admin/errors/500.html",
-            {"request": request, "error": str(e), "current_user": current_user, "sidebar_stats": sidebar_stats},
+            {
+                "request": request,
+                "error": str(e),
+                "current_user": current_user,
+                "sidebar_stats": sidebar_stats,
+            },
             status_code=500,
         )
 
@@ -1508,7 +1661,9 @@ def geocode_primary_address(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invalid customer id") from exc
 
-    customer = subscriber_service.subscribers.get(db=db, subscriber_id=str(parsed_customer_id))
+    customer = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(parsed_customer_id)
+    )
     if not customer:
         raise HTTPException(status_code=404, detail="Customer not found")
 
@@ -1520,7 +1675,10 @@ def geocode_primary_address(
         limit=100,
         offset=0,
     )
-    primary_address = next((addr for addr in addresses if addr.is_primary), addresses[0] if addresses else None)
+    primary_address = next(
+        (addr for addr in addresses if addr.is_primary),
+        addresses[0] if addresses else None,
+    )
 
     created = False
     if primary_address is None:
@@ -1562,7 +1720,11 @@ def geocode_primary_address(
     )
 
 
-@router.delete("/addresses/{address_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.delete(
+    "/addresses/{address_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def delete_address(
     request: Request,
     address_id: str,
@@ -1570,7 +1732,9 @@ def delete_address(
 ):
     """Delete an address."""
     try:
-        web_customer_actions_service.delete_customer_address(db=db, address_id=address_id)
+        web_customer_actions_service.delete_customer_address(
+            db=db, address_id=address_id
+        )
         # Return empty response for HTMX to remove the element
         return HTMLResponse(content="")
     except Exception as e:
@@ -1585,7 +1749,12 @@ def delete_address(
 # Contact Management Routes
 # ============================================================================
 
-@router.post("/contacts", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+
+@router.post(
+    "/contacts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def create_contact(
     request: Request,
     account_id: str = Form(...),
@@ -1622,16 +1791,26 @@ def create_contact(
 
     except Exception as e:
         from app.web.admin import get_current_user, get_sidebar_stats
+
         sidebar_stats = get_sidebar_stats(db)
         current_user = get_current_user(request)
         return templates.TemplateResponse(
             "admin/errors/500.html",
-            {"request": request, "error": str(e), "current_user": current_user, "sidebar_stats": sidebar_stats},
+            {
+                "request": request,
+                "error": str(e),
+                "current_user": current_user,
+                "sidebar_stats": sidebar_stats,
+            },
             status_code=500,
         )
 
 
-@router.delete("/contacts/{contact_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("customer:write"))])
+@router.delete(
+    "/contacts/{contact_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def delete_contact(
     request: Request,
     contact_id: str,
@@ -1639,7 +1818,9 @@ def delete_contact(
 ):
     """Delete a contact."""
     try:
-        web_customer_actions_service.delete_customer_contact(db=db, contact_id=contact_id)
+        web_customer_actions_service.delete_customer_contact(
+            db=db, contact_id=contact_id
+        )
         # Return empty response for HTMX to remove the element
         return HTMLResponse(content="")
     except Exception as e:
@@ -1654,7 +1835,10 @@ def delete_contact(
 # Bulk Operations Routes
 # ============================================================================
 
-@router.post("/bulk/status", dependencies=[Depends(require_permission("customer:write"))])
+
+@router.post(
+    "/bulk/status", dependencies=[Depends(require_permission("customer:write"))]
+)
 def bulk_update_status(
     request: Request,
     data: dict = Depends(parse_json_body),
@@ -1666,10 +1850,14 @@ def bulk_update_status(
         new_status = data.get("status")
 
         if not customer_ids or not new_status:
-            raise HTTPException(status_code=400, detail="customer_ids and status are required")
+            raise HTTPException(
+                status_code=400, detail="customer_ids and status are required"
+            )
 
         if new_status not in ("active", "inactive"):
-            raise HTTPException(status_code=400, detail="status must be 'active' or 'inactive'")
+            raise HTTPException(
+                status_code=400, detail="status must be 'active' or 'inactive'"
+            )
 
         is_active = new_status == "active"
         return web_customer_actions_service.bulk_update_customer_status(
@@ -1683,7 +1871,9 @@ def bulk_update_status(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post("/bulk/delete", dependencies=[Depends(require_permission("customer:delete"))])
+@router.post(
+    "/bulk/delete", dependencies=[Depends(require_permission("customer:delete"))]
+)
 def bulk_delete_customers(
     request: Request,
     data: dict = Depends(parse_json_body),

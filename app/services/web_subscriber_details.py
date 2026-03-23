@@ -82,7 +82,9 @@ def build_subscriber_map_data(db: Session, subscriber, primary_address):
         customer_name = subscriber.organization.name or "Customer"
     else:
         full_name = f"{getattr(subscriber, 'first_name', '')} {getattr(subscriber, 'last_name', '')}".strip()
-        customer_name = full_name or getattr(subscriber, "display_name", None) or "Customer"
+        customer_name = (
+            full_name or getattr(subscriber, "display_name", None) or "Customer"
+        )
 
     features = [
         {
@@ -119,7 +121,10 @@ def build_subscriber_map_data(db: Session, subscriber, primary_address):
             features.append(
                 {
                     "type": "Feature",
-                    "geometry": {"type": "Point", "coordinates": [fdh.longitude, fdh.latitude]},
+                    "geometry": {
+                        "type": "Point",
+                        "coordinates": [fdh.longitude, fdh.latitude],
+                    },
                     "properties": {
                         "type": "fdh_cabinet",
                         "name": fdh.name,
@@ -215,11 +220,15 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
             if not ont:
                 continue
             status_value = (
-                ont.online_status.value
-                if getattr(ont, "online_status", None) is not None
-                and hasattr(ont.online_status, "value")
-                else str(getattr(ont, "online_status", "") or "")
-            ).strip().lower()
+                (
+                    ont.online_status.value
+                    if getattr(ont, "online_status", None) is not None
+                    and hasattr(ont.online_status, "value")
+                    else str(getattr(ont, "online_status", "") or "")
+                )
+                .strip()
+                .lower()
+            )
             equipment.append(
                 {
                     "type": "ONT",
@@ -300,7 +309,8 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             reverse=True,
         )
         subscriptions = [
-            s for s in all_subscriptions
+            s
+            for s in all_subscriptions
             if getattr(s, "status", None) == SubscriptionStatus.active
         ][:10]
         for sub in subscriptions:
@@ -360,7 +370,11 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
                     Decimal(str(getattr(inv, "balance_due", 0) or 0))
                     for inv in invoices
                     if inv.status
-                    in (InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue)
+                    in (
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    )
                 ),
                 Decimal("0.00"),
             )
@@ -377,9 +391,11 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             )
             available_credit = sum(
                 (
-                    Decimal(str(note.total or 0)) - Decimal(str(note.applied_total or 0))
+                    Decimal(str(note.total or 0))
+                    - Decimal(str(note.applied_total or 0))
                     for note in credit_notes
-                    if note.status in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
+                    if note.status
+                    in (CreditNoteStatus.issued, CreditNoteStatus.partially_applied)
                 ),
                 Decimal("0.00"),
             )
@@ -409,7 +425,9 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             .all()
         )
     except Exception:
-        logger.exception("Failed to load dunning cases for subscriber %s", subscriber_id)
+        logger.exception(
+            "Failed to load dunning cases for subscriber %s", subscriber_id
+        )
         db.rollback()
 
     # Payments
@@ -444,7 +462,9 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
             .all()
         )
     except Exception:
-        logger.exception("Failed to load service orders for subscriber %s", subscriber_id)
+        logger.exception(
+            "Failed to load service orders for subscriber %s", subscriber_id
+        )
         db.rollback()
 
     notifications = []
@@ -505,7 +525,9 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     channels = (
         db.query(SubscriberChannel)
         .filter(SubscriberChannel.subscriber_id == subscriber_id)
-        .order_by(SubscriberChannel.is_primary.desc(), SubscriberChannel.created_at.asc())
+        .order_by(
+            SubscriberChannel.is_primary.desc(), SubscriberChannel.created_at.asc()
+        )
         .all()
     )
     contacts: list[dict[str, object]] = []
@@ -569,7 +591,9 @@ def build_subscriber_detail_snapshot(db: Session, subscriber, subscriber_id):
     }
 
 
-def _build_speedtest_snapshot(db: Session, subscriber_id, subscriptions: list) -> dict[str, object]:
+def _build_speedtest_snapshot(
+    db: Session, subscriber_id, subscriptions: list
+) -> dict[str, object]:
     plan_download = 0.0
     plan_upload = 0.0
     for subscription in subscriptions:
@@ -622,8 +646,12 @@ def _build_speedtest_snapshot(db: Session, subscriber_id, subscriptions: list) -
         performance_rows.append(
             {
                 "test": test,
-                "down_ratio_pct": round((down_ratio or 0) * 100, 1) if down_ratio is not None else None,
-                "up_ratio_pct": round((up_ratio or 0) * 100, 1) if up_ratio is not None else None,
+                "down_ratio_pct": round((down_ratio or 0) * 100, 1)
+                if down_ratio is not None
+                else None,
+                "up_ratio_pct": round((up_ratio or 0) * 100, 1)
+                if up_ratio is not None
+                else None,
                 "is_underperforming": is_underperforming,
             }
         )
@@ -676,12 +704,20 @@ def build_subscriber_timeline(db: Session, subscriber_id):
     if actor_ids:
         people = {
             str(person.id): person
-            for person in db.query(Subscriber).filter(Subscriber.id.in_(actor_ids)).all()
+            for person in db.query(Subscriber)
+            .filter(Subscriber.id.in_(actor_ids))
+            .all()
         }
     timeline = []
     for event in audit_events:
-        actor = people.get(str(event.actor_id)) if getattr(event, "actor_id", None) else None
-        actor_name = f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        actor = (
+            people.get(str(event.actor_id))
+            if getattr(event, "actor_id", None)
+            else None
+        )
+        actor_name = (
+            f"{actor.first_name} {actor.last_name}".strip() if actor else "System"
+        )
         metadata = getattr(event, "metadata_", None) or {}
         comment_text = str(metadata.get("comment") or "").strip()
         is_todo = bool(metadata.get("is_todo"))
@@ -695,7 +731,9 @@ def build_subscriber_timeline(db: Session, subscriber_id):
                 attachment_id = str(item.get("id") or "").strip()
                 if not attachment_id:
                     continue
-                filename = str(item.get("filename") or "Attachment").strip() or "Attachment"
+                filename = (
+                    str(item.get("filename") or "Attachment").strip() or "Attachment"
+                )
                 attachments.append(
                     {
                         "id": attachment_id,
@@ -708,7 +746,9 @@ def build_subscriber_timeline(db: Session, subscriber_id):
         if comment_text:
             detail = f"{actor_name} · {comment_text}"
         else:
-            detail = actor_name if not change_summary else f"{actor_name} · {change_summary}"
+            detail = (
+                actor_name if not change_summary else f"{actor_name} · {change_summary}"
+            )
         timeline.append(
             {
                 "id": str(event.id),
@@ -748,7 +788,9 @@ def build_subscriber_timeline(db: Session, subscriber_id):
             if payload.get("direction"):
                 detail_parts.append(f"({payload['direction']})")
             if payload.get("from_status") and payload.get("to_status"):
-                detail_parts.append(f"{payload['from_status']} → {payload['to_status']}")
+                detail_parts.append(
+                    f"{payload['from_status']} → {payload['to_status']}"
+                )
             if payload.get("new_offer_name") and payload.get("previous_offer_name"):
                 detail_parts.append(
                     f"{payload['previous_offer_name']} → {payload['new_offer_name']}"
@@ -839,7 +881,9 @@ def build_subscriber_detail_page_context(db: Session, subscriber_id):
         "subscriber": subscriber,
         **detail_snapshot,
         **enrichment,
-        "billing_config": _build_billing_config(subscriber, detail_snapshot.get("stats") or {}),
+        "billing_config": _build_billing_config(
+            subscriber, detail_snapshot.get("stats") or {}
+        ),
         "subscriber_user_access": subscriber_user_access,
         "timeline": timeline,
         "offers": offers,
@@ -864,10 +908,14 @@ def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
         enrichment["reseller_name"] = None
 
     # Last online from metadata (backfilled from Splynx API)
-    enrichment["last_online"] = metadata.get("splynx_last_online") or metadata.get("last_online")
+    enrichment["last_online"] = metadata.get("splynx_last_online") or metadata.get(
+        "last_online"
+    )
 
     # Billing email
-    enrichment["billing_email"] = metadata.get("billing_email") or metadata.get("splynx_billing_email")
+    enrichment["billing_email"] = metadata.get("billing_email") or metadata.get(
+        "splynx_billing_email"
+    )
 
     # GPS coordinates
     gps_raw = metadata.get("splynx_gps") or metadata.get("gps")
@@ -889,9 +937,7 @@ def _build_subscriber_enrichment(db: Session, subscriber) -> dict:
 
     # NAS device names for active subscriptions
     subscriptions = (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == subscriber.id)
-        .all()
+        db.query(Subscription).filter(Subscription.subscriber_id == subscriber.id).all()
     )
     nas_names: dict = {}
     for sub in subscriptions:
@@ -943,7 +989,9 @@ def _build_billing_config(subscriber, stats: dict) -> dict[str, object]:
     next_block_label = "No block scheduled"
     balance_due = float(stats.get("balance_due") or 0)
     if balance_due > 0:
-        delay_days = max(blocking_days, int(getattr(subscriber, "grace_period_days", 0) or 0))
+        delay_days = max(
+            blocking_days, int(getattr(subscriber, "grace_period_days", 0) or 0)
+        )
         next_block_at = datetime.now(UTC) + timedelta(days=delay_days)
         if delay_days <= 0:
             next_block_label = "Immediately"

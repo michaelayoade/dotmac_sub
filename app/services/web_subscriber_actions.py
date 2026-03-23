@@ -114,7 +114,9 @@ def create_subscriber_from_full_form(
         organization_uuid = UUID(created_id)
         resolved_person_uuid = resolve_subscriber_for_org(db, organization_uuid)
         if not resolved_person_uuid:
-            raise ValueError("Could not resolve a primary subscriber for the organization.")
+            raise ValueError(
+                "Could not resolve a primary subscriber for the organization."
+            )
         person_uuid = resolved_person_uuid
 
     notes_value = subscriber_notes
@@ -297,10 +299,16 @@ def update_subscriber_from_form(
     return subscriber, before, after
 
 
-def delete_subscriber(db: Session, subscriber_id: UUID, actor_id: str | None = None) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=str(subscriber_id))
+def delete_subscriber(
+    db: Session, subscriber_id: UUID, actor_id: str | None = None
+) -> None:
+    subscriber = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(subscriber_id)
+    )
     if subscriber.is_active:
-        raise HTTPException(status_code=409, detail="Deactivate subscriber before deleting.")
+        raise HTTPException(
+            status_code=409, detail="Deactivate subscriber before deleting."
+        )
     web_system_restore_tool_service.mark_subscriber_deleted(
         db=db,
         subscriber_id=str(subscriber_id),
@@ -308,7 +316,9 @@ def delete_subscriber(db: Session, subscriber_id: UUID, actor_id: str | None = N
     )
 
 
-def bulk_set_subscriber_status(db: Session, subscriber_ids: list[str], is_active: bool) -> tuple[int, int]:
+def bulk_set_subscriber_status(
+    db: Session, subscriber_ids: list[str], is_active: bool
+) -> tuple[int, int]:
     updated_count = 0
     failed_count = 0
     for subscriber_id in subscriber_ids:
@@ -320,7 +330,9 @@ def bulk_set_subscriber_status(db: Session, subscriber_ids: list[str], is_active
             )
             updated_count += 1
         except Exception as exc:
-            logger.error("Failed to set status for subscriber %s: %s", subscriber_id, exc)
+            logger.error(
+                "Failed to set status for subscriber %s: %s", subscriber_id, exc
+            )
             failed_count += 1
             continue
     return updated_count, failed_count
@@ -336,7 +348,9 @@ def bulk_delete_inactive_subscribers(
     failed_count = 0
     for subscriber_id in subscriber_ids:
         try:
-            subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
+            subscriber = subscriber_service.subscribers.get(
+                db=db, subscriber_id=subscriber_id
+            )
             if subscriber.is_active:
                 skipped_active += 1
                 continue

@@ -102,7 +102,9 @@ def execute_create_olt_service_port(
         if success:
             logger.info(
                 "OLT service-port created: ONT %s, VLAN %s, GEM %d",
-                ont_unit_id, vlan_id, gem_index,
+                ont_unit_id,
+                vlan_id,
+                gem_index,
             )
             return ProvisioningResult(
                 status="ok",
@@ -283,15 +285,21 @@ def execute_push_tr069_wan_config(
             if root == "Device":
                 params["PPP.Interface.1.Enable"] = "true"
             else:
-                params["WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Enable"] = "1"
-                params["WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType"] = "IP_Routed"
+                params[
+                    "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Enable"
+                ] = "1"
+                params[
+                    "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType"
+                ] = "IP_Routed"
 
         wan_vlan = config.get("wan_vlan")
         if wan_vlan:
             if root == "Device":
                 params["Ethernet.VLANTermination.1.VLANID"] = str(wan_vlan)
             else:
-                params["WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.X_HW_VLAN"] = str(wan_vlan)
+                params[
+                    "WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.X_HW_VLAN"
+                ] = str(wan_vlan)
 
         if params:
             tr069_params = build_tr069_params(root, params)

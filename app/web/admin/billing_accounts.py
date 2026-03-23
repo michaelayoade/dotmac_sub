@@ -22,7 +22,11 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
-@router.get("/accounts", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:read"))])
+@router.get(
+    "/accounts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:read"))],
+)
 def accounts_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -51,7 +55,11 @@ def accounts_list(
     )
 
 
-@router.get("/accounts/new", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
+@router.get(
+    "/accounts/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:write"))],
+)
 def account_new(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -76,7 +84,11 @@ def account_new(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/accounts", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
+@router.post(
+    "/accounts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:write"))],
+)
 def account_create(
     request: Request,
     subscriber_id: str | None = Form(None),
@@ -123,7 +135,9 @@ def account_create(
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
                 **form_data,
-                "selected_subscriber_id": selected_subscriber_id if "selected_subscriber_id" in locals() else subscriber_id,
+                "selected_subscriber_id": selected_subscriber_id
+                if "selected_subscriber_id" in locals()
+                else subscriber_id,
             },
             status_code=400,
         )
@@ -137,16 +151,24 @@ def account_create(
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
         metadata=metadata_payload,
     )
-    return RedirectResponse(url=f"/admin/billing/accounts/{account.id}", status_code=303)
+    return RedirectResponse(
+        url=f"/admin/billing/accounts/{account.id}", status_code=303
+    )
 
 
-@router.get("/accounts/{account_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
+@router.get(
+    "/accounts/{account_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:write"))],
+)
 def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
     account = subscriber_service.accounts.get(db, str(account_id))
     customer_ref = (
-        f"organization:{account.organization_id}" if account.organization_id else f"person:{account.id}"
+        f"organization:{account.organization_id}"
+        if account.organization_id
+        else f"person:{account.id}"
     )
     form_data = web_billing_accounts_service.build_account_form_data(
         db,
@@ -163,8 +185,12 @@ def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_d
             "active_menu": "billing",
             "account": account,
             "selected_subscriber_id": str(account.id),
-            "selected_reseller_id": str(account.reseller_id) if account.reseller_id else "",
-            "selected_tax_rate_id": str(account.tax_rate_id) if account.tax_rate_id else "",
+            "selected_reseller_id": str(account.reseller_id)
+            if account.reseller_id
+            else "",
+            "selected_tax_rate_id": str(account.tax_rate_id)
+            if account.tax_rate_id
+            else "",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
             **form_data,
@@ -172,7 +198,11 @@ def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_d
     )
 
 
-@router.post("/accounts/{account_id}/edit", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:write"))])
+@router.post(
+    "/accounts/{account_id}/edit",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:write"))],
+)
 def account_update(
     request: Request,
     account_id: UUID,
@@ -187,14 +217,16 @@ def account_update(
 
     before = subscriber_service.accounts.get(db, str(account_id))
     try:
-        account, metadata_payload = web_billing_accounts_service.update_account_from_form_with_metadata(
-            db,
-            account_id=str(account_id),
-            reseller_id=reseller_id,
-            tax_rate_id=tax_rate_id,
-            account_number=account_number,
-            status=status,
-            notes=notes,
+        account, metadata_payload = (
+            web_billing_accounts_service.update_account_from_form_with_metadata(
+                db,
+                account_id=str(account_id),
+                reseller_id=reseller_id,
+                tax_rate_id=tax_rate_id,
+                account_number=account_number,
+                status=status,
+                notes=notes,
+            )
         )
         current_user = get_current_user(request)
         log_audit_event(
@@ -206,10 +238,14 @@ def account_update(
             actor_id=str(current_user.get("subscriber_id")) if current_user else None,
             metadata=metadata_payload,
         )
-        return RedirectResponse(url=f"/admin/billing/accounts/{account.id}", status_code=303)
+        return RedirectResponse(
+            url=f"/admin/billing/accounts/{account.id}", status_code=303
+        )
     except Exception as exc:
         customer_ref = (
-            f"organization:{before.organization_id}" if before.organization_id else f"person:{before.id}"
+            f"organization:{before.organization_id}"
+            if before.organization_id
+            else f"person:{before.id}"
         )
         form_data = web_billing_accounts_service.build_account_form_data(
             db,
@@ -227,8 +263,10 @@ def account_update(
                 "active_menu": "billing",
                 "account": before,
                 "selected_subscriber_id": str(before.id),
-                "selected_reseller_id": reseller_id or (str(before.reseller_id) if before.reseller_id else ""),
-                "selected_tax_rate_id": tax_rate_id or (str(before.tax_rate_id) if before.tax_rate_id else ""),
+                "selected_reseller_id": reseller_id
+                or (str(before.reseller_id) if before.reseller_id else ""),
+                "selected_tax_rate_id": tax_rate_id
+                or (str(before.tax_rate_id) if before.tax_rate_id else ""),
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
                 **form_data,
@@ -237,7 +275,11 @@ def account_update(
         )
 
 
-@router.get("/accounts/{account_id}", response_class=HTMLResponse, dependencies=[Depends(require_permission("billing:account:read"))])
+@router.get(
+    "/accounts/{account_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:account:read"))],
+)
 def account_detail(
     request: Request,
     account_id: UUID,
@@ -245,8 +287,12 @@ def account_detail(
     statement_end: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    state = web_billing_accounts_service.build_account_detail_data(db, account_id=str(account_id))
-    statement_range = web_billing_statements_service.parse_statement_range(statement_start, statement_end)
+    state = web_billing_accounts_service.build_account_detail_data(
+        db, account_id=str(account_id)
+    )
+    statement_range = web_billing_statements_service.parse_statement_range(
+        statement_start, statement_end
+    )
     statement = web_billing_statements_service.build_account_statement(
         db,
         account_id=account_id,
@@ -282,9 +328,13 @@ def account_statement_csv(
     end_date: str | None = Query(None),
     db: Session = Depends(get_db),
 ):
-    state = web_billing_accounts_service.build_account_detail_data(db, account_id=str(account_id))
+    state = web_billing_accounts_service.build_account_detail_data(
+        db, account_id=str(account_id)
+    )
     account = state["account"]
-    date_range = web_billing_statements_service.parse_statement_range(start_date, end_date)
+    date_range = web_billing_statements_service.parse_statement_range(
+        start_date, end_date
+    )
     statement = web_billing_statements_service.build_account_statement(
         db,
         account_id=account_id,
@@ -319,9 +369,13 @@ def account_statement_send(
     recipient_email: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    state = web_billing_accounts_service.build_account_detail_data(db, account_id=str(account_id))
+    state = web_billing_accounts_service.build_account_detail_data(
+        db, account_id=str(account_id)
+    )
     account = state["account"]
-    date_range = web_billing_statements_service.parse_statement_range(start_date, end_date)
+    date_range = web_billing_statements_service.parse_statement_range(
+        start_date, end_date
+    )
     statement = web_billing_statements_service.build_account_statement(
         db,
         account_id=account_id,
@@ -329,7 +383,9 @@ def account_statement_send(
     )
     to_email = (recipient_email or account.email or "").strip()
     if not to_email:
-        raise HTTPException(status_code=400, detail="No recipient email set for this account")
+        raise HTTPException(
+            status_code=400, detail="No recipient email set for this account"
+        )
     notification_service.notifications.create(
         db,
         NotificationCreate(

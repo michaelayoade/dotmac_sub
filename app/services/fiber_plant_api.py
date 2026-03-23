@@ -20,6 +20,7 @@ from app.models.network_monitoring import PopSite
 
 logger = logging.getLogger(__name__)
 
+
 def build_fiber_plant_geojson(
     db: Session,
     *,

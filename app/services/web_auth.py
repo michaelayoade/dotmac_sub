@@ -38,7 +38,9 @@ def _safe_next(next_url: str | None, fallback: str = "/admin/dashboard") -> str:
     return fallback
 
 
-def _set_refresh_cookie(response, db: Session, refresh_token: str, request: Request | None = None):
+def _set_refresh_cookie(
+    response, db: Session, refresh_token: str, request: Request | None = None
+):
     settings = AuthFlow.refresh_cookie_settings(db)
     secure_cookie = settings["secure"]
     if request is not None:
@@ -116,7 +118,10 @@ def login_submit(
         error_msg = "Invalid credentials"
         if hasattr(exc, "detail"):
             detail = exc.detail
-            if isinstance(detail, dict) and detail.get("code") == "PASSWORD_RESET_REQUIRED":
+            if (
+                isinstance(detail, dict)
+                and detail.get("code") == "PASSWORD_RESET_REQUIRED"
+            ):
                 reset = auth_flow_service.request_password_reset(db=db, email=username)
                 if reset and reset.get("token"):
                     return RedirectResponse(
@@ -182,7 +187,11 @@ def mfa_submit(
     except Exception:
         return templates.TemplateResponse(
             "auth/mfa.html",
-            {"request": request, "error": "Invalid verification code", "next": next_url},
+            {
+                "request": request,
+                "error": "Invalid verification code",
+                "next": next_url,
+            },
             status_code=401,
         )
 
@@ -246,7 +255,9 @@ def reset_password_submit(
     try:
         auth_flow_service.reset_password(db=db, token=token, new_password=password)
         separator = "&" if "?" in safe_next_login else "?"
-        return RedirectResponse(url=f"{safe_next_login}{separator}reset=success", status_code=303)
+        return RedirectResponse(
+            url=f"{safe_next_login}{separator}reset=success", status_code=303
+        )
     except Exception:
         return templates.TemplateResponse(
             "auth/reset-password.html",

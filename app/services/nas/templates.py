@@ -4,6 +4,7 @@ Provisioning Template Service.
 Manages CRUD operations and template rendering for NAS provisioning templates.
 Extracted from the monolithic nas.py service.
 """
+
 import logging
 import re
 from typing import Any, cast
@@ -33,7 +34,9 @@ class ProvisioningTemplates(ListResponseMixin):
     """Service class for provisioning template operations."""
 
     @staticmethod
-    def create(db: Session, payload: ProvisioningTemplateCreate) -> ProvisioningTemplate:
+    def create(
+        db: Session, payload: ProvisioningTemplateCreate
+    ) -> ProvisioningTemplate:
         """Create a new provisioning template."""
         data = payload.model_dump(exclude_unset=True)
 
@@ -58,7 +61,9 @@ class ProvisioningTemplates(ListResponseMixin):
             ProvisioningTemplate | None, db.get(ProvisioningTemplate, template_id)
         )
         if not template:
-            raise HTTPException(status_code=404, detail="Provisioning template not found")
+            raise HTTPException(
+                status_code=404, detail="Provisioning template not found"
+            )
         return template
 
     @staticmethod

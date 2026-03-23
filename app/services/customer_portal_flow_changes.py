@@ -212,12 +212,18 @@ def get_offer_price_summary(offer: CatalogOffer | None) -> SimpleNamespace:
                 currency = str(price.currency or currency)
                 raw_cycle = price.billing_cycle
                 if raw_cycle:
-                    cycle_value = raw_cycle.value if hasattr(raw_cycle, "value") else str(raw_cycle)
+                    cycle_value = (
+                        raw_cycle.value
+                        if hasattr(raw_cycle, "value")
+                        else str(raw_cycle)
+                    )
                 break
         else:
             raw_cycle = getattr(offer, "billing_cycle", None)
             if raw_cycle:
-                cycle_value = raw_cycle.value if hasattr(raw_cycle, "value") else str(raw_cycle)
+                cycle_value = (
+                    raw_cycle.value if hasattr(raw_cycle, "value") else str(raw_cycle)
+                )
 
     return SimpleNamespace(
         amount=float(amount),
@@ -232,7 +238,9 @@ def get_plan_change_copy(subscription: Subscription) -> dict[str, str]:
     """Return billing-mode-aware customer copy for plan changes."""
     billing_mode = getattr(subscription, "billing_mode", None)
     billing_mode_value = (
-        billing_mode.value if billing_mode and hasattr(billing_mode, "value") else str(billing_mode or "")
+        billing_mode.value
+        if billing_mode and hasattr(billing_mode, "value")
+        else str(billing_mode or "")
     ).lower()
     if billing_mode_value == "prepaid":
         return {
@@ -322,7 +330,11 @@ def apply_instant_plan_change(
         proration = _calculate_proration(db, subscription, offer_id)
         if proration and abs(proration.get("net_amount", 0)) >= 1:
             _generate_proration_invoice(
-                db, subscription, proration, old_name, new_name,
+                db,
+                subscription,
+                proration,
+                old_name,
+                new_name,
             )
             proration_info = {
                 "net_amount": float(proration["net_amount"]),

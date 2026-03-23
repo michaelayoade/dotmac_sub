@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 # Paginated list result type
 # ---------------------------------------------------------------------------
 
+
 class PaginatedResult:
     """Holds items, total count, and total pages for a paginated query."""
 
@@ -73,7 +74,9 @@ def settings_overview_counts(db: Session) -> dict[str, int]:
         model_is_active = model.is_active  # type: ignore[attr-defined]
         total = db.execute(select(func.count(model_id))).scalar() or 0
         active = (
-            db.execute(select(func.count(model_id)).where(model_is_active.is_(True))).scalar()
+            db.execute(
+                select(func.count(model_id)).where(model_is_active.is_(True))
+            ).scalar()
             or 0
         )
         counts[f"{prefix}_count"] = total
@@ -103,9 +106,7 @@ def list_region_zones_paginated(
         count_stmt = count_stmt.where(RegionZone.is_active == is_active)
     if search:
         term = f"%{search.strip()}%"
-        search_filter = or_(
-            RegionZone.name.ilike(term), RegionZone.code.ilike(term)
-        )
+        search_filter = or_(RegionZone.name.ilike(term), RegionZone.code.ilike(term))
         stmt = stmt.where(search_filter)
         count_stmt = count_stmt.where(search_filter)
 
@@ -299,17 +300,20 @@ def bulk_delete_add_ons(db: Session, ids: list[str]) -> None:
 
 def export_region_zones_csv(db: Session) -> str:
     """Return CSV content for all region zones."""
-    zones = db.scalars(
-        select(RegionZone).order_by(RegionZone.name.asc())
-    ).all()
+    zones = db.scalars(select(RegionZone).order_by(RegionZone.name.asc())).all()
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(["ID", "Name", "Code", "Description", "Active"])
     for z in zones:
-        writer.writerow([
-            str(z.id), z.name, z.code or "", z.description or "",
-            "Yes" if z.is_active else "No",
-        ])
+        writer.writerow(
+            [
+                str(z.id),
+                z.name,
+                z.code or "",
+                z.description or "",
+                "Yes" if z.is_active else "No",
+            ]
+        )
     return output.getvalue()
 
 
@@ -320,83 +324,120 @@ def export_usage_allowances_csv(db: Session) -> str:
     ).all()
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "ID", "Name", "Included GB", "Overage Rate",
-        "Overage Cap GB", "Throttle Rate Mbps", "Active",
-    ])
+    writer.writerow(
+        [
+            "ID",
+            "Name",
+            "Included GB",
+            "Overage Rate",
+            "Overage Cap GB",
+            "Throttle Rate Mbps",
+            "Active",
+        ]
+    )
     for a in allowances:
-        writer.writerow([
-            str(a.id), a.name, a.included_gb or "", a.overage_rate or "",
-            a.overage_cap_gb or "", a.throttle_rate_mbps or "",
-            "Yes" if a.is_active else "No",
-        ])
+        writer.writerow(
+            [
+                str(a.id),
+                a.name,
+                a.included_gb or "",
+                a.overage_rate or "",
+                a.overage_cap_gb or "",
+                a.throttle_rate_mbps or "",
+                "Yes" if a.is_active else "No",
+            ]
+        )
     return output.getvalue()
 
 
 def export_sla_profiles_csv(db: Session) -> str:
     """Return CSV content for all SLA profiles."""
-    profiles = db.scalars(
-        select(SlaProfile).order_by(SlaProfile.name.asc())
-    ).all()
+    profiles = db.scalars(select(SlaProfile).order_by(SlaProfile.name.asc())).all()
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "ID", "Name", "Uptime %", "Response Hours",
-        "Resolution Hours", "Credit %", "Notes", "Active",
-    ])
+    writer.writerow(
+        [
+            "ID",
+            "Name",
+            "Uptime %",
+            "Response Hours",
+            "Resolution Hours",
+            "Credit %",
+            "Notes",
+            "Active",
+        ]
+    )
     for p in profiles:
-        writer.writerow([
-            str(p.id), p.name, p.uptime_percent or "",
-            p.response_time_hours or "", p.resolution_time_hours or "",
-            p.credit_percent or "", p.notes or "",
-            "Yes" if p.is_active else "No",
-        ])
+        writer.writerow(
+            [
+                str(p.id),
+                p.name,
+                p.uptime_percent or "",
+                p.response_time_hours or "",
+                p.resolution_time_hours or "",
+                p.credit_percent or "",
+                p.notes or "",
+                "Yes" if p.is_active else "No",
+            ]
+        )
     return output.getvalue()
 
 
 def export_policy_sets_csv(db: Session) -> str:
     """Return CSV content for all policy sets."""
-    policies = db.scalars(
-        select(PolicySet).order_by(PolicySet.name.asc())
-    ).all()
+    policies = db.scalars(select(PolicySet).order_by(PolicySet.name.asc())).all()
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "ID", "Name", "Proration Policy", "Downgrade Policy", "Trial Days",
-        "Trial Card Required", "Grace Days", "Suspension Action",
-        "Refund Policy", "Refund Window Days", "Active",
-    ])
+    writer.writerow(
+        [
+            "ID",
+            "Name",
+            "Proration Policy",
+            "Downgrade Policy",
+            "Trial Days",
+            "Trial Card Required",
+            "Grace Days",
+            "Suspension Action",
+            "Refund Policy",
+            "Refund Window Days",
+            "Active",
+        ]
+    )
     for p in policies:
-        writer.writerow([
-            str(p.id), p.name,
-            p.proration_policy.value if p.proration_policy else "",
-            p.downgrade_policy.value if p.downgrade_policy else "",
-            p.trial_days or "",
-            "Yes" if p.trial_card_required else "No",
-            p.grace_days or "",
-            p.suspension_action.value if p.suspension_action else "",
-            p.refund_policy.value if p.refund_policy else "",
-            p.refund_window_days or "",
-            "Yes" if p.is_active else "No",
-        ])
+        writer.writerow(
+            [
+                str(p.id),
+                p.name,
+                p.proration_policy.value if p.proration_policy else "",
+                p.downgrade_policy.value if p.downgrade_policy else "",
+                p.trial_days or "",
+                "Yes" if p.trial_card_required else "No",
+                p.grace_days or "",
+                p.suspension_action.value if p.suspension_action else "",
+                p.refund_policy.value if p.refund_policy else "",
+                p.refund_window_days or "",
+                "Yes" if p.is_active else "No",
+            ]
+        )
     return output.getvalue()
 
 
 def export_add_ons_csv(db: Session) -> str:
     """Return CSV content for all add-ons."""
-    add_ons = db.scalars(
-        select(AddOn).order_by(AddOn.name.asc())
-    ).all()
+    add_ons = db.scalars(select(AddOn).order_by(AddOn.name.asc())).all()
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(["ID", "Name", "Type", "Description", "Active"])
     for a in add_ons:
-        writer.writerow([
-            str(a.id), a.name,
-            a.addon_type.value if a.addon_type else "",
-            a.description or "",
-            "Yes" if a.is_active else "No",
-        ])
+        writer.writerow(
+            [
+                str(a.id),
+                a.name,
+                a.addon_type.value if a.addon_type else "",
+                a.description or "",
+                "Yes" if a.is_active else "No",
+            ]
+        )
     return output.getvalue()
 
 
@@ -432,8 +473,12 @@ def sync_dunning_steps(
     Deletes steps that were removed, updates existing ones, and creates new ones.
     """
     existing_steps = catalog_service.policy_dunning_steps.list(
-        db=db, policy_set_id=policy_id,
-        order_by="day_offset", order_dir="asc", limit=100, offset=0,
+        db=db,
+        policy_set_id=policy_id,
+        order_by="day_offset",
+        order_dir="asc",
+        limit=100,
+        offset=0,
     )
     existing_ids = {str(s.id) for s in existing_steps}
     submitted_ids = {s["id"] for s in dunning_steps if s.get("id")}
@@ -485,7 +530,9 @@ def create_addon_prices(
             price_type=PriceType(price["price_type"]),
             amount=Decimal(price["amount"]),
             currency=price["currency"] or "NGN",
-            billing_cycle=BillingCycle(price["billing_cycle"]) if price["billing_cycle"] else None,
+            billing_cycle=BillingCycle(price["billing_cycle"])
+            if price["billing_cycle"]
+            else None,
             unit=PriceUnit(price["unit"]) if price["unit"] else None,
             description=price["description"] or None,
         )
@@ -502,8 +549,13 @@ def sync_addon_prices(
     Deletes prices that were removed, updates existing ones, and creates new ones.
     """
     existing_prices = catalog_service.add_on_prices.list(
-        db=db, add_on_id=addon_id, is_active=None,
-        order_by="created_at", order_dir="asc", limit=100, offset=0,
+        db=db,
+        add_on_id=addon_id,
+        is_active=None,
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
     )
     existing_ids = {str(p.id) for p in existing_prices}
     submitted_ids = {p["id"] for p in prices if p.get("id")}
@@ -523,7 +575,9 @@ def sync_addon_prices(
                     price_type=PriceType(price["price_type"]),
                     amount=Decimal(price["amount"]),
                     currency=price["currency"] or "NGN",
-                    billing_cycle=BillingCycle(price["billing_cycle"]) if price["billing_cycle"] else None,
+                    billing_cycle=BillingCycle(price["billing_cycle"])
+                    if price["billing_cycle"]
+                    else None,
                     unit=PriceUnit(price["unit"]) if price["unit"] else None,
                     description=price["description"] or None,
                 ),
@@ -536,7 +590,9 @@ def sync_addon_prices(
                     price_type=PriceType(price["price_type"]),
                     amount=Decimal(price["amount"]),
                     currency=price["currency"] or "NGN",
-                    billing_cycle=BillingCycle(price["billing_cycle"]) if price["billing_cycle"] else None,
+                    billing_cycle=BillingCycle(price["billing_cycle"])
+                    if price["billing_cycle"]
+                    else None,
                     unit=PriceUnit(price["unit"]) if price["unit"] else None,
                     description=price["description"] or None,
                 ),

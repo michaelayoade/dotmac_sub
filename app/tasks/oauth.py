@@ -117,7 +117,9 @@ def _refresh_meta_token(session, token: OAuthToken) -> None:
     app_secret = settings.get("meta_app_secret")
 
     if not app_id or not app_secret:
-        raise ValueError("Meta App ID and App Secret required for token refresh. Configure in Settings > Comms.")
+        raise ValueError(
+            "Meta App ID and App Secret required for token refresh. Configure in Settings > Comms."
+        )
 
     if not token.access_token:
         raise ValueError("Token has no access_token to refresh")

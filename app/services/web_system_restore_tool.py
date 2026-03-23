@@ -63,7 +63,9 @@ def _parse_dt(value: Any) -> datetime | None:
 
 def get_retention_days(db: Session) -> int:
     try:
-        setting = domain_settings_service.subscriber_settings.get_by_key(db, RETENTION_DAYS_KEY)
+        setting = domain_settings_service.subscriber_settings.get_by_key(
+            db, RETENTION_DAYS_KEY
+        )
     except Exception as exc:
         logger.warning("Failed to read retention days setting: %s", exc)
         return DEFAULT_RETENTION_DAYS
@@ -103,16 +105,24 @@ def _is_soft_deleted(subscriber: Subscriber) -> bool:
 
 
 def _build_snapshot(db: Session, subscriber_id: UUID) -> dict[str, Any]:
-    subscriptions = db.scalars(select(Subscription).where(Subscription.subscriber_id == subscriber_id)).all()
-    service_orders = db.scalars(select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber_id)).all()
-    cpe_devices = db.scalars(select(CPEDevice).where(CPEDevice.subscriber_id == subscriber_id)).all()
+    subscriptions = db.scalars(
+        select(Subscription).where(Subscription.subscriber_id == subscriber_id)
+    ).all()
+    service_orders = db.scalars(
+        select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber_id)
+    ).all()
+    cpe_devices = db.scalars(
+        select(CPEDevice).where(CPEDevice.subscriber_id == subscriber_id)
+    ).all()
 
     return {
         "subscriptions": [
             {
                 "id": str(item.id),
                 "status": item.status.value if item.status else None,
-                "canceled_at": item.canceled_at.isoformat() if item.canceled_at else None,
+                "canceled_at": item.canceled_at.isoformat()
+                if item.canceled_at
+                else None,
             }
             for item in subscriptions
         ],
@@ -148,58 +158,77 @@ def _apply_soft_delete_cascade(db: Session, subscriber_id: UUID) -> dict[str, in
 
     now = _now()
 
-    subscriptions = db.scalars(select(Subscription).where(Subscription.subscriber_id == subscriber_id)).all()
+    subscriptions = db.scalars(
+        select(Subscription).where(Subscription.subscriber_id == subscriber_id)
+    ).all()
     for subscription in subscriptions:
         if subscription.status != SubscriptionStatus.canceled:
             subscription.status = SubscriptionStatus.canceled
             subscription.canceled_at = subscription.canceled_at or now
             touched["subscriptions"] += 1
 
-    invoices = db.scalars(select(Invoice).where(Invoice.account_id == subscriber_id)).all()
+    invoices = db.scalars(
+        select(Invoice).where(Invoice.account_id == subscriber_id)
+    ).all()
     for invoice in invoices:
         if invoice.is_active:
             invoice.is_active = False
             touched["invoices"] += 1
 
-    payments = db.scalars(select(Payment).where(Payment.account_id == subscriber_id)).all()
+    payments = db.scalars(
+        select(Payment).where(Payment.account_id == subscriber_id)
+    ).all()
     for payment in payments:
         if payment.is_active:
             payment.is_active = False
             touched["payments"] += 1
 
-    service_orders = db.scalars(select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber_id)).all()
+    service_orders = db.scalars(
+        select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber_id)
+    ).all()
     for service_order in service_orders:
         if service_order.status != ServiceOrderStatus.canceled:
             service_order.status = ServiceOrderStatus.canceled
             touched["service_orders"] += 1
 
-    credentials = db.scalars(select(access_credential_service.model).where(access_credential_service.model.subscriber_id == subscriber_id)).all()
+    credentials = db.scalars(
+        select(access_credential_service.model).where(
+            access_credential_service.model.subscriber_id == subscriber_id
+        )
+    ).all()
     for credential in credentials:
         if credential.is_active:
             credential.is_active = False
             touched["radius_accounts"] += 1
 
-    radius_users = db.scalars(select(RadiusUser).where(RadiusUser.subscriber_id == subscriber_id)).all()
+    radius_users = db.scalars(
+        select(RadiusUser).where(RadiusUser.subscriber_id == subscriber_id)
+    ).all()
     for radius_user in radius_users:
         if radius_user.is_active:
             radius_user.is_active = False
             touched["radius_users"] += 1
 
-    ip_assignments = db.scalars(select(IPAssignment).where(IPAssignment.subscriber_id == subscriber_id)).all()
+    ip_assignments = db.scalars(
+        select(IPAssignment).where(IPAssignment.subscriber_id == subscriber_id)
+    ).all()
     for ip_assignment in ip_assignments:
         if ip_assignment.is_active:
             ip_assignment.is_active = False
             touched["ip_assignments"] += 1
 
-    ont_assignments = db.scalars(select(OntAssignment).where(OntAssignment.subscriber_id == subscriber_id)).all()
+    ont_assignments = db.scalars(
+        select(OntAssignment).where(OntAssignment.subscriber_id == subscriber_id)
+    ).all()
     for ont_assignment in ont_assignments:
         if ont_assignment.active:
             ont_assignment.active = False
             touched["ont_assignments"] += 1
 
     splitter_assignments = db.scalars(
-        select(SplitterPortAssignment)
-        .where(SplitterPortAssignment.subscriber_id == subscriber_id)
+        select(SplitterPortAssignment).where(
+            SplitterPortAssignment.subscriber_id == subscriber_id
+        )
     ).all()
     for splitter_assignment in splitter_assignments:
         if splitter_assignment.active:
@@ -219,17 +248,23 @@ def mark_subscriber_deleted(
     if not subscriber:
         raise HTTPException(status_code=404, detail="Subscriber not found")
     if subscriber.is_active:
-        raise HTTPException(status_code=409, detail="Deactivate subscriber before deleting.")
+        raise HTTPException(
+            status_code=409, detail="Deactivate subscriber before deleting."
+        )
 
     metadata = _metadata(subscriber)
     if metadata.get(PURGED_AT_KEY):
-        raise HTTPException(status_code=409, detail="Subscriber was already purged from recovery queue.")
+        raise HTTPException(
+            status_code=409, detail="Subscriber was already purged from recovery queue."
+        )
 
     if not metadata.get(DELETED_AT_KEY):
         metadata[SNAPSHOT_KEY] = _build_snapshot(db, subscriber.id)
         metadata[DELETED_AT_KEY] = _now().isoformat()
         metadata[DELETED_BY_KEY] = actor_id
-        metadata[PURGE_DUE_AT_KEY] = (_now() + timedelta(days=get_retention_days(db))).isoformat()
+        metadata[PURGE_DUE_AT_KEY] = (
+            _now() + timedelta(days=get_retention_days(db))
+        ).isoformat()
 
     touched = _apply_soft_delete_cascade(db, subscriber.id)
     subscriber.metadata_ = metadata
@@ -245,7 +280,11 @@ def mark_subscriber_deleted(
 
 
 def _by_id(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {str(item.get("id")): item for item in items if isinstance(item, dict) and item.get("id")}
+    return {
+        str(item.get("id")): item
+        for item in items
+        if isinstance(item, dict) and item.get("id")
+    }
 
 
 def restore_subscriber(
@@ -260,14 +299,29 @@ def restore_subscriber(
 
     metadata = _metadata(subscriber)
     if metadata.get(PURGED_AT_KEY):
-        raise HTTPException(status_code=409, detail="Subscriber has passed retention and cannot be restored.")
+        raise HTTPException(
+            status_code=409,
+            detail="Subscriber has passed retention and cannot be restored.",
+        )
     if not metadata.get(DELETED_AT_KEY):
-        raise HTTPException(status_code=409, detail="Subscriber is not marked as deleted.")
+        raise HTTPException(
+            status_code=409, detail="Subscriber is not marked as deleted."
+        )
 
-    snapshot = metadata.get(SNAPSHOT_KEY) if isinstance(metadata.get(SNAPSHOT_KEY), dict) else {}
-    subscription_snapshot = _by_id(snapshot.get("subscriptions", [])) if isinstance(snapshot, dict) else {}
-    order_snapshot = _by_id(snapshot.get("service_orders", [])) if isinstance(snapshot, dict) else {}
-    cpe_snapshot = _by_id(snapshot.get("cpe_devices", [])) if isinstance(snapshot, dict) else {}
+    snapshot = (
+        metadata.get(SNAPSHOT_KEY)
+        if isinstance(metadata.get(SNAPSHOT_KEY), dict)
+        else {}
+    )
+    subscription_snapshot = (
+        _by_id(snapshot.get("subscriptions", [])) if isinstance(snapshot, dict) else {}
+    )
+    order_snapshot = (
+        _by_id(snapshot.get("service_orders", [])) if isinstance(snapshot, dict) else {}
+    )
+    cpe_snapshot = (
+        _by_id(snapshot.get("cpe_devices", [])) if isinstance(snapshot, dict) else {}
+    )
 
     touched = {
         "subscriptions": 0,
@@ -283,11 +337,17 @@ def restore_subscriber(
 
     subscriber.is_active = True
 
-    subscriptions = db.scalars(select(Subscription).where(Subscription.subscriber_id == subscriber.id)).all()
+    subscriptions = db.scalars(
+        select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+    ).all()
     for subscription in subscriptions:
         row_snapshot = subscription_snapshot.get(str(subscription.id), {})
-        status_value = row_snapshot.get("status") if isinstance(row_snapshot, dict) else None
-        canceled_value = row_snapshot.get("canceled_at") if isinstance(row_snapshot, dict) else None
+        status_value = (
+            row_snapshot.get("status") if isinstance(row_snapshot, dict) else None
+        )
+        canceled_value = (
+            row_snapshot.get("canceled_at") if isinstance(row_snapshot, dict) else None
+        )
         if status_value:
             try:
                 subscription_status = SubscriptionStatus(status_value)
@@ -300,22 +360,30 @@ def restore_subscriber(
             touched["subscriptions"] += 1
         subscription.canceled_at = _parse_dt(canceled_value)
 
-    invoices = db.scalars(select(Invoice).where(Invoice.account_id == subscriber.id)).all()
+    invoices = db.scalars(
+        select(Invoice).where(Invoice.account_id == subscriber.id)
+    ).all()
     for invoice in invoices:
         if not invoice.is_active:
             invoice.is_active = True
             touched["invoices"] += 1
 
-    payments = db.scalars(select(Payment).where(Payment.account_id == subscriber.id)).all()
+    payments = db.scalars(
+        select(Payment).where(Payment.account_id == subscriber.id)
+    ).all()
     for payment in payments:
         if not payment.is_active:
             payment.is_active = True
             touched["payments"] += 1
 
-    service_orders = db.scalars(select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber.id)).all()
+    service_orders = db.scalars(
+        select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber.id)
+    ).all()
     for service_order in service_orders:
         row_snapshot = order_snapshot.get(str(service_order.id), {})
-        status_value = row_snapshot.get("status") if isinstance(row_snapshot, dict) else None
+        status_value = (
+            row_snapshot.get("status") if isinstance(row_snapshot, dict) else None
+        )
         if status_value:
             try:
                 order_status = ServiceOrderStatus(status_value)
@@ -327,43 +395,58 @@ def restore_subscriber(
             service_order.status = order_status
             touched["service_orders"] += 1
 
-    credentials = db.scalars(select(access_credential_service.model).where(access_credential_service.model.subscriber_id == subscriber.id)).all()
+    credentials = db.scalars(
+        select(access_credential_service.model).where(
+            access_credential_service.model.subscriber_id == subscriber.id
+        )
+    ).all()
     for credential in credentials:
         if not credential.is_active:
             credential.is_active = True
             touched["radius_accounts"] += 1
 
-    radius_users = db.scalars(select(RadiusUser).where(RadiusUser.subscriber_id == subscriber.id)).all()
+    radius_users = db.scalars(
+        select(RadiusUser).where(RadiusUser.subscriber_id == subscriber.id)
+    ).all()
     for radius_user in radius_users:
         if not radius_user.is_active:
             radius_user.is_active = True
             touched["radius_users"] += 1
 
-    ip_assignments = db.scalars(select(IPAssignment).where(IPAssignment.subscriber_id == subscriber.id)).all()
+    ip_assignments = db.scalars(
+        select(IPAssignment).where(IPAssignment.subscriber_id == subscriber.id)
+    ).all()
     for ip_assignment in ip_assignments:
         if not ip_assignment.is_active:
             ip_assignment.is_active = True
             touched["ip_assignments"] += 1
 
-    ont_assignments = db.scalars(select(OntAssignment).where(OntAssignment.subscriber_id == subscriber.id)).all()
+    ont_assignments = db.scalars(
+        select(OntAssignment).where(OntAssignment.subscriber_id == subscriber.id)
+    ).all()
     for ont_assignment in ont_assignments:
         if not ont_assignment.active:
             ont_assignment.active = True
             touched["ont_assignments"] += 1
 
     splitter_assignments = db.scalars(
-        select(SplitterPortAssignment)
-        .where(SplitterPortAssignment.subscriber_id == subscriber.id)
+        select(SplitterPortAssignment).where(
+            SplitterPortAssignment.subscriber_id == subscriber.id
+        )
     ).all()
     for splitter_assignment in splitter_assignments:
         if not splitter_assignment.active:
             splitter_assignment.active = True
             touched["splitter_assignments"] += 1
 
-    cpe_devices = db.scalars(select(CPEDevice).where(CPEDevice.subscriber_id == subscriber.id)).all()
+    cpe_devices = db.scalars(
+        select(CPEDevice).where(CPEDevice.subscriber_id == subscriber.id)
+    ).all()
     for cpe_device in cpe_devices:
         row_snapshot = cpe_snapshot.get(str(cpe_device.id), {})
-        status_value = row_snapshot.get("status") if isinstance(row_snapshot, dict) else None
+        status_value = (
+            row_snapshot.get("status") if isinstance(row_snapshot, dict) else None
+        )
         if status_value:
             try:
                 cpe_status = DeviceStatus(status_value)
@@ -439,7 +522,11 @@ def list_deleted_subscribers(
         .limit(max(50, limit * 5))
     ).all()
 
-    rows = [item for item in candidates if _is_soft_deleted(item) and _matches_query(item, query or "")]
+    rows = [
+        item
+        for item in candidates
+        if _is_soft_deleted(item) and _matches_query(item, query or "")
+    ]
     rows.sort(key=_deleted_at_sort_key, reverse=True)
     return rows[: max(1, limit)]
 
@@ -455,21 +542,45 @@ def build_restore_preview(db: Session, *, subscriber_id: str) -> dict[str, Any]:
 
     metadata = _metadata(subscriber)
     if not metadata.get(DELETED_AT_KEY):
-        raise HTTPException(status_code=404, detail="Subscriber is not marked as deleted")
+        raise HTTPException(
+            status_code=404, detail="Subscriber is not marked as deleted"
+        )
     if metadata.get(PURGED_AT_KEY):
-        raise HTTPException(status_code=409, detail="Subscriber has already been purged from recovery queue")
+        raise HTTPException(
+            status_code=409,
+            detail="Subscriber has already been purged from recovery queue",
+        )
 
-    subscriptions = db.scalars(select(Subscription).where(Subscription.subscriber_id == subscriber.id)).all()
-    invoices = db.scalars(select(Invoice).where(Invoice.account_id == subscriber.id)).all()
-    payments = db.scalars(select(Payment).where(Payment.account_id == subscriber.id)).all()
-    service_orders = db.scalars(select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber.id)).all()
-    access_credentials = db.scalars(select(access_credential_service.model).where(access_credential_service.model.subscriber_id == subscriber.id)).all()
-    radius_users = db.scalars(select(RadiusUser).where(RadiusUser.subscriber_id == subscriber.id)).all()
-    ip_assignments = db.scalars(select(IPAssignment).where(IPAssignment.subscriber_id == subscriber.id)).all()
-    ont_assignments = db.scalars(select(OntAssignment).where(OntAssignment.subscriber_id == subscriber.id)).all()
+    subscriptions = db.scalars(
+        select(Subscription).where(Subscription.subscriber_id == subscriber.id)
+    ).all()
+    invoices = db.scalars(
+        select(Invoice).where(Invoice.account_id == subscriber.id)
+    ).all()
+    payments = db.scalars(
+        select(Payment).where(Payment.account_id == subscriber.id)
+    ).all()
+    service_orders = db.scalars(
+        select(ServiceOrder).where(ServiceOrder.subscriber_id == subscriber.id)
+    ).all()
+    access_credentials = db.scalars(
+        select(access_credential_service.model).where(
+            access_credential_service.model.subscriber_id == subscriber.id
+        )
+    ).all()
+    radius_users = db.scalars(
+        select(RadiusUser).where(RadiusUser.subscriber_id == subscriber.id)
+    ).all()
+    ip_assignments = db.scalars(
+        select(IPAssignment).where(IPAssignment.subscriber_id == subscriber.id)
+    ).all()
+    ont_assignments = db.scalars(
+        select(OntAssignment).where(OntAssignment.subscriber_id == subscriber.id)
+    ).all()
     splitter_assignments = db.scalars(
-        select(SplitterPortAssignment)
-        .where(SplitterPortAssignment.subscriber_id == subscriber.id)
+        select(SplitterPortAssignment).where(
+            SplitterPortAssignment.subscriber_id == subscriber.id
+        )
     ).all()
 
     return {
@@ -479,7 +590,11 @@ def build_restore_preview(db: Session, *, subscriber_id: str) -> dict[str, Any]:
         "counts": {
             "subscriptions": {
                 "total": len(subscriptions),
-                "to_restore": sum(1 for row in subscriptions if row.status == SubscriptionStatus.canceled),
+                "to_restore": sum(
+                    1
+                    for row in subscriptions
+                    if row.status == SubscriptionStatus.canceled
+                ),
             },
             "invoices": {
                 "total": len(invoices),
@@ -491,7 +606,11 @@ def build_restore_preview(db: Session, *, subscriber_id: str) -> dict[str, Any]:
             },
             "service_orders": {
                 "total": len(service_orders),
-                "to_restore": sum(1 for row in service_orders if row.status == ServiceOrderStatus.canceled),
+                "to_restore": sum(
+                    1
+                    for row in service_orders
+                    if row.status == ServiceOrderStatus.canceled
+                ),
             },
             "radius_accounts": {
                 "total": len(access_credentials) + len(radius_users),
@@ -499,7 +618,9 @@ def build_restore_preview(db: Session, *, subscriber_id: str) -> dict[str, Any]:
                 + sum(1 for row in radius_users if not row.is_active),
             },
             "network_assignments": {
-                "total": len(ip_assignments) + len(ont_assignments) + len(splitter_assignments),
+                "total": len(ip_assignments)
+                + len(ont_assignments)
+                + len(splitter_assignments),
                 "to_restore": sum(1 for row in ip_assignments if not row.is_active)
                 + sum(1 for row in ont_assignments if not row.active)
                 + sum(1 for row in splitter_assignments if not row.active),
@@ -548,7 +669,9 @@ def soft_deleted_count(db: Session) -> int:
     return sum(1 for row in rows if _is_soft_deleted(row))
 
 
-def build_page_state(db: Session, *, query: str | None, selected_id: str | None) -> dict[str, Any]:
+def build_page_state(
+    db: Session, *, query: str | None, selected_id: str | None
+) -> dict[str, Any]:
     # NOTE: purge_expired_from_recovery_queue should be called from a scheduled
     # Celery task, not on every page render. Leaving it here for now but it
     # should be migrated to app/tasks/ in a follow-up.
@@ -561,7 +684,9 @@ def build_page_state(db: Session, *, query: str | None, selected_id: str | None)
         except HTTPException:
             selected_preview = None
 
-    deleted_rows = list_deleted_subscribers(db, query=query, limit=100 if (query or "").strip() else 20)
+    deleted_rows = list_deleted_subscribers(
+        db, query=query, limit=100 if (query or "").strip() else 20
+    )
     recent_rows = list_recently_deleted(db, limit=20)
 
     return {

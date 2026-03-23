@@ -47,9 +47,7 @@ def refund_policy(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/{slug}", response_class=HTMLResponse)
-def legal_document_by_slug(
-    request: Request, slug: str, db: Session = Depends(get_db)
-):
+def legal_document_by_slug(request: Request, slug: str, db: Session = Depends(get_db)):
     """View any legal document by slug."""
     return legal_web_service.legal_document_by_slug(request, db, slug)
 

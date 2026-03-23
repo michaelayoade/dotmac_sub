@@ -28,6 +28,7 @@ from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
 
+
 class PolicySets(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PolicySetCreate):
@@ -119,6 +120,7 @@ class PolicySets(ListResponseMixin):
         policy.is_active = False
         db.commit()
 
+
 class PolicyDunningSteps(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: PolicyDunningStepCreate):
@@ -154,7 +156,10 @@ class PolicyDunningSteps(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"day_offset": PolicyDunningStep.day_offset, "action": PolicyDunningStep.action},
+            {
+                "day_offset": PolicyDunningStep.day_offset,
+                "action": PolicyDunningStep.action,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

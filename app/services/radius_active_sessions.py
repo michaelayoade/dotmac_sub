@@ -53,7 +53,9 @@ class RadiusActiveSessionManager:
         )
         db.add(session)
         db.flush()
-        logger.debug("Active session started: user=%s sid=%s", username, acct_session_id)
+        logger.debug(
+            "Active session started: user=%s sid=%s", username, acct_session_id
+        )
         return session
 
     @staticmethod
@@ -80,9 +82,8 @@ class RadiusActiveSessionManager:
         }
         if framed_ip_address:
             values["framed_ip_address"] = framed_ip_address
-        stmt = (
-            update(RadiusActiveSession)
-            .where(RadiusActiveSession.acct_session_id == acct_session_id)
+        stmt = update(RadiusActiveSession).where(
+            RadiusActiveSession.acct_session_id == acct_session_id
         )
         if nas_device_id:
             stmt = stmt.where(RadiusActiveSession.nas_device_id == nas_device_id)

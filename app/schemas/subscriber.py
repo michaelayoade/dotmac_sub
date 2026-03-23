@@ -92,6 +92,7 @@ class ResellerRead(ResellerBase):
 
 class SubscriberBase(BaseModel):
     """Unified subscriber model - combines identity, account, and billing."""
+
     # Identity fields
     first_name: str = Field(min_length=1, max_length=80)
     last_name: str = Field(min_length=1, max_length=80)
@@ -170,7 +171,9 @@ class SubscriberCreate(SubscriberBase):
         if self.person_id:
             return self
         if not self.first_name or not self.last_name or not self.email:
-            raise ValueError("first_name, last_name, and email are required when person_id is not provided.")
+            raise ValueError(
+                "first_name, last_name, and email are required when person_id is not provided."
+            )
         return self
 
 
@@ -251,6 +254,7 @@ class SubscriberRead(SubscriberBase):
 
 class SubscriberChannelBase(BaseModel):
     """Communication channel for a subscriber."""
+
     subscriber_id: UUID
     channel_type: ChannelType
     address: str = Field(min_length=1, max_length=255)
@@ -357,8 +361,10 @@ class SubscriberCustomFieldRead(SubscriberCustomFieldBase):
 # Accounts are represented by subscribers; these request/response shapes
 # remain to preserve API/import compatibility.
 
+
 class SubscriberAccountCreate(BaseModel):
     """Compatibility create payload for account-as-subscriber flows."""
+
     subscriber_id: UUID | None = None
     reseller_id: UUID | None = None
     account_number: str | None = None
@@ -367,10 +373,12 @@ class SubscriberAccountCreate(BaseModel):
 
 class SubscriberAccountUpdate(BaseModel):
     """Compatibility update payload for account-as-subscriber flows."""
+
     pass
 
 
 class SubscriberAccountRead(BaseModel):
     """Compatibility read payload for account-as-subscriber flows."""
+
     model_config = ConfigDict(from_attributes=True)
     id: UUID | None = None

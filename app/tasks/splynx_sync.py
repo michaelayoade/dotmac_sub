@@ -65,7 +65,9 @@ def run_incremental_sync(hours_back: int = 2) -> dict[str, int]:
         stats["errors"] = 1
         raise
 
-    total = stats["invoices_created"] + stats["payments_created"] + stats["status_updated"]
+    total = (
+        stats["invoices_created"] + stats["payments_created"] + stats["status_updated"]
+    )
     logger.info(
         "Splynx incremental sync complete: %d invoices, %d payments, %d status changes",
         stats["invoices_created"],

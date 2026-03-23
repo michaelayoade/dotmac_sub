@@ -21,6 +21,7 @@ from app.services.audit_helpers import (
 
 logger = logging.getLogger(__name__)
 
+
 def get_audit_page_data(
     db: Session,
     *,
@@ -97,8 +98,10 @@ def get_audit_page_data(
             }
         )
 
-    total_stmt = select(func.count()).select_from(AuditEvent).where(
-        AuditEvent.is_active.is_(True)
+    total_stmt = (
+        select(func.count())
+        .select_from(AuditEvent)
+        .where(AuditEvent.is_active.is_(True))
     )
     if normalized_actor_id:
         total_stmt = total_stmt.where(AuditEvent.actor_id == UUID(normalized_actor_id))
@@ -153,4 +156,9 @@ def _resolve_actor_name(event, people: dict[str, Subscriber]) -> str:
     metadata = getattr(event, "metadata_", None) or {}
     if is_user_actor:
         return metadata.get("actor_email") or event.actor_id or "User"
-    return metadata.get("actor_name") or metadata.get("actor_email") or event.actor_id or "System"
+    return (
+        metadata.get("actor_name")
+        or metadata.get("actor_email")
+        or event.actor_id
+        or "System"
+    )

@@ -26,7 +26,8 @@ class OfferResellerAvailability(Base):
     __tablename__ = "offer_reseller_availability"
     __table_args__ = (
         UniqueConstraint(
-            "offer_id", "reseller_id",
+            "offer_id",
+            "reseller_id",
             name="uq_offer_reseller",
         ),
     )
@@ -61,7 +62,8 @@ class OfferLocationAvailability(Base):
     __tablename__ = "offer_location_availability"
     __table_args__ = (
         UniqueConstraint(
-            "offer_id", "pop_site_id",
+            "offer_id",
+            "pop_site_id",
             name="uq_offer_location",
         ),
     )
@@ -96,7 +98,8 @@ class OfferCategoryAvailability(Base):
     __tablename__ = "offer_category_availability"
     __table_args__ = (
         UniqueConstraint(
-            "offer_id", "subscriber_category",
+            "offer_id",
+            "subscriber_category",
             name="uq_offer_category",
         ),
     )
@@ -133,7 +136,8 @@ class OfferBillingModeAvailability(Base):
     __tablename__ = "offer_billing_mode_availability"
     __table_args__ = (
         UniqueConstraint(
-            "offer_id", "billing_mode",
+            "offer_id",
+            "billing_mode",
             name="uq_offer_billing_mode",
         ),
     )

@@ -13,6 +13,7 @@ from app.services.common import validate_enum
 
 logger = logging.getLogger(__name__)
 
+
 def _form_bool(value: str | None) -> bool:
     if value is None:
         return False
@@ -89,7 +90,9 @@ def build_bank_account_error_context(
         web_system_settings_views as web_system_settings_views_service,
     )
 
-    settings_context = web_system_settings_views_service.build_settings_context(db, "billing")
+    settings_context = web_system_settings_views_service.build_settings_context(
+        db, "billing"
+    )
     return web_system_settings_views_service.build_settings_page_context(
         request,
         db,

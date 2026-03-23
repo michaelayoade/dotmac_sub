@@ -95,16 +95,13 @@ def fup_context(request: Request, db: Session, offer_id: str) -> dict:
             for e in FupConsumptionPeriod
         ],
         "directions": [
-            {"value": e.value, "label": DIRECTION_LABELS[e.value]}
-            for e in FupDirection
+            {"value": e.value, "label": DIRECTION_LABELS[e.value]} for e in FupDirection
         ],
         "data_units": [
-            {"value": e.value, "label": DATA_UNIT_LABELS[e.value]}
-            for e in FupDataUnit
+            {"value": e.value, "label": DATA_UNIT_LABELS[e.value]} for e in FupDataUnit
         ],
         "actions": [
-            {"value": e.value, "label": ACTION_LABELS[e.value]}
-            for e in FupAction
+            {"value": e.value, "label": ACTION_LABELS[e.value]} for e in FupAction
         ],
         "day_names": DAY_NAMES,
         "other_offers": other_offers,
@@ -317,7 +314,9 @@ def handle_update_rule(db: Session, rule_id: str, form: FormData) -> None:
     kwargs["enabled_by_rule_id"] = enabled_by_raw if enabled_by_raw else None
 
     days_of_week_raw = form.getlist("days_of_week")
-    kwargs["days_of_week"] = [int(d) for d in days_of_week_raw if str(d).isdigit()] or None
+    kwargs["days_of_week"] = [
+        int(d) for d in days_of_week_raw if str(d).isdigit()
+    ] or None
 
     fup_policies.update_rule(db, rule_id, **kwargs)
     logger.info("Updated FUP rule %s", rule_id)
@@ -334,9 +333,7 @@ def handle_delete_rule(db: Session, rule_id: str) -> None:
     logger.info("Deleted FUP rule %s", rule_id)
 
 
-def handle_clone_rules(
-    db: Session, source_offer_id: str, target_offer_id: str
-) -> None:
+def handle_clone_rules(db: Session, source_offer_id: str, target_offer_id: str) -> None:
     """Clone FUP rules from one offer to another.
 
     Args:

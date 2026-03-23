@@ -44,7 +44,12 @@ def sync_all_acs_devices() -> dict[str, int]:
         )
         if not servers:
             logger.info("No active ACS servers to sync")
-            return {"servers_synced": 0, "total_created": 0, "total_updated": 0, "errors": 0}
+            return {
+                "servers_synced": 0,
+                "total_created": 0,
+                "total_updated": 0,
+                "errors": 0,
+            }
 
         from app.services.tr069 import CpeDevices
 
@@ -60,7 +65,9 @@ def sync_all_acs_devices() -> dict[str, int]:
                 total_updated += result.get("updated", 0)
                 synced += 1
             except Exception as e:
-                logger.error("Failed to sync ACS server %s (%s): %s", server.name, server.id, e)
+                logger.error(
+                    "Failed to sync ACS server %s (%s): %s", server.name, server.id, e
+                )
                 errors += 1
 
         # Emit event for newly discovered devices
@@ -84,7 +91,10 @@ def sync_all_acs_devices() -> dict[str, int]:
 
         logger.info(
             "TR-069 sync complete: %d servers, %d created, %d updated, %d errors",
-            synced, total_created, total_updated, errors,
+            synced,
+            total_created,
+            total_updated,
+            errors,
         )
         return {
             "servers_synced": synced,
@@ -139,7 +149,9 @@ def execute_pending_jobs() -> dict[str, int]:
                 executed += 1
                 if result.status == Tr069JobStatus.succeeded:
                     succeeded += 1
-                    _emit_job_event(db, emit_event, EventType.tr069_job_completed, result)
+                    _emit_job_event(
+                        db, emit_event, EventType.tr069_job_completed, result
+                    )
                 else:
                     failed += 1
                     _emit_job_event(db, emit_event, EventType.tr069_job_failed, result)
@@ -173,7 +185,9 @@ def execute_pending_jobs() -> dict[str, int]:
                 retried += 1
                 if result.status == Tr069JobStatus.succeeded:
                     succeeded += 1
-                    _emit_job_event(db, emit_event, EventType.tr069_job_completed, result)
+                    _emit_job_event(
+                        db, emit_event, EventType.tr069_job_completed, result
+                    )
                 else:
                     failed += 1
             except Exception as e:
@@ -183,8 +197,7 @@ def execute_pending_jobs() -> dict[str, int]:
         stale_cutoff = now - timedelta(minutes=10)
         stale_jobs = list(
             db.scalars(
-                select(Tr069Job)
-                .where(
+                select(Tr069Job).where(
                     Tr069Job.status == Tr069JobStatus.running,
                     Tr069Job.started_at < stale_cutoff,
                 )
@@ -200,7 +213,11 @@ def execute_pending_jobs() -> dict[str, int]:
 
         logger.info(
             "TR-069 job execution: %d executed, %d succeeded, %d failed, %d retried, %d skipped",
-            executed, succeeded, failed, retried, skipped,
+            executed,
+            succeeded,
+            failed,
+            retried,
+            skipped,
         )
         return {
             "executed": executed,
@@ -268,7 +285,9 @@ def check_device_health() -> dict[str, int]:
 
         logger.info(
             "TR-069 health check: %d total, %d healthy, %d stale",
-            len(devices), healthy, stale,
+            len(devices),
+            healthy,
+            stale,
         )
         return {
             "total_checked": len(devices),
@@ -315,11 +334,13 @@ def cleanup_tr069_records() -> dict[str, int]:
             db.scalars(
                 select(Tr069Job).where(
                     Tr069Job.created_at < job_cutoff,
-                    Tr069Job.status.in_([
-                        Tr069JobStatus.succeeded,
-                        Tr069JobStatus.failed,
-                        Tr069JobStatus.canceled,
-                    ]),
+                    Tr069Job.status.in_(
+                        [
+                            Tr069JobStatus.succeeded,
+                            Tr069JobStatus.failed,
+                            Tr069JobStatus.canceled,
+                        ]
+                    ),
                 )
             ).all()
         )
@@ -332,7 +353,8 @@ def cleanup_tr069_records() -> dict[str, int]:
 
         logger.info(
             "TR-069 cleanup: %d sessions removed, %d jobs removed",
-            sessions_cleaned, jobs_cleaned,
+            sessions_cleaned,
+            jobs_cleaned,
         )
         return {"sessions_cleaned": sessions_cleaned, "jobs_cleaned": jobs_cleaned}
     except Exception:

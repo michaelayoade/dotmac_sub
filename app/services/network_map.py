@@ -25,6 +25,7 @@ from app.services import settings_spec
 
 logger = logging.getLogger(__name__)
 
+
 def build_network_map_context(db: Session) -> dict:
     features: list[dict] = []
 
@@ -51,16 +52,19 @@ def build_network_map_context(db: Session) -> dict:
         features.append(
             {
                 "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [pop.longitude, pop.latitude]},
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [pop.longitude, pop.latitude],
+                },
                 "properties": {
                     "id": str(pop.id),
-                "type": "pop_site",
-                "name": pop.name,
-                "code": pop.code,
-                "city": pop.city,
-                "device_count": pop_device_counts.get(pop.id, 0),
-            },
-        }
+                    "type": "pop_site",
+                    "name": pop.name,
+                    "code": pop.code,
+                    "city": pop.city,
+                    "device_count": pop_device_counts.get(pop.id, 0),
+                },
+            }
         )
 
     # Network Devices (anchored at POP coordinates with slight spread)
@@ -89,7 +93,9 @@ def build_network_map_context(db: Session) -> dict:
                     "name": device.name,
                     "status": device.status.value if device.status else "unknown",
                     "role": device.role.value if device.role else None,
-                    "device_type": device.device_type.value if device.device_type else None,
+                    "device_type": device.device_type.value
+                    if device.device_type
+                    else None,
                     "vendor": device.vendor,
                     "model": device.model,
                     "mgmt_ip": device.mgmt_ip,
@@ -120,7 +126,10 @@ def build_network_map_context(db: Session) -> dict:
         features.append(
             {
                 "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [fdh.longitude, fdh.latitude]},
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [fdh.longitude, fdh.latitude],
+                },
                 "properties": {
                     "id": str(fdh.id),
                     "type": "fdh_cabinet",
@@ -167,7 +176,10 @@ def build_network_map_context(db: Session) -> dict:
         features.append(
             {
                 "type": "Feature",
-                "geometry": {"type": "Point", "coordinates": [ap.longitude, ap.latitude]},
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [ap.longitude, ap.latitude],
+                },
                 "properties": {
                     "id": str(ap.id),
                     "type": "access_point",
@@ -283,7 +295,9 @@ def build_network_map_context(db: Session) -> dict:
         .subquery()
     )
 
-    map_limit_raw = settings_spec.resolve_value(db, SettingDomain.gis, "map_customer_limit")
+    map_limit_raw = settings_spec.resolve_value(
+        db, SettingDomain.gis, "map_customer_limit"
+    )
     try:
         map_limit = int(str(map_limit_raw)) if map_limit_raw is not None else None
     except (TypeError, ValueError):
@@ -299,7 +313,9 @@ def build_network_map_context(db: Session) -> dict:
             ).label("online"),
         )
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .outerjoin(active_sessions_subq, active_sessions_subq.c.subscriber_id == Subscriber.id)
+        .outerjoin(
+            active_sessions_subq, active_sessions_subq.c.subscriber_id == Subscriber.id
+        )
         .filter(
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
@@ -326,7 +342,9 @@ def build_network_map_context(db: Session) -> dict:
             (active_sessions_subq.c.subscriber_id.isnot(None)).label("is_online"),
         )
         .join(Subscriber, Address.subscriber_id == Subscriber.id)
-        .outerjoin(active_sessions_subq, active_sessions_subq.c.subscriber_id == Subscriber.id)
+        .outerjoin(
+            active_sessions_subq, active_sessions_subq.c.subscriber_id == Subscriber.id
+        )
         .filter(
             Address.latitude.isnot(None),
             Address.longitude.isnot(None),
@@ -358,7 +376,9 @@ def build_network_map_context(db: Session) -> dict:
                     "address": addr.address_line1,
                     "city": addr.city or "",
                     "subscriber_id": str(addr.subscriber_id),
-                    "organization_id": str(addr.organization_id) if addr.organization_id else None,
+                    "organization_id": str(addr.organization_id)
+                    if addr.organization_id
+                    else None,
                     "is_online": is_online,
                 },
             }
@@ -389,10 +409,14 @@ def build_network_map_context(db: Session) -> dict:
         "customers_offline": offline_count,
         "network_devices": len(network_devices),
         "network_devices_online": sum(
-            1 for device, _ in network_devices if device.status and device.status.value == "online"
+            1
+            for device, _ in network_devices
+            if device.status and device.status.value == "online"
         ),
         "network_devices_offline": sum(
-            1 for device, _ in network_devices if device.status and device.status.value == "offline"
+            1
+            for device, _ in network_devices
+            if device.status and device.status.value == "offline"
         ),
         "network_devices_degraded": sum(
             1

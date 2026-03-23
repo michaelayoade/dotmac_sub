@@ -52,9 +52,7 @@ def import_subscriber_custom_fields_from_csv(
     rows, row_errors = load_csv_content(
         content, SubscriberCustomFieldImportRow, max_rows=max_rows
     )
-    errors.extend(
-        {"index": err.index, "detail": err.detail} for err in row_errors
-    )
+    errors.extend({"index": err.index, "detail": err.detail} for err in row_errors)
     for idx, import_row in rows:
         try:
             payload = SubscriberCustomFieldCreate(**import_row.model_dump())
@@ -78,7 +76,9 @@ def import_subscriber_custom_fields_upload(
     try:
         content = payload.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=400, detail="Invalid UTF-8 CSV content") from exc
+        raise HTTPException(
+            status_code=400, detail="Invalid UTF-8 CSV content"
+        ) from exc
     max_rows = _imports_int_setting(db, "max_rows", _DEFAULT_MAX_ROWS)
     created, errors = import_subscriber_custom_fields_from_csv(
         db, content, max_rows=max_rows

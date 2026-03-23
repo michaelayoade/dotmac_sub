@@ -89,8 +89,12 @@ def create_request(
         operation=operation,
         payload=payload,
         status=FiberChangeRequestStatus.pending,
-        requested_by_person_id=coerce_uuid(requested_by_person_id) if requested_by_person_id else None,
-        requested_by_vendor_id=coerce_uuid(requested_by_vendor_id) if requested_by_vendor_id else None,
+        requested_by_person_id=coerce_uuid(requested_by_person_id)
+        if requested_by_person_id
+        else None,
+        requested_by_vendor_id=coerce_uuid(requested_by_vendor_id)
+        if requested_by_vendor_id
+        else None,
     )
     db.add(request)
     db.commit()
@@ -112,7 +116,9 @@ def get_request(db: Session, request_id: str) -> FiberChangeRequest:
     return request
 
 
-def reject_request(db: Session, request_id: str, reviewer_person_id: str, review_notes: str | None):
+def reject_request(
+    db: Session, request_id: str, reviewer_person_id: str, review_notes: str | None
+):
     request = get_request(db, request_id)
     if request.status != FiberChangeRequestStatus.pending:
         raise HTTPException(status_code=400, detail="Change request already processed")
@@ -158,7 +164,9 @@ def _apply_request(db: Session, request: FiberChangeRequest):
         raise HTTPException(status_code=400, detail="Invalid operation")
 
 
-def approve_request(db: Session, request_id: str, reviewer_person_id: str, review_notes: str | None):
+def approve_request(
+    db: Session, request_id: str, reviewer_person_id: str, review_notes: str | None
+):
     request = get_request(db, request_id)
     if request.status != FiberChangeRequestStatus.pending:
         raise HTTPException(status_code=400, detail="Change request already processed")

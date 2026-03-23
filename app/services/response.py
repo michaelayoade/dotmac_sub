@@ -2,6 +2,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 def list_response(items: list, limit: int, offset: int) -> dict:
     return {"items": items, "count": len(items), "limit": limit, "offset": offset}
 

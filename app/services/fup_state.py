@@ -20,9 +20,7 @@ class FupStateManager:
     @staticmethod
     def get(db: Session, subscription_id: str) -> FupState | None:
         """Get the current FUP state for a subscription."""
-        stmt = select(FupState).where(
-            FupState.subscription_id == subscription_id
-        )
+        stmt = select(FupState).where(FupState.subscription_id == subscription_id)
         return db.scalars(stmt).first()
 
     @staticmethod
@@ -32,9 +30,7 @@ class FupStateManager:
         offer_id: str,
     ) -> FupState:
         """Get existing state or create a clean one."""
-        stmt = select(FupState).where(
-            FupState.subscription_id == subscription_id
-        )
+        stmt = select(FupState).where(FupState.subscription_id == subscription_id)
         state = db.scalars(stmt).first()
         if state:
             return state
@@ -104,10 +100,12 @@ class FupStateManager:
     def list_throttled(db: Session) -> list[FupState]:
         """List all currently throttled/blocked subscriptions."""
         stmt = select(FupState).where(
-            FupState.action_status.in_([
-                FupActionStatus.throttled,
-                FupActionStatus.blocked,
-            ])
+            FupState.action_status.in_(
+                [
+                    FupActionStatus.throttled,
+                    FupActionStatus.blocked,
+                ]
+            )
         )
         return list(db.scalars(stmt).all())
 
