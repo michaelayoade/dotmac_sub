@@ -129,6 +129,41 @@ def resolve_genieacs_with_reason(
     if not getattr(ont, "serial_number", None):
         return None, "ONT serial number is missing."
 
+    # 0) Explicit ONT ↔ TR-069 device link (most authoritative)
+    linked_stmt = (
+        select(Tr069CpeDevice)
+        .where(Tr069CpeDevice.ont_unit_id == ont.id)
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .limit(1)
+    )
+    linked = db.scalars(linked_stmt).first()
+    if linked and linked.acs_server_id:
+        server = _resolve_server_by_id(db, str(linked.acs_server_id))
+        if server:
+            client = GenieACSClient(server.base_url)
+            device_id = ""
+            serial_candidates = _serial_search_candidates(linked.serial_number)
+            if not serial_candidates and ont.serial_number:
+                serial_candidates = _serial_search_candidates(ont.serial_number)
+            try:
+                for candidate in serial_candidates:
+                    device_id = _resolve_device_id_from_server(client, candidate) or ""
+                    if device_id:
+                        break
+            except GenieACSError:
+                logger.warning(
+                    "Failed explicit ONT TR-069 lookup for ONT %s", ont.serial_number
+                )
+                device_id = ""
+            if not device_id:
+                device_id = client.build_device_id(
+                    linked.oui or "",
+                    linked.product_class or "",
+                    linked.serial_number or ont.serial_number or "",
+                )
+            if device_id:
+                return (client, device_id), "resolved_via_linked_tr069_device"
+
     # 1) OLT profile (authoritative in inherited ACS model)
     #    Try ont.olt_device_id first, then fall back to assignment → PON port → OLT
     olt_server = None
@@ -142,9 +177,11 @@ def resolve_genieacs_with_reason(
     if olt_server:
         client = GenieACSClient(olt_server.base_url)
         try:
-            device_id = _resolve_device_id_from_server(client, ont.serial_number)
-            if device_id:
-                return (client, device_id), "resolved_via_olt_acs"
+            olt_device_id = _resolve_device_id_from_server(
+                client, ont.serial_number
+            )
+            if olt_device_id:
+                return (client, olt_device_id), "resolved_via_olt_acs"
         except GenieACSError:
             logger.warning("Failed OLT ACS lookup for ONT %s", ont.serial_number)
 
@@ -155,9 +192,11 @@ def resolve_genieacs_with_reason(
     if ont_server:
         client = GenieACSClient(ont_server.base_url)
         try:
-            device_id = _resolve_device_id_from_server(client, ont.serial_number)
-            if device_id:
-                return (client, device_id), "resolved_via_ont_acs"
+            ont_device_id = _resolve_device_id_from_server(
+                client, ont.serial_number
+            )
+            if ont_device_id:
+                return (client, ont_device_id), "resolved_via_ont_acs"
         except GenieACSError:
             logger.warning("Failed ONT ACS lookup for ONT %s", ont.serial_number)
 
@@ -184,14 +223,16 @@ def resolve_genieacs_with_reason(
         if server:
             client = GenieACSClient(server.base_url)
             try:
-                device_id = _resolve_device_id_from_server(client, ont.serial_number)
+                linked_device_id = _resolve_device_id_from_server(
+                    client, ont.serial_number
+                )
             except GenieACSError:
-                device_id = None
-            if not device_id:
-                device_id = client.build_device_id(
+                linked_device_id = None
+            if not linked_device_id:
+                linked_device_id = client.build_device_id(
                     cpe.oui or "", cpe.product_class or "", cpe.serial_number or ""
                 )
-            return (client, device_id), "resolved_via_tr069_cpe_device"
+            return (client, linked_device_id), "resolved_via_tr069_cpe_device"
 
     # 4) Default ACS server
     default_server_id = settings_spec.resolve_value(
@@ -204,9 +245,11 @@ def resolve_genieacs_with_reason(
         if server:
             client = GenieACSClient(server.base_url)
             try:
-                device_id = _resolve_device_id_from_server(client, ont.serial_number)
-                if device_id:
-                    return (client, device_id), "resolved_via_default_acs"
+                default_device_id = _resolve_device_id_from_server(
+                    client, ont.serial_number
+                )
+                if default_device_id:
+                    return (client, default_device_id), "resolved_via_default_acs"
             except GenieACSError:
                 logger.warning(
                     "Failed to search GenieACS for ONT %s", ont.serial_number

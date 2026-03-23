@@ -29,6 +29,7 @@ from app.services.domain_settings import (
     usage_settings,
 )
 from app.services.secrets import is_openbao_ref
+from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -902,7 +903,7 @@ def seed_scheduler_settings(db: Session) -> None:
         db,
         key="timezone",
         value_type=SettingValueType.string,
-        value_text=os.getenv("CELERY_TIMEZONE", "UTC"),
+        value_text=os.getenv("CELERY_TIMEZONE", APP_TIMEZONE_NAME),
     )
     scheduler_settings.ensure_by_key(
         db,

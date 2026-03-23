@@ -394,7 +394,8 @@ def _cpe_action_response(result: object) -> JSONResponse:
     """Build a JSON response with HX-Trigger toast header from an ActionResult."""
     from app.services.network.ont_action_common import ActionResult
 
-    assert isinstance(result, ActionResult)  # noqa: S101
+    if not isinstance(result, ActionResult):
+        raise TypeError("Expected ActionResult from CPE action handler")
     status_code = 200 if result.success else 502
     headers = {
         # HTTP header values must be latin-1 encodable; ensure_ascii keeps the

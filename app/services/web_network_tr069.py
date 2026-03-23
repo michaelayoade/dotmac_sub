@@ -117,9 +117,9 @@ def acs_form_snapshot_from_model(server) -> dict[str, object]:
         "name": server.name,
         "cwmp_url": server.cwmp_url,
         "cwmp_username": server.cwmp_username,
-        "cwmp_password": "",
+        "cwmp_password": "",  # nosec
         "connection_request_username": server.connection_request_username,
-        "connection_request_password": "",
+        "connection_request_password": "",  # nosec
         "base_url": server.base_url,
         "is_active": bool(server.is_active),
         "notes": server.notes or "",
@@ -424,6 +424,8 @@ def create_ont_from_tr069_device(
     if existing:
         if not existing.tr069_acs_server_id:
             existing.tr069_acs_server_id = device.acs_server_id
+        if device.ont_unit_id != existing.id:
+            device.ont_unit_id = existing.id
             db.commit()
             db.refresh(existing)
         return existing, False
@@ -440,6 +442,7 @@ def create_ont_from_tr069_device(
     )
     ont = network_service.ont_units.create(db=db, payload=payload)
     ont.tr069_acs_server_id = device.acs_server_id
+    device.ont_unit_id = ont.id
     db.commit()
     db.refresh(ont)
     return ont, True

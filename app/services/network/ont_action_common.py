@@ -138,3 +138,69 @@ def resolve_cpe_client_or_error(
             message=reason or "No GenieACS server configured for this CPE device.",
         )
     return resolved, None
+
+
+def get_ont_strict_or_error(
+    db: Session, ont_id: str
+) -> tuple[OntUnit | None, ActionResult | None]:
+    """Load an ONT and narrow away the optional type for callers."""
+    ont, error = get_ont_or_error(db, ont_id)
+    if error:
+        return None, error
+    if ont is None:
+        return None, ActionResult(success=False, message="ONT not found.")
+    return ont, None
+
+
+def get_ont_client_or_error(
+    db: Session, ont_id: str
+) -> tuple[tuple[OntUnit, Any, str] | None, ActionResult | None]:
+    """Load an ONT and resolve its GenieACS client/device id."""
+    ont, error = get_ont_strict_or_error(db, ont_id)
+    if error:
+        return None, error
+    if ont is None:
+        return None, ActionResult(success=False, message="ONT not found.")
+    resolved, error = resolve_client_or_error(db, ont)
+    if error:
+        return None, error
+    if resolved is None:
+        return None, ActionResult(
+            success=False,
+            message="No GenieACS server configured for this ONT.",
+        )
+    client, device_id = resolved
+    return (ont, client, device_id), None
+
+
+def get_cpe_strict_or_error(
+    db: Session, cpe_id: str
+) -> tuple[CPEDevice | None, ActionResult | None]:
+    """Load a CPE and narrow away the optional type for callers."""
+    cpe, error = get_cpe_or_error(db, cpe_id)
+    if error:
+        return None, error
+    if cpe is None:
+        return None, ActionResult(success=False, message="CPE device not found.")
+    return cpe, None
+
+
+def get_cpe_client_or_error(
+    db: Session, cpe_id: str
+) -> tuple[tuple[CPEDevice, Any, str] | None, ActionResult | None]:
+    """Load a CPE and resolve its GenieACS client/device id."""
+    cpe, error = get_cpe_strict_or_error(db, cpe_id)
+    if error:
+        return None, error
+    if cpe is None:
+        return None, ActionResult(success=False, message="CPE device not found.")
+    resolved, error = resolve_cpe_client_or_error(db, cpe)
+    if error:
+        return None, error
+    if resolved is None:
+        return None, ActionResult(
+            success=False,
+            message="No GenieACS server configured for this CPE device.",
+        )
+    client, device_id = resolved
+    return (cpe, client, device_id), None

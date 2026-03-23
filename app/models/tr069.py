@@ -64,6 +64,9 @@ class Tr069CpeDevice(Base):
     acs_server_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("tr069_acs_servers.id"), nullable=False
     )
+    ont_unit_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("ont_units.id")
+    )
     cpe_device_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("cpe_devices.id")
     )
@@ -84,6 +87,7 @@ class Tr069CpeDevice(Base):
     )
 
     acs_server = relationship("Tr069AcsServer", back_populates="devices")
+    ont_unit = relationship("OntUnit")
     cpe_device = relationship("CPEDevice")
     sessions = relationship("Tr069Session", back_populates="device")
     parameters = relationship("Tr069Parameter", back_populates="device")

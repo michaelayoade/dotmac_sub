@@ -402,7 +402,7 @@ def _run_olt_snmpwalk(
 ) -> list[str]:
     """Run snmpbulkwalk (with snmpwalk fallback) against an OLT and return output lines."""
     import shutil
-    import subprocess
+    import subprocess  # nosec
 
     # Prefer snmpbulkwalk for performance on large tables
     use_bulk = shutil.which("snmpbulkwalk") is not None
@@ -421,7 +421,7 @@ def _run_olt_snmpwalk(
         host,
         oid,
     ]
-    result = subprocess.run(  # noqa: S603 - arguments are built as a fixed argv list
+    result = subprocess.run(  # nosec
         args,
         capture_output=True,
         text=True,
@@ -1013,7 +1013,7 @@ def _parse_sysdescr(raw: str, vendor: str) -> tuple[str | None, str | None]:
 
 def _snmpget_value(host: str, oid: str, community: str) -> str | None:
     """Perform a single SNMP GET and return the value string, or None."""
-    import subprocess
+    import subprocess  # nosec
 
     args = [
         "snmpget",
@@ -1029,7 +1029,7 @@ def _snmpget_value(host: str, oid: str, community: str) -> str | None:
         host,
         oid,
     ]
-    result = subprocess.run(  # noqa: S603 - arguments are built as a fixed argv list
+    result = subprocess.run(  # nosec
         args, capture_output=True, text=True, check=False, timeout=15
     )
     if result.returncode != 0:

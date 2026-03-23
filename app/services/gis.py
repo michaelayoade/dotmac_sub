@@ -11,7 +11,7 @@ from geoalchemy2.functions import (
     ST_MakePoint,
     ST_SetSRID,
 )
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.gis import (
@@ -40,6 +40,55 @@ from app.services.query_builders import apply_active_state, apply_optional_equal
 from app.services.response import ListResponseMixin, list_response
 
 logger = logging.getLogger(__name__)
+
+
+def subscriber_locations_geojson(
+    db: Session, *, limit: int = 500
+) -> dict[str, object]:
+    """Return subscriber locations as a GeoJSON feature collection."""
+    from app.models.subscriber import Address, Subscriber
+
+    stmt = (
+        select(
+            Subscriber.id,
+            (Subscriber.first_name + " " + Subscriber.last_name).label("name"),
+            Subscriber.status,
+            Address.latitude,
+            Address.longitude,
+            Address.city,
+        )
+        .join(Address, Address.subscriber_id == Subscriber.id, isouter=True)
+        .where(
+            Address.latitude.isnot(None),
+            Address.longitude.isnot(None),
+        )
+        .order_by(Subscriber.created_at.desc())
+        .limit(limit)
+    )
+    rows = db.execute(stmt).all()
+    return {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Point",
+                    "coordinates": [float(row.longitude), float(row.latitude)],
+                },
+                "properties": {
+                    "id": str(row.id),
+                    "name": row.name or "",
+                    "status": (
+                        row.status.value
+                        if hasattr(row.status, "value")
+                        else str(row.status or "")
+                    ),
+                    "city": row.city or "",
+                },
+            }
+            for row in rows
+        ],
+    }
 
 
 def _coerce_filter_bool(value: object) -> bool | None:

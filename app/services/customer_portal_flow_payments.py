@@ -188,6 +188,12 @@ def get_topup_page(
     # Top-up limits from settings
     min_amount = resolve_value(db, SettingDomain.billing, "topup_min_amount")
     max_amount = resolve_value(db, SettingDomain.billing, "topup_max_amount")
+    min_amount_value = (
+        int(min_amount) if isinstance(min_amount, (str, int, float)) else 1000
+    )
+    max_amount_value = (
+        int(max_amount) if isinstance(max_amount, (str, int, float)) else 500000
+    )
 
     email = customer.get("username", "")
 
@@ -195,8 +201,8 @@ def get_topup_page(
         "provider_type": provider_type,
         "customer_email": email,
         "prepaid_balance": float(prepaid_balance),
-        "min_amount": int(min_amount or 1000),
-        "max_amount": int(max_amount or 500000),
+        "min_amount": min_amount_value,
+        "max_amount": max_amount_value,
         "preset_amounts": [1000, 2000, 5000, 10000, 20000, 50000],
     }
 
@@ -255,8 +261,12 @@ def verify_and_record_topup(
             from app.services import collections as collections_service
 
             collections_service.restore_account_services(db, str(account_id))
-        except Exception:
-            pass  # Best-effort retry
+        except Exception as exc:
+            logger.warning(
+                "Best-effort service restore retry failed for account %s: %s",
+                account_id,
+                exc,
+            )
         return {
             "payment": existing,
             "amount": getattr(existing, "amount", amount_naira),

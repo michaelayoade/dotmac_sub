@@ -9,8 +9,7 @@ from sqlalchemy.orm import Session
 from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
-    get_cpe_or_error,
-    resolve_cpe_client_or_error,
+    get_cpe_client_or_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -23,16 +22,12 @@ def run_ping_diagnostic(
     if not host or not host.strip():
         return ActionResult(success=False, message="Ping target host is required.")
 
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     count = max(1, min(count, 20))
     params = {
         "Device.IP.Diagnostics.IPPing.Host": host.strip(),
@@ -72,16 +67,12 @@ def run_traceroute_diagnostic(db: Session, cpe_id: str, host: str) -> ActionResu
             success=False, message="Traceroute target host is required."
         )
 
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     params = {
         "Device.IP.Diagnostics.TraceRoute.Host": host.strip(),
         "Device.IP.Diagnostics.TraceRoute.DiagnosticsState": "Requested",

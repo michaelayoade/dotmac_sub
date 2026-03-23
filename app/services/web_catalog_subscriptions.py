@@ -57,6 +57,7 @@ from app.services.audit_helpers import (
 )
 from app.services.billing_settings import resolve_payment_due_days
 from app.services.credential_crypto import decrypt_credential
+from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -356,7 +357,7 @@ def default_subscription_form(account_id: str, subscriber_id: str) -> dict[str, 
         "mac_address": "",
         "provisioning_nas_device_id": "",
         "radius_profile_id": "",
-        "service_password": "",
+        "service_password": "",  # nosec
         "ipv4_method": "permanent_static",
         "ipv4_block_ids": [],
         "ipv4_addresses": [],
@@ -695,10 +696,13 @@ def apply_generated_service_credentials(
             exc_info=True,
         )
         return
+    if not str(subscription.get("login") or "").strip():
+        if subscription.get("id"):
+            subscription["login"] = _generated_service_login(subscriber)
+        elif not _pppoe_auto_generate_enabled(db):
+            subscription["login"] = _generated_service_login(subscriber)
     if _pppoe_auto_generate_enabled(db):
         return
-    if not str(subscription.get("login") or "").strip():
-        subscription["login"] = _generated_service_login(subscriber)
     if (
         not subscription.get("id")
         and not str(subscription.get("service_password") or "").strip()
@@ -942,7 +946,10 @@ def _append_block_usage_note(
         or subscriber.subscriber_number
         or str(subscriber.id)
     )
-    entry = f"{datetime.now(UTC).strftime('%Y-%m-%d %H:%M UTC')}: allocated {allocated_ip} to {display_name}"
+    entry = (
+        f"{format_in_app_timezone(datetime.now(UTC), '%Y-%m-%d %H:%M')} "
+        f"{APP_TIMEZONE_NAME}: allocated {allocated_ip} to {display_name}"
+    )
     existing = str(block.notes or "").strip()
     block.notes = f"{existing}\n{entry}".strip() if existing else entry
     db.commit()
@@ -1229,7 +1236,7 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
         "radius_profile_id": str(subscription_obj.radius_profile_id)
         if subscription_obj.radius_profile_id
         else "",
-        "service_password": "",
+        "service_password": "",  # nosec
         "ipv4_method": (
             "permanent_static"
             if (subscription_obj.service_status_raw or "").strip().lower()

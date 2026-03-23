@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException, Request, status
 from sqlalchemy import func
 from sqlalchemy.exc import ProgrammingError
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session
 
 import app.services.auth_flow as auth_flow_service
 from app.models.auth import Session as AuthSession

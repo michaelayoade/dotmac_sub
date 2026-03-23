@@ -6,7 +6,6 @@ from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any
 from uuid import UUID
-from zoneinfo import ZoneInfo
 
 from sqlalchemy.inspection import inspect
 from sqlalchemy.orm import Session
@@ -15,6 +14,7 @@ from app.models.audit import AuditActorType
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
+from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ SENSITIVE_FIELD_TOKENS = {
     "credential",
 }
 
-AUDIT_TIMEZONE = ZoneInfo("Africa/Lagos")
+AUDIT_TIMEZONE = APP_TIMEZONE
 
 
 def _normalize_value(value):

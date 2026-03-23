@@ -1,19 +1,18 @@
 """Drop legacy organization model and columns.
 
-Revision ID: f2a3b4c5d6e7
-Revises: e1f2a3b4c5d6
+Revision ID: f2a3b4c5d6e8
+Revises: e1f2a3b4c5d7
 Create Date: 2026-03-23
 """
 
 from collections.abc import Sequence
 
-import sqlalchemy as sa
 from sqlalchemy import inspect, text
 
 from alembic import op
 
-revision: str = "f2a3b4c5d6e7"
-down_revision: str | Sequence[str] | None = "e1f2a3b4c5d6"
+revision: str = "f2a3b4c5d6e8"
+down_revision: str | Sequence[str] | None = "e1f2a3b4c5d7"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

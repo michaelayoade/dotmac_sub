@@ -16,8 +16,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
     detect_data_model_root,
-    get_cpe_or_error,
-    resolve_cpe_client_or_error,
+    get_cpe_client_or_error,
 )
 from app.services.settings_spec import resolve_value
 
@@ -26,8 +25,8 @@ logger = logging.getLogger(__name__)
 
 def _send_connection_request_http(
     conn_url: str,
-    username: str = "",
-    password: str = "",
+    username: str | None = None,
+    password: str | None = None,
 ) -> int:
     with httpx.Client(timeout=10.0) as http:
         if username:
@@ -89,16 +88,12 @@ def set_connection_request_credentials(
             success=False, message="Connection request password is required."
         )
 
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     root = detect_data_model_root(db, cpe, client, device_id)
     params = build_tr069_params(
         root,
@@ -139,16 +134,12 @@ def send_connection_request(db: Session, cpe_id: str) -> ActionResult:
     Reads the ConnectionRequestURL from the ACS device record
     and performs an HTTP GET with Digest auth.
     """
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     root = detect_data_model_root(db, cpe, client, device_id)
 
     try:

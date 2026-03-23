@@ -1045,7 +1045,7 @@ def olt_init_tr069(
         profile_name="DotMac-ACS",
         acs_url="http://10.10.41.1:7547",
         username="acs",
-        password="acs",  # noqa: S106
+        password="acs",  # nosec  # noqa: S106
         inform_interval=300,
     )
 

@@ -616,7 +616,7 @@ def test_router_connection(
             400,
         )
 
-    password = ""
+    password = ""  # nosec
     if router_config.get("password"):
         try:
             from app.services.wireguard_crypto import decrypt_private_key

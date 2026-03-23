@@ -7,7 +7,6 @@ import logging
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber, SubscriberCategory
-from app.services import subscriber as subscriber_service
 
 logger = logging.getLogger(__name__)
 

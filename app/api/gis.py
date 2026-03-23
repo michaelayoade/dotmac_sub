@@ -1,7 +1,6 @@
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query, status
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -462,44 +461,4 @@ def subscriber_locations(
 
     Returns GeoJSON-compatible list of subscriber address points.
     """
-    from app.models.subscriber import Address, Subscriber
-
-    stmt = (
-        select(
-            Subscriber.id,
-            (Subscriber.first_name + " " + Subscriber.last_name).label("name"),
-            Subscriber.status,
-            Address.latitude,
-            Address.longitude,
-            Address.city,
-        )
-        .join(Address, Address.subscriber_id == Subscriber.id, isouter=True)
-        .where(
-            Address.latitude.isnot(None),
-            Address.longitude.isnot(None),
-        )
-        .order_by(Subscriber.created_at.desc())
-        .limit(limit)
-    )
-    rows = db.execute(stmt).all()
-    return {
-        "type": "FeatureCollection",
-        "features": [
-            {
-                "type": "Feature",
-                "geometry": {
-                    "type": "Point",
-                    "coordinates": [float(r.longitude), float(r.latitude)],
-                },
-                "properties": {
-                    "id": str(r.id),
-                    "name": r.name or "",
-                    "status": r.status.value
-                    if hasattr(r.status, "value")
-                    else str(r.status or ""),
-                    "city": r.city or "",
-                },
-            }
-            for r in rows
-        ],
-    }
+    return gis_service.subscriber_locations_geojson(db, limit=limit)

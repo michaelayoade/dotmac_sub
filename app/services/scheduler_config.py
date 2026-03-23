@@ -7,6 +7,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.scheduler import ScheduledTask, ScheduleType
 from app.services import integration as integration_service
 from app.services.settings_spec import resolve_value
+from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +184,7 @@ def get_celery_config() -> dict:
 
     broker = broker or _env_value("REDIS_URL") or "redis://localhost:6379/0"
     backend = backend or _env_value("REDIS_URL") or "redis://localhost:6379/1"
-    timezone = timezone or "UTC"
+    timezone = timezone or APP_TIMEZONE_NAME
     config: dict[str, object] = {
         "broker_url": broker,
         "result_backend": backend,
@@ -609,6 +610,13 @@ def build_beat_schedule() -> dict:
             session,
             name="ont_discovery",
             task_name="app.tasks.ont_discovery.discover_all_olt_onts",
+            enabled=True,
+            interval_seconds=max(ont_discovery_minutes * 60, 120),
+        )
+        _sync_scheduled_task(
+            session,
+            name="olt_autofind_discovery",
+            task_name="app.tasks.ont_autofind.discover_all_olt_autofind",
             enabled=True,
             interval_seconds=max(ont_discovery_minutes * 60, 120),
         )

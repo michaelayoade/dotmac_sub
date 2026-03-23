@@ -5,11 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
     OLTDevice,
+    OntUnit,
     PonType,
     Splitter,
     Vlan,
@@ -39,6 +40,80 @@ def get_vlans(db: Session) -> list[Vlan]:
     """Fetch VLANs for form dropdowns."""
     stmt = select(Vlan).order_by(Vlan.tag)
     return list(db.scalars(stmt).all())
+
+
+def get_vlans_for_olt(
+    db: Session,
+    olt_device_id: str | None,
+    *,
+    include_vlan_ids: list[str] | None = None,
+) -> list[Vlan]:
+    """Fetch VLANs assigned to an OLT, preserving explicitly selected VLANs."""
+    include_ids = [v for v in (include_vlan_ids or []) if v]
+    if not olt_device_id and not include_ids:
+        return []
+
+    stmt = select(Vlan)
+    if olt_device_id and include_ids:
+        stmt = stmt.where(
+            or_(
+                Vlan.olt_device_id == olt_device_id,
+                Vlan.id.in_(include_ids),
+            )
+        )
+    elif olt_device_id:
+        stmt = stmt.where(Vlan.olt_device_id == olt_device_id)
+    else:
+        stmt = stmt.where(Vlan.id.in_(include_ids))
+
+    stmt = stmt.order_by(Vlan.tag)
+    return list(db.scalars(stmt).all())
+
+
+def get_vlans_for_ont(db: Session, ont: OntUnit | Any | None) -> list[Vlan]:
+    """Fetch VLANs scoped to an ONT's OLT, keeping current selections visible."""
+    if ont is None:
+        return []
+
+    selected_vlan_ids = [
+        str(vlan_id)
+        for vlan_id in [
+            getattr(ont, "user_vlan_id", None),
+            getattr(ont, "wan_vlan_id", None),
+            getattr(ont, "mgmt_vlan_id", None),
+        ]
+        if vlan_id
+    ]
+    olt_device_id = getattr(ont, "olt_device_id", None)
+    return get_vlans_for_olt(
+        db,
+        str(olt_device_id) if olt_device_id else None,
+        include_vlan_ids=selected_vlan_ids,
+    )
+
+
+def get_tr069_profiles_for_ont(
+    db: Session,
+    ont: OntUnit | Any | None,
+) -> tuple[list[Any], str | None]:
+    """Fetch TR-069 server profiles for the ONT's assigned OLT."""
+    if ont is None:
+        return [], None
+
+    olt_device_id = getattr(ont, "olt_device_id", None)
+    if not olt_device_id:
+        return [], "No OLT is assigned to this ONT"
+
+    olt = db.get(OLTDevice, olt_device_id)
+    if not olt:
+        return [], "OLT not found"
+
+    from app.services.network.olt_ssh_profiles import get_tr069_server_profiles
+
+    ok, msg, profiles = get_tr069_server_profiles(olt)
+    if ok:
+        return profiles, None
+    return [], msg
 
 
 def get_zones(db: Session) -> list[Any]:
@@ -79,12 +154,12 @@ def get_provisioning_profiles(db: Session) -> list[Any]:
     return list(db.scalars(stmt).all())
 
 
-def ont_form_dependencies(db: Session) -> dict[str, Any]:
+def ont_form_dependencies(db: Session, ont: OntUnit | Any | None = None) -> dict[str, Any]:
     """Build all dropdown data needed by the ONT provisioning form."""
     return {
         "onu_types": get_onu_types(db),
         "olt_devices": get_olt_devices(db),
-        "vlans": get_vlans(db),
+        "vlans": get_vlans_for_ont(db, ont),
         "zones": get_zones(db),
         "splitters": get_splitters(db),
         "speed_profiles_download": get_speed_profiles(db, "download"),
@@ -117,7 +192,13 @@ def get_active_firmware_images(db: Session) -> list:
 # Bulk ONT Operations
 # ---------------------------------------------------------------------------
 
-_BULK_ACTIONS = {"reboot", "refresh", "factory_reset", "firmware_upgrade"}
+_BULK_ACTIONS = {
+    "reboot",
+    "refresh",
+    "factory_reset",
+    "firmware_upgrade",
+    "return_to_inventory",
+}
 
 
 def execute_bulk_action(
@@ -127,18 +208,20 @@ def execute_bulk_action(
     *,
     firmware_image_id: str | None = None,
 ) -> dict[str, Any]:
-    """Execute a bulk action on multiple ONTs via TR-069.
+    """Execute a bulk action on multiple ONTs.
 
     Args:
         db: Database session.
         ont_ids: List of OntUnit IDs.
-        action: One of 'reboot', 'refresh', 'factory_reset', 'firmware_upgrade'.
+        action: One of 'reboot', 'refresh', 'factory_reset',
+            'firmware_upgrade', 'return_to_inventory'.
         firmware_image_id: Required when action is 'firmware_upgrade'.
 
     Returns:
         Stats dict with succeeded/failed/skipped counts and per-ONT results.
     """
     from app.services.network.ont_actions import OntActions
+    from app.services.web_network_ont_actions import return_to_inventory
 
     if action not in _BULK_ACTIONS:
         return {
@@ -174,6 +257,8 @@ def execute_bulk_action(
                 result = OntActions.factory_reset(db, ont_id)
             elif action == "firmware_upgrade" and firmware_image_id:
                 result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
+            elif action == "return_to_inventory":
+                result = return_to_inventory(db, ont_id)
             else:
                 continue
 

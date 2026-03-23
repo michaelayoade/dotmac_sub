@@ -3,7 +3,7 @@
 import html as html_mod
 import logging
 import shutil
-import subprocess
+import subprocess  # nosec
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, Form, Request
@@ -56,7 +56,7 @@ def _get_vpn_tunnel_status() -> list[dict]:
     """Read WireGuard peer status from wg show."""
     tunnels = []
     try:
-        result = subprocess.run(  # noqa: S603 - argv is fixed and peer data is read-only
+        result = subprocess.run(  # nosec
             [WG_BIN, "show", "wg0", "dump"],
             capture_output=True,
             text=True,

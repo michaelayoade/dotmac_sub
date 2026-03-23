@@ -12,15 +12,22 @@
         <div class="grid gap-4 sm:grid-cols-2">
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Default Landing Page</label>
-                <select name="default_landing_page" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="admin" {% if preferences.default_landing_page == 'admin' %}selected{% endif %}>Admin Portal</option>
-                    <option value="customer" {% if preferences.default_landing_page == 'customer' %}selected{% endif %}>Customer Portal</option>
-                    <option value="reseller" {% if preferences.default_landing_page == 'reseller' %}selected{% endif %}>Reseller Portal</option>
-                </select>
+                <div class="relative mt-1">
+                    <select name="default_landing_page" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="admin" {% if preferences.default_landing_page == 'admin' %}selected{% endif %}>Admin Portal</option>
+                        <option value="customer" {% if preferences.default_landing_page == 'customer' %}selected{% endif %}>Customer Portal</option>
+                        <option value="reseller" {% if preferences.default_landing_page == 'reseller' %}selected{% endif %}>Reseller Portal</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/>
+                        </svg>
+                    </div>
+                </div>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Admin Portal Title</label>
-                <input type="text" name="admin_portal_title" value="{{ preferences.admin_portal_title or '' }}" placeholder="DotMac Sub Admin" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <input type="text" name="admin_portal_title" value="{{ preferences.admin_portal_title or '' }}" placeholder="DotMac Sub Admin" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Appears in the browser tab title bar</p>
             </div>
         </div>
@@ -30,22 +37,29 @@
         <div class="grid gap-4 sm:grid-cols-2">
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Force 2FA for All Admins</label>
-                <select name="force_2fa" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="true" {% if preferences.force_2fa == 'true' %}selected{% endif %}>Enabled</option>
-                    <option value="false" {% if preferences.force_2fa != 'true' %}selected{% endif %}>Disabled</option>
-                </select>
+                <div class="relative mt-1">
+                    <select name="force_2fa" class="block w-full appearance-none rounded-xl border-0 bg-slate-100 px-4 py-3 pr-11 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                        <option value="true" {% if preferences.force_2fa == 'true' %}selected{% endif %}>Enabled</option>
+                        <option value="false" {% if preferences.force_2fa != 'true' %}selected{% endif %}>Disabled</option>
+                    </select>
+                    <div class="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-4 text-slate-400 dark:text-slate-500">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.51a.75.75 0 0 1-1.08 0l-4.25-4.51a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"/>
+                        </svg>
+                    </div>
+                </div>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">When enabled, all admin users must set up two-factor authentication</p>
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search Debounce (ms)</label>
-                <input type="number" name="search_debounce_ms" value="{{ preferences.search_debounce_ms or '300' }}" class="mt-1 w-full rounded-lg border-slate-300 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <input type="number" name="search_debounce_ms" value="{{ preferences.search_debounce_ms or '300' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-amber-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Delay before HTMX search requests fire (300ms default)</p>
             </div>
         </div>
         {% endcall %}
 
         <div class="flex justify-end">
-            <button type="submit" class="rounded-lg bg-slate-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-slate-700 transition">Save Preferences</button>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-amber-500/25 transition hover:from-amber-600 hover:to-amber-700 hover:shadow-amber-500/40">Save Preferences</button>
         </div>
     </form>
 </div>

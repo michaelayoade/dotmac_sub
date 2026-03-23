@@ -30,6 +30,7 @@ from app.services import (
     web_notifications_alert_policies as web_alert_policies_service,
 )
 from app.services.auth_dependencies import require_permission
+from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
@@ -897,7 +898,7 @@ def oncall_rotations_list(
 def oncall_rotation_create(
     request: Request,
     name: str = Form(...),
-    timezone: str = Form("UTC"),
+    timezone: str = Form(APP_TIMEZONE_NAME),
     notes: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
@@ -978,7 +979,7 @@ def oncall_rotation_update(
     request: Request,
     rotation_id: UUID,
     name: str = Form(...),
-    timezone: str = Form("UTC"),
+    timezone: str = Form(APP_TIMEZONE_NAME),
     notes: str | None = Form(None),
     is_active: str | None = Form(None),
     db: Session = Depends(get_db),

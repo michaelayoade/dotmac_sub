@@ -10,8 +10,7 @@ from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     DeviceConfig,
-    get_cpe_or_error,
-    resolve_cpe_client_or_error,
+    get_cpe_client_or_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,16 +43,12 @@ _WIFI_PARAMS = [
 
 def reboot(db: Session, cpe_id: str) -> ActionResult:
     """Reboot a CPE device via TR-069."""
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     try:
         result = client.reboot_device(device_id)
         logger.info("Reboot sent to CPE %s (device %s)", cpe.serial_number, device_id)
@@ -69,16 +64,12 @@ def reboot(db: Session, cpe_id: str) -> ActionResult:
 
 def refresh_status(db: Session, cpe_id: str) -> ActionResult:
     """Refresh CPE device parameters from GenieACS."""
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     try:
         result = client.refresh_object(device_id, "Device.", connection_request=True)
         logger.info("Refresh sent to CPE %s (device %s)", cpe.serial_number, device_id)
@@ -94,16 +85,12 @@ def refresh_status(db: Session, cpe_id: str) -> ActionResult:
 
 def get_running_config(db: Session, cpe_id: str) -> ActionResult:
     """Fetch running configuration from a CPE device."""
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     try:
         device = client.get_device(device_id)
     except GenieACSError as exc:
@@ -136,16 +123,12 @@ def get_running_config(db: Session, cpe_id: str) -> ActionResult:
 
 def factory_reset(db: Session, cpe_id: str) -> ActionResult:
     """Factory reset a CPE device via TR-069."""
-    cpe, error = get_cpe_or_error(db, cpe_id)
+    resolved, error = get_cpe_client_or_error(db, cpe_id)
     if error:
         return error
-    assert cpe is not None  # noqa: S101
-    resolved, error = resolve_cpe_client_or_error(db, cpe)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="CPE device resolution failed.")
+    cpe, client, device_id = resolved
     try:
         result = client.factory_reset(device_id)
         logger.info(

@@ -1,0 +1,3 @@
+from app.timezone import install_template_timezone_localization
+
+install_template_timezone_localization()

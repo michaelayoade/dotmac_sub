@@ -1,6 +1,6 @@
 """Add owner subscriber id to stored files.
 
-Revision ID: c9d0e1f2a3b4
+Revision ID: c9d0e1f2a3b5
 Revises: b8c9d0e1f2a3
 Create Date: 2026-03-23
 """
@@ -13,7 +13,7 @@ from sqlalchemy.dialects.postgresql import UUID
 
 from alembic import op
 
-revision: str = "c9d0e1f2a3b4"
+revision: str = "c9d0e1f2a3b5"
 down_revision: str | Sequence[str] | None = "b8c9d0e1f2a3"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None

@@ -64,7 +64,7 @@ def reset_user_password(db: Session, *, user_id: str) -> str:
     ).update(
         {
             "password_hash": hash_password(temp_password),
-            "must_change_password": True,
+            "must_change_password": True,  # nosec
             "password_updated_at": datetime.now(UTC),
         }
     )

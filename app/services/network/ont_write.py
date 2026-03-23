@@ -9,7 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
-from app.services.network.ont_action_common import ActionResult, get_ont_or_error
+from app.services.network.ont_action_common import (
+    ActionResult,
+    get_ont_or_error,
+)
 from app.services.web_network_service_ports import _parse_ont_id_on_olt
 
 logger = logging.getLogger(__name__)
@@ -88,7 +91,8 @@ class OntWriteService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         from app.services.common import coerce_uuid
 
@@ -118,7 +122,8 @@ class OntWriteService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         # Try setting PPPoE via TR-069 if applicable
         if wan_mode == "pppoe" and pppoe_username and pppoe_password:
@@ -177,13 +182,14 @@ class OntWriteService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         olt, assignment, olt_err = _resolve_olt_context(db, ont)
         if olt_err:
             return olt_err
-        assert olt is not None  # noqa: S101
-        assert assignment is not None  # noqa: S101
+        if olt is None or assignment is None:
+            return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
         fsp = _fsp_from_assignment(assignment)
         if not fsp:
@@ -267,13 +273,14 @@ class OntWriteService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         olt, assignment, olt_err = _resolve_olt_context(db, ont)
         if olt_err:
             return olt_err
-        assert olt is not None  # noqa: S101
-        assert assignment is not None  # noqa: S101
+        if olt is None or assignment is None:
+            return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
         fsp = _fsp_from_assignment(assignment)
         if not fsp:
@@ -324,7 +331,8 @@ class OntWriteService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         from app.services.common import coerce_uuid
 
@@ -373,7 +381,8 @@ class OntWriteService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         ont.external_id = external_id
         _set_sync_meta(ont, "manual")

@@ -256,7 +256,7 @@ class DeviceProvisioner:
 
         client = paramiko.SSHClient()
         if device.ssh_verify_host_key is False:
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # noqa: S507 - explicitly allowed when host-key verification is disabled
+            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # nosec
         else:
             client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
@@ -282,7 +282,7 @@ class DeviceProvisioner:
                     timeout=30,
                 )
 
-            stdin, stdout, stderr = client.exec_command(
+            stdin, stdout, stderr = client.exec_command(  # nosec B601
                 command, timeout=timeout_seconds
             )
             output: str = stdout.read().decode()

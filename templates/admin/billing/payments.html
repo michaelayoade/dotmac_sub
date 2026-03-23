@@ -92,7 +92,7 @@
     </div>
 
     {# ── Filters ── #}
-    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
+    <div class="relative z-20 animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white/80 backdrop-blur-sm p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800/80">
         <form method="get" action="/admin/billing/payments{% if unallocated_only %}/unallocated{% endif %}" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="flex-1">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Search</label>

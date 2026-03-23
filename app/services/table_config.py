@@ -15,7 +15,12 @@ from sqlalchemy.orm import Query, Session
 from app.models.catalog import CatalogOffer, NasDevice, Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.network_monitoring import PopSite
-from app.models.subscriber import Reseller, Subscriber, SubscriberCategory, SubscriberStatus
+from app.models.subscriber import (
+    Reseller,
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+)
 from app.models.table_column_config import TableColumnConfig
 from app.models.table_column_default_config import TableColumnDefaultConfig
 from app.schemas.table_config import (

@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import re
-import subprocess
+import subprocess  # nosec
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ def parse_latency_ms(output: str) -> float | None:
 def run_ping(host: str, *, timeout_seconds: int = 4) -> tuple[bool, float | None]:
     """Execute ping and return (success, latency_ms)."""
     try:
-        result = subprocess.run(  # noqa: S603 - host is validated before building argv
+        result = subprocess.run(  # nosec
             build_ping_command(host),
             capture_output=True,
             text=True,

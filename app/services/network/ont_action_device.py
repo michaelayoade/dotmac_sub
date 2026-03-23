@@ -10,8 +10,8 @@ from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     DeviceConfig,
-    get_ont_or_error,
-    resolve_client_or_error,
+    get_ont_client_or_error,
+    get_ont_strict_or_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,16 +50,12 @@ _WIFI_PARAMS = [
 
 
 def reboot(db: Session, ont_id: str) -> ActionResult:
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     try:
         result = client.reboot_device(device_id)
         logger.info("Reboot sent to ONT %s (device %s)", ont.serial_number, device_id)
@@ -74,16 +70,12 @@ def reboot(db: Session, ont_id: str) -> ActionResult:
 
 
 def refresh_status(db: Session, ont_id: str) -> ActionResult:
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     try:
         result = client.refresh_object(device_id, "Device.", connection_request=True)
         logger.info("Refresh sent to ONT %s (device %s)", ont.serial_number, device_id)
@@ -98,16 +90,12 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
 
 
 def get_running_config(db: Session, ont_id: str) -> ActionResult:
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     try:
         device = client.get_device(device_id)
     except GenieACSError as exc:
@@ -140,16 +128,12 @@ def get_running_config(db: Session, ont_id: str) -> ActionResult:
 
 
 def factory_reset(db: Session, ont_id: str) -> ActionResult:
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     try:
         result = client.factory_reset(device_id)
         logger.info(
@@ -168,10 +152,11 @@ def factory_reset(db: Session, ont_id: str) -> ActionResult:
 def firmware_upgrade(db: Session, ont_id: str, firmware_image_id: str) -> ActionResult:
     from app.models.network import OntFirmwareImage
 
-    ont, error = get_ont_or_error(db, ont_id)
+    ont, error = get_ont_strict_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
+    if ont is None:
+        return ActionResult(success=False, message="ONT not found.")
 
     firmware = db.get(OntFirmwareImage, firmware_image_id)
     if not firmware:
@@ -179,12 +164,13 @@ def firmware_upgrade(db: Session, ont_id: str, firmware_image_id: str) -> Action
     if not firmware.is_active:
         return ActionResult(success=False, message="Firmware image is not active.")
 
-    resolved, error = resolve_client_or_error(db, ont)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert resolved is not None  # noqa: S101
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
 
-    client, device_id = resolved
+    _, client, device_id = resolved
     try:
         result = client.download(
             device_id,

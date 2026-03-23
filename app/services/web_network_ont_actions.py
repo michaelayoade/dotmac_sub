@@ -8,11 +8,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntProvisioningStatus
-from app.services import network as network_service
 from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.services import network as network_service
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 

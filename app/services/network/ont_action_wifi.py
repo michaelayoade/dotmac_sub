@@ -11,8 +11,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
     detect_data_model_root,
-    get_ont_or_error,
-    resolve_client_or_error,
+    get_ont_client_or_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -39,16 +38,12 @@ def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
     if not ssid or len(ssid) > 32:
         return ActionResult(success=False, message="SSID must be 1-32 characters.")
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     params = build_tr069_params(root, {_WIFI_SSID_PATHS[root]: ssid})
     try:
@@ -71,16 +66,12 @@ def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
             success=False, message="WiFi password must be at least 8 characters."
         )
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     params = build_tr069_params(root, {_WIFI_PSK_PATHS[root]: password})
     try:
@@ -105,16 +96,12 @@ def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> Actio
             success=False, message="Port number must be between 1 and 4."
         )
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     value = "true" if enabled else "false"
     path = _LAN_PORT_PATHS[root].format(port=port)

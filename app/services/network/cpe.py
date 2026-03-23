@@ -1,6 +1,8 @@
 """CPE device and port services."""
 
 import logging
+from typing import cast
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -179,8 +181,11 @@ def ensure_cpe_for_ont(
     )
 
     if existing is None:
+        if assignment is None:
+            return None
+        assignment_subscriber_id = cast("UUID", assignment.subscriber_id)
         device = CPEDevice(
-            subscriber_id=assignment.subscriber_id,
+            subscriber_id=assignment_subscriber_id,
             subscription_id=getattr(assignment, "subscription_id", None),
             service_address_id=getattr(assignment, "service_address_id", None),
             device_type=DeviceType.other,
@@ -201,9 +206,11 @@ def ensure_cpe_for_ont(
         return device
 
     if assignment and getattr(assignment, "subscriber_id", None) is not None:
-        existing.subscriber_id = assignment.subscriber_id
-        existing.subscription_id = assignment.subscription_id
-        existing.service_address_id = assignment.service_address_id
+        existing.subscriber_id = cast("UUID", assignment.subscriber_id)
+        existing.subscription_id = cast("UUID | None", assignment.subscription_id)
+        existing.service_address_id = cast(
+            "UUID | None", assignment.service_address_id
+        )
         if existing.installed_at is None and assignment.assigned_at is not None:
             existing.installed_at = assignment.assigned_at
     if data.get("serial_number"):

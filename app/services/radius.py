@@ -247,7 +247,14 @@ def _mask_external_radius_value(attribute: str, value: str) -> str:
 
 
 def _external_radius_table(name: str, *columns: Column[Any]) -> Table:
-    return Table(name, MetaData(), *columns)
+    parts = [part.strip().strip('"') for part in str(name or "").split(".") if part]
+    if not parts:
+        raise ValueError("SQL table identifier cannot be empty.")
+    if not all(_SQL_IDENT_PART_RE.fullmatch(part) for part in parts):
+        raise ValueError(f"Invalid SQL table identifier: {name!r}")
+    if len(parts) == 1:
+        return Table(parts[0], MetaData(), *columns)
+    return Table(parts[-1], MetaData(), *columns, schema=".".join(parts[:-1]))
 
 
 def _read_external_radius_user_records(
@@ -816,12 +823,12 @@ def _bundled_external_db_config() -> dict | None:
         return None
     return {
         "db_url": db_url,
-        "radcheck_table": '"radcheck"',
-        "radreply_table": '"radreply"',
-        "radusergroup_table": '"radusergroup"',
-        "nas_table": '"nas"',
-        "password_attribute": "Cleartext-Password",
-        "password_op": ":=",
+        "radcheck_table": "radcheck",
+        "radreply_table": "radreply",
+        "radusergroup_table": "radusergroup",
+        "nas_table": "nas",
+        "password_attribute": "Cleartext-Password",  # nosec
+        "password_op": ":=",  # nosec
         "use_group": False,
         "group_priority": 0,
         "default_reply_op": ":=",
@@ -1041,11 +1048,10 @@ def _sanitize_table_identifier(raw: object, fallback: str) -> str:
     name = str(raw).strip() if raw is not None else fallback
     if not name:
         name = fallback
-    parts = name.split(".")
+    parts = [part.strip().strip('"') for part in name.split(".")]
     if not all(_SQL_IDENT_PART_RE.fullmatch(part) for part in parts):
         raise ValueError(f"Invalid SQL table identifier: {name!r}")
-    # Identifiers are validated strictly above; quoting prevents keyword collisions.
-    return ".".join(f'"{part}"' for part in parts)
+    return ".".join(parts)
 
 
 def _external_db_config(db: Session, job: RadiusSyncJob) -> dict | None:

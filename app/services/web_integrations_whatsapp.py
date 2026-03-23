@@ -56,7 +56,7 @@ def build_config_state(db: Session) -> dict[str, Any]:
             "phone_number": config.get("phone_number", ""),
             "webhook_url": config.get("webhook_url", ""),
             "api_key": "",
-            "api_secret": "",
+            "api_secret": "",  # nosec
             "api_key_masked": _mask_secret(str(config.get("api_key", ""))),
             "api_secret_masked": _mask_secret(str(config.get("api_secret", ""))),
             "message_templates_json": json.dumps(config.get("templates", []), indent=2),

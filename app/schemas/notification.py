@@ -197,7 +197,7 @@ class AlertNotificationLogRead(BaseModel):
 
 class OnCallRotationBase(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    timezone: str = Field(default="UTC", max_length=60)
+    timezone: str = Field(default="Africa/Lagos", max_length=60)
     is_active: bool = True
     notes: str | None = None
 

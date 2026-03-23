@@ -553,7 +553,7 @@ class AuthFlow(ListResponseMixin):
         status_code: int = status.HTTP_200_OK,
     ) -> Response:
         settings = AuthFlow.refresh_cookie_settings(db)
-        body_payload = {**payload, "refresh_token": None}
+        body_payload = {**payload, "refresh_token": None}  # nosec
         body_content = model_cls(**body_payload).model_dump_json()
         response = Response(
             content=body_content,

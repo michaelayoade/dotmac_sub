@@ -78,7 +78,7 @@
                             </div>
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm font-mono text-slate-600 dark:text-slate-300">
-                            {{ rotation.timezone or 'UTC' }}
+                            {{ rotation.timezone or 'Africa/Lagos' }}
                         </td>
                         <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                             {{ rotation.members | length if rotation.members else 0 }}
@@ -140,7 +140,7 @@
                 </div>
                 <div>
                     <label for="timezone" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Timezone</label>
-                    <input type="text" id="timezone" name="timezone" value="UTC" placeholder="UTC"
+                    <input type="text" id="timezone" name="timezone" value="Africa/Lagos" placeholder="Africa/Lagos"
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-rose-500 focus:ring-rose-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                 </div>
             </div>

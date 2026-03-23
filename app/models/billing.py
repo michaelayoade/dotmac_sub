@@ -821,7 +821,7 @@ class BillingRunSchedule(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     run_day: Mapped[int] = mapped_column(Integer, default=1)
     run_time: Mapped[str] = mapped_column(String(8), default="02:00")
-    timezone: Mapped[str] = mapped_column(String(64), default="UTC")
+    timezone: Mapped[str] = mapped_column(String(64), default="Africa/Lagos")
     billing_cycle: Mapped[str] = mapped_column(String(40), default="monthly")
     partner_ids: Mapped[list | None] = mapped_column(JSON, default=list)
 

@@ -352,6 +352,7 @@ class CpeDevices(ListResponseMixin):
 
         # Auto-link to ONTs by serial number
         auto_linked = 0
+        explicit_links = 0
         serial_updated = 0
         try:
             from app.models.network import OntUnit
@@ -402,6 +403,9 @@ class CpeDevices(ListResponseMixin):
                         pass
 
                 if ont:
+                    if cpe_dev.ont_unit_id != ont.id:
+                        cpe_dev.ont_unit_id = ont.id
+                        explicit_links += 1
                     if not ont.tr069_acs_server_id:
                         ont.tr069_acs_server_id = server.id
                         auto_linked += 1
@@ -411,12 +415,13 @@ class CpeDevices(ListResponseMixin):
                         ont.serial_number = cpe_serial[:120]
                         serial_updated += 1
 
-            if auto_linked or serial_updated:
+            if auto_linked or explicit_links or serial_updated:
                 db.commit()
                 logger.info(
-                    "Auto-link: %d ONTs linked to ACS %s, %d serials updated",
+                    "Auto-link: %d ONTs linked to ACS %s, %d explicit TR-069 links, %d serials updated",
                     auto_linked,
                     server.name,
+                    explicit_links,
                     serial_updated,
                 )
         except Exception as e:

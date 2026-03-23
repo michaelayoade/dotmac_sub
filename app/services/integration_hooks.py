@@ -6,7 +6,7 @@ import base64
 import json
 import logging
 import shlex
-import subprocess
+import subprocess  # nosec
 import time
 from datetime import UTC, datetime
 from typing import Any
@@ -440,7 +440,7 @@ def _execute_cli_hook(
     command = str(hook.command or "").strip()
     if not command:
         raise ValueError("CLI hook command is empty")
-    result = subprocess.run(  # noqa: S603 - command is explicitly configured by an admin integration hook
+    result = subprocess.run(  # nosec
         shlex.split(command),
         capture_output=True,
         text=True,

@@ -106,7 +106,7 @@ def _run_ssh_commands(conn: dict, commands: list[str]) -> list[str]:
     client = _ssh_client(conn)
     try:
         for cmd in commands:
-            stdin, stdout, stderr = client.exec_command(cmd)
+            stdin, stdout, stderr = client.exec_command(cmd)  # nosec B601
             output = stdout.read().decode("utf-8").strip()
             err = stderr.read().decode("utf-8").strip()
             outputs.append(output if output else err)

@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec
 import time
 from dataclasses import dataclass
 
@@ -120,7 +120,7 @@ def _run_snmpbulkwalk(device: NetworkDevice, oid: str, timeout: int = 20) -> lis
 
 
 def _run_snmp_command(args: list[str], timeout: int) -> list[str]:
-    result = subprocess.run(  # noqa: S603 - SNMP command is executed with a fixed argv list
+    result = subprocess.run(  # nosec
         args,
         capture_output=True,
         text=True,

@@ -18,8 +18,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     build_tr069_params,
     detect_data_model_root,
-    get_ont_or_error,
-    resolve_client_or_error,
+    get_ont_client_or_error,
 )
 from app.services.settings_spec import resolve_value
 
@@ -39,8 +38,8 @@ def _normalize_serial(value: str | None) -> str:
 
 def _send_connection_request_http(
     conn_url: str,
-    username: str = "",
-    password: str = "",
+    username: str | None = None,
+    password: str | None = None,
 ) -> int:
     with httpx.Client(timeout=10.0) as http:
         if username:
@@ -131,16 +130,12 @@ def set_connection_request_credentials(
             success=False, message="Connection request password is required."
         )
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     params = build_tr069_params(
         root,
@@ -181,16 +176,12 @@ def send_connection_request(db: Session, ont_id: str) -> ActionResult:
     Reads the ConnectionRequestURL from the ACS device record
     and performs an HTTP GET with Digest auth.
     """
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
 
     try:
@@ -334,16 +325,12 @@ def set_pppoe_credentials(
     if not password:
         return ActionResult(success=False, message="PPPoE password is required.")
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
     instance_index = max(1, instance_index)
 
@@ -397,16 +384,12 @@ def enable_ipv6_on_wan(
         ont_id: OntUnit ID.
         wan_instance: WAN connection instance index (default 1).
     """
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
 
     if root == "Device":

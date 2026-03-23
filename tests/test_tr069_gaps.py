@@ -236,7 +236,11 @@ class TestAutoLinkOnts:
         with patch("app.services.tr069.GenieACSClient") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
-            instance.parse_device_id.return_value = ("00D09E", "TestProduct", "AUTOLINK-001")
+            instance.parse_device_id.return_value = (
+                "00D09E",
+                "TestProduct",
+                "AUTOLINK-001",
+            )
             instance.extract_parameter_value.return_value = None
 
             result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
@@ -247,6 +251,13 @@ class TestAutoLinkOnts:
         # Verify ONT now has ACS server linked
         db_session.refresh(ont)
         assert ont.tr069_acs_server_id == server.id
+        linked = (
+            db_session.query(Tr069CpeDevice)
+            .filter_by(serial_number="AUTOLINK-001")
+            .first()
+        )
+        assert linked is not None
+        assert linked.ont_unit_id == ont.id
 
     def test_sync_auto_links_ont_by_normalized_serial(self, db_session) -> None:
         from app.models.network import OntUnit
@@ -282,7 +293,11 @@ class TestAutoLinkOnts:
         with patch("app.services.tr069.GenieACSClient") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = [mock_device]
-            instance.parse_device_id.return_value = ("00D09E", "TestProduct", "HWTC7D4733C3")
+            instance.parse_device_id.return_value = (
+                "00D09E",
+                "TestProduct",
+                "HWTC7D4733C3",
+            )
             instance.extract_parameter_value.return_value = None
 
             result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
@@ -291,10 +306,19 @@ class TestAutoLinkOnts:
         assert result["auto_linked"] == 1
         db_session.refresh(ont)
         assert ont.tr069_acs_server_id == server.id
+        linked = (
+            db_session.query(Tr069CpeDevice)
+            .filter_by(serial_number="HWTC7D4733C3")
+            .first()
+        )
+        assert linked is not None
+        assert linked.ont_unit_id == ont.id
 
 
 class TestCreateOntFromTr069Device:
-    def test_create_ont_from_tr069_device_creates_inactive_ont(self, db_session) -> None:
+    def test_create_ont_from_tr069_device_creates_inactive_ont(
+        self, db_session
+    ) -> None:
         from app.services.web_network_tr069 import create_ont_from_tr069_device
 
         server = Tr069AcsServer(
@@ -327,8 +351,12 @@ class TestCreateOntFromTr069Device:
         assert ont.model == "HG8546M"
         assert ont.is_active is False
         assert ont.tr069_acs_server_id == server.id
+        db_session.refresh(device)
+        assert device.ont_unit_id == ont.id
 
-    def test_create_ont_from_tr069_device_reuses_existing_normalized_serial(self, db_session) -> None:
+    def test_create_ont_from_tr069_device_reuses_existing_normalized_serial(
+        self, db_session
+    ) -> None:
         from app.models.network import OntUnit
         from app.services.web_network_tr069 import create_ont_from_tr069_device
 
@@ -364,6 +392,8 @@ class TestCreateOntFromTr069Device:
         assert created is False
         assert ont.id == existing.id
         assert ont.tr069_acs_server_id == server.id
+        db_session.refresh(device)
+        assert device.ont_unit_id == existing.id
 
 
 class TestTr069DashboardUi:
@@ -383,13 +413,17 @@ class TestParameterMapResolution:
     def test_resolve_returns_none_without_db(self) -> None:
         from app.services.network.ont_tr069 import _resolve_param_paths_from_capability
 
-        result = _resolve_param_paths_from_capability(None, "Huawei", "HG8245H", "system.manufacturer")
+        result = _resolve_param_paths_from_capability(
+            None, "Huawei", "HG8245H", "system.manufacturer"
+        )
         assert result is None
 
     def test_resolve_returns_none_without_vendor(self) -> None:
         from app.services.network.ont_tr069 import _resolve_param_paths_from_capability
 
-        result = _resolve_param_paths_from_capability(MagicMock(), None, None, "system.manufacturer")
+        result = _resolve_param_paths_from_capability(
+            MagicMock(), None, None, "system.manufacturer"
+        )
         assert result is None
 
 
@@ -437,9 +471,13 @@ class TestRecordCleanup:
         from sqlalchemy import select
 
         # Verify both exist
-        count = len(list(db_session.scalars(
-            select(Tr069Session).where(Tr069Session.device_id == device.id)
-        ).all()))
+        count = len(
+            list(
+                db_session.scalars(
+                    select(Tr069Session).where(Tr069Session.device_id == device.id)
+                ).all()
+            )
+        )
         assert count == 2
 
 
@@ -451,22 +489,27 @@ class TestRecordCleanup:
 class TestCeleryTaskRegistration:
     def test_sync_task_importable(self) -> None:
         from app.tasks.tr069 import sync_all_acs_devices
+
         assert sync_all_acs_devices.name == "app.tasks.tr069.sync_all_acs_devices"
 
     def test_execute_jobs_task_importable(self) -> None:
         from app.tasks.tr069 import execute_pending_jobs
+
         assert execute_pending_jobs.name == "app.tasks.tr069.execute_pending_jobs"
 
     def test_health_check_task_importable(self) -> None:
         from app.tasks.tr069 import check_device_health
+
         assert check_device_health.name == "app.tasks.tr069.check_device_health"
 
     def test_cleanup_task_importable(self) -> None:
         from app.tasks.tr069 import cleanup_tr069_records
+
         assert cleanup_tr069_records.name == "app.tasks.tr069.cleanup_tr069_records"
 
     def test_tasks_in_init_all(self) -> None:
         from app.tasks import __all__ as all_tasks
+
         assert "tr069_sync_all_acs_devices" in all_tasks
         assert "tr069_execute_pending_jobs" in all_tasks
         assert "tr069_check_device_health" in all_tasks
@@ -539,7 +582,11 @@ class TestDeviceResolution:
             instance = MockClient.return_value
             instance.list_devices.side_effect = [[], [mock_device]]
             instance.extract_parameter_value.side_effect = lambda device, path: None
-            instance.parse_device_id.return_value = ("00D09E", "TestProduct", "HWTC7D4733C3")
+            instance.parse_device_id.return_value = (
+                "00D09E",
+                "TestProduct",
+                "HWTC7D4733C3",
+            )
 
             result, reason = resolve_genieacs_with_reason(db_session, ont)
 
@@ -548,9 +595,56 @@ class TestDeviceResolution:
         assert device_id == "00D09E-TestProduct-HWTC7D4733C3"
         assert reason == "resolved_via_ont_acs"
 
+    def test_resolve_prefers_explicit_tr069_link_for_synthetic_ont_serial(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Linked Resolve ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HW-OLT-0001",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.flush()
+
+        linked = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number="HWTC7D4806C3",
+            oui="48575443",
+            product_class="EG8145V5",
+            is_active=True,
+        )
+        db_session.add(linked)
+        db_session.commit()
+
+        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = []
+            instance.build_device_id.return_value = "48575443-EG8145V5-HWTC7D4806C3"
+
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is not None
+        _client, device_id = result
+        assert device_id == "48575443-EG8145V5-HWTC7D4806C3"
+        assert reason == "resolved_via_linked_tr069_device"
+
 
 class TestAcsPropagation:
-    def test_queue_acs_propagation_includes_tr098_and_tr181_paths(self, db_session) -> None:
+    def test_queue_acs_propagation_includes_tr098_and_tr181_paths(
+        self, db_session
+    ) -> None:
         from app.models.network import OLTDevice, OntUnit
         from app.services.web_network_olts import _queue_acs_propagation
 
@@ -586,7 +680,15 @@ class TestAcsPropagation:
         assert stats["propagated"] == 1
         fake_client.set_parameter_values.assert_called_once()
         sent_params = fake_client.set_parameter_values.call_args.args[1]
-        assert sent_params["Device.ManagementServer.URL"] == "http://acs.example.com/cwmp"
-        assert sent_params["InternetGatewayDevice.ManagementServer.URL"] == "http://acs.example.com/cwmp"
+        assert (
+            sent_params["Device.ManagementServer.URL"] == "http://acs.example.com/cwmp"
+        )
+        assert (
+            sent_params["InternetGatewayDevice.ManagementServer.URL"]
+            == "http://acs.example.com/cwmp"
+        )
         assert sent_params["Device.ManagementServer.Username"] == "cwmp-user"
-        assert sent_params["InternetGatewayDevice.ManagementServer.Username"] == "cwmp-user"
+        assert (
+            sent_params["InternetGatewayDevice.ManagementServer.Username"]
+            == "cwmp-user"
+        )

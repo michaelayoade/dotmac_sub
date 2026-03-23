@@ -95,6 +95,21 @@ def _active_assignment(record) -> IPAssignment | None:
     return None
 
 
+def _query_count(db, model, where_clause=None) -> int:
+    from sqlalchemy import func, select
+
+    if hasattr(db, "execute"):
+        stmt = select(func.count(model.id))
+        if where_clause is not None:
+            stmt = stmt.where(where_clause)
+        return int(db.execute(stmt).scalar() or 0)
+    query = db.query(model)
+    if where_clause is not None and hasattr(query, "filter"):
+        query = query.filter(where_clause)
+    rows = query.all() if hasattr(query, "all") else []
+    return len(rows)
+
+
 def _subscriber_display_name(subscriber) -> str | None:
     if not subscriber:
         return None
@@ -939,7 +954,7 @@ def build_ip_management_data(
 ) -> dict[str, object]:
     from sqlalchemy import func, select
 
-    from app.models.network import IPv4Address, IPv6Address, IpBlock, IpPool
+    from app.models.network import IpBlock, IpPool, IPv4Address, IPv6Address
 
     total_pools = db.execute(select(func.count(IpPool.id))).scalar() or 0
     pools = network_service.ip_pools.list(
@@ -1619,11 +1634,9 @@ def build_ip_addresses_data(db, *, ip_version: str) -> dict[str, object]:
 
 
 def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
-    from sqlalchemy import func, select
-
     from app.models.network import IpBlock, IpPool
 
-    total_pools = db.execute(select(func.count(IpPool.id))).scalar() or 0
+    total_pools = _query_count(db, IpPool)
     pools_all = network_service.ip_pools.list(
         db=db,
         ip_version=None,
@@ -1650,9 +1663,7 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         pools = pools_all
 
     selected_pool_ids = {str(pool.id) for pool in pools}
-    total_blocks = db.execute(
-        select(func.count(IpBlock.id)).where(IpBlock.is_active.is_(True))
-    ).scalar() or 0
+    total_blocks = _query_count(db, IpBlock, IpBlock.is_active.is_(True))
     blocks = network_service.ip_blocks.list(
         db=db,
         pool_id=None,

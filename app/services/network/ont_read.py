@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
-from app.services.network.ont_action_common import get_ont_or_error
+from app.services.network.ont_action_common import get_ont_strict_or_error
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +44,15 @@ class OntReadFacade:
             ont_id: OntUnit ID.
             live_query: If True, also query TR-069 live data and persist observed runtime.
         """
-        ont, err = get_ont_or_error(db, ont_id)
+        ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             from fastapi import HTTPException
 
             raise HTTPException(status_code=404, detail=err.message)
+        if ont is None:
+            from fastapi import HTTPException
 
-        assert ont is not None  # noqa: S101 — guarded by get_ont_or_error
+            raise HTTPException(status_code=404, detail="ONT not found.")
 
         # Base fields from DB
         result: dict[str, Any] = {

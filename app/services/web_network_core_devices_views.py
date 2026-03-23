@@ -23,8 +23,8 @@ from app.models.network_monitoring import (
     DeviceStatus,
     NetworkDevice,
 )
-from app.models.subscriber import SubscriberCategory
 from app.models.provisioning import ProvisioningRun
+from app.models.subscriber import SubscriberCategory
 from app.services import network as network_service
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
@@ -1799,11 +1799,21 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "available_profiles": available_profiles,
         "available_firmware": available_firmware,
         "capabilities": capabilities,
+        "inventory_ready": (
+            not bool(assignment)
+            and not bool(getattr(ont, "is_active", False))
+            and not bool(getattr(ont, "provisioning_profile_id", None))
+            and (
+                getattr(ont, "provisioning_status", None) is None
+                or getattr(getattr(ont, "provisioning_status", None), "value", None)
+                == "unprovisioned"
+            )
+        ),
     }
 
 
 def _subscriber_display_name(subscriber: object) -> str:
-    """Build display name from subscriber person or organization."""
+    """Build display name from subscriber fields and person fallback."""
     display_name = str(getattr(subscriber, "display_name", "") or "").strip()
     if display_name:
         return display_name
@@ -1825,11 +1835,6 @@ def _subscriber_display_name(subscriber: object) -> str:
         name = f"{first} {last}".strip()
         if name:
             return name
-    org = getattr(subscriber, "organization", None)
-    if org:
-        org_name = getattr(org, "name", None)
-        if org_name:
-            return str(org_name)
     email = str(getattr(subscriber, "email", "") or "").strip()
     if email:
         return email

@@ -9,6 +9,7 @@ from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
 from app.services.response import ListResponseMixin
 from app.services.settings_cache import SettingsCache
+from app.timezone import APP_TIMEZONE_NAME
 
 if TYPE_CHECKING:
     from app.models.domain_settings import DomainSetting
@@ -642,7 +643,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="timezone",
         env_var="CELERY_TIMEZONE",
         value_type=SettingValueType.string,
-        default="UTC",
+        default=APP_TIMEZONE_NAME,
     ),
     SettingSpec(
         domain=SettingDomain.scheduler,

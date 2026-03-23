@@ -110,7 +110,7 @@ class EventType(enum.Enum):
     customer_login = "customer.login"
     customer_logout = "customer.logout"
     customer_ticket_created = "customer.ticket_created"
-    customer_password_changed = "customer.password_changed"  # noqa: S105 - event name, not a password
+    customer_password_changed = "customer.password_changed"  # nosec
 
     # Reseller events (3)
     reseller_login = "reseller.login"

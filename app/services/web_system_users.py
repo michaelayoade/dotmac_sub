@@ -457,7 +457,7 @@ def list_users(
     for credential in credentials:
         info = credential_info.setdefault(
             credential.system_user_id,
-            {"last_login": None, "has_active": False, "must_change_password": False},
+            {"last_login": None, "has_active": False, "must_change_password": False},  # nosec
         )
         if credential.is_active:
             info["has_active"] = True

@@ -28,7 +28,7 @@ REJECT_IP_KEYS: dict[str, str] = {
     "blocked": "reject_ip_blocked",
     "negative": "reject_ip_negative",
     "bad_mac": "reject_ip_bad_mac",
-    "bad_password": "reject_ip_bad_password",
+    "bad_password": "reject_ip_bad_password",  # nosec
 }
 REJECT_REASON_ALIASES: dict[str, str] = {
     "not_found": "not_found",
@@ -41,7 +41,7 @@ REJECT_REASON_ALIASES: dict[str, str] = {
     "dunning": "negative",
     "bad_mac": "bad_mac",
     "bad-mac": "bad_mac",
-    "bad_password": "bad_password",
+    "bad_password": "bad_password",  # nosec
     "bad-password": "bad_password",
 }
 _RUNTIME_STATE_KEY = "reject_ip_runtime_state"

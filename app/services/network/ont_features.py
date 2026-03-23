@@ -8,7 +8,11 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.services.network.ont_action_common import ActionResult, get_ont_or_error
+from app.services.network.ont_action_common import (
+    ActionResult,
+    get_ont_or_error,
+    get_ont_strict_or_error,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +92,8 @@ class OntFeatureService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         cap_err = _check_capability(db, ont, "wifi")
         if cap_err:
@@ -119,7 +124,8 @@ class OntFeatureService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         cap_err = _check_capability(db, ont, "voip")
         if cap_err:
@@ -141,7 +147,8 @@ class OntFeatureService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         cap_err = _check_capability(db, ont, "catv")
         if cap_err:
@@ -163,7 +170,8 @@ class OntFeatureService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         cap_err = _check_capability(db, ont, "iptv")
         if cap_err:
@@ -185,7 +193,8 @@ class OntFeatureService:
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         ont.wan_remote_access = enabled
         _set_sync_meta(ont, "api")
@@ -202,10 +211,11 @@ class OntFeatureService:
         db: Session, ont_id: str, *, port_number: int, enabled: bool
     ) -> ActionResult:
         """Toggle a specific LAN port via TR-069."""
-        ont, err = get_ont_or_error(db, ont_id)
+        ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         from app.services.network.ont_action_wifi import toggle_lan_port
 
@@ -221,10 +231,11 @@ class OntFeatureService:
         db: Session, ont_id: str, *, enabled: bool
     ) -> ActionResult:
         """Configure DHCP snooping (desired state)."""
-        ont, err = get_ont_or_error(db, ont_id)
+        ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         _set_sync_meta(ont, "api")
         db.commit()
@@ -237,10 +248,11 @@ class OntFeatureService:
     @staticmethod
     def set_max_mac_learn(db: Session, ont_id: str, *, max_mac: int) -> ActionResult:
         """Set MAC address learning limit (desired state)."""
-        ont, err = get_ont_or_error(db, ont_id)
+        ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         _set_sync_meta(ont, "api")
         db.commit()
@@ -255,10 +267,11 @@ class OntFeatureService:
         db: Session, ont_id: str, *, username: str, password: str
     ) -> ActionResult:
         """Update ONT web management credentials via TR-069."""
-        ont, err = get_ont_or_error(db, ont_id)
+        ont, err = get_ont_strict_or_error(db, ont_id)
         if err:
             return err
-        assert ont is not None  # noqa: S101
+        if ont is None:
+            return ActionResult(success=False, message="ONT not found.")
 
         cap_err = _check_capability(db, ont, "tr069")
         if cap_err:

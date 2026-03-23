@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
-import subprocess
+import subprocess  # nosec
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +54,7 @@ def snmp_get(
     ]
 
     try:
-        result = subprocess.run(  # noqa: S603 - SNMP command is executed with a fixed argv list
+        result = subprocess.run(  # nosec
             args,
             capture_output=True,
             text=True,

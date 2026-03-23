@@ -18,7 +18,12 @@ from app.models.network import (
     OntAssignment,
 )
 from app.models.network_monitoring import SpeedTestResult
-from app.models.subscriber import Address, Subscriber, SubscriberCategory, SubscriberChannel
+from app.models.subscriber import (
+    Address,
+    Subscriber,
+    SubscriberCategory,
+    SubscriberChannel,
+)
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import audit as audit_service
 from app.services import billing as billing_service

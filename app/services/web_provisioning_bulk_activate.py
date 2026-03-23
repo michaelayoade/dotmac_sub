@@ -451,8 +451,8 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 target.login = login
                 password = (
                     mapping.service_password_manual
-                    if mapping.service_password_mode == "manual"  # noqa: S105 - mode flag, not a secret
-                    and mapping.service_password_manual  # noqa: S105 - mode flag, not a secret
+                    if mapping.service_password_mode == "manual"  # nosec
+                    and mapping.service_password_manual
                     else secrets.token_urlsafe(12)
                 )
                 _upsert_access_credential(

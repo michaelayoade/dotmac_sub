@@ -50,6 +50,7 @@ class Tr069AcsServerRead(Tr069AcsServerBase):
 
 class Tr069CpeDeviceBase(BaseModel):
     acs_server_id: UUID
+    ont_unit_id: UUID | None = None
     cpe_device_id: UUID | None = None
     serial_number: str | None = Field(default=None, max_length=120)
     oui: str | None = Field(default=None, max_length=8)
@@ -65,6 +66,7 @@ class Tr069CpeDeviceCreate(Tr069CpeDeviceBase):
 
 class Tr069CpeDeviceUpdate(BaseModel):
     acs_server_id: UUID | None = None
+    ont_unit_id: UUID | None = None
     cpe_device_id: UUID | None = None
     serial_number: str | None = Field(default=None, max_length=120)
     oui: str | None = Field(default=None, max_length=8)

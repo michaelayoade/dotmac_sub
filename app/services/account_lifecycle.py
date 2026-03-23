@@ -66,10 +66,11 @@ ALLOWED_RESTORERS: dict[EnforcementReason, set[str]] = {
 }
 
 # Verify ALLOWED_RESTORERS covers every enum member at import time
-assert set(ALLOWED_RESTORERS.keys()) == set(EnforcementReason), (
-    f"ALLOWED_RESTORERS missing reasons: "
-    f"{set(EnforcementReason) - set(ALLOWED_RESTORERS.keys())}"
-)
+_missing_restorers = set(EnforcementReason) - set(ALLOWED_RESTORERS.keys())
+if _missing_restorers:
+    raise RuntimeError(
+        f"ALLOWED_RESTORERS missing reasons: {_missing_restorers}"
+    )
 
 # Statuses that can be suspended
 _SUSPENDABLE = {

@@ -16,6 +16,7 @@ from app.schemas.settings import DomainSettingUpdate
 from app.services import billing as billing_service
 from app.services import billing_automation as billing_automation_service
 from app.services import domain_settings as domain_settings_service
+from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 
@@ -364,7 +365,7 @@ def _default_schedule_config() -> dict[str, object]:
         "enabled": False,
         "run_day": 1,
         "run_time": "02:00",
-        "timezone": "UTC",
+        "timezone": APP_TIMEZONE_NAME,
         "billing_cycle": "monthly",
         "partner_ids": [],
     }
@@ -406,7 +407,7 @@ def get_billing_run_schedule(db) -> dict[str, object]:
                 "enabled": bool(schedule.enabled),
                 "run_day": int(schedule.run_day or 1),
                 "run_time": str(schedule.run_time or "02:00"),
-                "timezone": str(schedule.timezone or "UTC"),
+                "timezone": str(schedule.timezone or APP_TIMEZONE_NAME),
                 "billing_cycle": str(schedule.billing_cycle or "monthly"),
                 "partner_ids": list(schedule.partner_ids or []),
             }
@@ -452,7 +453,7 @@ def save_billing_run_schedule(
             "enabled": enabled,
             "run_day": run_day_value,
             "run_time": (run_time or "02:00").strip() or "02:00",
-            "timezone": (timezone or "UTC").strip() or "UTC",
+            "timezone": (timezone or APP_TIMEZONE_NAME).strip() or APP_TIMEZONE_NAME,
             "billing_cycle": (billing_cycle or "monthly").strip() or "monthly",
             "partner_ids": parsed_partner_ids,
         }

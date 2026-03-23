@@ -181,11 +181,13 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
     chain_result = validate_chain(db, ont_id, actual_service_ports=port_dicts)
     context["vlan_chain"] = chain_result
 
-    # Get available VLANs for create form
-    from app.models.network import Vlan
+    # Limit selectable VLANs to the assigned OLT.
+    from app.services import web_network_onts as web_network_onts_service
 
-    vlans = db.scalars(select(Vlan).order_by(Vlan.tag)).all()
-    context["vlans"] = list(vlans)
+    context["vlans"] = web_network_onts_service.get_vlans_for_olt(
+        db,
+        str(olt.id),
+    )
 
     return context
 

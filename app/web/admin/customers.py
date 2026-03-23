@@ -21,10 +21,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.billing import TaxRate
-from app.models.subscriber import Subscriber, SubscriberCategory
+from app.models.subscriber import SubscriberCategory
 from app.services import customer_portal
+from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
+from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
@@ -35,6 +36,7 @@ from app.services.audit_helpers import (
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
+from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
@@ -87,12 +89,7 @@ def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
 
 
 def _load_tax_rates(db: Session):
-    return (
-        db.query(TaxRate)
-        .filter(TaxRate.is_active.is_(True))
-        .order_by(TaxRate.name.asc())
-        .all()
-    )
+    return web_billing_invoices_service.load_tax_rates(db)
 
 
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
@@ -378,16 +375,17 @@ def customer_new(
     db: Session = Depends(get_db),
 ):
     """New customer form."""
-    from app.models.network_monitoring import PopSite
     from app.web.admin import get_current_user, get_sidebar_stats
 
     sidebar_stats = get_sidebar_stats(db)
     current_user = get_current_user(request)
-    pop_sites = (
-        db.query(PopSite)
-        .filter(PopSite.is_active.is_(True))
-        .order_by(PopSite.name)
-        .all()
+    pop_sites = network_monitoring_service.pop_sites.list(
+        db,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
     )
 
     return templates.TemplateResponse(
@@ -650,7 +648,11 @@ def customer_user_send_invite(
         )
         if not state.get("can_send_invite"):
             retry_at = state.get("invite_available_at")
-            when = retry_at.strftime("%Y-%m-%d %H:%M UTC") if retry_at else "later"
+            when = (
+                f"{format_in_app_timezone(retry_at, '%Y-%m-%d %H:%M')} {APP_TIMEZONE_NAME}"
+                if retry_at
+                else "later"
+            )
             message = f"Invite already sent recently. You can resend after {when}."
             log_audit_event(
                 db=db,

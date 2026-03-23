@@ -90,7 +90,9 @@ def _safe_limit(value: int | None) -> int:
 def _run_wrapped_select(
     db: Session, query: str, *, row_limit: int
 ) -> tuple[list[str], list[dict[str, Any]], bool]:
-    statement = text(f"SELECT * FROM ({query}) AS inspector_result LIMIT :row_limit")  # noqa: S608
+    statement = text(
+        f"SELECT * FROM ({query}) AS inspector_result LIMIT :row_limit"  # nosec  # noqa: S608
+    )
     result = db.execute(statement, {"row_limit": row_limit + 1})
     rows = result.mappings().all()
     columns = list(result.keys())

@@ -1,7 +1,7 @@
 """Add owner subscriber id to pop sites.
 
 Revision ID: d0e1f2a3b4c5
-Revises: c9d0e1f2a3b4
+Revises: c9d0e1f2a3b5
 Create Date: 2026-03-23
 """
 
@@ -14,7 +14,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from alembic import op
 
 revision: str = "d0e1f2a3b4c5"
-down_revision: str | Sequence[str] | None = "c9d0e1f2a3b4"
+down_revision: str | Sequence[str] | None = "c9d0e1f2a3b5"
 branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 

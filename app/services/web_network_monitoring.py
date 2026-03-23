@@ -428,7 +428,7 @@ _ACTION_DISPLAY: dict[str, str] = {
     "reboot": "Rebooted",
     "factory_reset": "Factory Reset",
     "set_wifi_ssid": "WiFi SSID Changed",
-    "set_wifi_password": "WiFi Password Changed",
+    "set_wifi_password": "WiFi Password Changed",  # nosec
     "toggle_lan_port": "LAN Port Toggled",
     "assign": "Assigned",
     "unassign": "Unassigned",

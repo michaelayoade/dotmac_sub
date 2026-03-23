@@ -811,8 +811,12 @@ class OntProvisioningOrchestrator:
 
                     _netops.mark_waiting(db, str(op.id), "tr069_bootstrap")
                     db.flush()
-                except Exception:
-                    pass  # Non-critical — UI hint only
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to mark ONT provisioning operation %s as waiting: %s",
+                        op.id,
+                        exc,
+                    )
             step_start = time.monotonic()
             device_found = _wait_for_tr069_bootstrap(db, ont)
             step_ms = int((time.monotonic() - step_start) * 1000)
@@ -821,8 +825,12 @@ class OntProvisioningOrchestrator:
                 try:
                     _netops.mark_running(db, str(op.id))
                     db.flush()
-                except Exception:
-                    pass  # Non-critical
+                except Exception as exc:
+                    logger.debug(
+                        "Failed to mark ONT provisioning operation %s as running: %s",
+                        op.id,
+                        exc,
+                    )
 
             if device_found:
                 result.steps.append(
@@ -1107,7 +1115,7 @@ def _resolve_pppoe_service_credentials(
 
     subscriber_id = getattr(assignment, "subscriber_id", None)
     username = ""
-    password = ""
+    password = ""  # nosec
 
     if service.pppoe_username_template:
         username = _render_template(service.pppoe_username_template, prov_ctx).strip()

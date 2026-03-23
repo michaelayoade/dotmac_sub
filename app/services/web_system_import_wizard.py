@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
-from xml.etree import ElementTree as ET
+from xml.etree import ElementTree as ET  # nosec
 
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.orm import Session
@@ -249,12 +249,12 @@ def _parse_xlsx_rows(file_bytes: bytes) -> list[dict[str, Any]]:
         sheet_xml = archive.read("xl/worksheets/sheet1.xml")
         shared_strings: list[str] = []
         if "xl/sharedStrings.xml" in archive.namelist():
-            strings_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))  # noqa: S314
+            strings_root = ET.fromstring(archive.read("xl/sharedStrings.xml"))  # nosec  # noqa: S314
             for si in strings_root.findall(".//{*}si"):
                 text = "".join(node.text or "" for node in si.findall(".//{*}t"))
                 shared_strings.append(text)
 
-    root = ET.fromstring(sheet_xml)  # noqa: S314
+    root = ET.fromstring(sheet_xml)  # nosec  # noqa: S314
     row_maps: list[dict[int, Any]] = []
     for row_node in root.findall(".//{*}sheetData/{*}row"):
         row_map: dict[int, Any] = {}

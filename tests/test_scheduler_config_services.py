@@ -467,7 +467,7 @@ class TestGetCeleryConfig:
 
         assert config["broker_url"] == "redis://localhost:6379/0"
         assert config["result_backend"] == "redis://localhost:6379/1"
-        assert config["timezone"] == "UTC"
+        assert config["timezone"] == "Africa/Lagos"
         assert config["beat_max_loop_interval"] == 5
         assert config["beat_refresh_seconds"] == 30
 

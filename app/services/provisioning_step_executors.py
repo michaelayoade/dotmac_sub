@@ -235,40 +235,28 @@ def execute_push_tr069_wan_config(
         if ont_unit_id:
             from app.services.network.ont_action_common import (
                 detect_data_model_root,
-                get_ont_or_error,
-                resolve_client_or_error,
+                get_ont_client_or_error,
             )
 
-            ont, error = get_ont_or_error(db, ont_unit_id)
-            if error:
-                return ProvisioningResult(status="failed", detail=error.message)
-            assert ont is not None  # noqa: S101
-
-            resolved, error = resolve_client_or_error(db, ont)
-            if error:
-                return ProvisioningResult(status="failed", detail=error.message)
-            assert resolved is not None  # noqa: S101
-
-            client, device_id = resolved
+            ont_resolved, ont_error = get_ont_client_or_error(db, ont_unit_id)
+            if ont_error:
+                return ProvisioningResult(status="failed", detail=ont_error.message)
+            if ont_resolved is None:
+                return ProvisioningResult(status="failed", detail="ONT resolution failed.")
+            ont, client, device_id = ont_resolved
             root = detect_data_model_root(db, ont, client, device_id)
         elif cpe_device_id:
             from app.services.network.ont_action_common import (
                 detect_data_model_root,
-                get_cpe_or_error,
-                resolve_cpe_client_or_error,
+                get_cpe_client_or_error,
             )
 
-            cpe, error = get_cpe_or_error(db, cpe_device_id)
-            if error:
-                return ProvisioningResult(status="failed", detail=error.message)
-            assert cpe is not None  # noqa: S101
-
-            resolved, error = resolve_cpe_client_or_error(db, cpe)
-            if error:
-                return ProvisioningResult(status="failed", detail=error.message)
-            assert resolved is not None  # noqa: S101
-
-            client, device_id = resolved
+            cpe_resolved, cpe_error = get_cpe_client_or_error(db, cpe_device_id)
+            if cpe_error:
+                return ProvisioningResult(status="failed", detail=cpe_error.message)
+            if cpe_resolved is None:
+                return ProvisioningResult(status="failed", detail="CPE resolution failed.")
+            cpe, client, device_id = cpe_resolved
             root = detect_data_model_root(db, cpe, client, device_id)
         else:
             return ProvisioningResult(

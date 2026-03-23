@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-import subprocess
+import subprocess  # nosec
 import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
@@ -360,7 +360,7 @@ def build_form_model(db: Session, olt: OLTDevice) -> SimpleNamespace:
         if hasattr(olt.status, "value")
         else str(olt.status or "active"),
         ssh_username=olt.ssh_username,
-        ssh_password="",
+        ssh_password="",  # nosec
         ssh_port=olt.ssh_port,
         netconf_enabled=olt.netconf_enabled,
         netconf_port=olt.netconf_port,
@@ -556,7 +556,7 @@ def _auto_init_tr069_profile(olt: OLTDevice) -> None:
             profile_name="DotMac-ACS",
             acs_url="http://10.10.41.1:7547",
             username="acs",
-            password="acs",  # noqa: S106
+            password="acs",  # nosec  # noqa: S106
             inform_interval=300,
         )
         if ok:
@@ -766,7 +766,7 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
 
     try:
         engine = SnmpEngine()
-        community = CommunityData(community_str, mpModel=1)  # noqa: S508
+        community = CommunityData(community_str, mpModel=1)  # nosec  # noqa: S508
         target = UdpTransportTarget((olt.mgmt_ip, 161), timeout=6, retries=0)
         oids = [
             "1.3.6.1.2.1.1.5.0",  # sysName
@@ -1226,7 +1226,7 @@ def _run_simple_v2c_walk(
 
     cmd = "snmpbulkwalk" if bulk else "snmpwalk"
     args = [cmd, "-v2c", "-c", community, host, oid]
-    result = subprocess.run(  # noqa: S603 - SNMP command is executed with a fixed argv list
+    result = subprocess.run(  # nosec
         args,
         capture_output=True,
         text=True,

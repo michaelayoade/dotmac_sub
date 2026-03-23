@@ -21,7 +21,7 @@
 
 {# Management IP Form #}
 <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800"
-     x-data="{ ipMode: 'dhcp' }">
+     x-data="{ ipMode: '{{ 'static' if ont and ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == 'static_ip' else 'dhcp' }}' }">
     <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-4">Configure Management IP</h3>
     <form hx-post="/admin/network/onts/{{ ont.id if ont else '' }}/actions/configure-mgmt-ip"
           hx-swap="none"
@@ -29,20 +29,30 @@
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">VLAN ID</label>
-                <input type="number" name="vlan_id" required min="1" max="4094" placeholder="e.g. 100" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <select name="vlan_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select management VLAN</option>
+                    {% for vlan in vlans %}
+                    <option value="{{ vlan.tag }}" {% if ont and ont.mgmt_vlan and ont.mgmt_vlan.tag == vlan.tag %}selected{% endif %}>
+                        {{ vlan.tag }} - {{ vlan.name or 'Unnamed' }}
+                    </option>
+                    {% endfor %}
+                </select>
+                {% if not vlans %}
+                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">No VLANs are assigned to this ONT's OLT.</p>
+                {% endif %}
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Mode</label>
                 <select name="ip_mode" x-model="ipMode" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="dhcp">DHCP</option>
-                    <option value="static">Static</option>
+                    <option value="dhcp" {% if ont and ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == 'dhcp' %}selected{% endif %}>DHCP</option>
+                    <option value="static" {% if ont and ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == 'static_ip' %}selected{% endif %}>Static</option>
                 </select>
             </div>
         </div>
         <div x-show="ipMode === 'static'" x-transition class="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
-                <input type="text" name="ip_address" placeholder="192.168.1.100" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <input type="text" name="ip_address" value="{{ ont.mgmt_ip_address if ont and ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == 'static_ip' else '' }}" placeholder="192.168.1.100" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subnet Mask</label>
@@ -53,7 +63,7 @@
                 <input type="text" name="gateway" placeholder="192.168.1.1" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
         </div>
-        <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700">
+        <button type="submit" {% if not vlans %}disabled{% endif %} class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 disabled:cursor-not-allowed disabled:opacity-60">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
             Apply
         </button>
@@ -67,10 +77,20 @@
           hx-swap="none"
           class="flex flex-wrap items-end gap-4">
         <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Profile ID</label>
-            <input type="number" name="profile_id" required min="0" max="999" placeholder="OLT profile ID" class="w-32 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Profile</label>
+            <select name="profile_id" required class="min-w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select TR-069 server profile</option>
+                {% for profile in tr069_profiles %}
+                <option value="{{ profile.profile_id }}">{{ profile.profile_id }} - {{ profile.name or 'Unnamed profile' }}</option>
+                {% endfor %}
+            </select>
+            {% if tr069_profiles_error %}
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ tr069_profiles_error }}</p>
+            {% elif not tr069_profiles %}
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">No TR-069 server profiles were found on this ONT's OLT.</p>
+            {% endif %}
         </div>
-        <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-700 dark:bg-slate-800 dark:text-indigo-400">
+        <button type="submit" {% if not tr069_profiles %}disabled{% endif %} class="inline-flex items-center gap-2 rounded-lg border border-indigo-300 bg-white px-4 py-2 text-sm font-semibold text-indigo-700 hover:bg-indigo-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-indigo-700 dark:bg-slate-800 dark:text-indigo-400">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
             Bind Profile
         </button>

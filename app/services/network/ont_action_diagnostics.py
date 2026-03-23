@@ -9,8 +9,7 @@ from sqlalchemy.orm import Session
 from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
-    get_ont_or_error,
-    resolve_client_or_error,
+    get_ont_client_or_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -22,16 +21,12 @@ def run_ping_diagnostic(
     if not host or not host.strip():
         return ActionResult(success=False, message="Ping target host is required.")
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     count = max(1, min(count, 20))
     params = {
         "Device.IP.Diagnostics.IPPing.Host": host.strip(),
@@ -67,16 +62,12 @@ def run_traceroute_diagnostic(db: Session, ont_id: str, host: str) -> ActionResu
             success=False, message="Traceroute target host is required."
         )
 
-    ont, error = get_ont_or_error(db, ont_id)
+    resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
         return error
-    assert ont is not None  # noqa: S101
-    resolved, error = resolve_client_or_error(db, ont)
-    if error:
-        return error
-    assert resolved is not None  # noqa: S101
-
-    client, device_id = resolved
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
     params = {
         "Device.IP.Diagnostics.TraceRoute.Host": host.strip(),
         "Device.IP.Diagnostics.TraceRoute.DiagnosticsState": "Requested",

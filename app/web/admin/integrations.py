@@ -1215,8 +1215,8 @@ def _hook_form_defaults(
         "auth_type": "none",
         "auth_bearer_token": "",
         "auth_basic_username": "",
-        "auth_basic_password": "",
-        "auth_hmac_secret": "",
+        "auth_basic_password": "",  # nosec
+        "auth_hmac_secret": "",  # nosec
         "auth_config_json": "",
         "event_filters_csv": "",
         "retry_max": 3,

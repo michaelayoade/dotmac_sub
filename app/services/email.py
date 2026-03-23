@@ -202,8 +202,8 @@ def list_smtp_senders(db: Session | None) -> list[dict[str, Any]]:
                 "host": "",
                 "port": 587,
                 "username": "",
-                "password": None,
-                "has_password": False,
+                "password": None,  # nosec
+                "has_password": False,  # nosec
                 "from_email": "",
                 "from_name": "Dotmac Selfcare",
                 "use_tls": True,

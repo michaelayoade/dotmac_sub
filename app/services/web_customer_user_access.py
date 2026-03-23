@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.domain_settings import SettingDomain
-from app.models.subscriber import Subscriber, SubscriberCategory, UserType
+from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.settings_spec import resolve_value
 

@@ -1,7 +1,7 @@
 import builtins
 import logging
 from datetime import UTC, datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import and_, case, func, not_, or_

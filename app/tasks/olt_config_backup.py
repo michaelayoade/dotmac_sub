@@ -113,7 +113,7 @@ def _fetch_running_config(
 
         # Gather basic info via SNMP
         engine = SnmpEngine()
-        community = CommunityData(community_str or "public", mpModel=1)  # noqa: S508
+        community = CommunityData(community_str or "public", mpModel=1)  # nosec  # noqa: S508
         target = UdpTransportTarget((olt.mgmt_ip, 161), timeout=10, retries=1)
 
         oids = [

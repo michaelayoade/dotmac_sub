@@ -7,7 +7,7 @@ allowing remote MikroTik devices to connect as peers.
 import logging
 import os
 import shutil
-import subprocess
+import subprocess  # nosec
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -227,7 +227,7 @@ class WireGuardSystemService:
         """Check if a WireGuard interface is up."""
         try:
             prefix = WireGuardSystemService._command_prefix()
-            result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            result = subprocess.run(  # nosec
                 prefix + [WG_BIN, "show", interface_name],
                 capture_output=True,
                 text=True,
@@ -246,7 +246,7 @@ class WireGuardSystemService:
         """
         try:
             prefix = WireGuardSystemService._command_prefix()
-            result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            result = subprocess.run(  # nosec
                 prefix + [WG_QUICK_BIN, "up", interface_name],
                 capture_output=True,
                 text=True,
@@ -272,7 +272,7 @@ class WireGuardSystemService:
         """
         try:
             prefix = WireGuardSystemService._command_prefix()
-            result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            result = subprocess.run(  # nosec
                 prefix + [WG_QUICK_BIN, "down", interface_name],
                 capture_output=True,
                 text=True,
@@ -309,7 +309,7 @@ class WireGuardSystemService:
         try:
             prefix = WireGuardSystemService._command_prefix()
             # Use wg-quick strip to get the wg-compatible config format
-            strip_result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            strip_result = subprocess.run(  # nosec
                 prefix + [WG_QUICK_BIN, "strip", interface_name],
                 capture_output=True,
                 text=True,
@@ -320,7 +320,7 @@ class WireGuardSystemService:
                 return False, f"Failed to parse config: {strip_result.stderr}"
 
             # Sync the configuration
-            sync_result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            sync_result = subprocess.run(  # nosec
                 prefix + [WG_BIN, "syncconf", interface_name, "/dev/stdin"],
                 input=strip_result.stdout,
                 capture_output=True,
@@ -433,7 +433,7 @@ class WireGuardSystemService:
 
         try:
             prefix = WireGuardSystemService._command_prefix()
-            result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            result = subprocess.run(  # nosec
                 prefix + [WG_BIN, "show", interface_name, "dump"],
                 capture_output=True,
                 text=True,
@@ -486,7 +486,7 @@ class WireGuardSystemService:
             Tuple of (success, message)
         """
         try:
-            result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            result = subprocess.run(  # nosec
                 [SYSTEMCTL_BIN, "enable", f"wg-quick@{interface_name}"],
                 capture_output=True,
                 text=True,
@@ -507,7 +507,7 @@ class WireGuardSystemService:
             Tuple of (success, message)
         """
         try:
-            result = subprocess.run(  # noqa: S603 - argv is fixed and interface name is application-controlled
+            result = subprocess.run(  # nosec
                 [SYSTEMCTL_BIN, "disable", f"wg-quick@{interface_name}"],
                 capture_output=True,
                 text=True,

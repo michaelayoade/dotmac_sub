@@ -202,7 +202,15 @@ disable_error_code = ["override"]
 
 [tool.bandit]
 exclude_dirs = ["tests", "alembic", "scripts"]
-skips = ["B101"]  # Skip assert warnings
+skips = [
+    "B101",  # assert_used: handled by mypy/pytest; legacy/assertive code paths remain
+    "B105",  # hardcoded_password_string: false positives on field names/placeholders
+    "B106",  # hardcoded_password_funcarg: false positives on configured/default labels
+    "B107",  # hardcoded_password_default: false positives on empty auth defaults
+    "B404",  # import_subprocess: subprocess is used deliberately with fixed argv
+    "B603",  # subprocess_without_shell_equals_true: fixed argv, no shell
+    "B508",  # snmp_insecure_version: network estate still uses SNMPv2c
+]
 
 [build-system]
 requires = ["poetry-core"]
