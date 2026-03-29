@@ -7,6 +7,7 @@ Create Date: 2026-03-21
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "c6d7e8f9a0b1"
@@ -15,7 +16,20 @@ branch_labels: Sequence[str] | None = None
 depends_on: Sequence[str] | None = None
 
 
+def _column_exists(bind, table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+    if table_name not in tables:
+        return False
+    return column_name in {column["name"] for column in inspector.get_columns(table_name)}
+
+
 def upgrade() -> None:
+    # Skip on fresh DBs where splynx_customer_id column doesn't exist yet
+    bind = op.get_bind()
+    if not _column_exists(bind, "subscribers", "splynx_customer_id"):
+        return
+
     op.execute(
         """
         UPDATE subscribers
@@ -35,6 +49,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    if not _column_exists(bind, "subscribers", "splynx_customer_id"):
+        return
+
     op.execute(
         """
         UPDATE subscribers

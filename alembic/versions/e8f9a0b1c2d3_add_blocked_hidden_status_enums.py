@@ -16,6 +16,7 @@ Create Date: 2026-03-21
 
 from collections.abc import Sequence
 
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = "e8f9a0b1c2d3"
@@ -24,16 +25,45 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+def _column_exists(bind, table_name: str, column_name: str) -> bool:
+    inspector = sa.inspect(bind)
+    tables = set(inspector.get_table_names())
+    if table_name not in tables:
+        return False
+    return column_name in {column["name"] for column in inspector.get_columns(table_name)}
+
+
+def _get_enum_names(bind) -> set[str]:
+    rows = bind.execute(sa.text("SELECT typname FROM pg_type WHERE typtype = 'e'"))
+    return {row[0] for row in rows}
+
+
+def _add_enum_value_if_missing(bind, enum_name: str, value: str) -> None:
+    escaped_value = value.replace("'", "''")
+    bind.execute(
+        sa.text(f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{escaped_value}'")
+    )
+
+
 def upgrade() -> None:
+    bind = op.get_bind()
+    existing_enums = _get_enum_names(bind)
+
     # --- 1. Add 'blocked' to subscriberstatus enum ---
-    op.execute("ALTER TYPE subscriberstatus ADD VALUE IF NOT EXISTS 'blocked'")
+    if "subscriberstatus" in existing_enums:
+        _add_enum_value_if_missing(bind, "subscriberstatus", "blocked")
 
     # --- 2. Add 'blocked' and 'hidden' to subscriptionstatus enum ---
-    op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'blocked'")
-    op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'hidden'")
+    if "subscriptionstatus" in existing_enums:
+        _add_enum_value_if_missing(bind, "subscriptionstatus", "blocked")
+        _add_enum_value_if_missing(bind, "subscriptionstatus", "hidden")
 
     # Commit the enum changes so they can be used in UPDATE statements
     op.execute("COMMIT")
+
+    # Skip data fixes on fresh DBs where splynx columns don't exist
+    if not _column_exists(bind, "subscribers", "splynx_customer_id"):
+        return
 
     # --- 3. Fix subscriber statuses based on Splynx metadata ---
 
@@ -86,6 +116,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+
     # Revert subscription status: blocked → suspended
     op.execute("""
         UPDATE subscriptions
@@ -99,6 +131,9 @@ def downgrade() -> None:
         SET status = 'suspended'::subscriberstatus
         WHERE status = 'blocked'
     """)
+
+    if not _column_exists(bind, "subscribers", "splynx_customer_id"):
+        return
 
     op.execute("""
         UPDATE subscribers
