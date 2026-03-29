@@ -48,6 +48,11 @@ def upgrade() -> None:
             ["id"],
         )
 
+    # Skip data backfill on fresh DBs where metadata column doesn't exist yet
+    sub_cols = {c["name"] for c in inspector.get_columns("subscribers")}
+    if "metadata" not in sub_cols or "organization_id" not in sub_cols:
+        return
+
     bind.execute(
         text(
             """

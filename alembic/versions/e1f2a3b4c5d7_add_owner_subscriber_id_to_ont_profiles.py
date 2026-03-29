@@ -48,19 +48,22 @@ def upgrade() -> None:
             ["id"],
         )
 
-    bind.execute(
-        text(
-            """
-            UPDATE ont_provisioning_profiles opp
-            SET owner_subscriber_id = s.id
-            FROM subscribers s
-            WHERE opp.owner_subscriber_id IS NULL
-              AND opp.organization_id IS NOT NULL
-              AND s.organization_id = opp.organization_id
-              AND lower(COALESCE(s.metadata->>'subscriber_category', '')) = 'business'
-            """
+    # Skip data backfill on fresh DBs where metadata column doesn't exist yet
+    sub_cols = {c["name"] for c in inspector.get_columns("subscribers")}
+    if "metadata" in sub_cols and "organization_id" in sub_cols:
+        bind.execute(
+            text(
+                """
+                UPDATE ont_provisioning_profiles opp
+                SET owner_subscriber_id = s.id
+                FROM subscribers s
+                WHERE opp.owner_subscriber_id IS NULL
+                  AND opp.organization_id IS NOT NULL
+                  AND s.organization_id = opp.organization_id
+                  AND lower(COALESCE(s.metadata->>'subscriber_category', '')) = 'business'
+                """
+            )
         )
-    )
 
     if "uq_ont_prov_profiles_org_name" in unique_constraints:
         op.drop_constraint(
