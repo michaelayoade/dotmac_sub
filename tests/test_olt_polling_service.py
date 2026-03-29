@@ -87,3 +87,43 @@ def test_vendor_oids_include_ddm_keys() -> None:
             assert key in oids, f"Vendor '{vendor}' missing OID key: {key}"
     for key in ddm_keys:
         assert key in GENERIC_OIDS, f"GENERIC_OIDS missing OID key: {key}"
+
+
+def test_parse_ddm_value_temperature() -> None:
+    """Temperature values are returned as integer degrees C."""
+    from app.services.network.olt_polling import _parse_ddm_value
+
+    assert _parse_ddm_value("42") == 42.0
+    assert _parse_ddm_value("") is None
+    assert _parse_ddm_value("No Such Instance") is None
+
+
+def test_parse_ddm_value_voltage() -> None:
+    """Voltage values are in 0.01V units for Huawei."""
+    from app.services.network.olt_polling import _parse_ddm_value
+
+    # 330 = 3.30V
+    assert _parse_ddm_value("330", scale=0.01) == 3.3
+
+
+def test_parse_ddm_value_bias_current() -> None:
+    """Bias current in 0.001 mA units."""
+    from app.services.network.olt_polling import _parse_ddm_value
+
+    assert _parse_ddm_value("15200", scale=0.001) == 15.2
+
+
+def test_parse_ddm_value_sentinel_returns_none() -> None:
+    """Sentinel values should return None."""
+    from app.services.network.olt_polling import _parse_ddm_value
+
+    assert _parse_ddm_value("2147483647") is None
+    assert _parse_ddm_value("65535") is None
+
+
+def test_parse_signal_value_onu_tx() -> None:
+    """ONU Tx power should parse like OLT Rx (simple scale)."""
+    from app.services.network.olt_polling import _parse_signal_value
+
+    value = _parse_signal_value("250", vendor="huawei", metric="onu_tx")
+    assert value == 2.5

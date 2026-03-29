@@ -95,6 +95,32 @@ _VENDOR_SIGNAL_SCALE: dict[str, float] = {
     "nokia": 0.01,
 }
 
+# DDM value scale factors per vendor.
+# Temperature: integer degrees C (scale 1.0) for most vendors.
+# Voltage: 0.01V units for Huawei/ZTE, 0.001V for Nokia.
+# Bias current: 0.001 mA for Huawei, 0.002 mA for ZTE, 0.001 for Nokia.
+_VENDOR_DDM_SCALES: dict[str, dict[str, float]] = {
+    "huawei": {"temperature": 1.0, "voltage": 0.01, "bias_current": 0.001},
+    "zte": {"temperature": 1.0, "voltage": 0.01, "bias_current": 0.002},
+    "nokia": {"temperature": 1.0, "voltage": 0.001, "bias_current": 0.001},
+}
+
+_DEFAULT_DDM_SCALES: dict[str, float] = {
+    "temperature": 1.0,
+    "voltage": 0.01,
+    "bias_current": 0.001,
+}
+
+
+def _get_ddm_scales(vendor: str) -> dict[str, float]:
+    """Return DDM value scale factors for a vendor."""
+    vendor_lower = vendor.lower().strip()
+    for key, scales in _VENDOR_DDM_SCALES.items():
+        if key in vendor_lower:
+            return scales
+    return _DEFAULT_DDM_SCALES
+
+
 # Sentinel values commonly used by vendors to indicate invalid/unavailable optics.
 _SIGNAL_SENTINELS: set[int] = {
     2147483647,
@@ -605,6 +631,33 @@ def _parse_distance(raw: str) -> int | None:
     return value
 
 
+def _parse_ddm_value(raw: str, *, scale: float = 1.0) -> float | None:
+    """Parse a generic DDM numeric value from SNMP (temperature, voltage, bias current).
+
+    Args:
+        raw: Raw SNMP value string.
+        scale: Multiplier to convert raw integer to real units.
+
+    Returns:
+        Parsed float value, or None if unparseable/missing.
+    """
+    if not raw:
+        return None
+    lowered = raw.lower().strip()
+    if lowered.startswith("no such") or lowered == "":
+        return None
+    match = re.search(r"(-?\d+)", raw)
+    if not match:
+        return None
+    try:
+        raw_int = int(match.group(1))
+    except ValueError:
+        return None
+    if raw_int in _SIGNAL_SENTINELS:
+        return None
+    return round(raw_int * scale, 4)
+
+
 def _parse_online_status(raw: str) -> bool | None:
     """Parse ONU online status from SNMP value."""
     lowered = raw.lower().strip()
@@ -714,6 +767,56 @@ def poll_olt_ont_signals(
         else {}
     )
 
+    # DDM health telemetry walks (optional — missing OIDs are silently skipped)
+    onu_tx_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["onu_tx"], community),
+            base_oid=oids["onu_tx"],
+        )
+        if oids.get("onu_tx")
+        else {}
+    )
+    temperature_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["temperature"], community),
+            base_oid=oids["temperature"],
+        )
+        if oids.get("temperature")
+        else {}
+    )
+    voltage_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["voltage"], community),
+            base_oid=oids["voltage"],
+        )
+        if oids.get("voltage")
+        else {}
+    )
+    bias_current_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["bias_current"], community),
+            base_oid=oids["bias_current"],
+        )
+        if oids.get("bias_current")
+        else {}
+    )
+    offline_reason_snmp_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["offline_reason"], community),
+            base_oid=oids["offline_reason"],
+        )
+        if oids.get("offline_reason")
+        else {}
+    )
+    serial_number_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["serial_number"], community),
+            base_oid=oids["serial_number"],
+        )
+        if oids.get("serial_number")
+        else {}
+    )
+
     if not olt_rx_raw and not onu_rx_raw and not status_raw:
         logger.info("No SNMP signal data returned for OLT %s (%s)", olt.name, host)
         return {"polled": 0, "updated": 0, "errors": 0, "skipped": 0}
@@ -730,6 +833,7 @@ def poll_olt_ont_signals(
         "missing": 0,
         "parse_error": 0,
     }
+    ddm_scales = _get_ddm_scales(vendor)
     for idx in all_indexes:
         readings.append(
             OntSignalReading(
@@ -748,9 +852,29 @@ def poll_olt_ont_signals(
                     metric="onu_rx",
                     stats=parse_stats,
                 ),
-                onu_tx_dbm=None,
+                onu_tx_dbm=_parse_signal_value(
+                    onu_tx_raw.get(idx, ""),
+                    scale,
+                    vendor=vendor,
+                    metric="onu_tx",
+                    stats=parse_stats,
+                ),
                 distance_m=_parse_distance(distance_raw.get(idx, "")),
                 is_online=_parse_online_status(status_raw.get(idx, "")),
+                temperature_c=_parse_ddm_value(
+                    temperature_raw.get(idx, ""),
+                    scale=ddm_scales.get("temperature", 1.0),
+                ),
+                voltage_v=_parse_ddm_value(
+                    voltage_raw.get(idx, ""),
+                    scale=ddm_scales.get("voltage", 0.01),
+                ),
+                bias_current_ma=_parse_ddm_value(
+                    bias_current_raw.get(idx, ""),
+                    scale=ddm_scales.get("bias_current", 0.001),
+                ),
+                offline_reason_raw=offline_reason_snmp_raw.get(idx),
+                serial_number_raw=serial_number_raw.get(idx),
             )
         )
 
