@@ -45,18 +45,25 @@ def upgrade() -> None:
         ["user_id", "table_key", "display_order"],
         unique=False,
     )
-    op.create_index(
-        "ix_subscribers_status_is_active_created_at",
-        "subscribers",
-        ["status", "is_active", "created_at"],
-        unique=False,
-    )
-    op.create_index(
-        "ix_subscribers_email_created_at",
-        "subscribers",
-        ["email", "created_at"],
-        unique=False,
-    )
+    # These indexes depend on columns added by later migrations — create
+    # only if the columns already exist (idempotent on fresh DBs).
+    bind = op.get_bind()
+    insp = sa.inspect(bind)
+    sub_cols = {c["name"] for c in insp.get_columns("subscribers")}
+    if "status" in sub_cols:
+        op.create_index(
+            "ix_subscribers_status_is_active_created_at",
+            "subscribers",
+            ["status", "is_active", "created_at"],
+            unique=False,
+        )
+    if "email" in sub_cols:
+        op.create_index(
+            "ix_subscribers_email_created_at",
+            "subscribers",
+            ["email", "created_at"],
+            unique=False,
+        )
 
 
 def downgrade() -> None:
