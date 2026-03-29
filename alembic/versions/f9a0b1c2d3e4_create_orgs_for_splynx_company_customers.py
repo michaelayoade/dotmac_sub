@@ -28,7 +28,7 @@ def upgrade() -> None:
 
     # Skip on fresh DBs where splynx columns don't exist
     sub_cols = {c["name"] for c in sa.inspect(conn).get_columns("subscribers")}
-    if "splynx_customer_id" not in sub_cols:
+    if "splynx_customer_id" not in sub_cols or "metadata" not in sub_cols:
         return
 
     # Find all Splynx company customers that don't already have an organization
