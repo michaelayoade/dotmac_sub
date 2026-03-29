@@ -108,6 +108,7 @@ def upgrade() -> None:
             f"({principal_col} IS NOT NULL) <> (system_user_id IS NOT NULL)",
         )
 
+    # Fix mfa_methods — may still have person_id instead of subscriber_id
     op.add_column(
         "mfa_methods",
         sa.Column("system_user_id", postgresql.UUID(as_uuid=True), nullable=True),
@@ -119,7 +120,15 @@ def upgrade() -> None:
         ["system_user_id"],
         ["id"],
     )
-    op.alter_column("mfa_methods", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+    mfa_cols = {c["name"] for c in sa.inspect(bind).get_columns("mfa_methods")}
+    if "subscriber_id" in mfa_cols:
+        op.alter_column("mfa_methods", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        mfa_principal = "subscriber_id"
+    elif "person_id" in mfa_cols:
+        op.alter_column("mfa_methods", "person_id", new_column_name="subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        mfa_principal = "subscriber_id"
+    else:
+        mfa_principal = None
     op.create_index(
         "ix_mfa_methods_primary_per_system_user",
         "mfa_methods",
@@ -127,12 +136,14 @@ def upgrade() -> None:
         unique=True,
         postgresql_where=sa.text("is_primary"),
     )
-    op.create_check_constraint(
-        "ck_mfa_methods_exactly_one_principal",
-        "mfa_methods",
-        "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
-    )
+    if mfa_principal:
+        op.create_check_constraint(
+            "ck_mfa_methods_exactly_one_principal",
+            "mfa_methods",
+            f"({mfa_principal} IS NOT NULL) <> (system_user_id IS NOT NULL)",
+        )
 
+    # Fix sessions — may still have person_id instead of subscriber_id
     op.add_column(
         "sessions",
         sa.Column("system_user_id", postgresql.UUID(as_uuid=True), nullable=True),
@@ -144,12 +155,21 @@ def upgrade() -> None:
         ["system_user_id"],
         ["id"],
     )
-    op.alter_column("sessions", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
-    op.create_check_constraint(
-        "ck_sessions_exactly_one_principal",
-        "sessions",
-        "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
-    )
+    sess_cols = {c["name"] for c in sa.inspect(bind).get_columns("sessions")}
+    if "subscriber_id" in sess_cols:
+        op.alter_column("sessions", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        sess_principal = "subscriber_id"
+    elif "person_id" in sess_cols:
+        op.alter_column("sessions", "person_id", new_column_name="subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        sess_principal = "subscriber_id"
+    else:
+        sess_principal = None
+    if sess_principal:
+        op.create_check_constraint(
+            "ck_sessions_exactly_one_principal",
+            "sessions",
+            f"({sess_principal} IS NOT NULL) <> (system_user_id IS NOT NULL)",
+        )
 
     op.add_column(
         "api_keys",
