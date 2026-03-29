@@ -911,6 +911,13 @@ class OntUnit(Base):
     onu_rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
     olt_rx_signal_dbm: Mapped[float | None] = mapped_column(Float)
     distance_meters: Mapped[int | None] = mapped_column(Integer)
+
+    # ONT DDM health telemetry (SNMP-polled)
+    onu_tx_signal_dbm: Mapped[float | None] = mapped_column(Float)
+    ont_temperature_c: Mapped[float | None] = mapped_column(Float)
+    ont_voltage_v: Mapped[float | None] = mapped_column(Float)
+    ont_bias_current_ma: Mapped[float | None] = mapped_column(Float)
+
     signal_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     online_status: Mapped[OnuOnlineStatus] = mapped_column(
         Enum(OnuOnlineStatus, name="onuonlinestatus", create_constraint=False),
