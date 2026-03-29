@@ -16,6 +16,8 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Commit pending enum additions so new values can be used in WHERE clause
+    op.execute("COMMIT")
     op.create_index(
         "uq_crm_messages_inbound_external",
         "crm_messages",
