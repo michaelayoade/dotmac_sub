@@ -20,12 +20,24 @@ depends_on = None
 
 
 def _ix(conn, table_name: str, name: str, ddl: str) -> None:
-    """Create index only if it does not already exist."""
+    """Create index only if it does not already exist.
+
+    Silently skips if the table or referenced columns don't exist yet
+    (happens on fresh DB migrations where column-adding migrations
+    haven't run yet at this point in the chain).
+    """
     inspector = inspect(conn)
+    if table_name not in inspector.get_table_names():
+        return
     existing_indexes = {index["name"] for index in inspector.get_indexes(table_name)}
-    exists = name in existing_indexes
-    if not exists:
+    if name in existing_indexes:
+        return
+    conn.execute(text("SAVEPOINT _ix_sp"))
+    try:
         conn.execute(text(ddl))
+        conn.execute(text("RELEASE SAVEPOINT _ix_sp"))
+    except Exception:
+        conn.execute(text("ROLLBACK TO SAVEPOINT _ix_sp"))
 
 
 def upgrade() -> None:
