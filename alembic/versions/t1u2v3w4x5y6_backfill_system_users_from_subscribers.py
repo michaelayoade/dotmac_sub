@@ -5,6 +5,7 @@ Revises: p9q0r1s2t3u4, r6s7t8u9v0w1
 Create Date: 2026-02-25 12:55:00.000000
 """
 
+import sqlalchemy as sa
 from alembic import op
 
 
@@ -16,6 +17,14 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # On fresh databases, subscribers won't have user_type/first_name/etc.
+    # columns yet (they're added by later migrations). Skip the backfill
+    # since there's no legacy data to migrate.
+    bind = op.get_bind()
+    sub_cols = {c["name"] for c in sa.inspect(bind).get_columns("subscribers")}
+    if "user_type" not in sub_cols or "first_name" not in sub_cols:
+        return
+
     # 1) Materialize legacy admin principals into system_users.
     op.execute(
         """
