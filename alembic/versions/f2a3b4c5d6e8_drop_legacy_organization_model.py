@@ -165,6 +165,14 @@ def upgrade() -> None:
 
     inspector = inspect(bind)
     if _has_table(inspector, "organizations"):
+        # Drop all FKs from other tables that reference organizations
+        for table_name in inspector.get_table_names():
+            if table_name == "organizations":
+                continue
+            for fk in inspector.get_foreign_keys(table_name):
+                if fk.get("referred_table") == "organizations" and fk.get("name"):
+                    op.drop_constraint(fk["name"], table_name, type_="foreignkey")
+
         foreign_keys = _fk_names(inspector, "organizations")
         if "organizations_primary_login_subscriber_id_fkey" in foreign_keys:
             op.drop_constraint(
