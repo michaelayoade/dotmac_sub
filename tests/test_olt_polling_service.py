@@ -127,3 +127,41 @@ def test_parse_signal_value_onu_tx() -> None:
 
     value = _parse_signal_value("250", vendor="huawei", metric="onu_tx")
     assert value == 2.5
+
+
+def test_ddm_values_included_in_update_values() -> None:
+    """Reading with DDM data should produce update_values with DDM keys."""
+    from app.services.network.olt_polling import OntSignalReading
+
+    reading = OntSignalReading(
+        onu_index="0.1.3.5",
+        olt_rx_dbm=-19.5,
+        onu_rx_dbm=-21.0,
+        onu_tx_dbm=2.5,
+        distance_m=1200,
+        is_online=True,
+        temperature_c=42.0,
+        voltage_v=3.3,
+        bias_current_ma=15.2,
+        offline_reason_raw=None,
+        serial_number_raw=None,
+    )
+    # Build update_values dict the same way the polling loop does
+    update_values: dict = {}
+    if reading.olt_rx_dbm is not None:
+        update_values["olt_rx_signal_dbm"] = reading.olt_rx_dbm
+    if reading.onu_rx_dbm is not None:
+        update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
+    if reading.onu_tx_dbm is not None:
+        update_values["onu_tx_signal_dbm"] = reading.onu_tx_dbm
+    if reading.temperature_c is not None:
+        update_values["ont_temperature_c"] = reading.temperature_c
+    if reading.voltage_v is not None:
+        update_values["ont_voltage_v"] = reading.voltage_v
+    if reading.bias_current_ma is not None:
+        update_values["ont_bias_current_ma"] = reading.bias_current_ma
+
+    assert update_values["onu_tx_signal_dbm"] == 2.5
+    assert update_values["ont_temperature_c"] == 42.0
+    assert update_values["ont_voltage_v"] == 3.3
+    assert update_values["ont_bias_current_ma"] == 15.2

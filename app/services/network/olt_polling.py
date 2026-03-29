@@ -923,6 +923,14 @@ def poll_olt_ont_signals(
                 update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
             if reading.distance_m is not None:
                 update_values["distance_meters"] = reading.distance_m
+            if reading.onu_tx_dbm is not None:
+                update_values["onu_tx_signal_dbm"] = reading.onu_tx_dbm
+            if reading.temperature_c is not None:
+                update_values["ont_temperature_c"] = reading.temperature_c
+            if reading.voltage_v is not None:
+                update_values["ont_voltage_v"] = reading.voltage_v
+            if reading.bias_current_ma is not None:
+                update_values["ont_bias_current_ma"] = reading.bias_current_ma
 
             prev_status = ont.online_status
 
@@ -942,6 +950,19 @@ def poll_olt_ont_signals(
                             update_values["offline_reason"] = OnuOfflineReason(reason)
                         except ValueError:
                             update_values["offline_reason"] = OnuOfflineReason.unknown
+
+            # Use SNMP offline_reason OID if available (more precise than status code)
+            if (
+                reading.offline_reason_raw
+                and reading.is_online is not None
+                and not reading.is_online
+            ):
+                snmp_reason = _derive_offline_reason(reading.offline_reason_raw)
+                if snmp_reason:
+                    try:
+                        update_values["offline_reason"] = OnuOfflineReason(snmp_reason)
+                    except ValueError:
+                        pass
 
             # Mark telemetry freshness only when at least one field was observed.
             if update_values:
