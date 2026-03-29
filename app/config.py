@@ -63,5 +63,11 @@ class Settings:
     s3_bucket_name: str = os.getenv("S3_BUCKET_NAME", "dotmac-private")
     s3_region: str = os.getenv("S3_REGION", "us-east-1")
 
+    # Router Management
+    router_sync_interval_hours: int = int(os.getenv("ROUTER_SYNC_INTERVAL_HOURS", "6"))
+    router_interface_sync_interval_min: int = int(os.getenv("ROUTER_IFACE_SYNC_INTERVAL_MIN", "15"))
+    router_snapshot_schedule: str = os.getenv("ROUTER_SNAPSHOT_SCHEDULE", "0 2 * * *")
+    router_tunnel_cleanup_interval_min: int = int(os.getenv("ROUTER_TUNNEL_CLEANUP_MIN", "5"))
+
 
 settings = Settings()

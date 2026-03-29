@@ -1,0 +1,101 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+
+{% block title %}Config Templates - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("teal", "emerald") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="/admin/network/routers" class="inline-flex items-center gap-1 text-sm font-medium text-teal-600 transition-colors hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Routers
+        </a>
+    </div>
+
+    {% call page_header(
+        title="Config Templates",
+        subtitle="Reusable RouterOS command templates for bulk push",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>',
+        color="teal",
+        color2="emerald",
+        breadcrumbs=[
+            {"label": "Network", "href": "/admin/network"},
+            {"label": "Routers", "href": "/admin/network/routers"},
+            {"label": "Config Templates"}
+        ]
+    ) %}
+        <a href="/admin/network/routers/templates/new"
+           class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-emerald-700 hover:-translate-y-0.5 transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            New Template
+        </a>
+    {% endcall %}
+
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+    {% call card("Templates", color="teal") %}
+    {% if templates %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
+                    <th class="pb-3 pr-4 font-medium">Name</th>
+                    <th class="pb-3 pr-4 font-medium">Category</th>
+                    <th class="pb-3 pr-4 font-medium">Active</th>
+                    <th class="pb-3 pr-4 font-medium">Updated</th>
+                    <th class="pb-3 font-medium text-right">Actions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for t in templates %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                    <td class="py-3 pr-4">
+                        <a href="/admin/network/routers/templates/{{ t.id }}"
+                           class="font-medium text-teal-600 hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300">{{ t.name }}</a>
+                        {% if t.description %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{{ t.description }}</p>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 pr-4">
+                        <span class="inline-flex items-center rounded-full bg-teal-100 px-2.5 py-0.5 text-xs font-medium text-teal-700 dark:bg-teal-900/30 dark:text-teal-400">
+                            {{ t.category.value | replace('_', ' ') | capitalize }}
+                        </span>
+                    </td>
+                    <td class="py-3 pr-4">
+                        {{ status_badge('Active', 'active', size="sm") if t.is_active else status_badge('Inactive', 'neutral', size="sm") }}
+                    </td>
+                    <td class="py-3 pr-4 text-slate-500 dark:text-slate-400 text-xs">{{ t.updated_at.strftime('%Y-%m-%d') }}</td>
+                    <td class="py-3 text-right">
+                        <div class="flex items-center justify-end gap-2">
+                            <a href="/admin/network/routers/templates/{{ t.id }}/edit"
+                               class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                                Edit
+                            </a>
+                            <a href="/admin/network/routers/push?template_id={{ t.id }}"
+                               class="inline-flex items-center rounded-lg bg-teal-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-teal-700">
+                                Use
+                            </a>
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state(
+        "No Config Templates",
+        "Create reusable command templates to speed up bulk config pushes.",
+        action_label="New Template",
+        action_href="/admin/network/routers/templates/new"
+    ) }}
+    {% endif %}
+    {% endcall %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

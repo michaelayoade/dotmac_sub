@@ -1,0 +1,159 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+
+{% block title %}{{ ('Edit ' ~ router.name) if router else 'Add Router' }} - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "indigo") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="{{ '/admin/network/routers/' ~ router.id if router else '/admin/network/routers' }}"
+           class="inline-flex items-center gap-1 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            {{ 'Back to ' ~ router.name if router else 'Back to Routers' }}
+        </a>
+    </div>
+
+    {% call page_header(
+        title=('Edit ' ~ router.name) if router else 'Add Router',
+        subtitle=('Update router configuration and credentials') if router else 'Register a new MikroTik router',
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>',
+        color="blue",
+        color2="indigo",
+        breadcrumbs=[
+            {"label": "Network", "href": "/admin/network"},
+            {"label": "Routers", "href": "/admin/network/routers"},
+            {"label": ('Edit ' ~ router.name) if router else 'Add Router'}
+        ]
+    ) %}{% endcall %}
+
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+    {% call card("Router Details", color="blue") %}
+    <form method="post"
+          action="{{ '/admin/network/routers/' ~ router.id ~ '/edit' if router else '/admin/network/routers/new' }}"
+          class="space-y-6 max-w-2xl"
+          x-data="{ accessMethod: '{{ router.access_method.value if router else 'direct' }}' }">
+        {% include "components/forms/csrf_input.html" %}
+
+        {# Basic info #}
+        <div>
+            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3 uppercase tracking-wide">Basic Information</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span class="text-red-500">*</span></label>
+                    <input type="text" name="name" value="{{ router.name if router else '' }}" required
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Hostname <span class="text-red-500">*</span></label>
+                    <input type="text" name="hostname" value="{{ router.hostname if router else '' }}" required
+                           placeholder="router-hq.example.com"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Management IP <span class="text-red-500">*</span></label>
+                    <input type="text" name="management_ip" value="{{ router.management_ip if router else '' }}" required
+                           placeholder="192.168.1.1"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Location</label>
+                    <input type="text" name="location" value="{{ router.location if router and router.location else '' }}"
+                           placeholder="HQ Data Centre"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+            </div>
+        </div>
+
+        {# API credentials #}
+        <div>
+            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3 uppercase tracking-wide">API Credentials</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">REST API Port</label>
+                    <input type="number" name="rest_api_port" value="{{ router.rest_api_port if router else 443 }}"
+                           min="1" max="65535"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">API Username <span class="text-red-500">*</span></label>
+                    <input type="text" name="rest_api_username" value="{{ router.rest_api_username if router else 'admin' }}" required
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                </div>
+                <div class="md:col-span-2">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">API Password {{ '' if not router else '(leave blank to keep existing)' }} {% if not router %}<span class="text-red-500">*</span>{% endif %}</label>
+                    <input type="password" name="rest_api_password"
+                           {{ 'required' if not router }}
+                           placeholder="{{ '(unchanged)' if router else 'Enter password' }}"
+                           class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored encrypted at rest.</p>
+                </div>
+            </div>
+            <div class="mt-4 flex gap-4">
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="use_ssl" value="1" {{ 'checked' if not router or router.use_ssl }}
+                           class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                    Use SSL/TLS
+                </label>
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="verify_tls" value="1" {{ 'checked' if router and router.verify_tls }}
+                           class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+                    Verify TLS Certificate
+                </label>
+            </div>
+        </div>
+
+        {# Access method #}
+        <div>
+            <h3 class="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-3 uppercase tracking-wide">Access Method</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Access Method</label>
+                    <select name="access_method" x-model="accessMethod"
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="direct">Direct</option>
+                        <option value="jump_host">Via Jump Host</option>
+                    </select>
+                </div>
+                <div x-show="accessMethod === 'jump_host'" x-cloak>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Jump Host</label>
+                    <select name="jump_host_id"
+                            class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Select jump host...</option>
+                        {% for jh in jump_hosts %}
+                        <option value="{{ jh.id }}" {{ 'selected' if router and router.jump_host_id == jh.id }}>{{ jh.name }} ({{ jh.hostname }})</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        {# Notes #}
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Notes</label>
+            <textarea name="notes" rows="3"
+                      placeholder="Optional notes about this router..."
+                      class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">{{ router.notes if router and router.notes else '' }}</textarea>
+        </div>
+
+        {# Actions #}
+        <div class="flex gap-3 pt-2">
+            <button type="submit"
+                    class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                {{ 'Update Router' if router else 'Create Router' }}
+            </button>
+            <a href="{{ '/admin/network/routers/' ~ router.id if router else '/admin/network/routers' }}"
+               class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-6 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                Cancel
+            </a>
+        </div>
+    </form>
+    {% endcall %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

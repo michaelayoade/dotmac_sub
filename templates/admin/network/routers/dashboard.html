@@ -1,0 +1,121 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+
+{% block title %}Router Dashboard - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("indigo", "purple") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="/admin/network/routers" class="inline-flex items-center gap-1 text-sm font-medium text-indigo-600 transition-colors hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            All Routers
+        </a>
+    </div>
+
+    {% call page_header(
+        title="Router Dashboard",
+        subtitle="Fleet health, push history, and quick actions",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>',
+        color="indigo",
+        color2="purple",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Routers", "href": "/admin/network/routers"}, {"label": "Dashboard"}]
+    ) %}
+        <div class="flex items-center gap-2">
+            <a href="/admin/network/routers"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                View All Routers
+            </a>
+        </div>
+    {% endcall %}
+
+    {# Status summary #}
+    <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 text-center shadow-sm">
+            <div class="text-3xl font-bold text-slate-900 dark:text-white">{{ summary.total }}</div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">Total</div>
+        </div>
+        {% set status_text_classes = {
+            'emerald': 'text-emerald-600 dark:text-emerald-400',
+            'slate':   'text-slate-600 dark:text-slate-400',
+            'amber':   'text-amber-600 dark:text-amber-400',
+            'blue':    'text-blue-600 dark:text-blue-400',
+            'rose':    'text-rose-600 dark:text-rose-400',
+        } %}
+        {% for key, label, color in [
+            ('online', 'Online', 'emerald'),
+            ('offline', 'Offline', 'slate'),
+            ('degraded', 'Degraded', 'amber'),
+            ('maintenance', 'Maintenance', 'blue'),
+            ('unreachable', 'Unreachable', 'rose'),
+        ] %}
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-6 text-center shadow-sm">
+            <div class="text-3xl font-bold {{ status_text_classes[color] }}">{{ summary.get(key, 0) }}</div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ label }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {# Recent config pushes #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Recent Config Pushes", color="indigo") %}
+    {% if recent_pushes %}
+    <div class="space-y-3">
+        {% for push in recent_pushes %}
+        {% set push_colors = {'completed': 'emerald', 'partial_failure': 'amber', 'failed': 'red', 'pending': 'slate', 'running': 'blue', 'rolled_back': 'orange'} %}
+        {% set push_statuses = {'completed': 'active', 'partial_failure': 'warning', 'failed': 'error', 'pending': 'neutral', 'running': 'neutral', 'rolled_back': 'warning'} %}
+        <a href="/admin/network/routers/push/{{ push.id }}"
+           class="block p-4 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex justify-between items-start gap-4">
+                <div class="flex-1 min-w-0">
+                    <div class="flex items-center gap-2 mb-1">
+                        {{ status_badge(push.status.value | capitalize, push_statuses.get(push.status.value, 'neutral'), size="sm") }}
+                        <span class="text-sm font-medium text-slate-700 dark:text-slate-300 truncate">
+                            {{ push.commands | length }} command(s) — {{ push.results | length }} router(s)
+                        </span>
+                    </div>
+                    {% if push.template %}
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Template: {{ push.template.name }}</p>
+                    {% endif %}
+                </div>
+                <span class="text-xs text-slate-400 dark:text-slate-500 flex-shrink-0">{{ push.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+            </div>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    {{ empty_state("No recent pushes", "Execute your first config push to see results here.") }}
+    {% endif %}
+    {% endcall %}
+    </div>
+
+    {# Quick actions #}
+    <div class="flex flex-wrap gap-4 animate-fade-in-up" style="animation-delay: 125ms;">
+        <a href="/admin/network/routers/push"
+           class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            New Config Push
+        </a>
+        <a href="/admin/network/routers/templates"
+           class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+            Manage Templates
+        </a>
+        <a href="/admin/network/routers/jump-hosts"
+           class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+            Jump Hosts
+        </a>
+        <a href="/admin/network/routers/new"
+           class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-6 py-3 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add Router
+        </a>
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

@@ -1,0 +1,173 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, empty_state, animation_styles %}
+
+{% block title %}Bulk Config Push - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("purple", "indigo") }}
+<div class="relative space-y-8" x-data="pushWizard()">
+    {# Back link #}
+    <div>
+        <a href="/admin/network/routers/dashboard" class="inline-flex items-center gap-1 text-sm font-medium text-purple-600 transition-colors hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    {% call page_header(
+        title="Bulk Config Push",
+        subtitle="Apply configuration commands to one or more routers",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>',
+        color="purple",
+        color2="indigo",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Routers", "href": "/admin/network/routers"}, {"label": "Config Push"}]
+    ) %}{% endcall %}
+
+    {# Step 1: Commands #}
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+    {% call card("Step 1 — Commands", color="purple") %}
+    <div class="space-y-4 max-w-2xl">
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Template (optional)</label>
+            <select x-model="selectedTemplate" @change="loadTemplate()"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">— Ad-hoc commands —</option>
+                {% for t in templates %}
+                <option value="{{ t.id }}" data-body="{{ t.template_body | e }}">{{ t.name }} ({{ t.category.value }})</option>
+                {% endfor %}
+            </select>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Load commands from a saved template or enter them manually below.</p>
+        </div>
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Commands <span class="text-red-500">*</span>
+                <span class="text-xs font-normal text-slate-500 dark:text-slate-400 ml-1">(one per line)</span>
+            </label>
+            <textarea x-model="commands" rows="8"
+                      class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-purple-500 focus:outline-none focus:ring-1 focus:ring-purple-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                      placeholder="/queue simple set [find] queue=sfq/sfq&#10;/system ntp client set enabled=yes"></textarea>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                RouterOS commands to execute. Commands are validated against a blocklist before execution.
+            </p>
+        </div>
+    </div>
+    {% endcall %}
+    </div>
+
+    {# Step 2: Select routers #}
+    <div class="animate-fade-in-up" style="animation-delay: 75ms;">
+    {% call card("Step 2 — Target Routers", color="blue") %}
+    {% if routers %}
+    <div class="mb-3">
+        <label class="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+            <input type="checkbox" @change="toggleAll($event)"
+                   class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+            Select all ({{ routers | length }} routers)
+        </label>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2 max-h-64 overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700 p-3">
+        {% for r in routers %}
+        <label class="flex items-center gap-2 rounded-lg p-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 text-sm cursor-pointer">
+            <input type="checkbox" value="{{ r.id }}" x-model="selectedRouters"
+                   class="rounded border-slate-300 text-blue-600 focus:ring-blue-500">
+            <span class="font-medium text-slate-700 dark:text-slate-300">{{ r.name }}</span>
+            <span class="text-xs text-slate-400 dark:text-slate-500 font-mono">{{ r.management_ip }}</span>
+        </label>
+        {% endfor %}
+    </div>
+    {% else %}
+    {{ empty_state("No routers available", "Add a router to the inventory first.") }}
+    {% endif %}
+    {% endcall %}
+    </div>
+
+    {# Step 3: Confirm #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Step 3 — Confirm & Execute", color="emerald") %}
+    <div class="flex items-center justify-between gap-4 flex-wrap">
+        <div class="text-sm text-slate-600 dark:text-slate-300 space-y-1">
+            <p>
+                <span class="font-semibold" x-text="commandCount()">0</span> command(s) will be pushed to
+                <span class="font-semibold" x-text="selectedRouters.length">0</span> router(s).
+            </p>
+            <p x-show="selectedRouters.length === 0" class="text-amber-600 dark:text-amber-400 text-xs">
+                Select at least one router.
+            </p>
+            <p x-show="!commands.trim()" class="text-amber-600 dark:text-amber-400 text-xs">
+                Enter at least one command.
+            </p>
+        </div>
+        <button @click="executePush()"
+                :disabled="!commands.trim() || selectedRouters.length === 0 || pushing"
+                class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-teal-700 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0">
+            <svg x-show="!pushing" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            <svg x-show="pushing" class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            <span x-text="pushing ? 'Executing...' : 'Execute Push'">Execute Push</span>
+        </button>
+    </div>
+    <p id="push-error" class="hidden mt-3 text-sm text-red-600 dark:text-red-400"></p>
+    {% endcall %}
+    </div>
+</div>
+
+<script>
+function pushWizard() {
+    return {
+        selectedTemplate: '',
+        commands: '',
+        selectedRouters: [],
+        pushing: false,
+        commandCount() {
+            return this.commands.split('\n').filter(l => l.trim()).length;
+        },
+        toggleAll(event) {
+            if (event.target.checked) {
+                this.selectedRouters = [...document.querySelectorAll('input[type=checkbox][value]')].map(el => el.value);
+            } else {
+                this.selectedRouters = [];
+            }
+        },
+        loadTemplate() {
+            const opt = document.querySelector(`option[value="${this.selectedTemplate}"]`);
+            if (opt && opt.dataset.body) {
+                this.commands = opt.dataset.body;
+            }
+        },
+        async executePush() {
+            const cmds = this.commands.split('\n').filter(l => l.trim());
+            this.pushing = true;
+            document.getElementById('push-error').classList.add('hidden');
+            try {
+                const resp = await fetch('/api/v1/network/routers/config-pushes', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        commands: cmds,
+                        router_ids: this.selectedRouters,
+                        template_id: this.selectedTemplate || null
+                    })
+                });
+                const data = await resp.json();
+                if (resp.ok) {
+                    window.location.href = `/admin/network/routers/push/${data.id}`;
+                } else {
+                    const errEl = document.getElementById('push-error');
+                    errEl.textContent = data.detail || 'Push failed. Please try again.';
+                    errEl.classList.remove('hidden');
+                }
+            } catch (err) {
+                const errEl = document.getElementById('push-error');
+                errEl.textContent = 'Network error. Please try again.';
+                errEl.classList.remove('hidden');
+            } finally {
+                this.pushing = false;
+            }
+        }
+    }
+}
+</script>
+
+{{ animation_styles() }}
+{% endblock %}

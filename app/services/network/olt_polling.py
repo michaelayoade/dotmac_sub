@@ -45,22 +45,46 @@ _VENDOR_OID_OIDS: dict[str, dict[str, str]] = {
         "olt_rx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4",
         # hwGponOltOpticsDdmInfoTxPower — ONU receive (reported via OLT)
         "onu_rx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6",
+        # hwGponOntOpticalDdmTxPower — ONU transmit power
+        "onu_tx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.2",
+        # hwGponOntOpticalDdmTemperature — ONU laser temperature
+        "temperature": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.3",
+        # hwGponOntOpticalDdmBiasCurrent — ONU laser bias current
+        "bias_current": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.5",
+        # hwGponOntOpticalDdmVoltage — ONU supply voltage
+        "voltage": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.7",
         # hwGponOltEponOnuDistance
         "distance": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.20",
         # hwGponDeviceOnuRunStatus
         "status": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15",
+        # hwGponDeviceOntLastDownCause
+        "offline_reason": ".1.3.6.1.4.1.2011.6.128.1.1.2.43.1.12",
+        # hwGponDeviceOntSN
+        "serial_number": ".1.3.6.1.4.1.2011.6.128.1.1.2.43.1.2",
     },
     "zte": {
         "olt_rx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.2",
         "onu_rx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.3",
+        "onu_tx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.4",
+        "temperature": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.5",
+        "bias_current": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.8",
+        "voltage": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.6",
         "distance": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.7",
         "status": ".1.3.6.1.4.1.3902.1082.500.10.2.2.1.1.10",
+        "offline_reason": ".1.3.6.1.4.1.3902.1082.500.10.2.2.1.1.11",
+        "serial_number": ".1.3.6.1.4.1.3902.1082.500.10.2.2.1.1.3",
     },
     "nokia": {
         "olt_rx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.2",
         "onu_rx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.4",
+        "onu_tx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.3",
+        "temperature": ".1.3.6.1.4.1.637.61.1.35.10.14.1.5",
+        "bias_current": ".1.3.6.1.4.1.637.61.1.35.10.14.1.7",
+        "voltage": ".1.3.6.1.4.1.637.61.1.35.10.14.1.6",
         "distance": ".1.3.6.1.4.1.637.61.1.35.10.1.1.9",
         "status": ".1.3.6.1.4.1.637.61.1.35.10.1.1.8",
+        "offline_reason": ".1.3.6.1.4.1.637.61.1.35.10.1.1.10",
+        "serial_number": ".1.3.6.1.4.1.637.61.1.35.10.1.1.3",
     },
 }
 
@@ -70,6 +94,32 @@ _VENDOR_SIGNAL_SCALE: dict[str, float] = {
     "zte": 0.01,
     "nokia": 0.01,
 }
+
+# DDM value scale factors per vendor.
+# Temperature: integer degrees C (scale 1.0) for most vendors.
+# Voltage: 0.01V units for Huawei/ZTE, 0.001V for Nokia.
+# Bias current: 0.001 mA for Huawei, 0.002 mA for ZTE, 0.001 for Nokia.
+_VENDOR_DDM_SCALES: dict[str, dict[str, float]] = {
+    "huawei": {"temperature": 1.0, "voltage": 0.01, "bias_current": 0.001},
+    "zte": {"temperature": 1.0, "voltage": 0.01, "bias_current": 0.002},
+    "nokia": {"temperature": 1.0, "voltage": 0.001, "bias_current": 0.001},
+}
+
+_DEFAULT_DDM_SCALES: dict[str, float] = {
+    "temperature": 1.0,
+    "voltage": 0.01,
+    "bias_current": 0.001,
+}
+
+
+def _get_ddm_scales(vendor: str) -> dict[str, float]:
+    """Return DDM value scale factors for a vendor."""
+    vendor_lower = vendor.lower().strip()
+    for key, scales in _VENDOR_DDM_SCALES.items():
+        if key in vendor_lower:
+            return scales
+    return _DEFAULT_DDM_SCALES
+
 
 # Sentinel values commonly used by vendors to indicate invalid/unavailable optics.
 _SIGNAL_SENTINELS: set[int] = {
@@ -85,6 +135,10 @@ _SIGNAL_SENTINELS: set[int] = {
 GENERIC_OIDS: dict[str, str] = {
     "olt_rx": ".1.3.6.1.4.1.17409.2.3.6.10.1.2",
     "onu_rx": ".1.3.6.1.4.1.17409.2.3.6.10.1.3",
+    "onu_tx": ".1.3.6.1.4.1.17409.2.3.6.10.1.4",
+    "temperature": ".1.3.6.1.4.1.17409.2.3.6.10.1.5",
+    "bias_current": ".1.3.6.1.4.1.17409.2.3.6.10.1.7",
+    "voltage": ".1.3.6.1.4.1.17409.2.3.6.10.1.6",
     "distance": ".1.3.6.1.4.1.17409.2.3.6.1.1.9",
     "status": ".1.3.6.1.4.1.17409.2.3.6.1.1.8",
 }
@@ -154,6 +208,13 @@ _DEFAULT_SIGNAL_DELTA_DB = 3.0
 
 _DEFAULT_ALERT_COOLDOWN_MINUTES = 30
 
+# DDM health thresholds — alert when exceeded
+_DDM_TEMPERATURE_WARN_C = 65.0
+_DDM_TEMPERATURE_CRIT_C = 75.0
+_DDM_VOLTAGE_LOW_V = 3.0
+_DDM_VOLTAGE_HIGH_V = 3.6
+_DDM_BIAS_CURRENT_WARN_MA = 60.0
+
 
 def _get_alert_cooldown_seconds(db: Session) -> int:
     """Load signal alert cooldown from settings (in seconds)."""
@@ -182,8 +243,14 @@ class OntSignalReading:
     onu_index: str
     olt_rx_dbm: float | None
     onu_rx_dbm: float | None
+    onu_tx_dbm: float | None
     distance_m: int | None
     is_online: bool | None
+    temperature_c: float | None = None
+    voltage_v: float | None = None
+    bias_current_ma: float | None = None
+    offline_reason_raw: str | None = None
+    serial_number_raw: str | None = None
 
 
 def _split_onu_index(raw_index: str) -> tuple[str, ...] | None:
@@ -571,6 +638,33 @@ def _parse_distance(raw: str) -> int | None:
     return value
 
 
+def _parse_ddm_value(raw: str, *, scale: float = 1.0) -> float | None:
+    """Parse a generic DDM numeric value from SNMP (temperature, voltage, bias current).
+
+    Args:
+        raw: Raw SNMP value string.
+        scale: Multiplier to convert raw integer to real units.
+
+    Returns:
+        Parsed float value, or None if unparseable/missing.
+    """
+    if not raw:
+        return None
+    lowered = raw.lower().strip()
+    if lowered.startswith("no such") or lowered == "":
+        return None
+    match = re.search(r"(-?\d+)", raw)
+    if not match:
+        return None
+    try:
+        raw_int = int(match.group(1))
+    except ValueError:
+        return None
+    if raw_int in _SIGNAL_SENTINELS:
+        return None
+    return round(raw_int * scale, 4)
+
+
 def _parse_online_status(raw: str) -> bool | None:
     """Parse ONU online status from SNMP value."""
     lowered = raw.lower().strip()
@@ -680,6 +774,56 @@ def poll_olt_ont_signals(
         else {}
     )
 
+    # DDM health telemetry walks (optional — missing OIDs are silently skipped)
+    onu_tx_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["onu_tx"], community),
+            base_oid=oids["onu_tx"],
+        )
+        if oids.get("onu_tx")
+        else {}
+    )
+    temperature_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["temperature"], community),
+            base_oid=oids["temperature"],
+        )
+        if oids.get("temperature")
+        else {}
+    )
+    voltage_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["voltage"], community),
+            base_oid=oids["voltage"],
+        )
+        if oids.get("voltage")
+        else {}
+    )
+    bias_current_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["bias_current"], community),
+            base_oid=oids["bias_current"],
+        )
+        if oids.get("bias_current")
+        else {}
+    )
+    offline_reason_snmp_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["offline_reason"], community),
+            base_oid=oids["offline_reason"],
+        )
+        if oids.get("offline_reason")
+        else {}
+    )
+    serial_number_raw = (
+        parse_table(
+            _run_olt_snmpwalk(host, oids["serial_number"], community),
+            base_oid=oids["serial_number"],
+        )
+        if oids.get("serial_number")
+        else {}
+    )
+
     if not olt_rx_raw and not onu_rx_raw and not status_raw:
         logger.info("No SNMP signal data returned for OLT %s (%s)", olt.name, host)
         return {"polled": 0, "updated": 0, "errors": 0, "skipped": 0}
@@ -696,6 +840,7 @@ def poll_olt_ont_signals(
         "missing": 0,
         "parse_error": 0,
     }
+    ddm_scales = _get_ddm_scales(vendor)
     for idx in all_indexes:
         readings.append(
             OntSignalReading(
@@ -714,8 +859,29 @@ def poll_olt_ont_signals(
                     metric="onu_rx",
                     stats=parse_stats,
                 ),
+                onu_tx_dbm=_parse_signal_value(
+                    onu_tx_raw.get(idx, ""),
+                    scale,
+                    vendor=vendor,
+                    metric="onu_tx",
+                    stats=parse_stats,
+                ),
                 distance_m=_parse_distance(distance_raw.get(idx, "")),
                 is_online=_parse_online_status(status_raw.get(idx, "")),
+                temperature_c=_parse_ddm_value(
+                    temperature_raw.get(idx, ""),
+                    scale=ddm_scales.get("temperature", 1.0),
+                ),
+                voltage_v=_parse_ddm_value(
+                    voltage_raw.get(idx, ""),
+                    scale=ddm_scales.get("voltage", 0.01),
+                ),
+                bias_current_ma=_parse_ddm_value(
+                    bias_current_raw.get(idx, ""),
+                    scale=ddm_scales.get("bias_current", 0.001),
+                ),
+                offline_reason_raw=offline_reason_snmp_raw.get(idx),
+                serial_number_raw=serial_number_raw.get(idx),
             )
         )
 
@@ -764,6 +930,14 @@ def poll_olt_ont_signals(
                 update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
             if reading.distance_m is not None:
                 update_values["distance_meters"] = reading.distance_m
+            if reading.onu_tx_dbm is not None:
+                update_values["onu_tx_signal_dbm"] = reading.onu_tx_dbm
+            if reading.temperature_c is not None:
+                update_values["ont_temperature_c"] = reading.temperature_c
+            if reading.voltage_v is not None:
+                update_values["ont_voltage_v"] = reading.voltage_v
+            if reading.bias_current_ma is not None:
+                update_values["ont_bias_current_ma"] = reading.bias_current_ma
 
             prev_status = ont.online_status
 
@@ -783,6 +957,19 @@ def poll_olt_ont_signals(
                             update_values["offline_reason"] = OnuOfflineReason(reason)
                         except ValueError:
                             update_values["offline_reason"] = OnuOfflineReason.unknown
+
+            # Use SNMP offline_reason OID if available (more precise than status code)
+            if (
+                reading.offline_reason_raw
+                and reading.is_online is not None
+                and not reading.is_online
+            ):
+                snmp_reason = _derive_offline_reason(reading.offline_reason_raw)
+                if snmp_reason:
+                    try:
+                        update_values["offline_reason"] = OnuOfflineReason(snmp_reason)
+                    except ValueError:
+                        pass
 
             # Mark telemetry freshness only when at least one field was observed.
             if update_values:
@@ -893,6 +1080,61 @@ def poll_olt_ont_signals(
                             )
                         )
 
+            # DDM health alerts — temperature, voltage, bias current
+            if (
+                reading.temperature_c is not None
+                and reading.temperature_c > _DDM_TEMPERATURE_WARN_C
+            ):
+                severity = (
+                    "critical"
+                    if reading.temperature_c > _DDM_TEMPERATURE_CRIT_C
+                    else "warning"
+                )
+                status_transitions.append(
+                    (
+                        ont,
+                        "ddm_alert",
+                        {
+                            "metric": "temperature",
+                            "value": reading.temperature_c,
+                            "unit": "C",
+                            "severity": severity,
+                        },
+                    )
+                )
+            if reading.voltage_v is not None and (
+                reading.voltage_v < _DDM_VOLTAGE_LOW_V
+                or reading.voltage_v > _DDM_VOLTAGE_HIGH_V
+            ):
+                status_transitions.append(
+                    (
+                        ont,
+                        "ddm_alert",
+                        {
+                            "metric": "voltage",
+                            "value": reading.voltage_v,
+                            "unit": "V",
+                            "severity": "warning",
+                        },
+                    )
+                )
+            if (
+                reading.bias_current_ma is not None
+                and reading.bias_current_ma > _DDM_BIAS_CURRENT_WARN_MA
+            ):
+                status_transitions.append(
+                    (
+                        ont,
+                        "ddm_alert",
+                        {
+                            "metric": "bias_current",
+                            "value": reading.bias_current_ma,
+                            "unit": "mA",
+                            "severity": "warning",
+                        },
+                    )
+                )
+
         except Exception as e:
             logger.error("Error updating ONT %s: %s", ont.id, e)
             errors += 1
@@ -915,6 +1157,8 @@ def poll_olt_ont_signals(
                 emit_event(db, EventType.ont_signal_degraded, payload, actor="system")
             elif transition == "signal_delta":
                 emit_event(db, EventType.ont_signal_delta, payload, actor="system")
+            elif transition == "ddm_alert":
+                emit_event(db, EventType.ont_ddm_alert, payload, actor="system")
         except Exception as e:
             logger.warning("Failed to emit ONT %s event: %s", transition, e)
 
@@ -1158,6 +1402,10 @@ def _push_signal_metrics(db: Session) -> int:
             OntUnit.serial_number,
             OntUnit.olt_rx_signal_dbm,
             OntUnit.onu_rx_signal_dbm,
+            OntUnit.onu_tx_signal_dbm,
+            OntUnit.ont_temperature_c,
+            OntUnit.ont_voltage_v,
+            OntUnit.ont_bias_current_ma,
             OntUnit.online_status,
             OLTDevice.name.label("olt_name"),
             PonPort.name.label("pon_port_name"),
@@ -1204,6 +1452,14 @@ def _push_signal_metrics(db: Session) -> int:
             lines.append(f"ont_olt_rx_dbm{{{labels}}} {row.olt_rx_signal_dbm} {now_ms}")
         if row.onu_rx_signal_dbm is not None:
             lines.append(f"ont_onu_rx_dbm{{{labels}}} {row.onu_rx_signal_dbm} {now_ms}")
+        if row.onu_tx_signal_dbm is not None:
+            lines.append(f"ont_onu_tx_dbm{{{labels}}} {row.onu_tx_signal_dbm} {now_ms}")
+        if row.ont_temperature_c is not None:
+            lines.append(f"ont_temperature_c{{{labels}}} {row.ont_temperature_c} {now_ms}")
+        if row.ont_voltage_v is not None:
+            lines.append(f"ont_voltage_v{{{labels}}} {row.ont_voltage_v} {now_ms}")
+        if row.ont_bias_current_ma is not None:
+            lines.append(f"ont_bias_current_ma{{{labels}}} {row.ont_bias_current_ma} {now_ms}")
 
     # Aggregate status counts
     status_counts = db.execute(
