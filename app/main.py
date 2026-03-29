@@ -38,6 +38,8 @@ from app.api.imports import router as imports_router
 from app.api.integrations import router as integrations_router
 from app.api.nas import router as nas_router
 from app.api.network_catalog import router as network_catalog_router
+from app.api.router_management import jump_host_router as jump_host_mgmt_router
+from app.api.router_management import router as router_mgmt_router
 from app.api.network_olt_ops import router as network_olt_ops_router
 from app.api.network_ont_ops import router as network_ont_ops_router
 from app.api.nextcloud_talk import router as nextcloud_talk_router
@@ -100,6 +102,7 @@ from app.services.settings_seed import (
 )
 from app.telemetry import setup_otel
 from app.web import router as web_router
+from app.web.admin.network_routers import router as web_router_mgmt
 from app.web_domains import router as web_domains_router
 from app.web_home import router as web_home_router
 from app.websocket.router import router as ws_router
@@ -584,6 +587,8 @@ _include_api_router(fiber_plant_router, dependencies=[Depends(require_user_auth)
 _include_api_router(nextcloud_talk_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(wireguard_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(nas_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(router_mgmt_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(jump_host_mgmt_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(provisioning_api_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(bandwidth_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(validation_router, dependencies=[Depends(require_user_auth)])
@@ -595,6 +600,7 @@ _include_api_router(tr069_inform_router)
 app.include_router(web_home_router)
 app.include_router(web_domains_router)
 app.include_router(web_router)
+app.include_router(web_router_mgmt, prefix="/admin")
 
 app.include_router(ws_router)
 
