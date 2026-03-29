@@ -1,0 +1,131 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+
+{% block title %}Push Results — {{ push.id }} - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("purple", "indigo") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="/admin/network/routers/dashboard" class="inline-flex items-center gap-1 text-sm font-medium text-purple-600 transition-colors hover:text-purple-700 dark:text-purple-400 dark:hover:text-purple-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Dashboard
+        </a>
+    </div>
+
+    {% set push_status_map = {'completed': 'active', 'partial_failure': 'warning', 'failed': 'error', 'pending': 'neutral', 'running': 'neutral', 'rolled_back': 'warning'} %}
+    {% call page_header(
+        title="Push Results",
+        subtitle="Config push " ~ push.id | string,
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>',
+        color="purple",
+        color2="indigo",
+        breadcrumbs=[
+            {"label": "Network", "href": "/admin/network"},
+            {"label": "Routers", "href": "/admin/network/routers"},
+            {"label": "Config Push"}
+        ]
+    ) %}
+        {{ status_badge(push.status.value | capitalize, push_status_map.get(push.status.value, 'neutral')) }}
+    {% endcall %}
+
+    {# Push summary #}
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+    {% call card("Commands", color="purple") %}
+    <pre class="overflow-x-auto rounded-lg bg-slate-50 p-4 text-xs font-mono leading-relaxed dark:bg-slate-900 dark:text-slate-300">{% for cmd in push.commands %}{{ cmd }}
+{% endfor %}</pre>
+    <div class="mt-3 flex flex-wrap gap-4 text-xs text-slate-500 dark:text-slate-400">
+        <span>Created: {{ push.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        {% if push.completed_at %}
+        <span>Completed: {{ push.completed_at.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+        {% endif %}
+        {% if push.template %}
+        <span>Template: {{ push.template.name }}</span>
+        {% endif %}
+    </div>
+    {% endcall %}
+    </div>
+
+    {# Per-router results #}
+    <div class="animate-fade-in-up" style="animation-delay: 75ms;">
+    {% call card("Per-Router Results", color="blue") %}
+    {% if results %}
+    {# Summary row #}
+    {% set success_count = results | selectattr('status.value', 'equalto', 'success') | list | length %}
+    {% set failed_count = results | selectattr('status.value', 'equalto', 'failed') | list | length %}
+    <div class="mb-4 flex gap-4 text-sm">
+        <span class="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+            <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+            {{ success_count }} succeeded
+        </span>
+        <span class="inline-flex items-center gap-1.5 text-red-600 dark:text-red-400">
+            <span class="h-2 w-2 rounded-full bg-red-500"></span>
+            {{ failed_count }} failed
+        </span>
+        <span class="text-slate-500 dark:text-slate-400">{{ results | length }} total</span>
+    </div>
+
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
+                    <th class="pb-3 pr-4 font-medium">Router</th>
+                    <th class="pb-3 pr-4 font-medium">Status</th>
+                    <th class="pb-3 pr-4 font-medium">Duration</th>
+                    <th class="pb-3 font-medium">Error</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for r in results %}
+                {% set r_map = {'success': 'active', 'failed': 'error', 'pending': 'warning', 'skipped': 'neutral'} %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                    <td class="py-3 pr-4">
+                        <a href="/admin/network/routers/{{ r.router_id }}"
+                           class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+                            {{ r.router.name if r.router else r.router_id }}
+                        </a>
+                        {% if r.router %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400 font-mono mt-0.5">{{ r.router.management_ip }}</p>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 pr-4">
+                        {{ status_badge(r.status.value | capitalize, r_map.get(r.status.value, 'neutral'), size="sm") }}
+                    </td>
+                    <td class="py-3 pr-4 font-mono text-xs text-slate-600 dark:text-slate-300">{{ (r.duration_ms ~ ' ms') if r.duration_ms else '—' }}</td>
+                    <td class="py-3 text-xs text-red-500 dark:text-red-400 max-w-sm">
+                        {% if r.error_message %}
+                        <span title="{{ r.error_message }}">{{ r.error_message[:120] ~ ('…' if r.error_message | length > 120 else '') }}</span>
+                        {% else %}
+                        —
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No results yet", "Results will appear as routers are processed.") }}
+    {% endif %}
+    {% endcall %}
+    </div>
+
+    {# Auto-refresh for running pushes #}
+    {% if push.status.value in ['pending', 'running'] %}
+    <script>
+        setTimeout(() => window.location.reload(), 5000);
+    </script>
+    <div class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300 animate-fade-in-up" style="animation-delay: 100ms;">
+        <div class="flex items-center gap-2">
+            <svg class="h-4 w-4 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+            Push in progress — page will refresh automatically every 5 seconds.
+        </div>
+    </div>
+    {% endif %}
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

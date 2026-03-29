@@ -1,0 +1,212 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+
+{% block title %}{{ router.name }} - Router Detail - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="/admin/network/routers" class="inline-flex items-center gap-1 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Routers
+        </a>
+    </div>
+
+    {% set status_map = {'online': 'active', 'offline': 'neutral', 'degraded': 'warning', 'maintenance': 'neutral', 'unreachable': 'error'} %}
+    {% call page_header(
+        title=router.name,
+        subtitle=router.hostname ~ " — " ~ router.management_ip,
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>',
+        color="blue",
+        color2="cyan",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Routers", "href": "/admin/network/routers"}, {"label": router.name}]
+    ) %}
+        <div class="flex items-center gap-3">
+            {{ status_badge(router.status.value | capitalize, status_map.get(router.status.value, 'neutral'), pulse=(router.status.value == 'online')) }}
+            <a href="/admin/network/routers/{{ router.id }}/edit"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
+            <button hx-post="/api/v1/network/routers/{{ router.id }}/sync" hx-swap="none"
+                    class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-cyan-700 hover:-translate-y-0.5 transition-all">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Sync Now
+            </button>
+        </div>
+    {% endcall %}
+
+    {# Tabs #}
+    <div class="flex gap-1 border-b border-slate-200 dark:border-slate-700 animate-fade-in-up" style="animation-delay: 40ms;">
+        {% for t, label in [('overview', 'Overview'), ('interfaces', 'Interfaces'), ('config', 'Config Snapshots'), ('pushes', 'Push History')] %}
+        <a href="?tab={{ t }}"
+           class="px-4 py-2.5 text-sm font-medium transition-colors {{ '-mb-px border-b-2 border-blue-600 text-blue-600 dark:text-blue-400' if tab == t else 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300' }}">
+            {{ label }}
+        </a>
+        {% endfor %}
+    </div>
+
+    {# Tab content #}
+    <div class="animate-fade-in-up" style="animation-delay: 75ms;">
+    {% if tab == 'overview' %}
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {% call card("System Info", color="blue") %}
+        <dl class="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+            <dt class="text-slate-500 dark:text-slate-400">Hostname</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.hostname }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Management IP</dt>
+            <dd class="font-mono text-slate-900 dark:text-white">{{ router.management_ip }}:{{ router.rest_api_port }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">RouterOS Version</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.routeros_version or '—' }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Board</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.board_name or '—' }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Architecture</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.architecture or '—' }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Serial</dt>
+            <dd class="font-mono text-slate-900 dark:text-white">{{ router.serial_number or '—' }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Location</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.location or '—' }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Access Method</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.access_method.value | replace('_', ' ') | capitalize }}</dd>
+
+            {% if router.jump_host %}
+            <dt class="text-slate-500 dark:text-slate-400">Jump Host</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.jump_host.name }}</dd>
+            {% endif %}
+
+            <dt class="text-slate-500 dark:text-slate-400">Last Seen</dt>
+            <dd class="text-slate-900 dark:text-white">{{ router.last_seen_at.strftime('%Y-%m-%d %H:%M') if router.last_seen_at else '—' }}</dd>
+
+            <dt class="text-slate-500 dark:text-slate-400">Active</dt>
+            <dd>{{ status_badge('Active', 'active', size="sm") if router.is_active else status_badge('Inactive', 'neutral', size="sm") }}</dd>
+        </dl>
+        {% endcall %}
+
+        {% call card("Notes", color="slate") %}
+        <p class="text-sm text-slate-600 dark:text-slate-300 leading-relaxed">{{ router.notes or 'No notes.' }}</p>
+        {% if router.tags %}
+        <div class="mt-4 flex flex-wrap gap-2">
+            {% for tag in router.tags %}
+            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ tag }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endcall %}
+    </div>
+
+    {% elif tab == 'interfaces' %}
+    {% call card("Interfaces", color="cyan") %}
+    {% if interfaces %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
+                    <th class="pb-3 pr-4 font-medium">Name</th>
+                    <th class="pb-3 pr-4 font-medium">Type</th>
+                    <th class="pb-3 pr-4 font-medium">MAC</th>
+                    <th class="pb-3 pr-4 font-medium">Status</th>
+                    <th class="pb-3 pr-4 font-medium">RX</th>
+                    <th class="pb-3 font-medium">TX</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for i in interfaces %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="py-2.5 pr-4 font-mono text-xs font-medium text-slate-800 dark:text-slate-200">{{ i.name }}</td>
+                    <td class="py-2.5 pr-4 text-slate-600 dark:text-slate-300">{{ i.type }}</td>
+                    <td class="py-2.5 pr-4 font-mono text-xs text-slate-600 dark:text-slate-400">{{ i.mac_address or '—' }}</td>
+                    <td class="py-2.5 pr-4">
+                        {% if i.is_running %}
+                        {{ status_badge('Up', 'active', size="sm") }}
+                        {% elif i.is_disabled %}
+                        {{ status_badge('Disabled', 'neutral', size="sm") }}
+                        {% else %}
+                        {{ status_badge('Down', 'error', size="sm") }}
+                        {% endif %}
+                    </td>
+                    <td class="py-2.5 pr-4 font-mono text-xs text-slate-600 dark:text-slate-300">{{ '{:,.0f}'.format((i.rx_byte or 0) / 1048576) }} MB</td>
+                    <td class="py-2.5 font-mono text-xs text-slate-600 dark:text-slate-300">{{ '{:,.0f}'.format((i.tx_byte or 0) / 1048576) }} MB</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No interfaces synced", "Click 'Sync Now' to fetch interface data from the router.") }}
+    {% endif %}
+    {% endcall %}
+
+    {% elif tab == 'config' %}
+    {% call card("Config Snapshots", color="teal") %}
+    {% if snapshots %}
+    <div class="space-y-3">
+        {% for snap in snapshots %}
+        <details class="rounded-lg border border-slate-200 dark:border-slate-700">
+            <summary class="flex cursor-pointer items-center gap-3 px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-sm">
+                <svg class="h-4 w-4 text-slate-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <span class="font-medium text-slate-700 dark:text-slate-300">{{ snap.source.value | capitalize }}</span>
+                <span class="text-slate-500 dark:text-slate-400">{{ snap.created_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                <code class="text-xs text-slate-400 dark:text-slate-500 font-mono">{{ snap.config_hash[:12] if snap.config_hash else '' }}</code>
+            </summary>
+            <pre class="overflow-x-auto border-t border-slate-200 bg-slate-50 px-4 py-3 text-xs font-mono leading-relaxed dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">{{ snap.config_export }}</pre>
+        </details>
+        {% endfor %}
+    </div>
+    {% else %}
+    {{ empty_state("No config snapshots yet", "Snapshots are captured automatically on sync.") }}
+    {% endif %}
+    {% endcall %}
+
+    {% elif tab == 'pushes' %}
+    {% call card("Push History", color="purple") %}
+    {% if push_results %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
+                    <th class="pb-3 pr-4 font-medium">Date</th>
+                    <th class="pb-3 pr-4 font-medium">Status</th>
+                    <th class="pb-3 pr-4 font-medium">Duration</th>
+                    <th class="pb-3 font-medium">Error</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for pr in push_results %}
+                {% set pr_map = {'success': 'active', 'failed': 'error', 'pending': 'warning', 'skipped': 'neutral'} %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <td class="py-2.5 pr-4 text-slate-600 dark:text-slate-300">
+                        <a href="/admin/network/routers/push/{{ pr.push_id }}" class="hover:text-blue-600 dark:hover:text-blue-400">
+                            {{ pr.created_at.strftime('%Y-%m-%d %H:%M') }}
+                        </a>
+                    </td>
+                    <td class="py-2.5 pr-4">
+                        {{ status_badge(pr.status.value | capitalize, pr_map.get(pr.status.value, 'neutral'), size="sm") }}
+                    </td>
+                    <td class="py-2.5 pr-4 font-mono text-xs text-slate-600 dark:text-slate-300">{{ (pr.duration_ms ~ 'ms') if pr.duration_ms else '—' }}</td>
+                    <td class="py-2.5 text-xs text-red-500 dark:text-red-400">{{ pr.error_message[:80] ~ '…' if pr.error_message and pr.error_message|length > 80 else (pr.error_message or '—') }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    {{ empty_state("No push history for this router") }}
+    {% endif %}
+    {% endcall %}
+    {% endif %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

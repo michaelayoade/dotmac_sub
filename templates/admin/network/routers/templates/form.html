@@ -1,0 +1,106 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles %}
+
+{% block title %}{{ ('Edit ' ~ template.name) if template else 'New Config Template' }} - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("teal", "emerald") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="/admin/network/routers/templates" class="inline-flex items-center gap-1 text-sm font-medium text-teal-600 transition-colors hover:text-teal-700 dark:text-teal-400 dark:hover:text-teal-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Templates
+        </a>
+    </div>
+
+    {% call page_header(
+        title=('Edit ' ~ template.name) if template else 'New Config Template',
+        subtitle=('Update this RouterOS command template') if template else 'Create a reusable RouterOS command template',
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>',
+        color="teal",
+        color2="emerald",
+        breadcrumbs=[
+            {"label": "Network", "href": "/admin/network"},
+            {"label": "Routers", "href": "/admin/network/routers"},
+            {"label": "Templates", "href": "/admin/network/routers/templates"},
+            {"label": ('Edit ' ~ template.name) if template else 'New Template'}
+        ]
+    ) %}{% endcall %}
+
+    <div class="animate-fade-in-up" style="animation-delay: 50ms;">
+    {% call card("Template Details", color="teal") %}
+    <form method="post"
+          action="{{ '/admin/network/routers/templates/' ~ template.id ~ '/edit' if template else '/admin/network/routers/templates/new' }}"
+          class="space-y-6 max-w-2xl">
+        {% include "components/forms/csrf_input.html" %}
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Name <span class="text-red-500">*</span></label>
+            <input type="text" name="name" value="{{ template.name if template else '' }}" required
+                   placeholder="e.g., NTP Sync, Queue Config"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description</label>
+            <input type="text" name="description"
+                   value="{{ template.description if template and template.description else '' }}"
+                   placeholder="Brief description of what this template does"
+                   class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Category</label>
+            <select name="category"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                {% for cat in ['firewall', 'queue', 'address_list', 'routing', 'dns', 'ntp', 'snmp', 'system', 'custom'] %}
+                <option value="{{ cat }}" {{ 'selected' if template and template.category.value == cat }}>
+                    {{ cat | replace('_', ' ') | capitalize }}
+                </option>
+                {% endfor %}
+            </select>
+        </div>
+
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">
+                Template Body <span class="text-red-500">*</span>
+                <span class="text-xs font-normal text-slate-500 dark:text-slate-400 ml-1">(Jinja2, one command per line)</span>
+            </label>
+            <textarea name="template_body" rows="12" required
+                      class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                      placeholder="/system ntp client set enabled=yes servers={{ '{{' }} ntp_server {{ '}}' }}&#10;/system ntp client set mode=unicast">{{ template.template_body if template else '' }}</textarea>
+            <div class="mt-2 rounded-lg bg-slate-50 dark:bg-slate-900/50 px-3 py-2 text-xs text-slate-500 dark:text-slate-400 space-y-1">
+                <p class="font-medium text-slate-600 dark:text-slate-300">Template syntax:</p>
+                <p>Use <code class="font-mono">{{ '{{' }} variable_name {{ '}}' }}</code> for substitutable variables.</p>
+                <p>Use <code class="font-mono">{% raw %}{% if condition %}{% endraw %}</code> for conditional blocks.</p>
+                <p>Variables can be set at push time via the API.</p>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-2">
+            <input type="checkbox" id="is_active" name="is_active" value="1"
+                   {{ 'checked' if not template or template.is_active }}
+                   class="rounded border-slate-300 text-teal-600 focus:ring-teal-500">
+            <label for="is_active" class="text-sm font-medium text-slate-700 dark:text-slate-300">Active (available for push wizard)</label>
+        </div>
+
+        <div class="flex gap-3 pt-2">
+            <button type="submit"
+                    class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-emerald-600 px-6 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-emerald-700 hover:-translate-y-0.5 transition-all">
+                {{ 'Update Template' if template else 'Create Template' }}
+            </button>
+            <a href="/admin/network/routers/templates"
+               class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-6 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                Cancel
+            </a>
+        </div>
+    </form>
+    {% endcall %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}

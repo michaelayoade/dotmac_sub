@@ -1,0 +1,161 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, status_badge, empty_state, animation_styles %}
+
+{% block title %}Routers - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("blue", "indigo") }}
+<div class="relative space-y-8">
+    {# Back link #}
+    <div>
+        <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Network
+        </a>
+    </div>
+
+    {% call page_header(
+        title="Routers",
+        subtitle="MikroTik router inventory and configuration management",
+        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3H5a2 2 0 00-2 2v4m6-6h10a2 2 0 012 2v4M9 3v18m0 0h10a2 2 0 002-2V9M9 21H5a2 2 0 01-2-2V9m0 0h18"/></svg>',
+        color="blue",
+        color2="indigo",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "Routers"}]
+    ) %}
+        <div class="flex items-center gap-2">
+            <a href="/admin/network/routers/dashboard"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                Dashboard
+            </a>
+            <a href="/admin/network/routers/templates"
+               class="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
+                Templates
+            </a>
+            <a href="/admin/network/routers/new"
+               class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                Add Router
+            </a>
+        </div>
+    {% endcall %}
+
+    {# Summary cards #}
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {% for key, label, color in [
+            ('online', 'Online', 'emerald'),
+            ('offline', 'Offline', 'slate'),
+            ('degraded', 'Degraded', 'amber'),
+            ('maintenance', 'Maintenance', 'blue'),
+            ('unreachable', 'Unreachable', 'rose'),
+        ] %}
+        <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 text-center shadow-sm">
+            <div class="text-2xl font-bold text-{{ color }}-600 dark:text-{{ color }}-400">{{ summary.get(key, 0) }}</div>
+            <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ label }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
+    {# Filters #}
+    <div class="animate-fade-in-up" style="animation-delay: 75ms;">
+        <form method="get" class="flex flex-col gap-3 sm:flex-row sm:items-end sm:flex-wrap">
+            <div class="flex-1 min-w-[200px]">
+                <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Search</label>
+                <input type="text" name="search" value="{{ search or '' }}" placeholder="Name, IP, location..."
+                       class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div class="w-44">
+                <label class="block text-xs font-medium text-slate-700 dark:text-slate-300 mb-1">Status</label>
+                <select name="status" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All Statuses</option>
+                    {% for s in ['online', 'offline', 'degraded', 'maintenance', 'unreachable'] %}
+                    <option value="{{ s }}" {{ 'selected' if status_filter == s }}>{{ s | capitalize }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="flex gap-2">
+                <button type="submit" class="inline-flex h-[38px] items-center justify-center rounded-lg bg-blue-600 px-4 text-sm font-medium text-white hover:bg-blue-700">Filter</button>
+                {% if search or status_filter %}
+                <a href="/admin/network/routers" class="inline-flex h-[38px] items-center justify-center rounded-lg border border-slate-300 px-4 text-sm font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-400 dark:hover:bg-slate-700">Clear</a>
+                {% endif %}
+            </div>
+        </form>
+    </div>
+
+    {# Router table #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Routers (" ~ summary.get('total', 0) ~ ")", color="blue") %}
+    {% if routers %}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead>
+                <tr class="border-b border-slate-200 dark:border-slate-700 text-left text-slate-500 dark:text-slate-400">
+                    <th class="pb-3 pr-4 font-medium">Name</th>
+                    <th class="pb-3 pr-4 font-medium">IP</th>
+                    <th class="pb-3 pr-4 font-medium">Version</th>
+                    <th class="pb-3 pr-4 font-medium">Status</th>
+                    <th class="pb-3 pr-4 font-medium">Access</th>
+                    <th class="pb-3 pr-4 font-medium">Location</th>
+                    <th class="pb-3 font-medium">Last Seen</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for r in routers %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+                    <td class="py-3 pr-4">
+                        <a href="/admin/network/routers/{{ r.id }}" class="font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">{{ r.name }}</a>
+                        {% if r.board_name %}
+                        <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{{ r.board_name }}</p>
+                        {% endif %}
+                    </td>
+                    <td class="py-3 pr-4 font-mono text-xs text-slate-600 dark:text-slate-300">{{ r.management_ip }}</td>
+                    <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.routeros_version or '—' }}</td>
+                    <td class="py-3 pr-4">
+                        {% set status_colors = {'online': 'active', 'offline': 'neutral', 'degraded': 'warning', 'maintenance': 'neutral', 'unreachable': 'error'} %}
+                        {{ status_badge(r.status.value | capitalize, status_colors.get(r.status.value, 'neutral'), pulse=(r.status.value == 'online'), size="sm") }}
+                    </td>
+                    <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.access_method.value | replace('_', ' ') | capitalize }}</td>
+                    <td class="py-3 pr-4 text-slate-600 dark:text-slate-300">{{ r.location or '—' }}</td>
+                    <td class="py-3 text-slate-500 dark:text-slate-400 text-xs">{{ r.last_seen_at.strftime('%Y-%m-%d %H:%M') if r.last_seen_at else '—' }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {# Pagination #}
+    {% if pagination and pagination.total_pages > 1 %}
+    <div class="mt-4 flex flex-col items-center justify-between gap-4 sm:flex-row">
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+            Showing {{ (pagination.page - 1) * 25 + 1 }} to {{ [pagination.page * 25, pagination.total]|min }} of {{ pagination.total }} routers
+        </p>
+        <div class="flex items-center gap-2">
+            {% if pagination.has_prev %}
+            <a href="?page={{ pagination.page - 1 }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+               class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Previous</a>
+            {% endif %}
+            <span class="text-sm text-slate-600 dark:text-slate-400">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+            {% if pagination.has_next %}
+            <a href="?page={{ pagination.page + 1 }}{% if search %}&search={{ search }}{% endif %}{% if status_filter %}&status={{ status_filter }}{% endif %}"
+               class="inline-flex items-center rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Next</a>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+    {% else %}
+    {{ empty_state(
+        "No Routers Found",
+        "Add your first MikroTik router to start managing configurations.",
+        action_label="Add Router",
+        action_href="/admin/network/routers/new"
+    ) }}
+    {% endif %}
+    {% endcall %}
+    </div>
+</div>
+
+{{ animation_styles() }}
+{% endblock %}
