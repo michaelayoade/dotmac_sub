@@ -23,7 +23,7 @@ from app.schemas.router_management import (
     RouterUpdate,
 )
 from app.services.common import apply_ordering, apply_pagination
-from app.services.credential_crypto import encrypt_credential
+from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -154,6 +154,61 @@ class RouterInventory(ListResponseMixin):
         logger.info("Router soft-deleted: %s (%s)", router.name, router.id)
 
     @staticmethod
+    def sync_system_info(db: Session, router: Router) -> None:
+        """Fetch /system/resource and /system/routerboard then persist to the router row."""
+        from app.services.router_management.connection import RouterConnectionService
+
+        sys_data = RouterConnectionService.execute(router, "GET", "/system/resource")
+        rb_data = RouterConnectionService.execute(router, "GET", "/system/routerboard")
+
+        router.routeros_version = sys_data.get("version")
+        router.board_name = sys_data.get("board-name") or rb_data.get("model")
+        router.architecture = sys_data.get("architecture-name")
+        router.serial_number = rb_data.get("serial-number")
+        router.firmware_type = rb_data.get("firmware-type")
+        router.status = RouterStatus.online
+        router.last_seen_at = datetime.now(UTC)
+        db.commit()
+        logger.info("System info synced for router %s (%s)", router.name, router.id)
+
+    @staticmethod
+    def sync_interfaces(db: Session, router: Router) -> None:
+        """Fetch /interface and upsert into the database."""
+        from app.services.router_management.connection import RouterConnectionService
+
+        iface_data = RouterConnectionService.execute(router, "GET", "/interface")
+        if isinstance(iface_data, list):
+            interfaces = [
+                {
+                    "name": i.get("name", ""),
+                    "type": i.get("type", "ether"),
+                    "mac_address": i.get("mac-address"),
+                    "is_running": i.get("running", "false") == "true",
+                    "is_disabled": i.get("disabled", "false") == "true",
+                    "rx_byte": int(i.get("rx-byte", 0)),
+                    "tx_byte": int(i.get("tx-byte", 0)),
+                    "rx_packet": int(i.get("rx-packet", 0)),
+                    "tx_packet": int(i.get("tx-packet", 0)),
+                    "last_link_up_time": i.get("last-link-up-time"),
+                    "speed": i.get("actual-mtu"),
+                    "comment": i.get("comment"),
+                }
+                for i in iface_data
+            ]
+            RouterInventory.upsert_interfaces(db, router, interfaces)
+            logger.info("Interfaces synced for router %s (%s)", router.name, router.id)
+
+    @staticmethod
+    def list_interfaces(db: Session, router_id: uuid.UUID) -> list[RouterInterface]:
+        """Return all interfaces for the given router, ordered by name."""
+        query = (
+            select(RouterInterface)
+            .where(RouterInterface.router_id == router_id)
+            .order_by(RouterInterface.name)
+        )
+        return list(db.execute(query).scalars().all())
+
+    @staticmethod
     def upsert_interfaces(
         db: Session, router: Router, interfaces_data: list[dict]
     ) -> list[RouterInterface]:
@@ -257,3 +312,33 @@ class JumpHostInventory:
         jh.is_active = False
         db.commit()
         logger.info("Jump host soft-deleted: %s (%s)", jh.name, jh.id)
+
+    @staticmethod
+    def test_connection(db: Session, jh_id: uuid.UUID) -> dict:
+        """Open a test SSH tunnel to the jump host and immediately close it."""
+        from sshtunnel import SSHTunnelForwarder
+
+        jh = JumpHostInventory.get(db, jh_id)
+        try:
+            ssh_key = decrypt_credential(jh.ssh_key)
+            ssh_password = decrypt_credential(jh.ssh_password)
+            kwargs: dict = {"ssh_username": jh.username}
+            if ssh_key:
+                kwargs["ssh_pkey"] = ssh_key
+            elif ssh_password:
+                kwargs["ssh_password"] = ssh_password
+
+            tunnel = SSHTunnelForwarder(
+                (jh.hostname, jh.port),
+                remote_bind_address=("127.0.0.1", 22),
+                **kwargs,
+            )
+            tunnel.start()
+            tunnel.stop()
+            logger.info("Jump host connection test succeeded: %s (%s)", jh.name, jh.id)
+            return {"success": True, "message": "SSH connection successful"}
+        except Exception as exc:
+            logger.warning(
+                "Jump host connection test failed: %s (%s): %s", jh.name, jh.id, exc
+            )
+            return {"success": False, "message": str(exc)}

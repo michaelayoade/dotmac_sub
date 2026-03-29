@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import hashlib
 import logging
 import uuid
@@ -15,6 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.router_management import (
+    Router,
     RouterConfigPush,
     RouterConfigPushResult,
     RouterConfigPushStatus,
@@ -58,6 +61,27 @@ class RouterConfigService:
         db.refresh(snap)
         logger.info("Config snapshot stored for router %s: %s", router_id, snap.id)
         return snap
+
+    @staticmethod
+    def capture_from_router(
+        db: Session,
+        router: Router,
+    ) -> RouterConfigSnapshot:
+        """Connect to the router, export its config, and store the snapshot."""
+        from app.services.router_management.connection import RouterConnectionService
+
+        try:
+            data = RouterConnectionService.execute(router, "GET", "/export")
+            config_text = data if isinstance(data, str) else str(data)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to export config: {exc}") from exc
+
+        return RouterConfigService.store_snapshot(
+            db,
+            router_id=router.id,
+            config_export=config_text,
+            source=RouterSnapshotSource.manual,
+        )
 
     @staticmethod
     def list_snapshots(

@@ -45,6 +45,13 @@
 
     {# Summary cards #}
     <div class="grid grid-cols-2 md:grid-cols-5 gap-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {% set status_text_classes = {
+            'emerald': 'text-emerald-600 dark:text-emerald-400',
+            'slate':   'text-slate-600 dark:text-slate-400',
+            'amber':   'text-amber-600 dark:text-amber-400',
+            'blue':    'text-blue-600 dark:text-blue-400',
+            'rose':    'text-rose-600 dark:text-rose-400',
+        } %}
         {% for key, label, color in [
             ('online', 'Online', 'emerald'),
             ('offline', 'Offline', 'slate'),
@@ -53,7 +60,7 @@
             ('unreachable', 'Unreachable', 'rose'),
         ] %}
         <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-4 text-center shadow-sm">
-            <div class="text-2xl font-bold text-{{ color }}-600 dark:text-{{ color }}-400">{{ summary.get(key, 0) }}</div>
+            <div class="text-2xl font-bold {{ status_text_classes[color] }}">{{ summary.get(key, 0) }}</div>
             <div class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ label }}</div>
         </div>
         {% endfor %}

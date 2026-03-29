@@ -1,12 +1,9 @@
 import uuid
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.router_management import RouterInterface, RouterSnapshotSource
 from app.schemas.router_management import (
     ConnectionTestResult,
     JumpHostCreate,
@@ -156,45 +153,8 @@ def sync_router(
 ) -> dict:
     r = RouterInventory.get(db, router_id)
     try:
-        sys_data = RouterConnectionService.execute(r, "GET", "/system/resource")
-        rb_data = RouterConnectionService.execute(r, "GET", "/system/routerboard")
-
-        RouterInventory.update(
-            db,
-            r.id,
-            RouterUpdate(
-                status="online",
-            ),
-        )
-        r.routeros_version = sys_data.get("version")
-        r.board_name = sys_data.get("board-name") or rb_data.get("model")
-        r.architecture = sys_data.get("architecture-name")
-        r.serial_number = rb_data.get("serial-number")
-        r.firmware_type = rb_data.get("firmware-type")
-        r.last_seen_at = datetime.now(UTC)
-        db.commit()
-
-        iface_data = RouterConnectionService.execute(r, "GET", "/interface")
-        if isinstance(iface_data, list):
-            interfaces = [
-                {
-                    "name": i.get("name", ""),
-                    "type": i.get("type", "ether"),
-                    "mac_address": i.get("mac-address"),
-                    "is_running": i.get("running", "false") == "true",
-                    "is_disabled": i.get("disabled", "false") == "true",
-                    "rx_byte": int(i.get("rx-byte", 0)),
-                    "tx_byte": int(i.get("tx-byte", 0)),
-                    "rx_packet": int(i.get("rx-packet", 0)),
-                    "tx_packet": int(i.get("tx-packet", 0)),
-                    "last_link_up_time": i.get("last-link-up-time"),
-                    "speed": i.get("actual-mtu"),
-                    "comment": i.get("comment"),
-                }
-                for i in iface_data
-            ]
-            RouterInventory.upsert_interfaces(db, r, interfaces)
-
+        RouterInventory.sync_system_info(db, r)
+        RouterInventory.sync_interfaces(db, r)
         return {"detail": "Sync complete", "version": r.routeros_version}
     except Exception as exc:
         RouterInventory.update(db, r.id, RouterUpdate(status="unreachable"))
@@ -225,12 +185,7 @@ def list_router_interfaces(
     db: Session = Depends(get_db),
 ) -> dict:
     RouterInventory.get(db, router_id)
-    query = (
-        select(RouterInterface)
-        .where(RouterInterface.router_id == router_id)
-        .order_by(RouterInterface.name)
-    )
-    interfaces = list(db.execute(query).scalars().all())
+    interfaces = RouterInventory.list_interfaces(db, router_id)
     return {"items": [RouterInterfaceRead.model_validate(i) for i in interfaces]}
 
 
@@ -265,17 +220,9 @@ def capture_snapshot(
 ) -> RouterConfigSnapshotRead:
     r = RouterInventory.get(db, router_id)
     try:
-        data = RouterConnectionService.execute(r, "GET", "/export")
-        config_text = data if isinstance(data, str) else str(data)
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Failed to export config: {exc}")
-
-    snap = RouterConfigService.store_snapshot(
-        db,
-        router_id=r.id,
-        config_export=config_text,
-        source=RouterSnapshotSource.manual,
-    )
+        snap = RouterConfigService.capture_from_router(db, r)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
     return RouterConfigSnapshotRead.model_validate(snap)
 
 
@@ -491,30 +438,7 @@ def test_jump_host(
     jh_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> dict:
-    from sshtunnel import SSHTunnelForwarder
-
-    from app.services.credential_crypto import decrypt_credential
-
-    jh = JumpHostInventory.get(db, jh_id)
-    try:
-        kwargs: dict = {"ssh_username": jh.username}
-        ssh_key = decrypt_credential(jh.ssh_key)
-        ssh_password = decrypt_credential(jh.ssh_password)
-        if ssh_key:
-            kwargs["ssh_pkey"] = ssh_key
-        elif ssh_password:
-            kwargs["ssh_password"] = ssh_password
-
-        tunnel = SSHTunnelForwarder(
-            (jh.hostname, jh.port),
-            remote_bind_address=("127.0.0.1", 22),
-            **kwargs,
-        )
-        tunnel.start()
-        tunnel.stop()
-        return {"success": True, "message": "SSH connection successful"}
-    except Exception as exc:
-        return {"success": False, "message": str(exc)}
+    return JumpHostInventory.test_connection(db, jh_id)
 
 
 # --- Dashboard ---

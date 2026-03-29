@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from datetime import UTC, datetime
@@ -33,21 +34,7 @@ def sync_all_system_info() -> dict:
         failed = 0
         for router in routers:
             try:
-                sys_data = RouterConnectionService.execute(
-                    router, "GET", "/system/resource"
-                )
-                rb_data = RouterConnectionService.execute(
-                    router, "GET", "/system/routerboard"
-                )
-
-                router.routeros_version = sys_data.get("version")
-                router.board_name = sys_data.get("board-name") or rb_data.get("model")
-                router.architecture = sys_data.get("architecture-name")
-                router.serial_number = rb_data.get("serial-number")
-                router.firmware_type = rb_data.get("firmware-type")
-                router.status = RouterStatus.online
-                router.last_seen_at = datetime.now(UTC)
-                db.commit()
+                RouterInventory.sync_system_info(db, router)
                 success += 1
             except Exception as exc:
                 logger.warning("Failed to sync %s: %s", router.name, exc)
@@ -79,28 +66,7 @@ def sync_all_interfaces() -> dict:
         failed = 0
         for router in routers:
             try:
-                iface_data = RouterConnectionService.execute(
-                    router, "GET", "/interface"
-                )
-                if isinstance(iface_data, list):
-                    interfaces = [
-                        {
-                            "name": i.get("name", ""),
-                            "type": i.get("type", "ether"),
-                            "mac_address": i.get("mac-address"),
-                            "is_running": i.get("running", "false") == "true",
-                            "is_disabled": i.get("disabled", "false") == "true",
-                            "rx_byte": int(i.get("rx-byte", 0)),
-                            "tx_byte": int(i.get("tx-byte", 0)),
-                            "rx_packet": int(i.get("rx-packet", 0)),
-                            "tx_packet": int(i.get("tx-packet", 0)),
-                            "last_link_up_time": i.get("last-link-up-time"),
-                            "speed": i.get("actual-mtu"),
-                            "comment": i.get("comment"),
-                        }
-                        for i in iface_data
-                    ]
-                    RouterInventory.upsert_interfaces(db, router, interfaces)
+                RouterInventory.sync_interfaces(db, router)
                 success += 1
             except Exception as exc:
                 logger.warning("Failed to sync interfaces for %s: %s", router.name, exc)
@@ -191,11 +157,25 @@ def execute_config_push(push_id: str) -> dict:
                 result.pre_snapshot_id = pre_snap.id
                 db.commit()
 
+                # Commands are RouterOS REST API paths, optionally followed by
+                # a space-separated JSON payload string, e.g.:
+                #   "/ip/address/add" '{"address":"192.168.1.1/24","interface":"ether1"}'
                 responses = []
                 for cmd in push.commands:
                     parts = cmd.strip().split(" ", 1)
-                    path = parts[0] if parts else cmd
-                    resp = RouterConnectionService.execute(router, "POST", path)
+                    path = parts[0]
+                    payload: dict | None = None
+                    if len(parts) == 2:
+                        try:
+                            payload = json.loads(parts[1])
+                        except json.JSONDecodeError:
+                            logger.warning(
+                                "Could not parse payload for command %r — sending without payload",
+                                cmd,
+                            )
+                    resp = RouterConnectionService.execute(
+                        router, "POST", path, payload=payload
+                    )
                     responses.append(resp)
 
                 post_data = RouterConnectionService.execute(router, "GET", "/export")

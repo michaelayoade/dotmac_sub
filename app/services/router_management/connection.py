@@ -1,4 +1,5 @@
 import logging
+import threading
 import time
 
 import httpx
@@ -13,6 +14,8 @@ logger = logging.getLogger(__name__)
 DANGEROUS_COMMANDS = [
     "/system/reset-configuration",
     "/system/shutdown",
+    "/system/reboot",
+    "/disk/format-drive",
     "/file/remove",
     "/user/remove",
 ]
@@ -36,6 +39,7 @@ def check_dangerous_commands(commands: list[str]) -> None:
 
 class RouterConnectionService:
     _tunnels: dict[str, SSHTunnelForwarder] = {}
+    _lock = threading.Lock()
 
     @staticmethod
     def _build_base_url(management_ip: str, port: int, use_ssl: bool) -> str:
@@ -46,69 +50,72 @@ class RouterConnectionService:
     def _get_or_create_tunnel(
         cls, router: Router, jump_host: JumpHost
     ) -> SSHTunnelForwarder:
-        tunnel_key = f"{jump_host.id}:{router.management_ip}:{router.rest_api_port}"
+        with cls._lock:
+            tunnel_key = f"{jump_host.id}:{router.management_ip}:{router.rest_api_port}"
 
-        if tunnel_key in cls._tunnels:
-            tunnel = cls._tunnels[tunnel_key]
-            if tunnel.is_active:
-                return tunnel
-            del cls._tunnels[tunnel_key]
+            if tunnel_key in cls._tunnels:
+                tunnel = cls._tunnels[tunnel_key]
+                if tunnel.is_active:
+                    return tunnel
+                del cls._tunnels[tunnel_key]
 
-        ssh_key = decrypt_credential(jump_host.ssh_key)
-        ssh_password = decrypt_credential(jump_host.ssh_password)
+            ssh_key = decrypt_credential(jump_host.ssh_key)
+            ssh_password = decrypt_credential(jump_host.ssh_password)
 
-        kwargs: dict = {
-            "ssh_username": jump_host.username,
-            "remote_bind_address": (
+            kwargs: dict = {
+                "ssh_username": jump_host.username,
+                "remote_bind_address": (
+                    router.management_ip,
+                    router.rest_api_port,
+                ),
+            }
+            if ssh_key:
+                kwargs["ssh_pkey"] = ssh_key
+            elif ssh_password:
+                kwargs["ssh_password"] = ssh_password
+
+            tunnel = SSHTunnelForwarder(
+                (jump_host.hostname, jump_host.port),
+                **kwargs,
+            )
+            tunnel.start()
+            cls._tunnels[tunnel_key] = tunnel
+            logger.info(
+                "SSH tunnel opened: %s:%d -> localhost:%d via %s",
                 router.management_ip,
                 router.rest_api_port,
-            ),
-        }
-        if ssh_key:
-            kwargs["ssh_pkey"] = ssh_key
-        elif ssh_password:
-            kwargs["ssh_password"] = ssh_password
-
-        tunnel = SSHTunnelForwarder(
-            (jump_host.hostname, jump_host.port),
-            **kwargs,
-        )
-        tunnel.start()
-        cls._tunnels[tunnel_key] = tunnel
-        logger.info(
-            "SSH tunnel opened: %s:%d -> localhost:%d via %s",
-            router.management_ip,
-            router.rest_api_port,
-            tunnel.local_bind_port,
-            jump_host.hostname,
-        )
-        return tunnel
+                tunnel.local_bind_port,
+                jump_host.hostname,
+            )
+            return tunnel
 
     @classmethod
     def cleanup_idle_tunnels(cls) -> int:
-        closed = 0
-        dead_keys = []
-        for key, tunnel in cls._tunnels.items():
-            if not tunnel.is_active:
-                dead_keys.append(key)
-                closed += 1
-                continue
-        for key in dead_keys:
-            try:
-                cls._tunnels[key].stop()
-            except Exception:
-                pass
-            del cls._tunnels[key]
-        return closed
+        with cls._lock:
+            closed = 0
+            dead_keys = []
+            for key, tunnel in cls._tunnels.items():
+                if not tunnel.is_active:
+                    dead_keys.append(key)
+                    closed += 1
+                    continue
+            for key in dead_keys:
+                try:
+                    cls._tunnels[key].stop()
+                except Exception:
+                    pass
+                del cls._tunnels[key]
+            return closed
 
     @classmethod
     def close_all_tunnels(cls) -> None:
-        for tunnel in cls._tunnels.values():
-            try:
-                tunnel.stop()
-            except Exception:
-                pass
-        cls._tunnels.clear()
+        with cls._lock:
+            for tunnel in cls._tunnels.values():
+                try:
+                    tunnel.stop()
+                except Exception:
+                    pass
+            cls._tunnels.clear()
 
     @classmethod
     def get_client(cls, router: Router) -> httpx.Client:
