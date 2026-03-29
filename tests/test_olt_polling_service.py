@@ -52,6 +52,31 @@ def test_parse_signal_value_sentinel_is_none() -> None:
     assert value is None
 
 
+def test_ont_signal_reading_has_ddm_fields() -> None:
+    """OntSignalReading must include DDM health fields."""
+    from app.services.network.olt_polling import OntSignalReading
+
+    reading = OntSignalReading(
+        onu_index="0.1.3.5",
+        olt_rx_dbm=-19.5,
+        onu_rx_dbm=-21.0,
+        onu_tx_dbm=2.5,
+        distance_m=1200,
+        is_online=True,
+        temperature_c=42.0,
+        voltage_v=3.3,
+        bias_current_ma=15.2,
+        offline_reason_raw=None,
+        serial_number_raw=None,
+    )
+    assert reading.onu_tx_dbm == 2.5
+    assert reading.temperature_c == 42.0
+    assert reading.voltage_v == 3.3
+    assert reading.bias_current_ma == 15.2
+    assert reading.offline_reason_raw is None
+    assert reading.serial_number_raw is None
+
+
 def test_vendor_oids_include_ddm_keys() -> None:
     """All vendor OID maps must include DDM OID keys."""
     from app.services.network.olt_polling import _VENDOR_OID_OIDS, GENERIC_OIDS

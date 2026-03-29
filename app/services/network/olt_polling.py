@@ -210,8 +210,14 @@ class OntSignalReading:
     onu_index: str
     olt_rx_dbm: float | None
     onu_rx_dbm: float | None
+    onu_tx_dbm: float | None
     distance_m: int | None
     is_online: bool | None
+    temperature_c: float | None = None
+    voltage_v: float | None = None
+    bias_current_ma: float | None = None
+    offline_reason_raw: str | None = None
+    serial_number_raw: str | None = None
 
 
 def _split_onu_index(raw_index: str) -> tuple[str, ...] | None:
@@ -742,6 +748,7 @@ def poll_olt_ont_signals(
                     metric="onu_rx",
                     stats=parse_stats,
                 ),
+                onu_tx_dbm=None,
                 distance_m=_parse_distance(distance_raw.get(idx, "")),
                 is_online=_parse_online_status(status_raw.get(idx, "")),
             )
