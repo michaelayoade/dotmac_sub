@@ -44,10 +44,11 @@ from app.web.admin.network_fiber_plant import router as network_fiber_plant_rout
 from app.web.admin.network_fiber_splice import router as network_fiber_splice_router
 from app.web.admin.network_ip_management import router as network_ip_management_router
 from app.web.admin.network_monitoring import router as network_monitoring_router
-from app.web.admin.network_olts_onts import router as network_olts_onts_router
+from app.web.admin.network_olts import router as network_olts_router
 from app.web.admin.network_ont_provisioning_profiles import (
     router as network_ont_provisioning_profiles_router,
 )
+from app.web.admin.network_onts import router as network_onts_router
 from app.web.admin.network_onu_types import router as network_onu_types_router
 from app.web.admin.network_pop_sites import router as network_pop_sites_router
 from app.web.admin.network_radius import router as network_radius_router
@@ -215,7 +216,11 @@ router.include_router(
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
-    network_olts_onts_router,
+    network_olts_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
+)
+router.include_router(
+    network_onts_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(
