@@ -20,14 +20,24 @@ depends_on: Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    # Add new values to subscriberstatus enum
-    op.execute("ALTER TYPE subscriberstatus ADD VALUE IF NOT EXISTS 'new'")
-    op.execute("ALTER TYPE subscriberstatus ADD VALUE IF NOT EXISTS 'disabled'")
+    import sqlalchemy as sa
 
-    # Add new values to subscriptionstatus enum
-    op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'stopped'")
-    op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'disabled'")
-    op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'archived'")
+    bind = op.get_bind()
+    # Only add values if the enums already exist (may not on fresh DBs
+    # where the enum is created with all values in a later migration).
+    existing_enums = {
+        row[0]
+        for row in bind.execute(sa.text("SELECT typname FROM pg_type WHERE typtype = 'e'"))
+    }
+
+    if "subscriberstatus" in existing_enums:
+        op.execute("ALTER TYPE subscriberstatus ADD VALUE IF NOT EXISTS 'new'")
+        op.execute("ALTER TYPE subscriberstatus ADD VALUE IF NOT EXISTS 'disabled'")
+
+    if "subscriptionstatus" in existing_enums:
+        op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'stopped'")
+        op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'disabled'")
+        op.execute("ALTER TYPE subscriptionstatus ADD VALUE IF NOT EXISTS 'archived'")
 
 
 def downgrade() -> None:
