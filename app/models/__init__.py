@@ -466,3 +466,18 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeerStatus,
     WireGuardServer,
 )
+from app.models.router_management import (  # noqa: F401
+    JumpHost,
+    Router,
+    RouterAccessMethod,
+    RouterConfigPush,
+    RouterConfigPushResult,
+    RouterConfigPushStatus,
+    RouterConfigSnapshot,
+    RouterConfigTemplate,
+    RouterInterface,
+    RouterPushResultStatus,
+    RouterSnapshotSource,
+    RouterStatus,
+    RouterTemplateCategory,
+)

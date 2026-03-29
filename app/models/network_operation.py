@@ -58,6 +58,11 @@ class NetworkOperationType(enum.Enum):
     tr069_bootstrap = "tr069_bootstrap"
     wifi_update = "wifi_update"
     pppoe_push = "pppoe_push"
+    router_config_push = "router_config_push"
+    router_config_backup = "router_config_backup"
+    router_reboot = "router_reboot"
+    router_firmware_upgrade = "router_firmware_upgrade"
+    router_bulk_push = "router_bulk_push"
 
 
 class NetworkOperationTargetType(enum.Enum):
