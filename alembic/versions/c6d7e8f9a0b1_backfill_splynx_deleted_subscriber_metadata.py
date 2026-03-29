@@ -25,9 +25,13 @@ def _column_exists(bind, table_name: str, column_name: str) -> bool:
 
 
 def upgrade() -> None:
-    # Skip on fresh DBs where splynx_customer_id column doesn't exist yet
+    # Skip on fresh DBs where required columns don't exist yet
     bind = op.get_bind()
     if not _column_exists(bind, "subscribers", "splynx_customer_id"):
+        return
+    if not _column_exists(bind, "subscribers", "metadata"):
+        return
+    if not _column_exists(bind, "subscribers", "status"):
         return
 
     op.execute(
