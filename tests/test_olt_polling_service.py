@@ -165,3 +165,10 @@ def test_ddm_values_included_in_update_values() -> None:
     assert update_values["ont_temperature_c"] == 42.0
     assert update_values["ont_voltage_v"] == 3.3
     assert update_values["ont_bias_current_ma"] == 15.2
+
+
+def test_event_type_ont_ddm_alert_exists() -> None:
+    from app.services.events.types import EventType
+
+    assert hasattr(EventType, "ont_ddm_alert")
+    assert EventType.ont_ddm_alert.value == "ont.ddm_alert"

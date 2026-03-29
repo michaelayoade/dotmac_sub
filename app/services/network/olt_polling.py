@@ -208,6 +208,13 @@ _DEFAULT_SIGNAL_DELTA_DB = 3.0
 
 _DEFAULT_ALERT_COOLDOWN_MINUTES = 30
 
+# DDM health thresholds — alert when exceeded
+_DDM_TEMPERATURE_WARN_C = 65.0
+_DDM_TEMPERATURE_CRIT_C = 75.0
+_DDM_VOLTAGE_LOW_V = 3.0
+_DDM_VOLTAGE_HIGH_V = 3.6
+_DDM_BIAS_CURRENT_WARN_MA = 60.0
+
 
 def _get_alert_cooldown_seconds(db: Session) -> int:
     """Load signal alert cooldown from settings (in seconds)."""
@@ -1073,6 +1080,61 @@ def poll_olt_ont_signals(
                             )
                         )
 
+            # DDM health alerts — temperature, voltage, bias current
+            if (
+                reading.temperature_c is not None
+                and reading.temperature_c > _DDM_TEMPERATURE_WARN_C
+            ):
+                severity = (
+                    "critical"
+                    if reading.temperature_c > _DDM_TEMPERATURE_CRIT_C
+                    else "warning"
+                )
+                status_transitions.append(
+                    (
+                        ont,
+                        "ddm_alert",
+                        {
+                            "metric": "temperature",
+                            "value": reading.temperature_c,
+                            "unit": "C",
+                            "severity": severity,
+                        },
+                    )
+                )
+            if reading.voltage_v is not None and (
+                reading.voltage_v < _DDM_VOLTAGE_LOW_V
+                or reading.voltage_v > _DDM_VOLTAGE_HIGH_V
+            ):
+                status_transitions.append(
+                    (
+                        ont,
+                        "ddm_alert",
+                        {
+                            "metric": "voltage",
+                            "value": reading.voltage_v,
+                            "unit": "V",
+                            "severity": "warning",
+                        },
+                    )
+                )
+            if (
+                reading.bias_current_ma is not None
+                and reading.bias_current_ma > _DDM_BIAS_CURRENT_WARN_MA
+            ):
+                status_transitions.append(
+                    (
+                        ont,
+                        "ddm_alert",
+                        {
+                            "metric": "bias_current",
+                            "value": reading.bias_current_ma,
+                            "unit": "mA",
+                            "severity": "warning",
+                        },
+                    )
+                )
+
         except Exception as e:
             logger.error("Error updating ONT %s: %s", ont.id, e)
             errors += 1
@@ -1095,6 +1157,8 @@ def poll_olt_ont_signals(
                 emit_event(db, EventType.ont_signal_degraded, payload, actor="system")
             elif transition == "signal_delta":
                 emit_event(db, EventType.ont_signal_delta, payload, actor="system")
+            elif transition == "ddm_alert":
+                emit_event(db, EventType.ont_ddm_alert, payload, actor="system")
         except Exception as e:
             logger.warning("Failed to emit ONT %s event: %s", transition, e)
 

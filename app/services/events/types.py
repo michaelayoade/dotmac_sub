@@ -92,6 +92,7 @@ class EventType(enum.Enum):
     ont_config_updated = "ont.config_updated"
     ont_moved = "ont.moved"
     ont_feature_toggled = "ont.feature_toggled"
+    ont_ddm_alert = "ont.ddm_alert"
 
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
