@@ -36,11 +36,13 @@ def upgrade() -> None:
             sa.Column("snmp_version", sa.String(10), server_default="v2c", nullable=True),
         )
 
-    # Set snmp_enabled = true where snmp_ro_community is populated
-    op.execute(
-        "UPDATE olt_devices SET snmp_enabled = true "
-        "WHERE snmp_ro_community IS NOT NULL AND snmp_ro_community != ''"
-    )
+    # Set snmp_enabled = true where snmp_ro_community is populated (column may not exist)
+    existing = {c["name"] for c in inspector.get_columns("olt_devices")}
+    if "snmp_ro_community" in existing:
+        op.execute(
+            "UPDATE olt_devices SET snmp_enabled = true "
+            "WHERE snmp_ro_community IS NOT NULL AND snmp_ro_community != ''"
+        )
 
 
 def downgrade() -> None:
