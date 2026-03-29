@@ -61,8 +61,10 @@ def upgrade() -> None:
     # Commit the enum changes so they can be used in UPDATE statements
     op.execute("COMMIT")
 
-    # Skip data fixes on fresh DBs where splynx columns don't exist
+    # Skip data fixes on fresh DBs where splynx/metadata columns don't exist
     if not _column_exists(bind, "subscribers", "splynx_customer_id"):
+        return
+    if not _column_exists(bind, "subscribers", "metadata"):
         return
 
     # --- 3. Fix subscriber statuses based on Splynx metadata ---
