@@ -1402,6 +1402,10 @@ def _push_signal_metrics(db: Session) -> int:
             OntUnit.serial_number,
             OntUnit.olt_rx_signal_dbm,
             OntUnit.onu_rx_signal_dbm,
+            OntUnit.onu_tx_signal_dbm,
+            OntUnit.ont_temperature_c,
+            OntUnit.ont_voltage_v,
+            OntUnit.ont_bias_current_ma,
             OntUnit.online_status,
             OLTDevice.name.label("olt_name"),
             PonPort.name.label("pon_port_name"),
@@ -1448,6 +1452,14 @@ def _push_signal_metrics(db: Session) -> int:
             lines.append(f"ont_olt_rx_dbm{{{labels}}} {row.olt_rx_signal_dbm} {now_ms}")
         if row.onu_rx_signal_dbm is not None:
             lines.append(f"ont_onu_rx_dbm{{{labels}}} {row.onu_rx_signal_dbm} {now_ms}")
+        if row.onu_tx_signal_dbm is not None:
+            lines.append(f"ont_onu_tx_dbm{{{labels}}} {row.onu_tx_signal_dbm} {now_ms}")
+        if row.ont_temperature_c is not None:
+            lines.append(f"ont_temperature_c{{{labels}}} {row.ont_temperature_c} {now_ms}")
+        if row.ont_voltage_v is not None:
+            lines.append(f"ont_voltage_v{{{labels}}} {row.ont_voltage_v} {now_ms}")
+        if row.ont_bias_current_ma is not None:
+            lines.append(f"ont_bias_current_ma{{{labels}}} {row.ont_bias_current_ma} {now_ms}")
 
     # Aggregate status counts
     status_counts = db.execute(
