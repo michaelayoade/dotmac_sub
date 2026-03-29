@@ -88,12 +88,25 @@ def upgrade() -> None:
         ["system_user_id"],
         ["id"],
     )
-    op.alter_column("user_credentials", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
-    op.create_check_constraint(
-        "ck_user_credentials_exactly_one_principal",
-        "user_credentials",
-        "(subscriber_id IS NOT NULL) <> (system_user_id IS NOT NULL)",
-    )
+    # subscriber_id may still be named person_id if the rename migration
+    # hasn't run yet (fresh DB ordering). Handle both cases.
+    bind = op.get_bind()
+    uc_cols = {c["name"] for c in sa.inspect(bind).get_columns("user_credentials")}
+    if "subscriber_id" in uc_cols:
+        op.alter_column("user_credentials", "subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        principal_col = "subscriber_id"
+    elif "person_id" in uc_cols:
+        op.alter_column("user_credentials", "person_id", new_column_name="subscriber_id", existing_type=postgresql.UUID(as_uuid=True), nullable=True)
+        principal_col = "subscriber_id"
+    else:
+        principal_col = None
+
+    if principal_col:
+        op.create_check_constraint(
+            "ck_user_credentials_exactly_one_principal",
+            "user_credentials",
+            f"({principal_col} IS NOT NULL) <> (system_user_id IS NOT NULL)",
+        )
 
     op.add_column(
         "mfa_methods",
