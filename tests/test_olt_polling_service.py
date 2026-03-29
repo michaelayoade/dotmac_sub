@@ -50,3 +50,15 @@ def test_parse_signal_value_huawei_onu_rx_offset_decoding() -> None:
 def test_parse_signal_value_sentinel_is_none() -> None:
     value = _parse_signal_value("2147483647", vendor="huawei", metric="olt_rx")
     assert value is None
+
+
+def test_vendor_oids_include_ddm_keys() -> None:
+    """All vendor OID maps must include DDM OID keys."""
+    from app.services.network.olt_polling import _VENDOR_OID_OIDS, GENERIC_OIDS
+
+    ddm_keys = {"onu_tx", "temperature", "voltage", "bias_current"}
+    for vendor, oids in _VENDOR_OID_OIDS.items():
+        for key in ddm_keys:
+            assert key in oids, f"Vendor '{vendor}' missing OID key: {key}"
+    for key in ddm_keys:
+        assert key in GENERIC_OIDS, f"GENERIC_OIDS missing OID key: {key}"
