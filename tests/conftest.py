@@ -5,6 +5,7 @@ from datetime import UTC
 from typing import Any
 
 import pytest
+from geoalchemy2.admin.dialects import sqlite as geoalchemy_sqlite_admin
 from sqlalchemy import String, TypeDecorator, create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -119,6 +120,23 @@ def _patch_jsonb_for_sqlite():
 
 _patch_jsonb_for_sqlite()
 
+
+def _disable_sqlite_spatial_admin() -> None:
+    """Avoid GeoAlchemy Spatialite admin calls when mod_spatialite is unavailable."""
+
+    def _noop(*args, **kwargs):
+        return None
+
+    geoalchemy_sqlite_admin.after_create = _noop
+    geoalchemy_sqlite_admin.before_drop = _noop
+
+
+def _enable_sqlite_spatial_admin() -> None:
+    """Restore default GeoAlchemy SQLite admin hooks."""
+    import importlib
+
+    importlib.reload(geoalchemy_sqlite_admin)
+
 from app.models.catalog import AccessType, PriceBasis, RegionZone, ServiceType
 from app.models.subscriber import Subscriber
 from app.schemas.catalog import (
@@ -160,7 +178,9 @@ def engine():
             dbapi_connection.enable_load_extension(True)
             try:
                 dbapi_connection.load_extension("mod_spatialite")
+                _enable_sqlite_spatial_admin()
             except Exception:
+                _disable_sqlite_spatial_admin()
                 pass  # Spatialite not available, some tests may fail
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")

@@ -103,7 +103,7 @@ class RouterConnectionService:
                 try:
                     cls._tunnels[key].stop()
                 except Exception:
-                    pass
+                    logger.debug("Failed to stop dead tunnel during cleanup", exc_info=True)
                 del cls._tunnels[key]
             return closed
 
@@ -114,7 +114,7 @@ class RouterConnectionService:
                 try:
                     tunnel.stop()
                 except Exception:
-                    pass
+                    logger.debug("Failed to stop tunnel during shutdown", exc_info=True)
             cls._tunnels.clear()
 
     @classmethod

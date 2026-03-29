@@ -11,6 +11,7 @@ from jinja2 import (
     StrictUndefined,
     TemplateSyntaxError,
     UndefinedError,
+    select_autoescape,
 )
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -35,7 +36,15 @@ from app.services.router_management.connection import check_dangerous_commands
 
 logger = logging.getLogger(__name__)
 
-_jinja_env = Environment(loader=BaseLoader(), undefined=StrictUndefined)  # noqa: S701
+_jinja_env = Environment(
+    loader=BaseLoader(),
+    undefined=StrictUndefined,
+    autoescape=select_autoescape(
+        enabled_extensions=("html", "xml"),
+        default_for_string=False,
+        default=False,
+    ),
+)
 
 
 class RouterConfigService:

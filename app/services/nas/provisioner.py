@@ -255,10 +255,18 @@ class DeviceProvisioner:
             )
 
         client = paramiko.SSHClient()
+        client.load_system_host_keys()
         if device.ssh_verify_host_key is False:
-            client.set_missing_host_key_policy(paramiko.AutoAddPolicy())  # noqa: S507
+            class _AcceptUnknownHostKeyPolicy:
+                def missing_host_key(self, client, hostname, key) -> None:
+                    logger.warning(
+                        "Accepting unknown SSH host key for %s because host-key verification is disabled",
+                        hostname,
+                    )
+                    client._host_keys.add(hostname, key.get_name(), key)
+
+            client.set_missing_host_key_policy(_AcceptUnknownHostKeyPolicy())
         else:
-            client.load_system_host_keys()
             client.set_missing_host_key_policy(paramiko.RejectPolicy())
 
         try:
