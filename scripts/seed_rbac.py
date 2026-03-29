@@ -185,6 +185,12 @@ DEFAULT_PERMISSIONS = [
     ("reports:operations", "View operations reports"),
     ("reports:subscribers", "View subscriber reports"),
 
+    # Router Management
+    ("router:read", "View routers, templates, push history, snapshots"),
+    ("router:write", "Create/edit routers, templates, trigger sync/snapshots"),
+    ("router:push_config", "Execute config pushes and rollbacks"),
+    ("router:admin", "Manage jump hosts, delete routers"),
+
     # Legacy broad permissions (for backward compatibility)
     ("billing:read", "Read all billing data"),
     ("billing:write", "Manage all billing data"),
