@@ -275,13 +275,6 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['account_id'], ['subscriber_accounts.id'], ),
-    sa.ForeignKeyConstraint(['address_id'], ['addresses.id'], ),
-    sa.ForeignKeyConstraint(['approved_quote_id'], ['project_quotes.id'], ),
-    sa.ForeignKeyConstraint(['assigned_vendor_id'], ['vendors.id'], ),
-    sa.ForeignKeyConstraint(['buildout_project_id'], ['buildout_projects.id'], ),
-    sa.ForeignKeyConstraint(['created_by_person_id'], ['people.id'], ),
-    sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
     sa.PrimaryKeyConstraint('id'),
     sa.UniqueConstraint('project_id', name='uq_installation_projects_project')
     )
@@ -527,10 +520,6 @@ def upgrade() -> None:
     sa.Column('is_active', sa.Boolean(), nullable=False),
     sa.Column('created_at', sa.DateTime(timezone=True), nullable=False),
     sa.Column('updated_at', sa.DateTime(timezone=True), nullable=False),
-    sa.ForeignKeyConstraint(['created_by_person_id'], ['people.id'], ),
-    sa.ForeignKeyConstraint(['project_id'], ['installation_projects.id'], ),
-    sa.ForeignKeyConstraint(['reviewed_by_person_id'], ['people.id'], ),
-    sa.ForeignKeyConstraint(['vendor_id'], ['vendors.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
     op.create_table('project_task_status_transitions',
@@ -3290,6 +3279,19 @@ def upgrade() -> None:
     op.drop_index('tige_cousub_the_geom_gist', table_name='cousub', postgresql_using='gist')
     op.drop_table('cousub')
     op.drop_table('state_lookup')
+
+    # Deferred FK constraints for tables with circular/forward references
+    op.create_foreign_key('fk_installation_projects_account_id', 'installation_projects', 'subscriber_accounts', ['account_id'], ['id'])
+    op.create_foreign_key('fk_installation_projects_address_id', 'installation_projects', 'addresses', ['address_id'], ['id'])
+    op.create_foreign_key('fk_installation_projects_approved_quote_id', 'installation_projects', 'project_quotes', ['approved_quote_id'], ['id'])
+    op.create_foreign_key('fk_installation_projects_assigned_vendor_id', 'installation_projects', 'vendors', ['assigned_vendor_id'], ['id'])
+    op.create_foreign_key('fk_installation_projects_buildout_project_id', 'installation_projects', 'buildout_projects', ['buildout_project_id'], ['id'])
+    op.create_foreign_key('fk_installation_projects_created_by_person_id', 'installation_projects', 'people', ['created_by_person_id'], ['id'])
+    op.create_foreign_key('fk_installation_projects_project_id', 'installation_projects', 'projects', ['project_id'], ['id'])
+    op.create_foreign_key('fk_project_quotes_created_by_person_id', 'project_quotes', 'people', ['created_by_person_id'], ['id'])
+    op.create_foreign_key('fk_project_quotes_project_id', 'project_quotes', 'installation_projects', ['project_id'], ['id'])
+    op.create_foreign_key('fk_project_quotes_reviewed_by_person_id', 'project_quotes', 'people', ['reviewed_by_person_id'], ['id'])
+    op.create_foreign_key('fk_project_quotes_vendor_id', 'project_quotes', 'vendors', ['vendor_id'], ['id'])
     # ### end Alembic commands ###
 
 
