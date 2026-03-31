@@ -55,22 +55,6 @@ class OntFirmwareRequest(BaseModel):
     firmware_image_id: str
 
 
-class OntProvisionRequest(BaseModel):
-    profile_id: str
-    dry_run: bool = False
-    tr069_olt_profile_id: int | None = None
-    async_mode: bool = False
-
-
-class OntProvisionResponse(BaseModel):
-    success: bool
-    message: str
-    steps: list[dict[str, Any]] = []
-    commands_preview: list[dict[str, Any]] = []
-    dry_run: bool = False
-    task_id: str | None = None
-
-
 # ── Enriched read schemas ──────────────────────────────────────────────
 
 

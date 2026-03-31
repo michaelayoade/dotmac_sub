@@ -13,9 +13,11 @@ from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    OltCard,
     OltCardPort,
     OLTDevice,
     OltSfpModule,
+    OltShelf,
     OntAssignment,
     OntUnit,
     OnuOfflineReason,
@@ -213,10 +215,10 @@ def _build_reading_targets(
             by_fsp_hint.setdefault(fsp_hint, []).append(ont)
 
     used_ont_ids: set = set()
-    fallback_queue = list(ordered_onts)
     targets: list[tuple[OntUnit, OntSignalReading]] = []
     vendor_lower = str(getattr(olt, "vendor", "") or "").lower()
 
+    ambiguous_fsp_matches = 0
     for reading in sorted(readings, key=lambda r: _reading_sort_key(r.onu_index)):
         matched: OntUnit | None = None
 
@@ -240,24 +242,26 @@ def _build_reading_targets(
         if matched is None:
             fsp_hint = _fsp_hint_from_index(reading.onu_index)
             if fsp_hint:
-                for ont in by_fsp_hint.get(fsp_hint, []):
-                    if ont.id not in used_ont_ids:
-                        matched = ont
-                        break
-
-        # 3) Fallback to ordered ONT queue to preserve legacy behavior
-        if matched is None:
-            while fallback_queue:
-                candidate = fallback_queue.pop(0)
-                if candidate.id not in used_ont_ids:
-                    matched = candidate
-                    break
+                unmatched = [
+                    ont for ont in by_fsp_hint.get(fsp_hint, []) if ont.id not in used_ont_ids
+                ]
+                if len(unmatched) == 1:
+                    matched = unmatched[0]
+                elif len(unmatched) > 1:
+                    ambiguous_fsp_matches += 1
 
         if matched is None:
             continue
 
         used_ont_ids.add(matched.id)
         targets.append((matched, reading))
+
+    if ambiguous_fsp_matches:
+        logger.warning(
+            "Skipped %d SNMP readings on OLT %s due to ambiguous FSP-only matches",
+            ambiguous_fsp_matches,
+            getattr(olt, "name", "unknown"),
+        )
 
     return targets
 
@@ -918,21 +922,35 @@ def poll_sfp_modules(
         db.scalars(
             select(OltSfpModule)
             .join(OltCardPort, OltSfpModule.olt_card_port_id == OltCardPort.id)
+            .join(OltCard, OltCardPort.card_id == OltCard.id)
+            .join(OltShelf, OltCard.shelf_id == OltShelf.id)
             .where(OltCardPort.is_active.is_(True))
+            .where(OltShelf.olt_id == olt.id)
         ).all()
     )
 
     updated_count = 0
     for sfp in sfp_modules:
-        port_idx = str(sfp.olt_card_port_id)[:8]  # Simplified matching
+        port = sfp.olt_card_port
+        if not port or port.port_number is None:
+            continue
+        card = port.card
+        slot_number = card.slot_number if card else None
+        candidate_indexes = {
+            str(port.port_number),
+            f"{slot_number}.{port.port_number}" if slot_number is not None else "",
+        }
+        candidate_indexes.discard("")
+        tx_key = next((idx for idx in candidate_indexes if idx in tx_raw), None)
+        rx_key = next((idx for idx in candidate_indexes if idx in rx_raw), None)
         tx_val = (
-            _parse_signal_value(tx_raw.get(port_idx, ""), 0.01)
-            if port_idx in tx_raw
+            _parse_signal_value(tx_raw.get(tx_key, ""), 0.01)
+            if tx_key is not None
             else None
         )
         rx_val = (
-            _parse_signal_value(rx_raw.get(port_idx, ""), 0.01)
-            if port_idx in rx_raw
+            _parse_signal_value(rx_raw.get(rx_key, ""), 0.01)
+            if rx_key is not None
             else None
         )
         if tx_val is not None:

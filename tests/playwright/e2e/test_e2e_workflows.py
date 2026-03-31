@@ -436,11 +436,11 @@ class TestWorkOrderExecution:
         overview.expect_loaded()
 
 
-class TestNetworkProvisioning:
-    """Tests for network provisioning workflow."""
+class TestNetworkOperations:
+    """Tests for manual network operations workflow."""
 
-    def test_ont_provisioning_flow(self, admin_page: Page, settings):
-        """Complete flow: OLT -> ONT -> IP -> Service."""
+    def test_ont_operations_flow(self, admin_page: Page, settings):
+        """Manual flow: OLT -> ONT -> IP -> Service."""
         from tests.playwright.pages.admin.network.olts_page import OLTsPage
 
         olts = OLTsPage(admin_page, settings.base_url)

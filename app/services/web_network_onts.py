@@ -142,8 +142,8 @@ def get_tr069_servers(db: Session) -> list[Tr069AcsServer]:
     return list(db.scalars(stmt).all())
 
 
-def get_provisioning_profiles(db: Session) -> list[Any]:
-    """Fetch active ONT provisioning profiles for form dropdowns."""
+def get_profile_templates(db: Session) -> list[Any]:
+    """Fetch active ONT profile templates for form dropdowns."""
     from app.models.network import OntProvisioningProfile
 
     stmt = (
@@ -157,7 +157,7 @@ def get_provisioning_profiles(db: Session) -> list[Any]:
 def ont_form_dependencies(
     db: Session, ont: OntUnit | Any | None = None
 ) -> dict[str, Any]:
-    """Build all dropdown data needed by the ONT provisioning form."""
+    """Build all dropdown data needed by the ONT configuration form."""
     return {
         "onu_types": get_onu_types(db),
         "olt_devices": get_olt_devices(db),

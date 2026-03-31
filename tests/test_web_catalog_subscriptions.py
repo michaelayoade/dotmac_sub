@@ -272,6 +272,34 @@ def test_subscription_form_context_prefers_service_address_tax_for_commercial_po
     assert rows["tax_rate"]["override"] == "Customer VAT (7.50%)"
 
 
+def test_subscription_form_context_exposes_plain_offer_labels(
+    db_session,
+    catalog_offer,
+):
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session,
+        {
+            "offer_id": str(catalog_offer.id),
+        },
+    )
+
+    option = next(
+        item for item in context["offer_options"] if item["id"] == str(catalog_offer.id)
+    )
+    assert option["name"] == catalog_offer.name
+    assert option["label"].startswith(catalog_offer.name)
+    assert isinstance(option["price_summary"], str)
+
+
+def test_subscription_form_context_exposes_json_safe_ipv4_blocks(db_session):
+    context = web_catalog_subscriptions_service.subscription_form_context(
+        db_session,
+        {},
+    )
+
+    assert isinstance(context["ipv4_blocks_json"], str)
+
+
 def test_subscription_detail_context_exposes_events_notifications_and_radius_sync(
     db_session,
     subscription,

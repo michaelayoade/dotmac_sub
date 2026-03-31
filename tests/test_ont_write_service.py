@@ -106,6 +106,40 @@ class TestUpdateManagementIp:
         mock_configure.assert_called_once()
         assert mock_configure.call_args.args[2] == 5
 
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write._resolve_olt_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_ssh_ont.configure_ont_iphost")
+    @patch("app.services.network.cpe.Vlans.get")
+    def test_accepts_prefixed_pon_port_name(
+        self,
+        mock_vlan_get,
+        mock_configure,
+        mock_get,
+        mock_resolve,
+        mock_emit,
+    ):
+        ont = MagicMock(external_id="generic:5")
+        assignment = MagicMock()
+        assignment.pon_port = MagicMock(name="pon-0/1/3")
+        assignment.pon_port.name = "pon-0/1/3"
+        mock_get.return_value = (ont, None)
+        mock_resolve.return_value = (MagicMock(), assignment, None)
+        mock_vlan_get.return_value = MagicMock(tag=203)
+        mock_configure.return_value = (True, "ok")
+        db = MagicMock()
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+            mgmt_vlan_id=FAKE_UUID,
+        )
+
+        assert result.success is True
+        assert mock_configure.call_args.args[1] == "0/1/3"
+        assert mock_configure.call_args.args[2] == 5
+
 
 class TestUpdateServicePort:
     @patch("app.services.network.ont_write._emit_ont_event")
@@ -139,6 +173,37 @@ class TestUpdateServicePort:
         mock_create.assert_called_once()
         assert mock_create.call_args.args[2] == 5
 
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write._resolve_olt_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_ssh_service_ports.create_single_service_port")
+    def test_accepts_prefixed_pon_port_name_and_generic_external_id(
+        self,
+        mock_create,
+        mock_get,
+        mock_resolve,
+        mock_emit,
+    ):
+        ont = MagicMock(external_id="generic:5")
+        assignment = MagicMock()
+        assignment.pon_port = MagicMock(name="pon-0/1/3")
+        assignment.pon_port.name = "pon-0/1/3"
+        mock_get.return_value = (ont, None)
+        mock_resolve.return_value = (MagicMock(), assignment, None)
+        mock_create.return_value = (True, "created")
+        db = MagicMock()
+
+        result = OntWriteService.update_service_port(
+            db,
+            "ont-1",
+            vlan_id=203,
+            gem_index=1,
+        )
+
+        assert result.success is True
+        assert mock_create.call_args.args[1] == "0/1/3"
+        assert mock_create.call_args.args[2] == 5
+
 
 class TestMoveOnt:
     """ONT move tests."""
@@ -154,3 +219,57 @@ class TestMoveOnt:
         )
         assert result.success is False
         assert "not found" in result.message.lower()
+
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    def test_move_updates_ont_olt_device_id(self, mock_get, mock_emit):
+        ont = MagicMock()
+        ont.id = "ont-1"
+        ont.olt_device_id = "old-olt"
+        mock_get.return_value = (ont, None)
+
+        target_port = MagicMock()
+        target_port.id = "pon-1"
+        target_port.olt_id = "new-olt"
+
+        current_assignment = MagicMock()
+        current_assignment.subscriber_id = "sub-1"
+        current_assignment.subscription_id = "subscr-1"
+
+        scalar_result = MagicMock()
+        scalar_result.first.return_value = current_assignment
+
+        db = MagicMock()
+        db.get.return_value = target_port
+        db.scalars.return_value = scalar_result
+
+        result = OntWriteService.move_ont(
+            db, "ont-1", target_pon_port_id=FAKE_UUID
+        )
+
+        assert result.success is True
+        assert ont.olt_device_id == "new-olt"
+        db.commit.assert_called_once()
+
+    def test_resolve_olt_context_prefers_assignment_pon_port_olt(self):
+        from app.services.network.ont_write import _resolve_olt_context
+
+        assignment_olt = MagicMock()
+        assignment = MagicMock()
+        assignment.pon_port = MagicMock()
+        assignment.pon_port.olt = assignment_olt
+
+        ont = MagicMock()
+        ont.id = "ont-1"
+        ont.olt_device = MagicMock()
+
+        scalar_result = MagicMock()
+        scalar_result.first.return_value = assignment
+        db = MagicMock()
+        db.scalars.return_value = scalar_result
+
+        olt, resolved_assignment, error = _resolve_olt_context(db, ont)
+
+        assert error is None
+        assert resolved_assignment is assignment
+        assert olt is assignment_olt

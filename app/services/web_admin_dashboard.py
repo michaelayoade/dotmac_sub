@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -63,32 +63,46 @@ def _is_user_actor(actor_type) -> bool:
 
 
 def _build_pon_interface_summary(db: Session) -> dict[str, int]:
-    """Return dashboard-friendly counts for PON-related monitoring interfaces."""
-    tokens = ("pon", "gpon", "epon", "xgpon", "xgs")
-    summary = {"up": 0, "down": 0, "unknown": 0, "total": 0}
+    """Return dashboard-friendly counts for PON-related monitoring interfaces.
 
-    rows = (
+    Uses SQL-level filtering and aggregation for performance.
+    """
+    # SQL ILIKE patterns for PON interfaces
+    pon_pattern = or_(
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%pon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%gpon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%epon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgpon%"),
+        func.lower(func.coalesce(DeviceInterface.name, "")).like("%xgs%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%pon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%gpon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%epon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgpon%"),
+        func.lower(func.coalesce(DeviceInterface.description, "")).like("%xgs%"),
+    )
+
+    counts = (
         db.query(
-            DeviceInterface.name, DeviceInterface.description, DeviceInterface.status
+            func.count(DeviceInterface.id).label("total"),
+            func.count(DeviceInterface.id)
+            .filter(DeviceInterface.status == InterfaceStatus.up)
+            .label("up"),
+            func.count(DeviceInterface.id)
+            .filter(DeviceInterface.status == InterfaceStatus.down)
+            .label("down"),
         )
         .join(NetworkDevice, NetworkDevice.id == DeviceInterface.device_id)
         .filter(NetworkDevice.is_active.is_(True))
-        .all()
+        .filter(pon_pattern)
+        .one()
     )
 
-    for name, description, status in rows:
-        text = f"{name or ''} {description or ''}".lower()
-        if not any(token in text for token in tokens):
-            continue
-        summary["total"] += 1
-        if status == InterfaceStatus.up:
-            summary["up"] += 1
-        elif status == InterfaceStatus.down:
-            summary["down"] += 1
-        else:
-            summary["unknown"] += 1
+    total = counts.total or 0
+    up = counts.up or 0
+    down = counts.down or 0
+    unknown = total - up - down
 
-    return summary
+    return {"up": up, "down": down, "unknown": unknown, "total": total}
 
 
 def _build_health_thresholds(db: Session) -> dict:
@@ -619,11 +633,25 @@ def dashboard_server_health_partial(request: Request, db: Session):
     )
 
 
-def dashboard_stats_partial(request: Request, db: Session):
+def _get_cached_dashboard_stats(db: Session) -> dict:
+    """Get dashboard stats with Redis caching (30 second TTL)."""
+    import json
+
+    from app.services.settings_cache import get_settings_redis
+
+    cache_key = "dashboard:stats_partial"
+    try:
+        r = get_settings_redis()
+        cached = r.get(cache_key)
+        if cached:
+            return json.loads(cached)
+    except Exception:
+        logger.debug("Dashboard cache read failed", exc_info=True)
+
+    # Cache miss - compute stats
     sub_stats = subscriber_service.subscribers.get_dashboard_stats(db)
     pon_interface_summary = _build_pon_interface_summary(db)
 
-    # Monthly revenue from billing stats
     monthly_revenue = 0
     try:
         from app.services import billing as _billing_svc
@@ -633,7 +661,6 @@ def dashboard_stats_partial(request: Request, db: Session):
     except Exception:
         logger.debug("Failed to load billing dashboard stats", exc_info=True)
 
-    # System uptime from network stats
     system_uptime = 0.0
     try:
         from app.services import network_monitoring as _net_mon_svc
@@ -656,6 +683,18 @@ def dashboard_stats_partial(request: Request, db: Session):
         "pon_interfaces_total": pon_interface_summary["total"],
     }
 
+    # Cache for 30 seconds
+    try:
+        r = get_settings_redis()
+        r.setex(cache_key, 30, json.dumps(stats))
+    except Exception:
+        logger.debug("Dashboard cache write failed", exc_info=True)
+
+    return stats
+
+
+def dashboard_stats_partial(request: Request, db: Session):
+    stats = _get_cached_dashboard_stats(db)
     return templates.TemplateResponse(
         "admin/dashboard/_stats.html",
         {"request": request, "stats": stats},

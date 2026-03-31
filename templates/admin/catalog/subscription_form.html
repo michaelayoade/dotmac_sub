@@ -139,9 +139,9 @@
                         <select name="offer_id" id="offer_id" required
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="" disabled {% if not subscription.offer_id %}selected{% endif %}>Select a plan</option>
-                            {% for offer in offers or [] %}
+                            {% for offer in offer_options or [] %}
                                 <option value="{{ offer.id }}" {% if subscription.offer_id == offer.id|string %}selected{% endif %}>
-                                    {{ offer.name }}{% if offer.prices and offer.prices|length > 0 %} - ₦{{ "{:,.0f}".format(offer.prices[0].amount) }}/mo{% endif %}
+                                    {{ offer.label }}
                                 </option>
                             {% endfor %}
                         </select>
@@ -576,7 +576,7 @@
 </div>
 <script>
 function subscriptionProvisioning() {
-    const blocks = {{ ipv4_blocks | tojson }};
+    const blocks = {{ ipv4_blocks_json | safe }};
     const initialAddresses = {{ initial_ipv4_addresses | tojson }};
     const initialBlocks = {{ initial_ipv4_block_ids | tojson }};
     const rows = initialAddresses.map((ip, idx) => ({

@@ -7,6 +7,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 from fastapi import HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import FdhCabinet
@@ -551,21 +552,35 @@ class NetworkDevices(ListResponseMixin):
         Returns:
             Dictionary with online/total counts, uptime_percentage,
             active_alarms, device_status_chart, and alarm severity breakdown.
+
+        All aggregations use SQL-level queries for performance.
         """
         from app.models.network_monitoring import AlertSeverity as Sev
         from app.models.network_monitoring import AlertStatus as AStatus
         from app.models.network_monitoring import DeviceStatus as DStatus
 
-        active_devices = (
-            db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
-        )
-        total_count = len(active_devices)
-        online_count = sum(1 for d in active_devices if d.status == DStatus.online)
-        degraded_count = sum(1 for d in active_devices if d.status == DStatus.degraded)
-        offline_count = sum(1 for d in active_devices if d.status == DStatus.offline)
-        maintenance_count = sum(
-            1 for d in active_devices if d.status == DStatus.maintenance
-        )
+        # Device counts using SQL aggregation
+        device_counts = db.query(
+            func.count(NetworkDevice.id).label("total"),
+            func.count(NetworkDevice.id)
+            .filter(NetworkDevice.status == DStatus.online)
+            .label("online"),
+            func.count(NetworkDevice.id)
+            .filter(NetworkDevice.status == DStatus.degraded)
+            .label("degraded"),
+            func.count(NetworkDevice.id)
+            .filter(NetworkDevice.status == DStatus.offline)
+            .label("offline"),
+            func.count(NetworkDevice.id)
+            .filter(NetworkDevice.status == DStatus.maintenance)
+            .label("maintenance"),
+        ).filter(NetworkDevice.is_active.is_(True)).one()
+
+        total_count = device_counts.total or 0
+        online_count = device_counts.online or 0
+        degraded_count = device_counts.degraded or 0
+        offline_count = device_counts.offline or 0
+        maintenance_count = device_counts.maintenance or 0
 
         uptime_percentage = (
             round(
@@ -583,13 +598,34 @@ class NetworkDevices(ListResponseMixin):
             "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
         }
 
-        # Active alarms by severity (AlertStatus: open/acknowledged/resolved)
-        open_alarms = db.query(Alert).filter(Alert.status == AStatus.open).all()
-        alarms_critical = sum(1 for a in open_alarms if a.severity == Sev.critical)
-        alarms_warning = sum(1 for a in open_alarms if a.severity == Sev.warning)
-        alarms_info = sum(1 for a in open_alarms if a.severity == Sev.info)
+        # Alarm counts using SQL aggregation
+        alarm_counts = db.query(
+            func.count(Alert.id)
+            .filter(Alert.severity == Sev.critical)
+            .label("critical"),
+            func.count(Alert.id)
+            .filter(Alert.severity == Sev.warning)
+            .label("warning"),
+            func.count(Alert.id).filter(Alert.severity == Sev.info).label("info"),
+        ).filter(Alert.status == AStatus.open).one()
 
-        # Top 5 critical alarms
+        alarms_critical = alarm_counts.critical or 0
+        alarms_warning = alarm_counts.warning or 0
+        alarms_info = alarm_counts.info or 0
+
+        # Top 5 critical/recent alarms - query only what we need
+        top_alarms = (
+            db.query(Alert)
+            .filter(Alert.status == AStatus.open)
+            .order_by(
+                # Critical first, then by created_at descending
+                (Alert.severity != Sev.critical).asc(),
+                Alert.created_at.desc(),
+            )
+            .limit(5)
+            .all()
+        )
+
         critical_alarms = [
             {
                 "id": str(a.id),
@@ -598,14 +634,7 @@ class NetworkDevices(ListResponseMixin):
                 "message": a.notes or "",
                 "created_at": a.created_at.isoformat() if a.created_at else None,
             }
-            for a in sorted(
-                open_alarms,
-                key=lambda a: (
-                    0 if a.severity == Sev.critical else 1,
-                    a.created_at or datetime.min.replace(tzinfo=UTC),
-                ),
-                reverse=True,
-            )[:5]
+            for a in top_alarms
         ]
 
         return {

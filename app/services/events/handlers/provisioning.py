@@ -44,9 +44,7 @@ class ProvisioningHandler:
         self._sync_radius_on_activation(db, str(subscription_id))
         # Step 3: Push NAS provisioning commands
         self._push_nas_provisioning(db, str(subscription_id))
-        # Step 4: Auto-provision assigned ONT if subscriber has one
-        self._auto_provision_ont(db, str(subscription_id))
-        # Step 5: Mark related service orders as active (completed)
+        # Step 4: Mark related service orders as active (completed)
         self._complete_service_orders(db, str(subscription_id))
 
     def _sync_radius_on_activation(self, db: Session, subscription_id: str) -> None:
@@ -137,114 +135,6 @@ class ProvisioningHandler:
         except Exception as exc:
             logger.warning(
                 "NAS provisioning failed for subscription %s: %s",
-                subscription_id,
-                exc,
-            )
-
-    def _auto_provision_ont(self, db: Session, subscription_id: str) -> None:
-        """Auto-provision the subscriber's assigned ONT when subscription activates.
-
-        Checks if the subscriber has an active ONT assignment and a provisioning
-        profile. If both exist, runs the ONT provisioning orchestrator.
-        """
-        try:
-            from app.models.catalog import Subscription
-            from app.models.network import OntAssignment
-
-            subscription = db.get(Subscription, coerce_uuid(subscription_id))
-            if not subscription:
-                return
-
-            # Find active ONT assignment for this subscriber
-            assignment = (
-                db.query(OntAssignment)
-                .filter(
-                    OntAssignment.subscriber_id == subscription.subscriber_id,
-                    OntAssignment.active.is_(True),
-                )
-                .first()
-            )
-            if not assignment:
-                logger.debug(
-                    "No ONT assignment for subscription %s — skipping auto-provision",
-                    subscription_id,
-                )
-                return
-
-            ont_id = str(assignment.ont_unit_id)
-
-            # Find provisioning profile (from ONT or default)
-            from app.models.network import OntUnit
-
-            ont = db.get(OntUnit, assignment.ont_unit_id)
-            if not ont:
-                return
-
-            profile_id = (
-                str(ont.provisioning_profile_id)
-                if ont.provisioning_profile_id
-                else None
-            )
-            if not profile_id:
-                # Try default profile from settings
-                from app.models.domain_settings import SettingDomain
-                from app.services import settings_spec
-
-                default_profile = settings_spec.resolve_value(
-                    db,
-                    SettingDomain.provisioning,
-                    "default_ont_provisioning_profile_id",
-                )
-                if default_profile:
-                    profile_id = str(default_profile)
-
-            if not profile_id:
-                # Try to find any active profile
-                from app.models.network import OntProvisioningProfile
-
-                fallback = (
-                    db.query(OntProvisioningProfile)
-                    .filter(OntProvisioningProfile.is_active.is_(True))
-                    .first()
-                )
-                if fallback:
-                    profile_id = str(fallback.id)
-
-            if not profile_id:
-                logger.debug(
-                    "No provisioning profile for ONT %s — skipping auto-provision",
-                    ont_id,
-                )
-                return
-
-            # Run orchestrator (non-dry-run)
-            from app.services.network.ont_provisioning_orchestrator import (
-                OntProvisioningOrchestrator,
-            )
-
-            result = OntProvisioningOrchestrator.provision_ont(
-                db,
-                ont_id,
-                profile_id,
-                dry_run=False,
-            )
-
-            if result.success:
-                logger.info(
-                    "Auto-provisioned ONT %s for subscription %s: %s",
-                    ont.serial_number,
-                    subscription_id,
-                    result.message,
-                )
-            else:
-                logger.warning(
-                    "ONT auto-provisioning failed for %s: %s",
-                    ont.serial_number,
-                    result.message,
-                )
-        except Exception as exc:
-            logger.warning(
-                "ONT auto-provisioning error for subscription %s: %s",
                 subscription_id,
                 exc,
             )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -944,6 +945,7 @@ def _build_map_payload(primary_address, customer_name: str):
                     "country_code": primary_address.country_code or "",
                 },
             }
+            geocode_target["payload_json"] = json.dumps(geocode_target["payload"])
     return map_data, geocode_target
 
 

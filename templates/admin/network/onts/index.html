@@ -21,7 +21,7 @@
     </div>
     {% call page_header(
         title="ONT Fleet",
-        subtitle="Inventory, diagnostics, and provisioning triage for optical network terminals",
+        subtitle="Inventory, diagnostics, and manual operations for optical network terminals",
         icon=icon_cpu(),
         color="blue",
         color2="indigo",
@@ -231,7 +231,7 @@
                         <input type="hidden" name="action" :value="bulkAction">
                         <input type="hidden" name="firmware_image_id" :value="firmwareImageId || ''">
                         <button type="submit" :disabled="!bulkAction || (bulkAction === 'firmware_upgrade' && !firmwareImageId)"
-                            x-on:click="if (bulkAction === 'factory_reset' && !confirm('Factory reset will ERASE ALL configuration on ' + selected.length + ' ONTs. Continue?')) $event.preventDefault(); if (bulkAction === 'return_to_inventory' && !confirm('Return ' + selected.length + ' ONTs to inventory? This will deactivate them, close active assignments, and clear provisioning/service state.')) $event.preventDefault(); if (bulkAction === 'firmware_upgrade' && !confirm('Push firmware to ' + selected.length + ' ONTs? Each will download and reboot.')) $event.preventDefault()"
+                            x-on:click="if (bulkAction === 'factory_reset' && !confirm('Factory reset will ERASE ALL configuration on ' + selected.length + ' ONTs. Continue?')) $event.preventDefault(); if (bulkAction === 'return_to_inventory' && !confirm('Return ' + selected.length + ' ONTs to inventory?')) $event.preventDefault(); if (bulkAction === 'firmware_upgrade' && !confirm('Push firmware to ' + selected.length + ' ONTs? Each will download and reboot.')) $event.preventDefault()"
                             class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                             Execute

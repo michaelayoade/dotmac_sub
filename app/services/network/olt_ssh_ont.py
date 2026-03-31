@@ -9,6 +9,59 @@ from app.models.network import OLTDevice
 logger = logging.getLogger(__name__)
 
 
+def _run_ont_config_command(
+    olt: OLTDevice,
+    fsp: str,
+    command: str,
+    *,
+    success_message: str,
+) -> tuple[bool, str]:
+    """Run a single ONT-scoped config command on a GPON interface."""
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    parts = fsp.split("/")
+    frame_slot = f"{parts[0]}/{parts[1]}"
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (core.SSHException, OSError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+    except Exception as exc:
+        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
+        return False, f"Unexpected error: {type(exc).__name__}"
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
+        output = core._run_huawei_cmd(channel, command, prompt=config_prompt)
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
+        if core.is_error_output(output):
+            logger.warning(
+                "ONT config command failed on OLT %s: %s",
+                olt.name,
+                output.strip()[-150:],
+            )
+            return False, f"OLT rejected: {output.strip()[-150:]}"
+        return True, success_message
+    except Exception as exc:
+        logger.error("Error running ONT config command on OLT %s: %s", olt.name, exc)
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
 def configure_ont_iphost(
     olt: OLTDevice,
     fsp: str,
@@ -86,6 +139,24 @@ def configure_ont_iphost(
         return False, f"Error: {exc}"
     finally:
         transport.close()
+
+
+def clear_ont_ipconfig(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Best-effort removal of ONT IP configuration for a given IP index."""
+    parts = fsp.split("/")
+    port_num = parts[2] if len(parts) > 2 else "0"
+    return _run_ont_config_command(
+        olt,
+        fsp,
+        f"undo ont ipconfig {port_num} {ont_id} ip-index {ip_index}",
+        success_message=f"ONT ipconfig cleared for ip-index {ip_index}",
+    )
 
 
 def get_ont_iphost_config(
@@ -253,6 +324,24 @@ def configure_ont_internet_config(
         transport.close()
 
 
+def clear_ont_internet_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Best-effort removal of ONT internet-config state."""
+    parts = fsp.split("/")
+    port_num = parts[2] if len(parts) > 2 else "0"
+    return _run_ont_config_command(
+        olt,
+        fsp,
+        f"undo ont internet-config {port_num} {ont_id} ip-index {ip_index}",
+        success_message=f"Internet config cleared for ip-index {ip_index}",
+    )
+
+
 def configure_ont_wan_config(
     olt: OLTDevice,
     fsp: str,
@@ -320,6 +409,24 @@ def configure_ont_wan_config(
         return False, f"Error: {exc}"
     finally:
         transport.close()
+
+
+def clear_ont_wan_config(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+    *,
+    ip_index: int = 0,
+) -> tuple[bool, str]:
+    """Best-effort removal of ONT wan-config state."""
+    parts = fsp.split("/")
+    port_num = parts[2] if len(parts) > 2 else "0"
+    return _run_ont_config_command(
+        olt,
+        fsp,
+        f"undo ont wan-config {port_num} {ont_id} ip-index {ip_index}",
+        success_message=f"WAN config cleared for ip-index {ip_index}",
+    )
 
 
 def configure_ont_pppoe_omci(
@@ -583,6 +690,68 @@ def remote_ping_ont(
         transport.close()
 
 
+def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
+    """Delete an ONT from the OLT so it can be rediscovered via autofind."""
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err
+
+    parts = fsp.split("/")
+    frame_slot = f"{parts[0]}/{parts[1]}"
+    port_num = parts[2]
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (core.SSHException, OSError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+    except Exception as exc:
+        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
+        return False, f"Unexpected error: {type(exc).__name__}"
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {frame_slot}", prompt=config_prompt
+        )
+
+        delete_out = core._run_huawei_cmd(
+            channel,
+            f"ont delete {port_num} {ont_id}",
+            prompt=r"[#)]\s*$|y/n|Y/N",
+        )
+        if "y/n" in delete_out.lower():
+            channel.send("y\n")
+            delete_out += core._read_until_prompt(
+                channel, config_prompt, timeout_sec=10
+            )
+
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
+        if core.is_error_output(delete_out):
+            logger.warning(
+                "ONT delete failed for %d on OLT %s: %s",
+                ont_id,
+                olt.name,
+                delete_out.strip()[-150:],
+            )
+            return False, f"OLT rejected: {delete_out.strip()[-150:]}"
+
+        logger.info("Deleted ONT %d from OLT %s on %s", ont_id, olt.name, fsp)
+        return True, f"ONT {ont_id} deleted from OLT"
+    except Exception as exc:
+        logger.error("Error deleting ONT on OLT %s: %s", olt.name, exc)
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
 def bind_tr069_server_profile(
     olt: OLTDevice, fsp: str, ont_id: int, profile_id: int
 ) -> tuple[bool, str]:
@@ -666,3 +835,19 @@ def bind_tr069_server_profile(
         return False, f"Error: {exc}"
     finally:
         transport.close()
+
+
+def unbind_tr069_server_profile(
+    olt: OLTDevice,
+    fsp: str,
+    ont_id: int,
+) -> tuple[bool, str]:
+    """Best-effort removal of an ONT TR-069 server profile binding."""
+    parts = fsp.split("/")
+    port_num = parts[2] if len(parts) > 2 else "0"
+    return _run_ont_config_command(
+        olt,
+        fsp,
+        f"undo ont tr069-server-config {port_num} {ont_id}",
+        success_message="TR-069 profile binding cleared",
+    )

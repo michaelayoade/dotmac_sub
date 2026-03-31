@@ -2,6 +2,7 @@
 
 import json
 import logging
+import re
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -22,13 +23,11 @@ from app.models.network import (
     ConfigMethod,
     GponChannel,
     IpProtocol,
-    MgmtIpMode,
     OnuMode,
     WanMode,
 )
 from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
-from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import (
     web_network_ont_assignments as web_network_ont_assignments_service,
@@ -102,7 +101,7 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
 
 
 def _ont_form_dependencies(db: Session, ont: Any | None = None) -> dict:
-    """Build all dropdown data needed by the ONT provisioning form."""
+    """Build all dropdown data needed by the ONT configuration form."""
     deps = web_network_onts_service.ont_form_dependencies(db, ont)
     deps["gpon_channels"] = [e.value for e in GponChannel]
     deps["onu_modes"] = [e.value for e in OnuMode]
@@ -132,6 +131,62 @@ def _form_float_or_none(form: FormData, key: str) -> float | None:
         return float(raw)
     except ValueError:
         return None
+
+
+def _normalize_iphost_key(value: str) -> str:
+    """Normalize OLT IPHOST labels for loose matching."""
+    return re.sub(r"[^a-z0-9]+", "", value.lower())
+
+
+def _iphost_value(
+    config: dict[str, str],
+    *patterns: str,
+) -> str | None:
+    """Return the first IPHOST value whose normalized key contains a pattern."""
+    if not config:
+        return None
+    normalized = {
+        _normalize_iphost_key(key): str(value).strip()
+        for key, value in config.items()
+        if value is not None
+    }
+    for pattern in patterns:
+        needle = _normalize_iphost_key(pattern)
+        for key, value in normalized.items():
+            if needle in key:
+                return value
+    return None
+
+
+def _initial_iphost_form(ont: Any, config: dict[str, str]) -> dict[str, str]:
+    """Build Management IP form defaults from live OLT config first, DB fallback second."""
+    live_mode = (_iphost_value(config, "ip mode", "address mode", "mode") or "").lower()
+    if "static" in live_mode:
+        ip_mode = "static"
+    elif "dhcp" in live_mode:
+        ip_mode = "dhcp"
+    elif getattr(ont, "mgmt_ip_mode", None) and getattr(ont.mgmt_ip_mode, "value", None) == "static_ip":
+        ip_mode = "static"
+    else:
+        ip_mode = "dhcp"
+
+    live_vlan = _iphost_value(config, "vlan", "vlan id") or ""
+    vlan_digits = re.search(r"\d+", live_vlan)
+    live_ip = _iphost_value(config, "ip address", "ip") or ""
+    subnet = _iphost_value(config, "subnet mask", "mask", "subnet") or ""
+    gateway = _iphost_value(config, "gateway") or ""
+
+    fallback_vlan = ""
+    if getattr(ont, "mgmt_vlan", None) and getattr(ont.mgmt_vlan, "tag", None) is not None:
+        fallback_vlan = str(ont.mgmt_vlan.tag)
+
+    return {
+        "ip_mode": ip_mode,
+        "vlan_id": vlan_digits.group(0) if vlan_digits else fallback_vlan,
+        "ip_address": live_ip or str(getattr(ont, "mgmt_ip_address", "") or ""),
+        "subnet": subnet,
+        "gateway": gateway,
+    }
 
 
 @router.get(
@@ -275,7 +330,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
         firmware_version=_form_str(form, "firmware_version").strip() or None,
         notes=_form_str(form, "notes").strip() or None,
         is_active=_form_str(form, "is_active") == "true",
-        # Imported / external provisioning fields
+        # Imported / external network inventory fields
         onu_type_id=_form_uuid_or_none(form, "onu_type_id"),
         olt_device_id=_form_uuid_or_none(form, "olt_device_id"),
         pon_type=_form_str(form, "pon_type").strip() or None,
@@ -393,7 +448,7 @@ def ont_detail(
         "tr069",
         "charts",
         "service-ports",
-        "provisioning",
+        "configuration",
     }
     active_tab = tab if tab in allowed_tabs else "overview"
 
@@ -407,8 +462,6 @@ def ont_detail(
             "Failed to load operation history for ONT %s", ont_id, exc_info=True
         )
         operations = []
-    profiles = web_network_onts_service.get_provisioning_profiles(db)
-
     context = _base_context(request, db, active_page="onts")
     context.update(
         {
@@ -416,7 +469,65 @@ def ont_detail(
             "activities": activities,
             "operations": operations,
             "ont_active_tab": active_tab,
-            "profiles": profiles,
+        }
+    )
+    return templates.TemplateResponse("admin/network/onts/detail.html", context)
+
+
+@router.get(
+    "/onts/{ont_id}/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_detail_preview(
+    request: Request,
+    ont_id: str,
+    tab: str = Query(default="overview"),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Temporary preview page for ONT detail layout experiments."""
+    page_data = web_network_core_devices_service.ont_detail_page_data(db, ont_id)
+    if not page_data:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": "ONT not found"},
+            status_code=404,
+        )
+
+    allowed_tabs = {
+        "overview",
+        "network",
+        "history",
+        "tr069",
+        "charts",
+        "service-ports",
+        "configuration",
+    }
+    active_tab = tab if tab in allowed_tabs else "overview"
+
+    activities = build_audit_activities(db, "ont", str(ont_id))
+    try:
+        operations = web_network_operations_service.build_operation_history(
+            db, "ont", str(ont_id)
+        )
+    except Exception:
+        logger.error(
+            "Failed to load operation history for ONT preview %s",
+            ont_id,
+            exc_info=True,
+        )
+        operations = []
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            **page_data,
+            **_ont_form_dependencies(db, page_data["ont"]),
+            "activities": activities,
+            "operations": operations,
+            "ont_active_tab": active_tab,
+            "preview_mode": True,
+            "preview_origin_url": f"/admin/network/onts/{ont_id}",
         }
     )
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
@@ -555,7 +666,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
         firmware_version=_form_str(form, "firmware_version").strip() or None,
         notes=_form_str(form, "notes").strip() or None,
         is_active=_form_str(form, "is_active") == "true",
-        # Imported / external provisioning fields
+        # Imported / external network inventory fields
         onu_type_id=_form_uuid_or_none(form, "onu_type_id"),
         olt_device_id=_form_uuid_or_none(form, "olt_device_id"),
         pon_type=_form_str(form, "pon_type").strip() or None,
@@ -628,7 +739,7 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
     return RedirectResponse(f"/admin/network/onts/{ont.id}", status_code=303)
 
 
-# -- ONU Mode / Mgmt IP Modals ------------------------------------------------
+# -- ONU Mode Modal -----------------------------------------------------------
 
 
 @router.get(
@@ -703,76 +814,6 @@ def ont_onu_mode_update(
         db=db,
         request=request,
         action="update_onu_mode",
-        entity_type="ont",
-        entity_id=str(ont_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"changes": changes} if changes else None,
-    )
-    return RedirectResponse(url=f"/admin/network/onts/{ont_id}", status_code=303)
-
-
-@router.get(
-    "/onts/{ont_id}/mgmt-ip",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_mgmt_ip_modal(
-    ont_id: str, request: Request, db: Session = Depends(get_db)
-) -> HTMLResponse:
-    """Serve management/VoIP IP modal partial."""
-    try:
-        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    except HTTPException:
-        raise HTTPException(status_code=404, detail="ONT not found")
-
-    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    context = {
-        "request": request,
-        "ont": ont,
-        "vlans": vlans,
-        "mgmt_ip_modes": [e.value for e in MgmtIpMode],
-    }
-    return templates.TemplateResponse("admin/network/onts/_mgmt_ip_modal.html", context)
-
-
-@router.post(
-    "/onts/{ont_id}/mgmt-ip",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_mgmt_ip_update(
-    ont_id: str, request: Request, db: Session = Depends(get_db)
-) -> RedirectResponse:
-    """Update management/VoIP IP configuration."""
-    from app.schemas.network import OntUnitUpdate
-
-    form = parse_form_data_sync(request)
-    payload = OntUnitUpdate(
-        mgmt_ip_mode=_form_str(form, "mgmt_ip_mode").strip() or None,
-        mgmt_vlan_id=_form_uuid_or_none(form, "mgmt_vlan_id"),
-        mgmt_ip_address=_form_str(form, "mgmt_ip_address").strip() or None,
-        mgmt_remote_access=_form_str(form, "mgmt_remote_access") == "true",
-        voip_enabled=_form_str(form, "voip_enabled") == "true",
-    )
-
-    try:
-        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    except HTTPException:
-        raise HTTPException(status_code=404, detail="ONT not found")
-
-    before_snapshot = model_to_dict(ont)
-    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-    after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    after_snapshot = model_to_dict(after)
-    changes = diff_dicts(before_snapshot, after_snapshot)
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update_mgmt_ip",
         entity_type="ont",
         entity_id=str(ont_id),
         actor_id=str(current_user.get("subscriber_id")) if current_user else None,
@@ -875,7 +916,7 @@ def ont_config(
 def ont_return_to_inventory(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> Response:
-    """Deactivate an ONT and reset it to reusable inventory state."""
+    """Release an ONT from the OLT and reset it to reusable inventory state."""
     try:
         ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
@@ -949,7 +990,7 @@ def ont_factory_reset(
 def ont_apply_profile(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Apply a provisioning profile to an ONT."""
+    """Apply a profile template to an ONT as an explicit manual action."""
     form = parse_form_data_sync(request)
     profile_id = _form_str(form, "profile_id")
     if not profile_id:
@@ -1592,123 +1633,10 @@ def ont_iphost_config(
             "iphost_config": config,
             "iphost_ok": ok,
             "iphost_msg": msg,
+            "initial_iphost_form": _initial_iphost_form(ont, config),
             "vlans": vlans,
             "tr069_profiles": tr069_profiles,
             "tr069_profiles_error": tr069_profiles_error,
         }
     )
     return templates.TemplateResponse("admin/network/onts/_mgmt_config.html", context)
-
-
-# -- ONT provisioning preview and execution ------------------------------------
-
-
-@router.get(
-    "/onts/{ont_id}/provisioning-preview",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_provisioning_preview(
-    request: Request,
-    ont_id: str,
-    profile_id: str = Query(...),
-    tr069_profile_id: int | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """HTMX partial: Command preview for provisioning an ONT."""
-    data = web_network_olt_profiles_service.command_preview_context(
-        db, ont_id, profile_id, tr069_olt_profile_id=tr069_profile_id
-    )
-    context = _base_context(request, db, active_page="onts")
-    context.update(data)
-    return templates.TemplateResponse(
-        "admin/network/onts/_provisioning_preview.html", context
-    )
-
-
-@router.get(
-    "/onts/{ont_id}/preflight",
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_preflight_check(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-):
-    """Pre-flight validation for ONT provisioning. Returns JSON checklist."""
-    from fastapi.responses import JSONResponse
-
-    from app.services.network.ont_provisioning_orchestrator import (
-        OntProvisioningOrchestrator,
-    )
-
-    result = OntProvisioningOrchestrator.validate_prerequisites(db, ont_id)
-    return JSONResponse(result)
-
-
-@router.post(
-    "/onts/{ont_id}/provision",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_provision(
-    request: Request,
-    ont_id: str,
-    profile_id: str = Form(...),
-    dry_run: bool = Form(default=False),
-    tr069_profile_id: int | None = Form(default=None),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Trigger end-to-end ONT provisioning (dispatches Celery task)."""
-    from app.tasks.provisioning import provision_ont
-
-    task = provision_ont.delay(
-        ont_id=ont_id,
-        profile_id=profile_id,
-        dry_run=dry_run,
-        tr069_olt_profile_id=tr069_profile_id,
-    )
-    return JSONResponse(
-        content={
-            "success": True,
-            "message": "Provisioning task dispatched",
-            "task_id": task.id,
-        },
-        headers={
-            "HX-Trigger": '{"showToast": {"message": "Provisioning task started", "type": "success"}}'
-        },
-    )
-
-
-@router.get(
-    "/onts/{ont_id}/provision-status",
-    dependencies=[Depends(require_permission("network:read"))],
-)
-def ont_provision_status(
-    request: Request,
-    ont_id: str,
-    task_id: str = Query(...),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Poll provisioning task status."""
-    from celery.result import AsyncResult
-
-    result = AsyncResult(task_id)
-    if result.ready():
-        status = "failed" if result.failed() else "complete"
-        result_payload = (
-            result.result
-            if isinstance(result.result, dict)
-            else {
-                "success": False,
-                "message": str(result.result),
-                "steps": [],
-            }
-        )
-        return JSONResponse(
-            content={
-                "status": status,
-                "state": result.state,
-                "result": result_payload,
-            }
-        )
-    return JSONResponse(content={"status": "pending", "state": result.state})

@@ -26,8 +26,6 @@ from app.schemas.network_ont_ops import (
     OntMoveRequest,
     OntPingRequest,
     OntPPPoERequest,
-    OntProvisionRequest,
-    OntProvisionResponse,
     OntServicePortUpdate,
     OntSpeedProfileUpdate,
     OntTracerouteRequest,
@@ -40,9 +38,6 @@ from app.schemas.network_ont_ops import (
 from app.services.auth_dependencies import require_permission
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_actions import ont_actions
-from app.services.network.ont_provisioning_orchestrator import (
-    OntProvisioningOrchestrator,
-)
 
 logger = logging.getLogger(__name__)
 
@@ -240,47 +235,6 @@ def firmware_upgrade(
 ) -> OntActionResponse:
     result = ont_actions.firmware_upgrade(db, ont_id, payload.firmware_image_id)
     return _action_response(result)
-
-
-@router.post(
-    "/ont-units/{ont_id}/provision",
-    response_model=OntProvisionResponse,
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def provision_ont(
-    ont_id: str, payload: OntProvisionRequest, db: Session = Depends(get_db)
-) -> OntProvisionResponse:
-    if payload.async_mode and not payload.dry_run:
-        from app.tasks.ont_provisioning import provision_ont_async
-
-        task = provision_ont_async.delay(
-            ont_id,
-            payload.profile_id,
-            tr069_olt_profile_id=payload.tr069_olt_profile_id,
-        )
-        return OntProvisionResponse(
-            success=True,
-            message="Provisioning job queued",
-            task_id=str(task.id),
-        )
-
-    job = OntProvisioningOrchestrator.provision_ont(
-        db,
-        ont_id,
-        payload.profile_id,
-        dry_run=payload.dry_run,
-        tr069_olt_profile_id=payload.tr069_olt_profile_id,
-    )
-    result_dict = job.to_dict()
-    if not job.success and not job.dry_run:
-        raise HTTPException(status_code=422, detail=result_dict)
-    return OntProvisionResponse(
-        success=job.success,
-        message=job.message,
-        steps=result_dict.get("steps", []),
-        commands_preview=result_dict.get("command_sets", []),
-        dry_run=job.dry_run,
-    )
 
 
 # ── Phase 4: ONT Enriched Reads ───────────────────────────────────────

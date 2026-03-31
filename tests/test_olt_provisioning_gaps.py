@@ -1,11 +1,9 @@
-"""Tests for OLT/VLAN/TR-069 provisioning gap fixes (Phases 1-4).
+"""Tests for OLT/VLAN/TR-069 command and manual-action coverage.
 
 Covers:
 - Service-port SSH command parsing and filtering (Phase 1)
 - VLAN chain validation (Phase 1)
 - Huawei command generation from provisioning profiles (Phase 3)
-- Provisioning orchestrator context resolution and dry-run (Phase 4)
-- Celery task registration (Phase 4)
 - Web service wrappers (Phase 2)
 - Route registration (all phases)
 - OLT profile SSH output parsing (Phase 3)
@@ -13,29 +11,24 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import uuid
+from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-from pathlib import Path
-from unittest.mock import patch
 
-from fastapi import Request
 from starlette.routing import Route
 
-from app.models.catalog import AccessCredential
 from app.models.network import (
     OLTDevice,
     OntAssignment,
     OntProvisioningProfile,
-    OntProvisioningStatus,
     OntUnit,
     PonPort,
     PppoePasswordMode,
     VlanMode,
 )
+from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber, SubscriberCategory
-from app.services.events.types import EventType
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
     OltCommandSet,
@@ -651,830 +644,6 @@ class TestOltProfileParsing:
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Provisioning orchestrator
-# ---------------------------------------------------------------------------
-
-
-class TestProvisioningOrchestrator:
-    """Test the end-to-end provisioning orchestrator."""
-
-    def test_provision_ont_not_found(self, db_session) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        result = OntProvisioningOrchestrator.provision_ont(
-            db_session, str(uuid.uuid4()), str(uuid.uuid4()), dry_run=True
-        )
-        assert not result.success
-        assert "ONT not found" in result.message
-        assert len(result.steps) >= 1
-        assert not result.steps[0].success
-
-    def test_provision_ont_no_assignment(self, db_session) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-001")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="Test Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        result = OntProvisioningOrchestrator.provision_ont(
-            db_session, str(ont.id), str(profile.id), dry_run=True
-        )
-        assert not result.success
-        assert "OLT" in result.message or "context" in result.message.lower()
-
-    def test_provision_ont_profile_not_found(self, db_session) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-002", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        # Create OLT + PonPort + assignment for context resolution
-        olt = OLTDevice(name="Provisioning OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
-        db_session.add(assignment)
-        db_session.commit()
-
-        result = OntProvisioningOrchestrator.provision_ont(
-            db_session, str(ont.id), str(uuid.uuid4()), dry_run=True
-        )
-        assert not result.success
-        assert "profile" in result.message.lower() or "not found" in result.message.lower()
-
-    def test_dry_run_generates_commands(self, db_session) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-003", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="Dry Run OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
-        db_session.add(assignment)
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="Dry Run Profile",
-            mgmt_vlan_tag=100,
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        result = OntProvisioningOrchestrator.provision_ont(
-            db_session, str(ont.id), str(profile.id), dry_run=True
-        )
-        assert result.success
-        assert result.dry_run
-        assert "dry run" in result.message.lower() or "generated" in result.message.lower()
-        # At minimum: resolve + generate + dry-run steps
-        assert len(result.steps) >= 3
-
-    def test_provisioning_result_to_dict(self) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            ProvisioningJobResult,
-            ProvisioningStepResult,
-        )
-
-        result = ProvisioningJobResult(
-            success=True,
-            message="Test complete",
-            dry_run=True,
-            steps=[
-                ProvisioningStepResult(step=1, name="Step One", success=True, message="OK", duration_ms=50),
-            ],
-            command_sets=[
-                OltCommandSet(step="Test", commands=["cmd1", "cmd2"], description="Test commands"),
-            ],
-        )
-        d = result.to_dict()
-        assert d["success"] is True
-        assert d["dry_run"] is True
-        assert len(d["steps"]) == 1
-        assert d["steps"][0]["name"] == "Step One"
-        assert d["steps"][0]["duration_ms"] == 50
-        assert len(d["command_preview"]) == 1
-        assert d["command_preview"][0]["commands"] == ["cmd1", "cmd2"]
-
-    def test_partial_service_port_failure_marks_run_incomplete(self, db_session, monkeypatch) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-004", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="Partial Failure OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
-        db_session.add(assignment)
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="Dual WAN Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.build_spec_from_profile",
-            lambda *_args, **_kwargs: ProvisioningSpec(
-                wan_services=[
-                    WanServiceSpec(service_type="internet", vlan_id=201, gem_index=2),
-                    WanServiceSpec(service_type="iptv", vlan_id=203, gem_index=3),
-                ]
-            ),
-        )
-
-        calls = {"count": 0}
-
-        def _fake_create_service_port(*_args, **_kwargs):
-            calls["count"] += 1
-            if calls["count"] == 1:
-                return True, "created"
-            return False, "olt rejected"
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            _fake_create_service_port,
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: True,
-        )
-
-        with patch("app.services.events.dispatcher.emit_event") as mock_emit:
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session, str(ont.id), str(profile.id), dry_run=False, tr069_olt_profile_id=7
-            )
-
-        assert result.success is False
-        assert "Create Service Ports" in result.message
-        assert any(step.step == 4 and not step.success for step in result.steps)
-        refreshed = db_session.get(OntUnit, ont.id)
-        assert refreshed is not None
-        assert refreshed.provisioning_status == OntProvisioningStatus.failed
-        assert refreshed.provisioning_profile_id == profile.id
-        assert refreshed.last_provisioned_at is None
-        mock_emit.assert_not_called()
-
-    def test_bootstrap_timeout_marks_ont_failed(self, db_session, monkeypatch) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-005", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="Timeout OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
-        db_session.add(assignment)
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="Timeout Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            lambda *_args, **_kwargs: (True, "created"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: False,
-        )
-
-        with patch("app.services.events.dispatcher.emit_event") as mock_emit:
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session, str(ont.id), str(profile.id), dry_run=False, tr069_olt_profile_id=7
-            )
-
-        assert result.success is False
-        assert "bootstrap timed out" in result.message.lower()
-        refreshed = db_session.get(OntUnit, ont.id)
-        assert refreshed is not None
-        assert refreshed.provisioning_status == OntProvisioningStatus.failed
-        assert refreshed.provisioning_profile_id == profile.id
-        assert refreshed.last_provisioned_at is None
-        mock_emit.assert_not_called()
-
-    def test_provision_without_tr069_profile_skips_bootstrap(self, db_session, monkeypatch) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-TR069-OPTIONAL", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="Optional TR069 OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        db_session.add(OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True))
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="OLT Only Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("bootstrap poll should not run")),
-        )
-
-        with patch("app.services.events.dispatcher.emit_event") as mock_emit:
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session, str(ont.id), str(profile.id), dry_run=False
-            )
-
-        assert result.success is True
-        assert any(
-            step.step == 9 and step.success and "Skipped" in step.message
-            for step in result.steps
-        )
-        refreshed = db_session.get(OntUnit, ont.id)
-        assert refreshed is not None
-        assert refreshed.provisioning_status == OntProvisioningStatus.provisioned
-        mock_emit.assert_called_once()
-
-    def test_pppoe_from_credential_pushes_active_subscriber_credential(self, db_session, monkeypatch, subscriber) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-PPPOE-CRED", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="PPPoE Cred OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        db_session.add(
-            OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=pon.id,
-                subscriber_id=subscriber.id,
-                active=True,
-            )
-        )
-        db_session.add(
-            AccessCredential(
-                subscriber_id=subscriber.id,
-                username="cred-user",
-                secret_hash="plain:cred-pass",
-                is_active=True,
-            )
-        )
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="PPPoE Credential Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.build_spec_from_profile",
-            lambda *_args, **_kwargs: ProvisioningSpec(
-                wan_services=[
-                    WanServiceSpec(
-                        service_type="internet",
-                        vlan_id=201,
-                        gem_index=1,
-                        connection_type="pppoe",
-                        pppoe_password_mode="from_credential",
-                    )
-                ]
-            ),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            lambda *_args, **_kwargs: (True, "created"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.bind_tr069_server_profile",
-            lambda *_args, **_kwargs: (True, "bound"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: True,
-        )
-
-        calls: list[tuple[str, str, int]] = []
-
-        def _fake_push(_db, _ont_id, username, password, *, instance_index=1):
-            calls.append((username, password, instance_index))
-            return SimpleNamespace(success=True, message="ok")
-
-        from app.services.network.ont_actions import OntActions
-
-        monkeypatch.setattr(OntActions, "set_pppoe_credentials", staticmethod(_fake_push))
-
-        with patch("app.services.events.dispatcher.emit_event"):
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session,
-                str(ont.id),
-                str(profile.id),
-                dry_run=False,
-                tr069_olt_profile_id=7,
-            )
-
-        assert result.success is True
-        assert calls == [("cred-user", "cred-pass", 1)]
-
-    def test_pppoe_generate_mode_auto_generates_when_missing(self, db_session, monkeypatch, subscriber) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-PPPOE-GEN", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="PPPoE Generate OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        db_session.add(
-            OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=pon.id,
-                subscriber_id=subscriber.id,
-                active=True,
-            )
-        )
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="PPPoE Generate Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.build_spec_from_profile",
-            lambda *_args, **_kwargs: ProvisioningSpec(
-                wan_services=[
-                    WanServiceSpec(
-                        service_type="internet",
-                        vlan_id=201,
-                        gem_index=1,
-                        connection_type="pppoe",
-                        pppoe_password_mode="generate",
-                    )
-                ]
-            ),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            lambda *_args, **_kwargs: (True, "created"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.bind_tr069_server_profile",
-            lambda *_args, **_kwargs: (True, "bound"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: True,
-        )
-        monkeypatch.setattr(
-            "app.services.pppoe_credentials.auto_generate_pppoe_credential",
-            lambda *_args, **_kwargs: SimpleNamespace(username="gen-user", secret_hash="plain:gen-pass"),
-        )
-
-        calls: list[tuple[str, str, int]] = []
-
-        def _fake_push(_db, _ont_id, username, password, *, instance_index=1):
-            calls.append((username, password, instance_index))
-            return SimpleNamespace(success=True, message="ok")
-
-        from app.services.network.ont_actions import OntActions
-
-        monkeypatch.setattr(OntActions, "set_pppoe_credentials", staticmethod(_fake_push))
-
-        with patch("app.services.events.dispatcher.emit_event"):
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session,
-                str(ont.id),
-                str(profile.id),
-                dry_run=False,
-                tr069_olt_profile_id=7,
-            )
-
-        assert result.success is True
-        assert calls == [("gen-user", "gen-pass", 1)]
-
-    def test_multiple_pppoe_services_push_all_instances(self, db_session, monkeypatch, subscriber) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-PPPOE-MULTI", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="PPPoE Multi OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        db_session.add(
-            OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=pon.id,
-                subscriber_id=subscriber.id,
-                active=True,
-            )
-        )
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="PPPoE Multi Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.build_spec_from_profile",
-            lambda *_args, **_kwargs: ProvisioningSpec(
-                wan_services=[
-                    WanServiceSpec(
-                        service_type="internet",
-                        vlan_id=201,
-                        gem_index=1,
-                        connection_type="pppoe",
-                        pppoe_username_template="user-a",
-                        pppoe_password="pass-a",
-                        pppoe_password_mode="static",
-                    ),
-                    WanServiceSpec(
-                        service_type="iptv",
-                        vlan_id=202,
-                        gem_index=2,
-                        connection_type="pppoe",
-                        pppoe_username_template="user-b",
-                        pppoe_password="pass-b",
-                        pppoe_password_mode="static",
-                    ),
-                ]
-            ),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            lambda *_args, **_kwargs: (True, "created"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.bind_tr069_server_profile",
-            lambda *_args, **_kwargs: (True, "bound"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: True,
-        )
-
-        calls: list[tuple[str, str, int]] = []
-
-        def _fake_push(_db, _ont_id, username, password, *, instance_index=1):
-            calls.append((username, password, instance_index))
-            return SimpleNamespace(success=True, message="ok")
-
-        from app.services.network.ont_actions import OntActions
-
-        monkeypatch.setattr(OntActions, "set_pppoe_credentials", staticmethod(_fake_push))
-
-        with patch("app.services.events.dispatcher.emit_event"):
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session,
-                str(ont.id),
-                str(profile.id),
-                dry_run=False,
-                tr069_olt_profile_id=7,
-            )
-
-        assert result.success is True
-        assert calls == [
-            ("user-a", "pass-a", 1),
-            ("user-b", "pass-b", 2),
-        ]
-
-    def test_partial_pppoe_omci_failure_marks_provision_failed(self, db_session, monkeypatch, subscriber) -> None:
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(serial_number="TEST-PROV-PPPOE-OMCI-PARTIAL", board="0/2", port="1", external_id="5")
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="PPPoE Partial OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        db_session.add(
-            OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=pon.id,
-                subscriber_id=subscriber.id,
-                active=True,
-            )
-        )
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="PPPoE Partial Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.build_spec_from_profile",
-            lambda *_args, **_kwargs: ProvisioningSpec(
-                wan_services=[
-                    WanServiceSpec(
-                        service_type="internet",
-                        vlan_id=201,
-                        gem_index=1,
-                        connection_type="pppoe",
-                        pppoe_username_template="user-a",
-                        pppoe_password="pass-a",
-                        pppoe_password_mode="static",
-                    ),
-                    WanServiceSpec(
-                        service_type="iptv",
-                        vlan_id=202,
-                        gem_index=2,
-                        connection_type="pppoe",
-                        pppoe_username_template="user-b",
-                        pppoe_password="pass-b",
-                        pppoe_password_mode="static",
-                    ),
-                ],
-                pppoe_omci_vlan=201,
-            ),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            lambda *_args, **_kwargs: (True, "created"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.bind_tr069_server_profile",
-            lambda *_args, **_kwargs: (True, "bound"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: True,
-        )
-
-        omci_calls = {"count": 0}
-
-        def _fake_omci(*_args, **_kwargs):
-            omci_calls["count"] += 1
-            if omci_calls["count"] == 1:
-                return True, "configured"
-            return False, "olt rejected"
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.configure_ont_pppoe_omci",
-            _fake_omci,
-        )
-
-        from app.services.network.ont_actions import OntActions
-
-        monkeypatch.setattr(
-            OntActions,
-            "set_pppoe_credentials",
-            staticmethod(lambda *_args, **_kwargs: SimpleNamespace(success=True, message="ok")),
-        )
-
-        with patch("app.services.events.dispatcher.emit_event") as mock_emit:
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session,
-                str(ont.id),
-                str(profile.id),
-                dry_run=False,
-                tr069_olt_profile_id=7,
-            )
-
-        assert result.success is False
-        assert any(step.step == 11 and not step.success for step in result.steps)
-        refreshed = db_session.get(OntUnit, ont.id)
-        assert refreshed is not None
-        assert refreshed.provisioning_status == OntProvisioningStatus.failed
-        mock_emit.assert_not_called()
-
-    def test_failed_reprovision_clears_previous_last_provisioned_at(self, db_session, monkeypatch) -> None:
-        from datetime import UTC, datetime
-
-        from app.services.network.ont_provisioning_orchestrator import (
-            OntProvisioningOrchestrator,
-        )
-
-        ont = OntUnit(
-            serial_number="TEST-PROV-006",
-            board="0/2",
-            port="1",
-            external_id="5",
-            provisioning_status=OntProvisioningStatus.provisioned,
-            last_provisioned_at=datetime(2026, 1, 10, tzinfo=UTC),
-        )
-        db_session.add(ont)
-        db_session.commit()
-        db_session.refresh(ont)
-
-        olt = OLTDevice(name="Reprovision Fail OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
-        pon = PonPort(olt_id=olt.id, name="0/2/1")
-        db_session.add(pon)
-        db_session.commit()
-        db_session.refresh(pon)
-
-        assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
-        db_session.add(assignment)
-        db_session.commit()
-
-        org = _create_business_subscriber(db_session)
-        profile = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
-            name="Reprovision Fail Profile",
-        )
-        db_session.add(profile)
-        db_session.commit()
-        db_session.refresh(profile)
-
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator.create_single_service_port",
-            lambda *_args, **_kwargs: (True, "created"),
-        )
-        monkeypatch.setattr(
-            "app.services.network.ont_provisioning_orchestrator._wait_for_tr069_bootstrap",
-            lambda *_args, **_kwargs: False,
-        )
-
-        with patch("app.services.events.dispatcher.emit_event") as mock_emit:
-            result = OntProvisioningOrchestrator.provision_ont(
-                db_session, str(ont.id), str(profile.id), dry_run=False, tr069_olt_profile_id=7
-            )
-
-        assert result.success is False
-        refreshed = db_session.get(OntUnit, ont.id)
-        assert refreshed is not None
-        assert refreshed.provisioning_status == OntProvisioningStatus.failed
-        assert refreshed.last_provisioned_at is None
-        mock_emit.assert_not_called()
-
-
-# ---------------------------------------------------------------------------
-# Phase 4: Celery task registration
-# ---------------------------------------------------------------------------
-
-
-class TestCeleryTaskRegistration:
-    """Verify new provisioning Celery task is importable and named."""
-
-    def test_provision_ont_task_exists(self) -> None:
-        from app.tasks.provisioning import provision_ont
-
-        assert provision_ont.name == "app.tasks.provisioning.provision_ont"
-
-
-# ---------------------------------------------------------------------------
-# Event type registration
-# ---------------------------------------------------------------------------
-
-
-class TestOntProvisionedEvent:
-    """Verify ont_provisioned event type exists."""
-
-    def test_ont_provisioned_event_value(self) -> None:
-        assert EventType.ont_provisioned.value == "ont.provisioned"
-
-
-# ---------------------------------------------------------------------------
 # Web service wrappers (Phase 2)
 # ---------------------------------------------------------------------------
 
@@ -1505,6 +674,16 @@ class TestWebNetworkOntActionsWrappers:
 
 class TestWebNetworkServicePortsWrappers:
     """Test service-port web service functions."""
+
+    def test_parse_ont_id_on_olt_accepts_generic_prefixed_numeric_id(self) -> None:
+        from app.services.web_network_service_ports import _parse_ont_id_on_olt
+
+        assert _parse_ont_id_on_olt("generic:5") == 5
+
+    def test_normalize_fsp_strips_pon_prefix(self) -> None:
+        from app.services.web_network_service_ports import _normalize_fsp
+
+        assert _normalize_fsp("pon-0/2/1") == "0/2/1"
 
     def test_list_context_ont_not_found(self, db_session) -> None:
         from app.services.web_network_service_ports import list_context
@@ -1569,6 +748,44 @@ class TestWebNetworkServicePortsWrappers:
                 "label": "REF-ONT | ONT-ID 9 | 0/2/2",
             }
         ]
+
+    def test_list_context_accepts_prefixed_pon_name(self, db_session, monkeypatch) -> None:
+        from app.services.web_network_service_ports import list_context
+
+        olt = OLTDevice(name="Prefixed OLT", vendor="Huawei", model="MA5608T")
+        db_session.add(olt)
+        db_session.commit()
+        db_session.refresh(olt)
+
+        pon = PonPort(olt_id=olt.id, name="pon-0/2/1")
+        db_session.add(pon)
+        db_session.commit()
+        db_session.refresh(pon)
+
+        ont = OntUnit(serial_number="TARGET-ONT", external_id="generic:7")
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        db_session.add(OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True))
+        db_session.commit()
+
+        captured: dict[str, object] = {}
+
+        def _fake_get_service_ports_for_ont(_olt, fsp, ont_id):
+            captured["fsp"] = fsp
+            captured["ont_id"] = ont_id
+            return True, "ok", []
+
+        monkeypatch.setattr(
+            "app.services.web_network_service_ports.get_service_ports_for_ont",
+            _fake_get_service_ports_for_ont,
+        )
+
+        ctx = list_context(db_session, str(ont.id))
+
+        assert ctx["error"] is None
+        assert captured == {"fsp": "0/2/1", "ont_id": 7}
 
     def test_handle_create_no_olt_context(self, db_session) -> None:
         from app.services.web_network_service_ports import handle_create
@@ -1727,7 +944,7 @@ class TestWebNetworkOltsMigration:
             "reference_vlans": [201, 202],
         }
 
-    def test_authorize_autofind_skips_service_port_clone_when_ont_id_unknown(self, db_session, monkeypatch) -> None:
+    def test_authorize_autofind_skips_clone_when_ont_id_unknown(self, db_session, monkeypatch) -> None:
         from app.services.web_network_olts import authorize_autofind_ont
 
         olt = OLTDevice(name="Authorize OLT", vendor="Huawei", model="MA5608T")
@@ -1748,6 +965,80 @@ class TestWebNetworkOltsMigration:
 
         assert ok is True
         assert "ONT-ID could not be determined" in msg
+
+    def test_authorize_autofind_persists_ont_and_assignment_without_cloning(self, db_session, monkeypatch) -> None:
+        from app.services.web_network_olts import authorize_autofind_ont
+
+        olt = OLTDevice(name="Authorize Persist OLT", vendor="Huawei", model="MA5608T")
+        db_session.add(olt)
+        db_session.commit()
+        db_session.refresh(olt)
+
+        candidate = OltAutofindCandidate(
+            olt_id=olt.id,
+            fsp="0/2/1",
+            serial_number="48575443ABCDEF02",
+            vendor_id="HWTC",
+            model="EchoLife HG8010H",
+            software_version="V3R019",
+            mac="AA:BB:CC:DD:EE:FF",
+            is_active=True,
+        )
+        db_session.add(candidate)
+        db_session.commit()
+        db_session.refresh(candidate)
+
+        monkeypatch.setattr(
+            "app.services.web_network_olts.olt_ssh_service.authorize_ont",
+            lambda *_args, **_kwargs: (True, "Authorized", 7),
+        )
+
+        clone_called = {"value": False}
+
+        def _unexpected_clone(*_args, **_kwargs):
+            clone_called["value"] = True
+            return True, "service-ports cloned"
+
+        monkeypatch.setattr(
+            "app.services.web_network_olts.clone_service_ports",
+            _unexpected_clone,
+        )
+
+        ok, msg = authorize_autofind_ont(
+            db_session,
+            str(olt.id),
+            "0/2/1",
+            "48575443ABCDEF02",
+        )
+
+        assert ok is True
+        assert msg == "Authorized"
+        assert clone_called["value"] is False
+
+        ont = db_session.query(OntUnit).filter_by(serial_number="48575443ABCDEF02").one()
+        assert ont.olt_device_id == olt.id
+        assert ont.board == "0/2"
+        assert ont.port == "1"
+        assert ont.external_id == "7"
+        assert ont.vendor == "HWTC"
+        assert ont.model == "EchoLife HG8010H"
+        assert ont.firmware_version == "V3R019"
+        assert ont.mac_address == "AA:BB:CC:DD:EE:FF"
+
+        pon = db_session.query(PonPort).filter_by(olt_id=olt.id, name="0/2/1").one()
+        assignment = (
+            db_session.query(OntAssignment)
+            .filter_by(ont_unit_id=ont.id, active=True)
+            .one()
+        )
+        assert assignment.pon_port_id == pon.id
+        assert assignment.assigned_at is not None
+
+        refreshed_candidate = db_session.get(OltAutofindCandidate, candidate.id)
+        assert refreshed_candidate is not None
+        assert refreshed_candidate.is_active is False
+        assert refreshed_candidate.resolution_reason == "authorized"
+        assert refreshed_candidate.ont_unit_id == ont.id
 
     def test_command_preview_profile_not_found(self, db_session) -> None:
         from app.services.web_network_olt_profiles import command_preview_context
@@ -1776,18 +1067,18 @@ class TestWebNetworkOltsMigration:
         assert "profile" in ctx["error"].lower() or "not found" in ctx["error"].lower()
 
 
-class TestGetProvisioningProfiles:
-    """Test provisioning profile listing service."""
+class TestGetProfileTemplates:
+    """Test ONT profile template listing service."""
 
-    def test_get_provisioning_profiles_empty(self, db_session) -> None:
-        from app.services.web_network_onts import get_provisioning_profiles
+    def test_get_profile_templates_empty(self, db_session) -> None:
+        from app.services.web_network_onts import get_profile_templates
 
-        profiles = get_provisioning_profiles(db_session)
+        profiles = get_profile_templates(db_session)
         # May have existing profiles from other tests, just verify it returns a list
         assert isinstance(profiles, list)
 
-    def test_get_provisioning_profiles_returns_active_only(self, db_session) -> None:
-        from app.services.web_network_onts import get_provisioning_profiles
+    def test_get_profile_templates_returns_active_only(self, db_session) -> None:
+        from app.services.web_network_onts import get_profile_templates
 
         org = _create_business_subscriber(db_session)
         active = OntProvisioningProfile(
@@ -1803,30 +1094,10 @@ class TestGetProvisioningProfiles:
         db_session.add_all([active, inactive])
         db_session.commit()
 
-        profiles = get_provisioning_profiles(db_session)
+        profiles = get_profile_templates(db_session)
         profile_names = [p.name for p in profiles]
         assert "Active Profile Test" in profile_names
         assert "Inactive Profile Test" not in profile_names
-
-
-class TestProvisionStatusRoute:
-    def test_failed_task_reports_failed_status(self, db_session) -> None:
-        from app.web.admin.network_olts_onts import ont_provision_status
-
-        async_result = SimpleNamespace(
-            ready=lambda: True,
-            failed=lambda: True,
-            state="FAILURE",
-            result=RuntimeError("boom"),
-        )
-
-        with patch("celery.result.AsyncResult", return_value=async_result):
-            response = ont_provision_status(cast(Request, None), str(uuid.uuid4()), task_id="task-1", db=db_session)
-
-        payload = json.loads(response.body.decode("utf-8"))
-        assert payload["status"] == "failed"
-        assert payload["state"] == "FAILURE"
-        assert "boom" in payload["result"]["message"]
 
 
 # ---------------------------------------------------------------------------
@@ -1854,33 +1125,31 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/actions/bind-tr069-profile" in route_paths
         assert "/network/onts/{ont_id}/iphost-config" in route_paths
 
-        # Phase 3: OLT profiles + provisioning preview
+        # Phase 3: OLT profile routes remain, provisioning UI routes do not
         assert "/network/olts/{olt_id}/profiles/line" in route_paths
         assert "/network/olts/{olt_id}/profiles/tr069" in route_paths
-        assert "/network/onts/{ont_id}/provisioning-preview" in route_paths
 
-        # Phase 4: End-to-end provisioning
-        assert "/network/onts/{ont_id}/preflight" in route_paths
-        assert "/network/onts/{ont_id}/provision" in route_paths
-        assert "/network/onts/{ont_id}/provision-status" in route_paths
+        assert "/network/onts/{ont_id}/provisioning-preview" not in route_paths
+        assert "/network/onts/{ont_id}/preflight" not in route_paths
+        assert "/network/onts/{ont_id}/provision" not in route_paths
+        assert "/network/onts/{ont_id}/provision-status" not in route_paths
 
 
 class TestProvisioningUiTemplates:
-    def test_provisioning_widget_surfaces_preflight_checklist(self) -> None:
+    def test_provisioning_widget_replaced_with_manual_operations_notice(self) -> None:
         template = Path("templates/admin/network/onts/_provision_action.html").read_text()
 
-        assert "Preflight Checklist" in template
-        assert "/preflight" in template
-        assert "Provisioning blocked by preflight failures" in template
-        assert "Refresh Preflight" in template
-        assert "/provisioning-preview" in template
-        assert "Route Preview" in template
+        assert "Manual ONT Operations" in template
+        assert "Coordinated provisioning is not available" in template
+        assert "clone service-ports" in template
 
-    def test_provisioning_widget_no_longer_shows_background_toggle(self) -> None:
+    def test_provisioning_widget_has_no_orchestration_controls(self) -> None:
         template = Path("templates/admin/network/onts/_provision_action.html").read_text()
 
-        assert "Background" not in template
-        assert "async_mode" not in template
+        assert "Preflight Checklist" not in template
+        assert "/preflight" not in template
+        assert "/provisioning-preview" not in template
+        assert "/provision-status" not in template
 
     def test_ont_form_describes_supported_external_id_formats(self) -> None:
         template = Path("templates/admin/network/onts/form.html").read_text()

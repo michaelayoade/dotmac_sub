@@ -7,7 +7,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import OntAssignment, OntProvisioningStatus
+from app.models.network import OLTDevice, OntAssignment, OntProvisioningStatus, OntUnit
 from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
@@ -17,6 +17,41 @@ from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 
 logger = logging.getLogger(__name__)
+
+
+def _normalize_fsp(value: str | None) -> str | None:
+    raw = (value or "").strip()
+    if raw.lower().startswith("pon-"):
+        raw = raw[4:].strip()
+    return raw or None
+
+
+def _parse_ont_id_on_olt(external_id: str | None) -> int | None:
+    ext = (external_id or "").strip()
+    if ext.isdigit():
+        return int(ext)
+    if "." in ext:
+        dot_part = ext.rsplit(".", 1)[-1]
+        if dot_part.isdigit():
+            return int(dot_part)
+    if ":" in ext:
+        suffix = ext.rsplit(":", 1)[-1]
+        if suffix.isdigit():
+            return int(suffix)
+    return None
+
+
+def _resolve_return_olt_context(
+    db: Session, ont_id: str
+) -> tuple[OntUnit | None, OLTDevice | None, str | None, int | None]:
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+
+    olt = db.get(OLTDevice, str(ont.olt_device_id)) if ont.olt_device_id else None
+    board = (ont.board or "").strip()
+    port = (ont.port or "").strip()
+    fsp = _normalize_fsp(f"{board}/{port}") if board and port else None
+    ont_id_on_olt = _parse_ont_id_on_olt(ont.external_id)
+    return ont, olt, fsp, ont_id_on_olt
 
 
 def execute_reboot(
@@ -185,8 +220,48 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
 
 
 def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
-    """Deactivate an ONT, close any active assignment, and clear service state."""
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    """Release an ONT from the OLT, close assignment, and clear service state."""
+    from app.services.network.olt_ssh_ont import deauthorize_ont
+    from app.services.network.olt_ssh_service_ports import (
+        delete_service_port,
+        get_service_ports_for_ont,
+    )
+
+    ont, olt, fsp, olt_ont_id = _resolve_return_olt_context(db, ont_id)
+    if ont is None:
+        return ActionResult(success=False, message="ONT not found.")
+    if not olt or not fsp or olt_ont_id is None:
+        return ActionResult(
+            success=False,
+            message="Cannot resolve OLT context for this ONT.",
+        )
+
+    ok, msg, service_ports = get_service_ports_for_ont(olt, fsp, olt_ont_id)
+    if not ok:
+        return ActionResult(
+            success=False,
+            message=f"Cannot read OLT service-ports before release: {msg}",
+        )
+
+    deleted_service_ports = 0
+    for service_port in service_ports:
+        ok, msg = delete_service_port(olt, service_port.index)
+        if not ok:
+            return ActionResult(
+                success=False,
+                message=(
+                    "Failed to remove OLT service-port "
+                    f"{service_port.index}: {msg}"
+                ),
+            )
+        deleted_service_ports += 1
+
+    ok, msg = deauthorize_ont(olt, fsp, olt_ont_id)
+    if not ok:
+        return ActionResult(
+            success=False,
+            message=f"Failed to delete ONT from OLT: {msg}",
+        )
 
     active_assignment = db.scalars(
         select(OntAssignment)
@@ -201,10 +276,10 @@ def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
     if active_assignment is not None:
         active_assignment.active = False
 
-    ont.is_active = False
     ont.provisioning_profile_id = None
     ont.provisioning_status = OntProvisioningStatus.unprovisioned
     ont.last_provisioned_at = None
+    ont.external_id = None
     ont.wan_vlan_id = None
     ont.wan_mode = None
     ont.config_method = None
@@ -223,7 +298,15 @@ def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
     db.refresh(ont)
 
     assignment_msg = "assignment closed and " if active_assignment is not None else ""
+    service_port_msg = (
+        f"{deleted_service_ports} service-port(s) removed, "
+        if deleted_service_ports
+        else ""
+    )
     return ActionResult(
         success=True,
-        message=f"ONT returned to inventory: {assignment_msg}service state cleared.",
+        message=(
+            "ONT returned to inventory: "
+            f"{service_port_msg}{assignment_msg}removed from OLT and service state cleared."
+        ),
     )

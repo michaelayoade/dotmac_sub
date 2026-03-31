@@ -68,13 +68,36 @@ def _reading_sort_key(index: str) -> tuple[int, ...]:
     return tuple(parts)
 
 
+def _decode_huawei_packed_fsp(packed_value: int) -> str | None:
+    """Decode Huawei packed ONU indexes into frame/slot/port when possible."""
+    if packed_value < 0:
+        return None
+    base = 0xFA000000
+    if packed_value < base:
+        return None
+    delta = packed_value - base
+    if delta % 256 != 0:
+        return None
+    slot_port = delta // 256
+    frame = 0
+    slot = slot_port // 16
+    port = slot_port % 16
+    if slot < 0 or port < 0:
+        return None
+    return f"{frame}/{slot}/{port}"
+
+
 def _fsp_hint_from_index(raw_index: str) -> str | None:
     """Return frame/slot/port hint from a composite SNMP index."""
     parsed = _split_onu_index(raw_index)
-    if not parsed or len(parsed) != 4:
+    if not parsed:
         return None
-    frame, slot, port, _onu = parsed
-    return f"{frame}/{slot}/{port}"
+    if len(parsed) == 4:
+        frame, slot, port, _onu = parsed
+        return f"{frame}/{slot}/{port}"
+    if len(parsed) == 2 and parsed[0].isdigit():
+        return _decode_huawei_packed_fsp(int(parsed[0]))
+    return None
 
 
 def _fsp_hint_from_ont(ont: OntUnit) -> str | None:

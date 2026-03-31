@@ -1,7 +1,7 @@
 """Network operation tracking model.
 
 Provides durable state tracking for long-running or multi-step network
-device operations (OLT sync, ONT provisioning, TR-069 bootstrap, etc.).
+device operations (OLT sync, ONT authorization, TR-069 bootstrap, etc.).
 Operations are composable via parent/child relationships, allowing complex
 workflows to be broken into independently trackable sub-operations.
 """
@@ -43,7 +43,6 @@ class NetworkOperationType(enum.Enum):
     """Types of network operations that can be tracked."""
 
     olt_ont_sync = "olt_ont_sync"
-    ont_provision = "ont_provision"
     ont_authorize = "ont_authorize"
     ont_reboot = "ont_reboot"
     ont_factory_reset = "ont_factory_reset"

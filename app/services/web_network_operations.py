@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 OPERATION_DISPLAY: dict[str, str] = {
     "olt_ont_sync": "OLT ONT Discovery",
-    "ont_provision": "ONT Provisioning",
     "ont_authorize": "ONT Authorize",
     "ont_reboot": "ONT Reboot",
     "ont_factory_reset": "ONT Factory Reset",

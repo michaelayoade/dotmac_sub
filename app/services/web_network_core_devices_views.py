@@ -23,7 +23,6 @@ from app.models.network_monitoring import (
     DeviceStatus,
     NetworkDevice,
 )
-from app.models.provisioning import ProvisioningRun
 from app.models.subscriber import SubscriberCategory
 from app.services import network as network_service
 from app.services.web_network_core_devices_inventory import (
@@ -58,43 +57,6 @@ def _nas_inventory_stub(device: NasDevice) -> SimpleNamespace:
         detail_url=f"/admin/network/nas/devices/{device.id}",
         edit_url=f"/admin/network/nas/{device.id}/edit",
     )
-
-
-def _summarize_provisioning_run(run: ProvisioningRun) -> dict[str, object]:
-    payload = run.output_payload if isinstance(run.output_payload, dict) else {}
-    raw_results = (
-        payload.get("results") if isinstance(payload.get("results"), list) else []
-    )
-    step_results: list[dict[str, str]] = []
-    success_count = 0
-    failed_count = 0
-    for raw in raw_results:
-        if not isinstance(raw, dict):
-            continue
-        status = str(raw.get("status") or "").strip().lower()
-        if status == "success":
-            success_count += 1
-        elif status == "failed":
-            failed_count += 1
-        step_results.append(
-            {
-                "step_type": str(raw.get("step_type") or raw.get("name") or "step"),
-                "status": status or "unknown",
-                "detail": str(raw.get("detail") or raw.get("message") or "").strip(),
-            }
-        )
-    return {
-        "id": str(run.id),
-        "workflow_name": run.workflow.name if run.workflow else "Provisioning Workflow",
-        "status": run.status.value if run.status else "unknown",
-        "started_at": run.started_at,
-        "completed_at": run.completed_at,
-        "error_message": run.error_message or "",
-        "step_results": step_results[:6],
-        "step_count": len(step_results),
-        "success_count": success_count,
-        "failed_count": failed_count,
-    }
 
 
 def _normalize_port_name(value: str | None) -> str:
@@ -1720,24 +1682,24 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             subscription.status.value if subscription.status else "unknown"
         )
 
-    # Provisioning profile info
-    provisioning_info: dict[str, object] = {}
+    # Manual profile state shown on the ONT detail screen
+    profile_state: dict[str, object] = {}
     if ont.provisioning_profile_id:
-        provisioning_info["profile_id"] = str(ont.provisioning_profile_id)
-        provisioning_info["status"] = (
+        profile_state["profile_id"] = str(ont.provisioning_profile_id)
+        profile_state["status"] = (
             ont.provisioning_status.value if ont.provisioning_status else None
         )
-        provisioning_info["last_provisioned_at"] = ont.last_provisioned_at
+        profile_state["last_provisioned_at"] = ont.last_provisioned_at
         if ont.provisioning_profile:
-            provisioning_info["profile_name"] = ont.provisioning_profile.name
+            profile_state["profile_name"] = ont.provisioning_profile.name
 
         # Check for drift
         from app.services.network.ont_profile_apply import detect_drift
 
         drift = detect_drift(db, str(ont.id))
         if drift:
-            provisioning_info["has_drift"] = drift.has_drift
-            provisioning_info["drifted_fields"] = [
+            profile_state["has_drift"] = drift.has_drift
+            profile_state["drifted_fields"] = [
                 {
                     "field": f.field_name,
                     "desired": str(f.desired),
@@ -1746,26 +1708,12 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
                 for f in drift.drifted_fields
             ]
 
-    # Available profiles for "Apply Profile" dropdown
+    # Available templates for the manual "Apply Profile" action
     from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
 
-    available_profiles = ont_provisioning_profiles.list(db, is_active=True, limit=50)
-
-    provisioning_runs: list[dict[str, object]] = []
-    subscription_id = (
-        getattr(assignment, "subscription_id", None) if assignment else None
+    available_profile_templates = ont_provisioning_profiles.list(
+        db, is_active=True, limit=50
     )
-    if subscription_id:
-        raw_runs = (
-            db.query(ProvisioningRun)
-            .filter(ProvisioningRun.subscription_id == subscription_id)
-            .order_by(
-                ProvisioningRun.started_at.desc(), ProvisioningRun.created_at.desc()
-            )
-            .limit(5)
-            .all()
-        )
-        provisioning_runs = [_summarize_provisioning_run(run) for run in raw_runs]
 
     # Available firmware images matching this ONT's vendor
     from app.models.network import OntFirmwareImage
@@ -1794,20 +1742,15 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "signal_info": signal_info,
         "network_path": network_path,
         "subscriber_info": subscriber_info,
-        "provisioning_info": provisioning_info,
-        "provisioning_runs": provisioning_runs,
-        "available_profiles": available_profiles,
+        "profile_state": profile_state,
+        "available_profile_templates": available_profile_templates,
         "available_firmware": available_firmware,
         "capabilities": capabilities,
         "inventory_ready": (
             not bool(assignment)
-            and not bool(getattr(ont, "is_active", False))
-            and not bool(getattr(ont, "provisioning_profile_id", None))
-            and (
-                getattr(ont, "provisioning_status", None) is None
-                or getattr(getattr(ont, "provisioning_status", None), "value", None)
-                == "unprovisioned"
-            )
+            and not bool(getattr(ont, "external_id", None))
+            and not bool(profile_state.get("profile_id"))
+            and profile_state.get("status") in (None, "unprovisioned")
         ),
     }
 

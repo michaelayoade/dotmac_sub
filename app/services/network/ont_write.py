@@ -13,7 +13,7 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.web_network_service_ports import _parse_ont_id_on_olt
+from app.services.web_network_service_ports import _normalize_fsp, _parse_ont_id_on_olt
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,10 @@ def _resolve_olt_context(
             None,
             ActionResult(success=False, message="ONT has no active assignment."),
         )
-    olt = ont.olt_device
+    pon_port = assignment.pon_port
+    olt = pon_port.olt if pon_port else None
+    if not olt:
+        olt = ont.olt_device
     if not olt:
         return (
             None,
@@ -53,7 +56,7 @@ def _fsp_from_assignment(assignment: OntAssignment) -> str | None:
     if not pp:
         return None
     # PonPort typically has frame/slot/port or a name like "0/1/0"
-    return pp.name if pp.name else None
+    return _normalize_fsp(pp.name)
 
 
 def _set_sync_meta(ont: OntUnit, source: str) -> None:
@@ -361,6 +364,7 @@ class OntWriteService:
             notes="Moved from previous assignment",
         )
         db.add(new_assignment)
+        ont.olt_device_id = target_port.olt_id
         _set_sync_meta(ont, "manual")
         db.commit()
         _emit_ont_event(

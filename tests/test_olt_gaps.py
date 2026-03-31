@@ -51,10 +51,6 @@ class TestOltEventTypes:
     def test_ont_signal_degraded_event_exists(self) -> None:
         assert EventType.ont_signal_degraded.value == "ont.signal_degraded"
 
-    def test_ont_provisioned_event_exists(self) -> None:
-        assert EventType.ont_provisioned.value == "ont.provisioned"
-
-
 # ---------------------------------------------------------------------------
 # 2. OLT CRUD emits events
 # ---------------------------------------------------------------------------

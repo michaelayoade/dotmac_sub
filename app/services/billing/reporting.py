@@ -13,7 +13,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import String, case, cast, func, select
+from sqlalchemy import String, and_, case, cast, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.billing import (
@@ -506,70 +506,136 @@ class BillingReporting:
         revenue_trend = {"labels": labels, "billed": billed, "collected": collected}
 
         # --- Period comparison (last / current / next month) ---
+        # Consolidated into 3 queries instead of 12 using CASE expressions
         current_month_start = _month_start(now)
         last_month_start = _month_start(current_month_start - timedelta(days=1))
-        next_month_start_dt = _next_month_start(current_month_start)
-        comparison_periods = [
-            ("Last Month", *_month_window(last_month_start)),
-            ("Current Month", *_month_window(current_month_start)),
-            ("Next Month", *_month_window(next_month_start_dt)),
-        ]
+        last_month_end = current_month_start
+        current_month_end = _next_month_start(current_month_start)
+        next_month_start_dt = current_month_end
+        next_month_end = _next_month_start(next_month_start_dt)
 
-        period_comparison: list[dict[str, Any]] = []
-        for cmp_label, cmp_start, cmp_end in comparison_periods:
-            # Payments in period
-            pp_stmt = select(
+        # Helper to create period CASE expression
+        def _period_case(date_col, last_start, last_end, curr_start, curr_end, next_start, next_end):
+            return case(
+                (and_(date_col >= last_start, date_col < last_end), "last"),
+                (and_(date_col >= curr_start, date_col < curr_end), "current"),
+                (and_(date_col >= next_start, date_col < next_end), "next"),
+                else_=None,
+            )
+
+        # Combined payments query for all periods
+        payment_date = func.coalesce(Payment.paid_at, Payment.created_at)
+        payment_period = _period_case(
+            payment_date,
+            last_month_start, last_month_end,
+            current_month_start, current_month_end,
+            next_month_start_dt, next_month_end,
+        )
+        pp_stmt = (
+            select(
+                payment_period.label("period"),
                 func.count().label("count"),
                 func.coalesce(func.sum(Payment.amount), Decimal("0")).label("total"),
-            ).where(
+            )
+            .where(
                 Payment.status == PaymentStatus.succeeded,
-                func.coalesce(Payment.paid_at, Payment.created_at) >= cmp_start,
-                func.coalesce(Payment.paid_at, Payment.created_at) < cmp_end,
+                payment_date >= last_month_start,
+                payment_date < next_month_end,
             )
-            pp_stmt = _scope_payment_stmt(pp_stmt)
-            pp_row = db.execute(pp_stmt).one()
+            .group_by(payment_period)
+        )
+        pp_stmt = _scope_payment_stmt(pp_stmt)
+        payment_rows = {r.period: r for r in db.execute(pp_stmt).all()}
 
-            # Paid invoices in period
-            pi_stmt = select(func.count()).where(
+        # Combined paid invoices query for all periods
+        invoice_date = func.coalesce(Invoice.paid_at, Invoice.created_at)
+        inv_period = _period_case(
+            invoice_date,
+            last_month_start, last_month_end,
+            current_month_start, current_month_end,
+            next_month_start_dt, next_month_end,
+        )
+        pi_stmt = (
+            select(
+                inv_period.label("period"),
+                func.count().label("paid_count"),
+            )
+            .where(
                 Invoice.status == InvoiceStatus.paid,
-                func.coalesce(Invoice.paid_at, Invoice.created_at) >= cmp_start,
-                func.coalesce(Invoice.paid_at, Invoice.created_at) < cmp_end,
+                invoice_date >= last_month_start,
+                invoice_date < next_month_end,
             )
-            pi_stmt = _scope_invoice_stmt(pi_stmt)
-            paid_inv_count = db.execute(pi_stmt).scalar() or 0
+            .group_by(inv_period)
+        )
+        pi_stmt = _scope_invoice_stmt(pi_stmt)
+        paid_inv_rows = {r.period: r.paid_count for r in db.execute(pi_stmt).all()}
 
-            # Unpaid invoices created in period
-            ui_stmt = select(func.count()).where(
+        # Combined unpaid invoices query for all periods
+        unpaid_period = _period_case(
+            Invoice.created_at,
+            last_month_start, last_month_end,
+            current_month_start, current_month_end,
+            next_month_start_dt, next_month_end,
+        )
+        ui_stmt = (
+            select(
+                unpaid_period.label("period"),
+                func.count().label("unpaid_count"),
+            )
+            .where(
                 Invoice.status.in_(unpaid_statuses),
-                Invoice.created_at >= cmp_start,
-                Invoice.created_at < cmp_end,
+                Invoice.created_at >= last_month_start,
+                Invoice.created_at < next_month_end,
             )
-            ui_stmt = _scope_invoice_stmt(ui_stmt)
-            unpaid_inv_count = db.execute(ui_stmt).scalar() or 0
+            .group_by(unpaid_period)
+        )
+        ui_stmt = _scope_invoice_stmt(ui_stmt)
+        unpaid_inv_rows = {r.period: r.unpaid_count for r in db.execute(ui_stmt).all()}
 
-            # Credit notes in period
-            pcn_stmt = select(
+        # Combined credit notes query for all periods
+        cn_period = _period_case(
+            CreditNote.created_at,
+            last_month_start, last_month_end,
+            current_month_start, current_month_end,
+            next_month_start_dt, next_month_end,
+        )
+        pcn_stmt = (
+            select(
+                cn_period.label("period"),
                 func.count().label("count"),
                 func.coalesce(func.sum(CreditNote.total), Decimal("0")).label("total"),
-            ).where(
+            )
+            .where(
                 CreditNote.is_active.is_(True),
                 CreditNote.status != CreditNoteStatus.void,
-                CreditNote.created_at >= cmp_start,
-                CreditNote.created_at < cmp_end,
+                CreditNote.created_at >= last_month_start,
+                CreditNote.created_at < next_month_end,
             )
-            pcn_stmt = _scope_credit_note_stmt(pcn_stmt)
-            pcn_row = db.execute(pcn_stmt).one()
+            .group_by(cn_period)
+        )
+        pcn_stmt = _scope_credit_note_stmt(pcn_stmt)
+        cn_rows = {r.period: r for r in db.execute(pcn_stmt).all()}
 
+        # Build period comparison from consolidated results
+        period_comparison: list[dict[str, Any]] = []
+        for label, period_key in [
+            ("Last Month", "last"),
+            ("Current Month", "current"),
+            ("Next Month", "next"),
+        ]:
+            pp = payment_rows.get(period_key)
+            cn = cn_rows.get(period_key)
+            payments_amount = float(pp.total) if pp else 0.0
             period_comparison.append(
                 {
-                    "label": cmp_label,
-                    "payments_amount": float(pp_row.total),
-                    "payments_count": pp_row.count,
-                    "paid_invoices_count": paid_inv_count,
-                    "unpaid_invoices_count": unpaid_inv_count,
-                    "credit_notes_count": pcn_row.count,
-                    "credit_notes_amount": float(pcn_row.total),
-                    "total_income": float(pp_row.total),
+                    "label": label,
+                    "payments_amount": payments_amount,
+                    "payments_count": pp.count if pp else 0,
+                    "paid_invoices_count": paid_inv_rows.get(period_key, 0),
+                    "unpaid_invoices_count": unpaid_inv_rows.get(period_key, 0),
+                    "credit_notes_count": cn.count if cn else 0,
+                    "credit_notes_amount": float(cn.total) if cn else 0.0,
+                    "total_income": payments_amount,
                 }
             )
 

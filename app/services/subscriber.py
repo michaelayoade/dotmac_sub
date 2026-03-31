@@ -821,53 +821,76 @@ class Subscribers(ListResponseMixin):
             Dictionary with active_count, new_this_month, suspended_count,
             churn_rate, subscriber_status_chart, signup_trend, and
             recent_subscribers.
+
+        All aggregations use SQL-level queries for performance.
         """
         import calendar
         from datetime import timedelta
 
+        from sqlalchemy import extract, literal_column, text
+
         now = datetime.now(UTC)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        thirty_days_ago = now - timedelta(days=30)
 
-        all_subs = (
-            db.query(Subscriber)
-            .filter(Subscriber.user_type != UserType.system_user)
-            .all()
+        # Base filter for visible subscribers (excludes system_user and splynx deleted)
+        visible_filter = visible_subscriber_clause()
+
+        # SQL expression for effective created_at:
+        # COALESCE(metadata->>'splynx_date_add', account_start_date, created_at)
+        effective_created_at = func.coalesce(
+            func.cast(
+                Subscriber.metadata_["splynx_date_add"].as_string(),
+                Subscriber.created_at.type,
+            ),
+            Subscriber.account_start_date,
+            Subscriber.created_at,
         )
-        dashboard_subs = [s for s in all_subs if not is_splynx_deleted_import(s)]
-        total = len(dashboard_subs)
-        active_count = sum(1 for s in dashboard_subs if s.is_active)
+
+        # SQL expression for effective updated_at:
+        # COALESCE(metadata->>'splynx_last_update', updated_at)
+        effective_updated_at = func.coalesce(
+            func.cast(
+                Subscriber.metadata_["splynx_last_update"].as_string(),
+                Subscriber.updated_at.type,
+            ),
+            Subscriber.updated_at,
+        )
+
+        # Total and active counts in single query
+        counts = db.query(
+            func.count(Subscriber.id).label("total"),
+            func.count(Subscriber.id).filter(Subscriber.is_active.is_(True)).label(
+                "active"
+            ),
+            func.count(Subscriber.id)
+            .filter(Subscriber.status == SubscriberStatus.suspended)
+            .label("suspended"),
+            func.count(Subscriber.id)
+            .filter(Subscriber.status == SubscriberStatus.canceled)
+            .label("canceled"),
+            func.count(Subscriber.id)
+            .filter(effective_created_at >= month_start)
+            .label("new_this_month"),
+            func.count(Subscriber.id)
+            .filter(
+                and_(
+                    Subscriber.status == SubscriberStatus.canceled,
+                    effective_updated_at >= thirty_days_ago,
+                )
+            )
+            .label("churned_recent"),
+        ).filter(visible_filter).one()
+
+        total = counts.total or 0
+        active_count = counts.active or 0
+        suspended_count = counts.suspended or 0
+        canceled_count = counts.canceled or 0
+        new_this_month = counts.new_this_month or 0
+        churned_recent = counts.churned_recent or 0
         inactive_count = total - active_count
 
-        # New this month
-        new_this_month = sum(
-            1
-            for s in dashboard_subs
-            if (
-                (created_at := get_effective_created_at(s)) is not None
-                and created_at >= month_start
-            )
-        )
-
-        suspended_count = 0
-        canceled_count = 0
-        for s in dashboard_subs:
-            acct_status = getattr(s, "status", None)
-            if acct_status == SubscriberStatus.suspended:
-                suspended_count += 1
-            elif acct_status == SubscriberStatus.canceled:
-                canceled_count += 1
-
-        # Churn rate: canceled in last 30 days / active at start of period
-        thirty_days_ago = now - timedelta(days=30)
-        churned_recent = sum(
-            1
-            for s in dashboard_subs
-            if (
-                getattr(s, "status", None) == SubscriberStatus.canceled
-                and (updated_at := get_effective_updated_at(s)) is not None
-                and updated_at >= thirty_days_ago
-            )
-        )
+        # Churn rate calculation
         active_at_start = active_count + churned_recent
         churn_rate = (
             round(churned_recent / active_at_start * 100, 1)
@@ -882,7 +905,29 @@ class Subscribers(ListResponseMixin):
             "colors": ["#10b981", "#f59e0b", "#f43f5e", "#94a3b8"],
         }
 
-        # Signup trend — last 12 months
+        # Signup trend - last 12 months using SQL GROUP BY
+        twelve_months_ago = (now - timedelta(days=365)).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+
+        monthly_counts = (
+            db.query(
+                extract("year", effective_created_at).label("year"),
+                extract("month", effective_created_at).label("month"),
+                func.count(Subscriber.id).label("count"),
+            )
+            .filter(visible_filter)
+            .filter(effective_created_at >= twelve_months_ago)
+            .group_by(
+                extract("year", effective_created_at),
+                extract("month", effective_created_at),
+            )
+            .all()
+        )
+
+        # Build lookup dict for monthly counts
+        monthly_lookup = {(int(r.year), int(r.month)): r.count for r in monthly_counts}
+
         labels: list[str] = []
         values: list[int] = []
         for i in range(11, -1, -1):
@@ -892,27 +937,18 @@ class Subscribers(ListResponseMixin):
                 month += 12
                 year -= 1
             labels.append(calendar.month_abbr[month])
-            count = sum(
-                1
-                for s in dashboard_subs
-                if (
-                    (created_at := get_effective_created_at(s)) is not None
-                    and created_at.year == year
-                    and created_at.month == month
-                )
-            )
-            values.append(count)
+            values.append(monthly_lookup.get((year, month), 0))
 
         signup_trend = {"labels": labels, "values": values}
 
-        # Recent subscribers
-        recent = sorted(
-            dashboard_subs,
-            key=lambda s: (
-                get_effective_created_at(s) or datetime.min.replace(tzinfo=UTC)
-            ),
-            reverse=True,
-        )[:10]
+        # Recent subscribers - query only 10 with ORDER BY
+        recent = (
+            db.query(Subscriber)
+            .filter(visible_filter)
+            .order_by(effective_created_at.desc())
+            .limit(10)
+            .all()
+        )
 
         return {
             "active_count": active_count,

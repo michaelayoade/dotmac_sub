@@ -69,16 +69,16 @@ class TestNetworkOperationCreate:
         payload = {"profile_id": "abc", "dry_run": False}
         op = network_operations.start(
             db_session,
-            NetworkOperationType.ont_provision,
+            NetworkOperationType.ont_authorize,
             NetworkOperationTargetType.ont,
             target_id,
             input_payload=payload,
             initiated_by="admin:alice",
-            correlation_key="ont_provision:test",
+            correlation_key="ont_authorize:test",
         )
         assert op.input_payload == payload
         assert op.initiated_by == "admin:alice"
-        assert op.correlation_key == "ont_provision:test"
+        assert op.correlation_key == "ont_authorize:test"
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +400,7 @@ class TestListForDevice:
         target_id = _make_target_id()
         parent = network_operations.start(
             db_session,
-            NetworkOperationType.ont_provision,
+            NetworkOperationType.ont_authorize,
             NetworkOperationTargetType.ont,
             target_id,
         )
@@ -449,7 +449,7 @@ class TestParentStatusDerivation:
         target_id = _make_target_id()
         parent = network_operations.start(
             db_session,
-            NetworkOperationType.ont_provision,
+            NetworkOperationType.ont_authorize,
             NetworkOperationTargetType.ont,
             target_id,
         )
@@ -545,7 +545,7 @@ class TestParentStatusDerivation:
         target_id = _make_target_id()
         parent = network_operations.start(
             db_session,
-            NetworkOperationType.ont_provision,
+            NetworkOperationType.ont_authorize,
             NetworkOperationTargetType.ont,
             target_id,
         )
@@ -571,7 +571,7 @@ class TestCleanupOldOperations:
         target_id = _make_target_id()
         parent = network_operations.start(
             db_session,
-            NetworkOperationType.ont_provision,
+            NetworkOperationType.ont_authorize,
             NetworkOperationTargetType.ont,
             target_id,
         )
@@ -750,7 +750,7 @@ class TestParentReDerivation:
         target_id = _make_target_id()
         parent = network_operations.start(
             db_session,
-            NetworkOperationType.ont_provision,
+            NetworkOperationType.ont_authorize,
             NetworkOperationTargetType.ont,
             target_id,
         )

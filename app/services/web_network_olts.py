@@ -7,6 +7,7 @@ import os
 import re
 import subprocess  # nosec
 import uuid
+from hashlib import blake2b
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from difflib import unified_diff
@@ -16,7 +17,7 @@ from typing import Any
 from uuid import UUID
 
 from fastapi import HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,8 +33,8 @@ from app.models.network import (
     PonPort,
     PonType,
 )
+from app.models.ont_autofind import OltAutofindCandidate
 from app.models.network_monitoring import (
-    DeviceInterface,
     DeviceRole,
     DeviceType,
     NetworkDevice,
@@ -49,8 +50,15 @@ from app.services.credential_crypto import decrypt_credential, encrypt_credentia
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.web_network_ont_autofind import _find_ont_by_serial
 
 logger = logging.getLogger(__name__)
+
+
+def _olt_sync_lock_key(olt_id: str) -> int:
+    """Return a deterministic positive bigint advisory-lock key for an OLT."""
+    digest = blake2b(olt_id.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, byteorder="big", signed=False) & 0x7FFFFFFFFFFFFFFF
 
 
 def _encrypt_if_set(values: Mapping[str, Any], key: str) -> str | None:
@@ -889,6 +897,136 @@ def _extract_firmware_version(version_output: str) -> str | None:
     return None
 
 
+def _parse_fsp_parts(fsp: str) -> tuple[str | None, str | None]:
+    """Split an F/S/P string into board and port fragments."""
+    parts = [part.strip() for part in str(fsp or "").split("/") if part.strip()]
+    if len(parts) != 3:
+        return None, None
+    return f"{parts[0]}/{parts[1]}", parts[2]
+
+
+def _persist_authorized_ont_inventory(
+    db: Session,
+    *,
+    olt: OLTDevice,
+    fsp: str,
+    serial_number: str,
+    ont_id: int,
+) -> None:
+    """Persist ONT + assignment state after OLT-side authorization."""
+    normalized_serial = str(serial_number or "").strip()
+    board, port = _parse_fsp_parts(fsp)
+    if not normalized_serial or not board or not port:
+        return
+
+    now = datetime.now(UTC)
+    candidate = db.scalars(
+        select(OltAutofindCandidate)
+        .where(
+            OltAutofindCandidate.olt_id == olt.id,
+            OltAutofindCandidate.fsp == fsp,
+            OltAutofindCandidate.serial_number == normalized_serial,
+        )
+        .order_by(
+            OltAutofindCandidate.updated_at.desc(),
+            OltAutofindCandidate.created_at.desc(),
+        )
+    ).first()
+
+    ont = _find_ont_by_serial(db, normalized_serial)
+    if ont is None:
+        ont = OntUnit(
+            serial_number=normalized_serial,
+            is_active=True,
+        )
+        db.add(ont)
+
+    ont.is_active = True
+    ont.olt_device_id = olt.id
+    ont.board = board
+    ont.port = port
+    ont.external_id = str(ont_id)
+    ont.last_sync_source = "olt_ssh_authorize"
+    ont.last_sync_at = now
+
+    if candidate is not None:
+        if candidate.vendor_id:
+            ont.vendor = candidate.vendor_id
+        if candidate.model:
+            ont.model = candidate.model
+        if candidate.software_version:
+            ont.firmware_version = candidate.software_version
+        if candidate.mac:
+            ont.mac_address = candidate.mac
+
+    pon_port = db.scalars(
+        select(PonPort).where(
+            PonPort.olt_id == olt.id,
+            PonPort.name == fsp,
+        )
+    ).first()
+    if pon_port is None:
+        pon_port = PonPort(
+            olt_id=olt.id,
+            name=fsp,
+            port_number=int(port) if str(port).isdigit() else None,
+            is_active=True,
+        )
+        db.add(pon_port)
+        db.flush()
+    else:
+        pon_port.is_active = True
+        if pon_port.port_number is None and str(port).isdigit():
+            pon_port.port_number = int(port)
+
+    active_assignment = db.scalars(
+        select(OntAssignment)
+        .where(
+            OntAssignment.ont_unit_id == ont.id,
+            OntAssignment.active.is_(True),
+        )
+        .order_by(
+            OntAssignment.assigned_at.desc(),
+            OntAssignment.created_at.desc(),
+        )
+    ).first()
+    if active_assignment is None:
+        db.add(
+            OntAssignment(
+                ont_unit_id=ont.id,
+                pon_port_id=pon_port.id,
+                active=True,
+                assigned_at=now,
+            )
+        )
+    elif active_assignment.pon_port_id != pon_port.id:
+        active_assignment.active = False
+        db.add(
+            OntAssignment(
+                ont_unit_id=ont.id,
+                pon_port_id=pon_port.id,
+                subscriber_id=active_assignment.subscriber_id,
+                subscription_id=active_assignment.subscription_id,
+                service_address_id=active_assignment.service_address_id,
+                notes=active_assignment.notes,
+                active=True,
+                assigned_at=now,
+            )
+        )
+    else:
+        active_assignment.active = True
+        if active_assignment.assigned_at is None:
+            active_assignment.assigned_at = now
+
+    if candidate is not None:
+        candidate.ont_unit = ont
+        candidate.is_active = False
+        candidate.resolution_reason = "authorized"
+        candidate.resolved_at = now
+
+    db.commit()
+
+
 def get_autofind_onts(
     db: Session, olt_id: str
 ) -> tuple[bool, str, list[olt_ssh_service.AutofindEntry]]:
@@ -902,7 +1040,7 @@ def get_autofind_onts(
 def authorize_autofind_ont(
     db: Session, olt_id: str, fsp: str, serial_number: str
 ) -> tuple[bool, str]:
-    """Authorize an unregistered ONT on an OLT via SSH, then provision service-ports."""
+    """Authorize an unregistered ONT and persist app-side inventory state."""
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found"
@@ -923,23 +1061,23 @@ def authorize_autofind_ont(
             f"{msg}. Warning: ONT-ID could not be determined, so service-port provisioning was skipped",
         )
 
-    # Step 2: Provision service-ports using neighbor-learning
-    sp_ok, sp_msg = provision_ont_service_ports(db, olt_id, fsp, ont_id)
-    if sp_ok:
-        return True, f"{msg}. {sp_msg}"
-    # Authorization succeeded even if service-port provisioning failed
-    logger.warning("Service-port provisioning failed after ONT authorize: %s", sp_msg)
-    return True, f"{msg}. Warning: service-port provisioning failed — {sp_msg}"
+    _persist_authorized_ont_inventory(
+        db,
+        olt=olt,
+        fsp=fsp,
+        serial_number=serial_number,
+        ont_id=ont_id,
+    )
+    return True, msg
 
-
-def provision_ont_service_ports(
+def clone_service_ports(
     db: Session, olt_id: str, fsp: str, ont_id: int
 ) -> tuple[bool, str]:
-    """Provision service-ports for the most recently authorized ONT on a port.
+    """Clone service-ports for an ONT using a reference ONT on the same port.
 
     Uses the neighbor-learning pattern: inspects existing service-ports on the
-    same PON port, finds the VLAN/GEM pattern from a reference ONT, and
-    replicates it for the explicitly authorized ONT-ID.
+    same PON port, finds the VLAN/GEM pattern from a reference ONT, and copies
+    it to the explicitly selected ONT-ID.
     """
     olt = get_olt_or_none(db, olt_id)
     if not olt:
@@ -981,6 +1119,13 @@ def provision_ont_service_ports(
     )
 
     return olt_ssh_service.create_service_ports(olt, fsp, ont_id, reference_ports)
+
+
+def provision_ont_service_ports(
+    db: Session, olt_id: str, fsp: str, ont_id: int
+) -> tuple[bool, str]:
+    """Compatibility alias for explicit service-port cloning."""
+    return clone_service_ports(db, olt_id, fsp, ont_id)
 
 
 def test_olt_netconf_connection(
@@ -1156,57 +1301,6 @@ def _decode_huawei_packed_fsp(packed_value: int) -> str | None:
     return f"{frame}/{slot}/{port}"
 
 
-def _extract_pon_hint(value: str | None) -> str | None:
-    import re
-
-    if not value:
-        return None
-    match = re.search(r"(\d+/\d+/\d+)\s*$", str(value).strip())
-    if match:
-        return match.group(1)
-    return None
-
-
-def _pon_sort_key(hint: str) -> tuple[int, int, int]:
-    parts = hint.split("/")
-    try:
-        return int(parts[0]), int(parts[1]), int(parts[2])
-    except Exception:
-        return (10**9, 10**9, 10**9)
-
-
-def _build_packed_fsp_map(
-    db: Session, linked: NetworkDevice, indexes: set[str]
-) -> dict[str, str]:
-    """Map Huawei packed FSP integers to detected PON hints (0/s/p)."""
-    packed_values: list[int] = []
-    for idx in indexes:
-        parts = [p for p in idx.split(".") if p.isdigit()]
-        if len(parts) == 2:
-            try:
-                packed_values.append(int(parts[0]))
-            except ValueError:
-                continue
-    if not packed_values:
-        return {}
-    unique_packed = sorted(set(packed_values))
-
-    iface_names = list(
-        db.scalars(
-            select(DeviceInterface.name).where(DeviceInterface.device_id == linked.id)
-        ).all()
-    )
-    hints = sorted(
-        {h for name in iface_names if (h := _extract_pon_hint(name))},
-        key=_pon_sort_key,
-    )
-    if not hints:
-        return {}
-    return {
-        str(packed): hint for packed, hint in zip(unique_packed, hints, strict=False)
-    }
-
-
 def _run_simple_v2c_walk(
     linked: NetworkDevice, oid: str, *, timeout: int = 45, bulk: bool = False
 ) -> list[str]:
@@ -1246,7 +1340,33 @@ def sync_onts_from_olt_snmp(
 
     Supports vendor-specific OID profiles (Huawei, ZTE, Nokia) with
     automatic vendor detection from the linked monitoring device/OLT.
+
+    Uses a PostgreSQL transaction-scoped advisory lock per-OLT to prevent
+    concurrent SNMP syncs from racing on the same rows. Non-PostgreSQL
+    test environments fall back to the unlocked path.
     """
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        return _sync_onts_from_olt_snmp_impl(db, olt_id)
+    lock_key = _olt_sync_lock_key(olt_id)
+    lock_acquired = bool(
+        db.execute(
+            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_key}
+        ).scalar()
+    )
+    if not lock_acquired:
+        return (
+            False,
+            "Another sync is already running for this OLT",
+            {"discovered": 0, "created": 0, "updated": 0},
+        )
+    return _sync_onts_from_olt_snmp_impl(db, olt_id)
+
+
+def _sync_onts_from_olt_snmp_impl(
+    db: Session, olt_id: str
+) -> tuple[bool, str, dict[str, object]]:
+    """Internal implementation of ONT SNMP sync (called with advisory lock held)."""
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found", {"discovered": 0, "created": 0, "updated": 0}
@@ -1401,12 +1521,9 @@ def sync_onts_from_olt_snmp(
 
     created = 0
     updated = 0
+    unresolved_topology = 0
     now = datetime.now(UTC)
     olt_tag = str(olt.id).split("-")[0].upper()
-
-    packed_fsp_map = (
-        _build_packed_fsp_map(db, linked, all_indexes) if vendor_key == "huawei" else {}
-    )
 
     vendor_serial_prefix = {
         "huawei": "HW",
@@ -1419,10 +1536,11 @@ def sync_onts_from_olt_snmp(
         parsed = _split_onu_index(idx)
         if not parsed:
             continue
-        frame = "0"
-        slot = "0"
-        port = "0"
+        frame = None
+        slot = None
+        port = None
         onu = "0"
+        fsp: str | None = None
         if len(parsed) >= 4:
             frame, slot, port, onu = parsed
             fsp = f"{frame}/{slot}/{port}"
@@ -1430,29 +1548,49 @@ def sync_onts_from_olt_snmp(
             packed, onu = parsed
             if vendor_key == "huawei":
                 packed_int = int(packed) if str(packed).isdigit() else None
-                decoded = (
+                fsp = (
                     _decode_huawei_packed_fsp(packed_int)
                     if packed_int is not None
                     else None
                 )
-                fsp = packed_fsp_map.get(str(packed)) or decoded or f"0/0/{packed}"
-            else:
-                # Best-effort for vendors exposing compact indexes.
-                fsp = f"0/0/{packed}"
-        fsp_parts = fsp.split("/")
-        frame = fsp_parts[0] if len(fsp_parts) > 0 else "0"
-        slot = fsp_parts[1] if len(fsp_parts) > 1 else "0"
-        port = fsp_parts[2] if len(fsp_parts) > 2 else "0"
-        board = f"{frame}/{slot}"
+        if fsp:
+            fsp_parts = fsp.split("/")
+            frame = fsp_parts[0] if len(fsp_parts) > 0 else None
+            slot = fsp_parts[1] if len(fsp_parts) > 1 else None
+            port = fsp_parts[2] if len(fsp_parts) > 2 else None
+        else:
+            unresolved_topology += 1
+        board = f"{frame}/{slot}" if frame is not None and slot is not None else None
         external_id = f"{vendor_key}:{idx}"
-        synthetic_serial = f"{vendor_serial_prefix}-{olt_tag}-{frame}{slot}{port}{onu}"
+        serial_frame = frame if frame is not None else "U"
+        serial_slot = slot if slot is not None else "U"
+        serial_port = port if port is not None else "U"
+        synthetic_serial = (
+            f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
+        )
 
         status, offline_reason = _parse_online_status(status_rows.get(idx))
         olt_rx = _parse_signal_dbm(olt_rx_rows.get(idx))
         onu_rx = _parse_signal_dbm(onu_rx_rows.get(idx))
         distance = _parse_distance_m(distance_rows.get(idx))
 
+        # First check in-memory cache, then verify with database query
         ont = by_external_id.get(external_id) or by_serial.get(synthetic_serial)
+
+        # If not in cache, do a database lookup to handle race conditions
+        if ont is None:
+            ont = db.scalars(
+                select(OntUnit).where(
+                    OntUnit.olt_device_id == olt.id,
+                    OntUnit.external_id == external_id,
+                )
+            ).first()
+            if ont:
+                # Found in DB but not in cache - add to cache
+                by_external_id[external_id] = ont
+                if ont.serial_number:
+                    by_serial[ont.serial_number] = ont
+
         if ont is None:
             ont = OntUnit(
                 serial_number=synthetic_serial,
@@ -1465,7 +1603,7 @@ def sync_onts_from_olt_snmp(
                 board=board,
                 port=port,
                 external_id=external_id,
-                name=f"ONU {fsp}:{onu}",
+                name=f"ONU {fsp}:{onu}" if fsp else f"ONU unresolved:{idx}",
                 online_status=status,
                 tr069_acs_server_id=olt.tr069_acs_server_id,
             )
@@ -1497,7 +1635,7 @@ def sync_onts_from_olt_snmp(
             ont.offline_reason = offline_reason
 
     try:
-        db.commit()
+        db.flush()
     except Exception as exc:
         db.rollback()
         return (
@@ -1539,7 +1677,7 @@ def sync_onts_from_olt_snmp(
         for ont_item in onts_needing_assignment:
             ont_board = getattr(ont_item, "board", "") or ""
             ont_port = getattr(ont_item, "port", "") or ""
-            pon_name = f"pon-{ont_board}/{ont_port}" if ont_board and ont_port else None
+            pon_name = f"{ont_board}/{ont_port}" if ont_board and ont_port else None
             if not pon_name:
                 continue
             pon_port = olt_pon_ports.get(pon_name)
@@ -1562,11 +1700,24 @@ def sync_onts_from_olt_snmp(
             db.add(assignment)
             assignment_created += 1
         if assignment_created:
-            db.commit()
+            db.flush()
     except Exception as exc:
         logger.warning("Failed to auto-create ONT assignments: %s", exc)
         db.rollback()
         assignment_errors += 1
+        return (
+            False,
+            f"Failed to auto-create ONT assignments: {exc!s}",
+            {
+                "discovered": len(all_indexes),
+                "created": created,
+                "updated": updated,
+                "assignments_created": 0,
+                "assignment_errors": assignment_errors,
+                "tr069_runtime_synced": 0,
+                "tr069_runtime_errors": 0,
+            },
+        )
 
     if created > 0:
         try:
@@ -1633,6 +1784,7 @@ def sync_onts_from_olt_snmp(
         "discovered": len(all_indexes),
         "created": created,
         "updated": updated,
+        "unresolved_topology": unresolved_topology,
         "assignments_created": assignment_created,
         "assignment_errors": assignment_errors,
         "tr069_runtime_synced": tr069_runtime_synced,
@@ -1640,6 +1792,11 @@ def sync_onts_from_olt_snmp(
     }
     if propagation_stats:
         result_stats["acs_propagation"] = propagation_stats
+    try:
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        return False, f"Failed to finalize ONT sync: {exc!s}", result_stats
     return True, message, result_stats
 
 

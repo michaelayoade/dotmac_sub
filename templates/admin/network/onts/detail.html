@@ -19,10 +19,10 @@
             const trigger = document.querySelector('[data-tab=\"service-ports\"]');
             if (trigger) trigger.dataset.loaded = '1';
             htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'});
-        } else if (activeTab === 'provisioning') {
-            const trigger = document.querySelector('[data-tab=\"provisioning\"]');
+        } else if (activeTab === 'configuration') {
+            const trigger = document.querySelector('[data-tab=\"configuration\"]');
             if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/iphost-config', {target: '#provisioning-content', swap: 'innerHTML'});
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/iphost-config', {target: '#configuration-content', swap: 'innerHTML'});
         }
      ">
     {# Header #}
@@ -86,12 +86,15 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 ONU Mode
             </button>
-            <button hx-get="/admin/network/onts/{{ ont.id }}/mgmt-ip"
-                    hx-target="#modal-container"
+            <button type="button"
+                    data-tab-trigger="configuration"
+                    hx-get="/admin/network/onts/{{ ont.id }}/iphost-config"
+                    hx-target="#configuration-content"
                     hx-swap="innerHTML"
+                    @click="activeTab = 'configuration'"
                     class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-                Mgmt IP
+                Configuration
             </button>
             <a href="/admin/network/onts/{{ ont.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
@@ -100,9 +103,16 @@
         </div>
     </div>
 
+    {% if preview_mode %}
+    <div class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+        Preview mode: this page is for layout testing only. The Move ONU interaction below is visual and does not save changes.
+        <a href="{{ preview_origin_url }}" class="ml-2 font-medium underline decoration-amber-400 underline-offset-2 hover:text-amber-900 dark:hover:text-amber-100">Open live detail page</a>
+    </div>
+    {% endif %}
+
     {% if inventory_ready %}
     <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300">
-        This ONT is back in inventory and ready for a fresh assignment/provisioning flow.
+        This ONT is back in inventory and ready for a fresh assignment and configuration flow.
     </div>
     {% endif %}
 
@@ -137,7 +147,7 @@
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Subscription: {{ subscriber_info.subscription_status | replace("_", " ") | title if subscriber_info.get('subscription_status') else 'Unknown' }}</p>
             {% else %}
             <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">No subscriber linked</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Use assignment and provisioning flows to attach service context.</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Use assignment and explicit configuration actions to attach service context.</p>
             {% endif %}
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
@@ -153,16 +163,16 @@
             </p>
         </div>
         <div class="rounded-xl border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Provisioning</p>
-            {% if provisioning_info.get('profile_name') %}
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">{{ provisioning_info.profile_name }}</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500 dark:text-slate-400">Profile State</p>
+            {% if profile_state.get('profile_name') %}
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">{{ profile_state.profile_name }}</p>
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">
-                {{ provisioning_info.status | replace("_", " ") | title if provisioning_info.get('status') else 'Status unknown' }}
-                {% if provisioning_info.get('has_drift') %} · Drift detected{% endif %}
+                {{ profile_state.status | replace("_", " ") | title if profile_state.get('status') else 'Status unknown' }}
+                {% if profile_state.get('has_drift') %} · Drift detected{% endif %}
             </p>
             {% else %}
-            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">No profile bound</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">Provisioning template has not been attached to this ONT.</p>
+            <p class="mt-2 text-base font-semibold text-slate-900 dark:text-white">No profile applied</p>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-400">No manual profile template has been applied to this ONT.</p>
             {% endif %}
         </div>
     </div>
@@ -223,55 +233,9 @@
     </div>
     {% endif %}
 
-    <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="flex items-center justify-between gap-4">
-            <div>
-                <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Provisioning Run Evidence</h3>
-                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Recent orchestration runs linked to the assigned subscription.</p>
-            </div>
-            <span class="text-xs text-slate-500 dark:text-slate-400">{{ provisioning_runs|length }} recent run{{ '' if provisioning_runs|length == 1 else 's' }}</span>
-        </div>
-        <div class="mt-4 space-y-3">
-            {% for run in provisioning_runs %}
-            <div class="rounded-lg border border-slate-200 p-4 dark:border-slate-700">
-                <div class="flex items-center justify-between gap-3">
-                    <div>
-                        <p class="text-sm font-medium text-slate-900 dark:text-white">{{ run.workflow_name }}</p>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ run.status | replace('_', ' ') | title }} · {{ run.success_count }}/{{ run.step_count }} successful{% if run.failed_count %} · {{ run.failed_count }} failed{% endif %}</p>
-                    </div>
-                    <p class="text-xs text-slate-500 dark:text-slate-400">
-                        {% if run.completed_at %}
-                        {{ run.completed_at.strftime('%b %d, %Y %H:%M') }}
-                        {% elif run.started_at %}
-                        Started {{ run.started_at.strftime('%b %d, %Y %H:%M') }}
-                        {% else %}
-                        No timestamp
-                        {% endif %}
-                    </p>
-                </div>
-                {% if run.step_results %}
-                <div class="mt-3 grid gap-2 sm:grid-cols-2">
-                    {% for step in run.step_results %}
-                    <div class="rounded-md bg-slate-50 px-3 py-2 text-xs dark:bg-slate-900/40">
-                        <p class="font-medium text-slate-700 dark:text-slate-200">{{ step.step_type | replace('_', ' ') | title }}</p>
-                        <p class="mt-1 text-slate-500 dark:text-slate-400">{{ step.status | title }}{% if step.detail %} · {{ step.detail }}{% endif %}</p>
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-                {% if run.error_message %}
-                <p class="mt-3 text-xs text-rose-600 dark:text-rose-300">{{ run.error_message }}</p>
-                {% endif %}
-            </div>
-            {% else %}
-            <div class="rounded-lg border border-dashed border-slate-300 p-4 text-sm text-slate-500 dark:border-slate-700 dark:text-slate-400">No provisioning runs are linked to the current ONT assignment yet.</div>
-            {% endfor %}
-        </div>
-    </div>
-
     {# Tab Navigation #}
-    <div class="border-b border-slate-200 dark:border-slate-700">
-        <nav class="flex gap-6 -mb-px">
+    <div class="overflow-x-auto border-b border-slate-200 dark:border-slate-700">
+        <nav class="flex min-w-max gap-6 -mb-px">
             <button @click="activeTab = 'overview'"
                     :class="activeTab === 'overview' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
@@ -308,11 +272,16 @@
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
                 Service Ports
             </button>
-            <button data-tab="provisioning" @click="activeTab = 'provisioning'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/iphost-config', {target: '#provisioning-content', swap: 'innerHTML'}) }"
-                    :class="activeTab === 'provisioning' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+            <button type="button"
+                    data-tab="configuration"
+                    hx-get="/admin/network/onts/{{ ont.id }}/iphost-config"
+                    hx-target="#configuration-content"
+                    hx-swap="innerHTML"
+                    @click="activeTab = 'configuration'; $el.dataset.loaded = '1'"
+                    :class="activeTab === 'configuration' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                Provisioning
+                Configuration
             </button>
         </nav>
     </div>
@@ -321,6 +290,133 @@
     <div x-show="activeTab === 'overview'" x-transition>
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
             <div class="lg:col-span-2 space-y-6">
+                {% if preview_mode %}
+                {% set preview_initial_olt_id = ont.olt_device_id|string if ont.olt_device_id else '' %}
+                {% set preview_initial_olt_name = network_path.get('olt_name') or '' %}
+                {% if not preview_initial_olt_name and ont.olt_device is defined and ont.olt_device %}
+                    {% set preview_initial_olt_name = ont.olt_device.name %}
+                {% endif %}
+                <div
+                    x-data='{
+                        open: false,
+                        currentOltId: {{ preview_initial_olt_id | tojson }},
+                        currentOltName: {{ preview_initial_olt_name | tojson }},
+                        currentBoard: {{ (ont.board or "") | tojson }},
+                        currentPort: {{ (ont.port or "") | tojson }},
+                        draftOltId: {{ preview_initial_olt_id | tojson }},
+                        draftBoard: {{ (ont.board or "") | tojson }},
+                        draftPort: {{ (ont.port or "") | tojson }},
+                        openModal() {
+                            this.draftOltId = this.currentOltId;
+                            this.draftBoard = this.currentBoard;
+                            this.draftPort = this.currentPort;
+                            this.open = true;
+                        },
+                        applyMove() {
+                            const select = this.$refs.oltSelect;
+                            this.currentOltId = this.draftOltId;
+                            this.currentBoard = this.draftBoard;
+                            this.currentPort = this.draftPort;
+                            this.currentOltName = select && select.selectedIndex >= 0
+                                ? select.options[select.selectedIndex].text
+                                : this.currentOltName;
+                            this.open = false;
+                        }
+                    }'
+                    class="space-y-4"
+                >
+                    {% call card("ONU Placement Preview", color="blue") %}
+                    <div class="flex flex-col gap-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-800/60 sm:flex-row sm:items-start sm:justify-between">
+                        <div class="flex items-center gap-3">
+                            <a href="/admin/network/onts/{{ ont.id }}/preview?tab=configuration"
+                               class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                               title="Open configuration preview">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                            </a>
+                            <button type="button"
+                                    @click="openModal()"
+                                    class="text-sm font-medium text-blue-600 underline decoration-blue-300 underline-offset-4 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                                Move ONU
+                            </button>
+                        </div>
+                    </div>
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
+                            <dd class="mt-1 text-sm font-medium text-slate-900 dark:text-white" x-text="currentOltName || 'Not set'"></dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Board</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentBoard || 'Not set'"></dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Port</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentPort || 'Not set'"></dd>
+                        </div>
+                    </dl>
+                    {% endcall %}
+
+                    <div x-show="open" x-cloak x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+                        <div class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
+                             @click.outside="open = false"
+                             @keydown.escape.window="open = false">
+                            <div class="flex items-start justify-between gap-4">
+                                <div>
+                                    <h3 class="text-lg font-bold text-slate-900 dark:text-white">Move ONU</h3>
+                                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Preview only. This modal updates the page summary without saving to the database.</p>
+                                </div>
+                                <button type="button"
+                                        @click="open = false"
+                                        class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                                </button>
+                            </div>
+                            <form class="mt-6 space-y-4" @submit.prevent="applyMove()">
+                                <div>
+                                    <label for="preview-move-olt" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT</label>
+                                    <select id="preview-move-olt"
+                                            x-ref="oltSelect"
+                                            x-model="draftOltId"
+                                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                        <option value="">Select OLT</option>
+                                        {% for olt in olt_devices %}
+                                        <option value="{{ olt.id }}">{{ olt.name }}{% if olt.mgmt_ip %} ({{ olt.mgmt_ip }}){% endif %}</option>
+                                        {% endfor %}
+                                    </select>
+                                </div>
+                                <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                    <div>
+                                        <label for="preview-move-board" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Board</label>
+                                        <input id="preview-move-board"
+                                               type="text"
+                                               x-model="draftBoard"
+                                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    </div>
+                                    <div>
+                                        <label for="preview-move-port" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Port</label>
+                                        <input id="preview-move-port"
+                                               type="text"
+                                               x-model="draftPort"
+                                               class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    </div>
+                                </div>
+                                <div class="flex justify-end gap-3 pt-2">
+                                    <button type="button"
+                                            @click="open = false"
+                                            class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">
+                                        Cancel
+                                    </button>
+                                    <button type="submit"
+                                            class="rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
+                                        Update
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
                 {# Device Information #}
                 {% call card("Device Information", color="blue") %}
                 <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
@@ -496,7 +592,7 @@
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</p>
-                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or ont.mgmt_ip_address or '&mdash;' }}</p>
+                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '&mdash;' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</p>
@@ -546,11 +642,11 @@
                         Assign to Subscriber
                     </a>
                     {% endif %}
-                    {% if assignment or ont.is_active or (provisioning_info and (provisioning_info.profile_id or provisioning_info.status)) %}
+                    {% if assignment or ont.external_id or (profile_state and (profile_state.profile_id or profile_state.status)) %}
                     <button
                         hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
                         hx-swap="none"
-                        hx-confirm="Return this ONT to inventory? This will deactivate it, close the active assignment, and clear provisioning/service state."
+                        hx-confirm="Return this ONT to inventory?"
                         class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:bg-slate-800 dark:text-amber-400"
                     >
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7H9m11 0l-4-4m4 4l-4 4M4 17h11m-11 0l4-4m-4 4l4 4"/></svg>
@@ -631,40 +727,46 @@
                 {# WiFi, PPPoE, LAN Ports, Diagnostics, Connection Request #}
                 {% include "admin/network/onts/_actions_panel.html" %}
 
-                {# -- Provisioning Profile Card -- #}
-                {% call card("Provisioning Profile", color="blue") %}
+                {# -- Manual Profile Card -- #}
+                {% call card("Manual Profile", color="blue") %}
                 <div class="space-y-3">
-                    {% if provisioning_info and provisioning_info.profile_name is defined %}
+                    {% if profile_state and profile_state.profile_name is defined %}
                     <div class="flex items-center justify-between">
                         <div>
-                            <span class="text-sm font-medium text-slate-900 dark:text-white">{{ provisioning_info.profile_name }}</span>
-                            {% if provisioning_info.status %}
-                            {% set status_classes = {
-                                'provisioned': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
+                            <span class="text-sm font-medium text-slate-900 dark:text-white">{{ profile_state.profile_name }}</span>
+                            {% if profile_state.status %}
+                            {% set profile_status_classes = {
+                                'applied': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
                                 'drift_detected': 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
                                 'failed': 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
-                                'unprovisioned': 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200'
+                                'not_applied': 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200'
                             } %}
-                            <span class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ status_classes[provisioning_info.status] or status_classes['unprovisioned'] }}">
-                                {{ provisioning_info.status | replace('_', ' ') | title }}
+                            {% set profile_status_label = {
+                                'provisioned': 'Applied',
+                                'unprovisioned': 'Not Applied',
+                                'drift_detected': 'Drift Detected',
+                                'failed': 'Failed'
+                            } %}
+                            <span class="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ profile_status_classes[profile_status_label.get(profile_state.status, profile_state.status) | lower | replace(' ', '_')] or profile_status_classes['not_applied'] }}">
+                                {{ profile_status_label.get(profile_state.status, profile_state.status | replace('_', ' ') | title) }}
                             </span>
                             {% endif %}
                         </div>
                     </div>
-                    {% if provisioning_info.last_provisioned_at %}
-                    <p class="text-xs text-slate-500 dark:text-slate-400">Last applied: {{ provisioning_info.last_provisioned_at.strftime('%Y-%m-%d %H:%M') if provisioning_info.last_provisioned_at else 'Never' }}</p>
+                    {% if profile_state.last_provisioned_at %}
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Last applied manually: {{ profile_state.last_provisioned_at.strftime('%Y-%m-%d %H:%M') if profile_state.last_provisioned_at else 'Never' }}</p>
                     {% endif %}
 
                     {# Drift Warning #}
-                    {% if provisioning_info.has_drift is defined and provisioning_info.has_drift %}
+                    {% if profile_state.has_drift is defined and profile_state.has_drift %}
                     <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20">
                         <div class="flex items-center gap-2 mb-1">
                             <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
                             <span class="text-xs font-semibold text-amber-700 dark:text-amber-400">Configuration Drift Detected</span>
                         </div>
-                        {% if provisioning_info.drifted_fields %}
+                        {% if profile_state.drifted_fields %}
                         <ul class="mt-1 space-y-0.5">
-                            {% for df in provisioning_info.drifted_fields %}
+                            {% for df in profile_state.drifted_fields %}
                             <li class="text-xs text-amber-600 dark:text-amber-300">
                                 <span class="font-mono">{{ df.field }}</span>: {{ df.observed }} &rarr; {{ df.desired }}
                             </li>
@@ -674,11 +776,13 @@
                     </div>
                     {% endif %}
                     {% else %}
-                    <p class="text-sm text-slate-500 dark:text-slate-400">No profile assigned</p>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">No profile applied</p>
                     {% endif %}
 
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Profile templates are optional. Applying one updates the ONT immediately; it does not start a coordinated workflow.</p>
+
                     {# Apply Profile Form #}
-                    {% if available_profiles %}
+                    {% if available_profile_templates %}
                     <form hx-post="/admin/network/onts/{{ ont.id }}/apply-profile"
                           hx-swap="none"
                           class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
@@ -686,11 +790,11 @@
                         <select name="profile_id" required
                             class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select profile...</option>
-                            {% for p in available_profiles %}
-                            <option value="{{ p.id }}" {% if provisioning_info and provisioning_info.profile_id is defined and provisioning_info.profile_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+                            {% for p in available_profile_templates %}
+                            <option value="{{ p.id }}" {% if profile_state and profile_state.profile_id is defined and profile_state.profile_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
                             {% endfor %}
                         </select>
-                        <button type="submit" hx-confirm="Apply this provisioning profile to the ONT?"
+                        <button type="submit" hx-confirm="Apply this profile template to the ONT now?"
                             class="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700">
                             <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
                             Apply
@@ -749,7 +853,7 @@
             {% if has_runtime %}
             <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '&mdash;' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or ont.mgmt_ip_address or '&mdash;' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '&mdash;' }}</dd></div>
                 <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '&mdash;' }}</dd></div>
                 <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '&mdash;' }}</dd></div>
                 <div>
@@ -981,16 +1085,16 @@
         </div>
     </div>
 
-    {# ===================== PROVISIONING TAB ===================== #}
-    <div x-show="activeTab === 'provisioning'" x-transition x-cloak>
-        <div id="provisioning-content">
+    {# ===================== CONFIGURATION TAB ===================== #}
+    <div x-show="activeTab === 'configuration'" x-transition x-cloak>
+        <div id="configuration-content">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading provisioning data...</span>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading configuration data...</span>
             </div>
         </div>
 
-        {# Provisioning Preview & One-Click #}
+        {# Manual ONT action guidance #}
         {% include "admin/network/onts/_provision_action.html" %}
     </div>
 </div>

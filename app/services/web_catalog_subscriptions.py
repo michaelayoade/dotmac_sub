@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -60,6 +61,30 @@ from app.services.credential_crypto import decrypt_credential
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
+
+
+def _format_offer_price_summary(amount: object | None) -> str:
+    value = _coerce_setting_decimal(amount)
+    if value is None:
+        return ""
+    return f"₦{value:,.0f}/mo"
+
+
+def _offer_option(offer: object) -> dict[str, str]:
+    offer_id = str(getattr(offer, "id", "") or "")
+    name = str(getattr(offer, "name", "") or "")
+    prices = getattr(offer, "prices", None) or []
+    amount = getattr(prices[0], "amount", None) if prices else None
+    price_summary = _format_offer_price_summary(amount)
+    label = name
+    if price_summary:
+        label = f"{name} - {price_summary}"
+    return {
+        "id": offer_id,
+        "name": name,
+        "price_summary": price_summary,
+        "label": label,
+    }
 
 
 def _coerce_setting_int(value: object | None) -> int | None:
@@ -1815,10 +1840,12 @@ def subscription_form_context(
         "subscription": subscription,
         "accounts": accounts,
         "offers": offers,
+        "offer_options": [_offer_option(offer) for offer in offers],
         "nas_devices": nas_devices,
         "router_devices": nas_devices,
         "ipv4_pools": ipv4_pools,
         "ipv4_blocks": block_options,
+        "ipv4_blocks_json": json.dumps(block_options),
         "radius_profiles": radius_profiles,
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],

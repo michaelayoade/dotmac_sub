@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import select
@@ -20,16 +21,28 @@ from app.services.network.vlan_chain import validate_chain
 logger = logging.getLogger(__name__)
 
 
+def _normalize_fsp(value: str | None) -> str | None:
+    """Normalize stored PON labels to raw frame/slot/port strings."""
+    raw = (value or "").strip()
+    if raw.lower().startswith("pon-"):
+        raw = raw[4:].strip()
+    return raw or None
+
+
 def _parse_ont_id_on_olt(external_id: str | None) -> int | None:
     """Extract the ONT ID from supported external_id formats.
 
     Supported formats:
     - "5" -> 5
+    - "generic:5" -> 5
     - "huawei:4194320640.5" -> 5
     """
     ext = (external_id or "").strip()
     if ext.isdigit():
         return int(ext)
+    match = re.match(r"^(?:[a-z0-9_-]+:)?(?:\d+\.)*(\d+)$", ext, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
     if "." in ext:
         dot_part = ext.rsplit(".", 1)[-1]
         if dot_part.isdigit():
@@ -71,9 +84,9 @@ def _resolve_ont_olt_context(
     board = ont.board or ""
     port = ont.port or ""
     if board and port:
-        fsp = f"{board}/{port}"
+        fsp = _normalize_fsp(f"{board}/{port}")
     elif pon_port.name:
-        fsp = pon_port.name
+        fsp = _normalize_fsp(pon_port.name)
     else:
         return ont, olt, None, None
 

@@ -1,8 +1,10 @@
 from app.services.network.olt_polling import (
+    _build_reading_targets,
     _parse_signal_value,
     _parse_snmp_table,
     _parse_snmp_table_composite,
 )
+from app.services.network.olt_polling_parsers import _fsp_hint_from_index
 
 
 def test_parse_snmp_table_last_token_index() -> None:
@@ -172,3 +174,136 @@ def test_event_type_ont_ddm_alert_exists() -> None:
 
     assert hasattr(EventType, "ont_ddm_alert")
     assert EventType.ont_ddm_alert.value == "ont.ddm_alert"
+
+
+def test_build_reading_targets_does_not_fallback_to_unmatched_ont(db_session) -> None:
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.olt_polling_parsers import OntSignalReading
+
+    olt = OLTDevice(name="Poll OLT", vendor="Huawei")
+    ont = OntUnit(
+        serial_number="ONT-001",
+        olt_device_id=olt.id,
+        is_active=True,
+        external_id="huawei:4194320640.5",
+    )
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    readings = [
+        OntSignalReading(
+            onu_index="4194320640.7",
+            olt_rx_dbm=-19.5,
+            onu_rx_dbm=-21.0,
+            onu_tx_dbm=None,
+            distance_m=1000,
+            is_online=True,
+        )
+    ]
+
+    targets = _build_reading_targets(
+        db_session,
+        olt=olt,
+        readings=readings,
+        assignments=[],
+    )
+
+    assert targets == []
+
+
+def test_build_reading_targets_skips_ambiguous_fsp_only_matches(db_session) -> None:
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.olt_polling_parsers import OntSignalReading
+
+    olt = OLTDevice(name="Poll OLT", vendor="Huawei")
+    ont_a = OntUnit(
+        serial_number="ONT-001",
+        olt_device_id=olt.id,
+        is_active=True,
+        board="0/1",
+        port="0",
+        external_id=None,
+    )
+    ont_b = OntUnit(
+        serial_number="ONT-002",
+        olt_device_id=olt.id,
+        is_active=True,
+        board="0/1",
+        port="0",
+        external_id=None,
+    )
+    db_session.add_all([olt, ont_a, ont_b])
+    db_session.commit()
+
+    readings = [
+        OntSignalReading(
+            onu_index="4194320384.3",
+            olt_rx_dbm=-19.5,
+            onu_rx_dbm=-21.0,
+            onu_tx_dbm=None,
+            distance_m=1000,
+            is_online=True,
+        )
+    ]
+
+    targets = _build_reading_targets(
+        db_session,
+        olt=olt,
+        readings=readings,
+        assignments=[],
+    )
+
+    assert targets == []
+
+
+def test_fsp_hint_from_huawei_packed_index_decodes_frame_slot_port() -> None:
+    assert _fsp_hint_from_index("4194320384.3") == "0/1/0"
+
+
+def test_poll_sfp_modules_scopes_to_olt_and_uses_port_number_keys(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network import OltCard, OltCardPort, OLTDevice, OltShelf, OltSfpModule
+    from app.services.network.olt_polling import poll_sfp_modules
+
+    olt = OLTDevice(name="OLT-A", vendor="Huawei")
+    other_olt = OLTDevice(name="OLT-B", vendor="Huawei")
+    db_session.add_all([olt, other_olt])
+    db_session.commit()
+
+    shelf = OltShelf(olt_id=olt.id, shelf_number=1)
+    other_shelf = OltShelf(olt_id=other_olt.id, shelf_number=1)
+    db_session.add_all([shelf, other_shelf])
+    db_session.commit()
+
+    card = OltCard(shelf_id=shelf.id, slot_number=2)
+    other_card = OltCard(shelf_id=other_shelf.id, slot_number=2)
+    db_session.add_all([card, other_card])
+    db_session.commit()
+
+    port = OltCardPort(card_id=card.id, port_number=3)
+    other_port = OltCardPort(card_id=other_card.id, port_number=3)
+    db_session.add_all([port, other_port])
+    db_session.commit()
+
+    sfp = OltSfpModule(olt_card_port_id=port.id, serial_number="SFP-A")
+    other_sfp = OltSfpModule(olt_card_port_id=other_port.id, serial_number="SFP-B")
+    db_session.add_all([sfp, other_sfp])
+    db_session.commit()
+
+    def _fake_walk(_host, oid, _community, timeout=20):
+        if oid.endswith(".9"):
+            return ["1.3.6.1.x.3 = INTEGER: -1950"]
+        return ["1.3.6.1.x.3 = INTEGER: -2050"]
+
+    monkeypatch.setattr("app.services.network.olt_polling._run_olt_snmpwalk", _fake_walk)
+
+    stats = poll_sfp_modules(db_session, olt, community="public")
+
+    db_session.refresh(sfp)
+    db_session.refresh(other_sfp)
+
+    assert stats["updated"] >= 1
+    assert sfp.tx_power_dbm == -19.5
+    assert sfp.rx_power_dbm == -20.5
+    assert other_sfp.tx_power_dbm is None

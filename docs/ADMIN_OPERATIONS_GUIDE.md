@@ -1188,15 +1188,20 @@ Rotate non-customer-facing secrets first, then payment, then authentication or n
 ### Database Backup
 
 ```bash
-# Manual backup
-./scripts/backup_dotmac_sub_db_to_rclone.sh
+# Create remote folder structure
+./scripts/init_dotmac_sub_backup_dirs.sh
 
-# Cron (daily at 2am)
-0 2 * * * /root/projects/dotmac_sub/scripts/backup_dotmac_sub_db_to_rclone.sh
+# Manual backup
+./scripts/backup_dotmac_sub_dbs_to_rclone.sh
+
+# Install cron (daily at 6pm)
+./scripts/install_dotmac_sub_backup_cron.sh
 ```
 
 Backup script:
-- Dumps PostgreSQL via `pg_dump`
+- Creates per-database folders in `Backup:db.backup/dotmac_sub/`
+- Dumps PostgreSQL databases via `pg_dump`
+- Dumps MongoDB databases via `mongodump --archive --gzip`
 - Compresses with gzip
 - Uploads to rclone remote (S3, GCS, etc.)
 - Keeps last 5 backups (configurable `KEEP_LAST`)

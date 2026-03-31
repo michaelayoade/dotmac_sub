@@ -2,8 +2,6 @@
 
 from app.web.admin.network_olts import router as _olt_router  # noqa: F401
 
-# Re-export for any code that imports specific functions
-from app.web.admin.network_onts import ont_provision_status  # noqa: F401
 from app.web.admin.network_onts import router as _ont_router  # noqa: F401
 
 # Legacy: expose a router for code that imports `router` from this module.

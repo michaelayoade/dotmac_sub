@@ -10,7 +10,6 @@ from app.schemas.network_ont_ops import (
     OntBulkActionResponse,
     OntConnectionRequestCredentials,
     OntEnrichedRead,
-    OntProvisionResponse,
     OntWifiSsidRequest,
 )
 from app.services.network.ont_action_common import ActionResult
@@ -39,12 +38,6 @@ class TestOntActionSchemas:
     def test_wifi_ssid_valid(self):
         req = OntWifiSsidRequest(ssid="MyNetwork")
         assert req.ssid == "MyNetwork"
-
-    def test_provision_response_dry_run(self):
-        resp = OntProvisionResponse(
-            success=True, message="Preview", dry_run=True, steps=[], commands_preview=[]
-        )
-        assert resp.dry_run is True
 
     def test_bulk_action_request_validation(self):
         req = OntBulkActionRequest(
@@ -131,7 +124,7 @@ class TestRouterRegistration:
 
         paths = [r.path for r in app.routes]
         assert any("/ont-units/{ont_id}/reboot" in p for p in paths)
-        assert any("/ont-units/{ont_id}/provision" in p for p in paths)
+        assert not any("/ont-units/{ont_id}/provision" in p for p in paths)
         assert any("/ont-units/{ont_id}/enriched" in p for p in paths)
         assert any("/ont-units/bulk-action" in p for p in paths)
         assert any("/ont-units/{ont_id}/connection-request" in p for p in paths)

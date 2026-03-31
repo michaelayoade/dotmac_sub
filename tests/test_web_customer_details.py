@@ -1,8 +1,9 @@
+import json
 from decimal import Decimal
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.models.subscriber import Subscriber, SubscriberCategory
+from app.models.subscriber import Address, Subscriber, SubscriberCategory
 from app.services.web_customer_details import build_business_detail_snapshot, build_person_detail_snapshot
 
 
@@ -65,3 +66,24 @@ def test_business_detail_marks_mixed_billing_policy(db_session, subscriber):
     assert context["organization"].name == "Test Org"
     assert rows["payment_due_days"]["effective"] == "21 day(s)"
     assert rows["payment_due_days"]["source"] == "Customer override"
+
+
+def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber):
+    address = Address(
+        subscriber_id=subscriber.id,
+        address_line1="123 Sample Street",
+        address_line2="Suite 5",
+        city="Lagos",
+        region="LA",
+        postal_code="100001",
+        country_code="NG",
+        is_primary=True,
+    )
+    db_session.add(address)
+    db_session.commit()
+
+    context = build_person_detail_snapshot(db_session, str(subscriber.id))
+
+    assert context["geocode_target"] is not None
+    assert context["geocode_target"]["payload"]["address_line1"] == "123 Sample Street"
+    assert json.loads(context["geocode_target"]["payload_json"]) == context["geocode_target"]["payload"]

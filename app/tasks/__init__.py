@@ -46,7 +46,6 @@ from app.tasks.ont_discovery import discover_all_olt_onts
 from app.tasks.ont_provisioning import (
     auto_link_profiles,
     detect_profile_drift,
-    provision_ont_async,
 )
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 from app.tasks.radius import run_radius_sync_job
@@ -143,7 +142,6 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "discover_all_olt_autofind",
-    "provision_ont_async",
     "evaluate_alert_rules",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
