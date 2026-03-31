@@ -3,6 +3,7 @@
 import json
 import logging
 import re
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -113,11 +114,19 @@ def _ont_has_active_assignment(db: Session, ont_id: str) -> bool:
     return web_network_ont_assignments_service.has_active_assignment(db, ont_id)
 
 
-def _form_uuid_or_none(form: FormData, key: str) -> str | None:
-    """Extract a UUID string from form data, returning None if empty."""
+def _form_uuid_or_none(form: FormData, key: str) -> uuid.UUID | None:
+    """Extract a UUID from form data, returning None if empty."""
+    from uuid import UUID
+
     value = form.get(key, "")
     raw = value if isinstance(value, str) else ""
-    return raw.strip() or None
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return UUID(raw)
+    except ValueError:
+        return None
 
 
 def _form_float_or_none(form: FormData, key: str) -> float | None:

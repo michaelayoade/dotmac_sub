@@ -926,7 +926,10 @@ class Subscribers(ListResponseMixin):
         )
 
         # Build lookup dict for monthly counts
-        monthly_lookup = {(int(r.year), int(r.month)): r.count for r in monthly_counts}
+        # r is (year, month, count) tuple; use index to avoid mypy confusion with row.count method
+        monthly_lookup: dict[tuple[int, int], int] = {
+            (int(r[0]), int(r[1])): int(r[2]) for r in monthly_counts
+        }
 
         labels: list[str] = []
         values: list[int] = []

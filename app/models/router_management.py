@@ -327,7 +327,7 @@ class RouterConfigPushResult(Base):
         ),
         default=RouterPushResultStatus.pending,
     )
-    response_data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    response_data: Mapped[dict | list | None] = mapped_column(JSON, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     pre_snapshot_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),

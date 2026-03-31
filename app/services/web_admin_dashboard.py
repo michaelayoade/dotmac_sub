@@ -643,7 +643,7 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
     try:
         r = get_settings_redis()
         cached = r.get(cache_key)
-        if cached:
+        if cached and isinstance(cached, (str, bytes)):
             return json.loads(cached)
     except Exception:
         logger.debug("Dashboard cache read failed", exc_info=True)

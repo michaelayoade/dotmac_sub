@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import builtins
 import logging
 import uuid
 from datetime import UTC, datetime
@@ -199,19 +200,21 @@ class RouterInventory(ListResponseMixin):
             logger.info("Interfaces synced for router %s (%s)", router.name, router.id)
 
     @staticmethod
-    def list_interfaces(db: Session, router_id: uuid.UUID) -> list[RouterInterface]:
+    def list_interfaces(
+        db: Session, router_id: uuid.UUID
+    ) -> builtins.list[RouterInterface]:
         """Return all interfaces for the given router, ordered by name."""
         query = (
             select(RouterInterface)
             .where(RouterInterface.router_id == router_id)
             .order_by(RouterInterface.name)
         )
-        return list(db.execute(query).scalars().all())
+        return builtins.list(db.execute(query).scalars().all())
 
     @staticmethod
     def upsert_interfaces(
-        db: Session, router: Router, interfaces_data: list[dict]
-    ) -> list[RouterInterface]:
+        db: Session, router: Router, interfaces_data: builtins.list[dict]
+    ) -> builtins.list[RouterInterface]:
         now = datetime.now(UTC)
         existing = {
             iface.name: iface

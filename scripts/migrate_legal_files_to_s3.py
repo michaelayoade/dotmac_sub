@@ -43,7 +43,7 @@ def main() -> None:
                 original_filename=doc.file_name or resolved.name,
                 content_type=doc.mime_type,
                 data=payload,
-                organization_id=None,
+                owner_subscriber_id=None,
                 uploaded_by=None,
             )
             doc.file_path = uploaded.storage_key_or_relative_path

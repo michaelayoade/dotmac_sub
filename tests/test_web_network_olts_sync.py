@@ -141,7 +141,9 @@ def test_sync_onts_from_olt_snmp_impl_flushes_before_final_commit(
 
 
 def test_decode_huawei_packed_fsp_is_deterministic() -> None:
-    assert service._decode_huawei_packed_fsp(4194320384) == "0/1/0"
+    # 4194320384 = 0xFA000000 (base) + 16384 (delta)
+    # delta / 256 = 64 -> slot = 64 / 16 = 4, port = 64 % 16 = 0
+    assert service._decode_huawei_packed_fsp(4194320384) == "0/4/0"
 
 
 def test_sync_impl_fails_closed_when_assignment_creation_rolls_back(
@@ -168,7 +170,12 @@ def test_sync_impl_fails_closed_when_assignment_creation_rolls_back(
 
         def scalars(self, *_args, **_kwargs):
             self.scalar_calls += 1
-            if self.scalar_calls == 1:
+            # Let the first three scalars calls succeed:
+            # 1) existing_onts lookup
+            # 2) ONT lookup in loop
+            # 3) PON port lookup for assignment
+            # Then fail on the 4th call (ONTs needing assignment)
+            if self.scalar_calls <= 3:
                 return _FakeScalarList([])
             raise RuntimeError("assignment flush boom")
 

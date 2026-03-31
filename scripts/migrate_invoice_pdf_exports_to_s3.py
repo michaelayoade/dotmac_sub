@@ -50,7 +50,10 @@ def main() -> None:
 
             payload = local_path.read_bytes()
             invoice = export.invoice
-            org_id = getattr(getattr(invoice, "account", None), "organization_id", None)
+            # Extract subscriber_id from invoice account for tenancy scoping
+            owner_sub_id = getattr(
+                getattr(invoice, "account", None), "subscriber_id", None
+            )
             uploaded = file_uploads.upload(
                 db=db,
                 domain="generated_docs",
@@ -62,7 +65,7 @@ def main() -> None:
                 content_type="application/pdf",
                 data=payload,
                 uploaded_by=str(export.requested_by_id) if export.requested_by_id else None,
-                organization_id=org_id,
+                owner_subscriber_id=owner_sub_id,
             )
             export.file_path = uploaded.storage_key_or_relative_path
             export.file_size_bytes = uploaded.file_size

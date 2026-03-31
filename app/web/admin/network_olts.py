@@ -178,6 +178,7 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
+    assert olt is not None  # create_olt_with_audit returns olt when no error
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
 
 
@@ -249,6 +250,7 @@ def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
+    assert olt is not None  # update_olt_with_audit returns olt when no error
     return RedirectResponse(f"/admin/network/olts/{olt.id}", status_code=303)
 
 
@@ -293,11 +295,11 @@ def olt_detail(
     # ACS prefill for the TR-069 create modal
     olt_obj = page_data.get("olt")
     acs_prefill: dict[str, str] = {}
-    if olt_obj and getattr(olt_obj, "tr069_acs_server", None):
-        acs = olt_obj.tr069_acs_server
+    acs = getattr(olt_obj, "tr069_acs_server", None) if olt_obj else None
+    if acs is not None:
         acs_prefill = {
-            "cwmp_url": acs.cwmp_url or "",
-            "cwmp_username": acs.cwmp_username or "",
+            "cwmp_url": getattr(acs, "cwmp_url", "") or "",
+            "cwmp_username": getattr(acs, "cwmp_username", "") or "",
         }
 
     context = _base_context(request, db, active_page="olts")
@@ -862,8 +864,9 @@ async def olt_tr069_rebind(
     from app.web.admin import get_current_user
 
     form = await request.form()
-    target_profile_id = int(form.get("target_profile_id", 0))
-    ont_ids = form.getlist("ont_ids")
+    raw_profile_id = form.get("target_profile_id")
+    target_profile_id = int(raw_profile_id) if isinstance(raw_profile_id, str) else 0
+    ont_ids = [v for v in form.getlist("ont_ids") if isinstance(v, str)]
     if not ont_ids or not target_profile_id:
         return JSONResponse(
             {"ok": False, "message": "Missing ONT selection or target profile"},
@@ -871,17 +874,19 @@ async def olt_tr069_rebind(
         )
 
     stats = web_network_olts_service.handle_rebind_tr069_profiles(
-        db, olt_id, list(ont_ids), target_profile_id
+        db, olt_id, ont_ids, target_profile_id
     )
-    rebound = stats.get("rebound", 0)
-    failed = stats.get("failed", 0)
+    rebound_val = stats.get("rebound", 0)
+    failed_val = stats.get("failed", 0)
+    rebound = rebound_val if isinstance(rebound_val, int) else 0
+    failed = failed_val if isinstance(failed_val, int) else 0
     errors = stats.get("errors", [])
 
     message = f"Rebound {rebound} ONT(s) to profile {target_profile_id}"
     if failed:
         message += f", {failed} failed"
 
-    ok = int(rebound) > 0
+    ok = rebound > 0
 
     current_user = get_current_user(request)
     actor_id = str(current_user.get("subscriber_id")) if current_user else None

@@ -1,6 +1,7 @@
 """Admin web routes for router management."""
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -87,7 +88,8 @@ def router_create(
 ) -> RedirectResponse:
     from app.schemas.router_management import RouterCreate
 
-    data = parse_form_data_sync(request)
+    form_data = parse_form_data_sync(request)
+    data: dict[str, Any] = {k: v for k, v in form_data.items() if isinstance(v, str)}
     payload = RouterCreate(**data)
     r = RouterInventory.create(db, payload)
     return RedirectResponse(url=f"/admin/network/routers/{r.id}", status_code=303)
@@ -222,7 +224,8 @@ def router_edit(
 ) -> RedirectResponse:
     from app.schemas.router_management import RouterUpdate
 
-    data = parse_form_data_sync(request)
+    form_data = parse_form_data_sync(request)
+    data: dict[str, Any] = {k: v for k, v in form_data.items() if isinstance(v, str)}
     payload = RouterUpdate(**data)
     RouterInventory.update(db, router_id, payload)
     return RedirectResponse(url=f"/admin/network/routers/{router_id}", status_code=303)
