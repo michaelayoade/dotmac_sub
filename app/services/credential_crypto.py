@@ -78,7 +78,11 @@ def get_encryption_key() -> bytes | None:
                     session, SettingDomain.auth, "credential_encryption_key"
                 )
                 if isinstance(raw, str):
-                    key_str = raw
+                    from app.services.secrets import resolve_secret
+
+                    resolved = resolve_secret(raw)
+                    if resolved:
+                        key_str = resolved
             finally:
                 session.close()
         except Exception:

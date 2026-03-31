@@ -10,7 +10,6 @@ from playwright._impl._errors import Error as PlaywrightError
 from app.services.auth_flow import hash_password
 from tests.playwright.helpers.api import (
     api_get,
-    api_post_form,
     api_post_json,
     bearer_headers,
 )
@@ -26,7 +25,7 @@ def login_for_token(api_context, username: str, password: str) -> str:
         try:
             response = api_context.post(
                 "/api/v1/auth/login",
-                data='{"username": "%s", "password": "%s"}' % (username, password),
+                data=f'{{"username": "{username}", "password": "{password}"}}',
                 headers={"Content-Type": "application/json"},
                 timeout=60_000,
             )

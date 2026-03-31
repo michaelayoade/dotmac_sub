@@ -290,10 +290,17 @@ def ticket():
     return SimpleNamespace(id=uuid.uuid4())
 
 
+_TEST_FERNET_KEY = "IuBP8vzovIeLwFbxtGPHO8jMvZULQa6JUjuCNOp-Uec="
+
+
 @pytest.fixture(autouse=True)
 def auth_env(monkeypatch):
     monkeypatch.setenv("JWT_SECRET", os.getenv("JWT_SECRET", "test-secret"))
     monkeypatch.setenv("JWT_ALGORITHM", os.getenv("JWT_ALGORITHM", "HS256"))
+    monkeypatch.setenv(
+        "CREDENTIAL_ENCRYPTION_KEY",
+        os.getenv("CREDENTIAL_ENCRYPTION_KEY", _TEST_FERNET_KEY),
+    )
 
 
 @pytest.fixture()

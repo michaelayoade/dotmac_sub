@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 _CACHE_SIZE = 128
 
 
+def is_secret_ref(value: str | None) -> bool:
+    """Check if a value is a secret URI reference (OpenBao or env)."""
+    if not value:
+        return False
+    return value.startswith(("bao://", "openbao://", "vault://", "env://"))
+
+
 def is_openbao_ref(value: str | None) -> bool:
     """Check if a value is an OpenBao URI reference."""
     if not value:
@@ -107,14 +114,26 @@ def resolve_openbao_ref(reference: str) -> str:
     return str(secret_data[field])
 
 
-def resolve_secret(value: str | None) -> str | None:
-    """Resolve a value that may be an OpenBao reference or plaintext.
+def _resolve_env_ref(reference: str) -> str | None:
+    """Resolve an ``env://VARIABLE_NAME`` reference to its environment value."""
+    var_name = reference[6:]  # strip "env://"
+    if not var_name:
+        return None
+    return os.environ.get(var_name)
 
-    If the value starts with ``bao://``, ``openbao://``, or ``vault://``,
-    it is resolved from OpenBao. Otherwise returned as-is.
+
+def resolve_secret(value: str | None) -> str | None:
+    """Resolve a value that may be a secret URI reference or plaintext.
+
+    Supported schemes:
+    - ``bao://``, ``openbao://``, ``vault://`` — resolved from OpenBao
+    - ``env://VARIABLE_NAME`` — resolved from environment variable
+    - Anything else — returned as-is
     """
     if not value:
         return value
+    if value.startswith("env://"):
+        return _resolve_env_ref(value)
     if is_openbao_ref(value):
         return resolve_openbao_ref(value)
     return value
