@@ -302,3 +302,78 @@ def execute_bulk_action(
         "total": len(capped_ids),
         "results": results,
     }
+
+
+# ---------------------------------------------------------------------------
+# Provisioning profile helpers
+# ---------------------------------------------------------------------------
+
+
+def get_provisioning_profiles(db: Session) -> list[Any]:
+    """Fetch active ONT provisioning profiles for form dropdowns."""
+    return get_profile_templates(db)
+
+
+def provision_wizard_context(
+    request: Any, db: Session, ont_id: str
+) -> dict[str, Any]:
+    """Build template context for the ONT provisioning wizard page."""
+    from app.services import network as network_service
+    from app.services import web_admin as web_admin_service
+
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except Exception:
+        return {"error": "ONT not found", "request": request}
+
+    olt = getattr(ont, "olt_device", None)
+    profile = resolve_effective_provisioning_profile(db, ont, olt)
+    tr069_profile, tr069_error = resolve_effective_tr069_profile_for_ont(db, ont)
+
+    context: dict[str, Any] = {
+        "request": request,
+        "active_page": "onts",
+        "active_menu": "network",
+        "current_user": web_admin_service.get_current_user(request),
+        "sidebar_stats": web_admin_service.get_sidebar_stats(db),
+        "ont": ont,
+        "olt": olt,
+        "provisioning_profile": profile,
+        "tr069_profile": tr069_profile,
+        "tr069_profile_error": tr069_error,
+        "profiles": get_profile_templates(db),
+        "vlans": get_vlans_for_ont(db, ont),
+        "tr069_servers": get_tr069_servers(db),
+    }
+    return context
+
+
+def resolve_effective_provisioning_profile(
+    db: Session, ont: Any, olt: Any | None = None
+) -> Any | None:
+    """Resolve the provisioning profile for an ONT.
+
+    Checks ONT-level override, then OLT default, then returns None.
+    """
+    from app.models.network import OntProvisioningProfile
+
+    profile_id = getattr(ont, "provisioning_profile_id", None)
+    if not profile_id and olt:
+        profile_id = getattr(olt, "default_provisioning_profile_id", None)
+    if profile_id:
+        return db.get(OntProvisioningProfile, str(profile_id))
+    return None
+
+
+def resolve_effective_tr069_profile_for_ont(
+    db: Session, ont: Any
+) -> tuple[Any | None, str | None]:
+    """Resolve the TR-069 OLT profile for an ONT.
+
+    Returns (profile_data, error_message). profile_data may be a namespace
+    with ``profile_id`` and ``profile_name`` attributes if found, or None.
+    """
+    profiles = get_tr069_profiles_for_ont(db, ont)
+    if profiles:
+        return profiles[0], None
+    return None, "No TR-069 profile found for this ONT"

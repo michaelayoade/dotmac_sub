@@ -461,6 +461,7 @@ class PonPortRead(PonPortBase):
 
 class OntUnitBase(BaseModel):
     serial_number: str = Field(min_length=1, max_length=120)
+    vendor_serial_number: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     vendor: str | None = Field(default=None, max_length=120)
     firmware_version: str | None = Field(default=None, max_length=120)
@@ -494,6 +495,7 @@ class OntUnitCreate(OntUnitBase):
 
 class OntUnitUpdate(BaseModel):
     serial_number: str | None = Field(default=None, min_length=1, max_length=120)
+    vendor_serial_number: str | None = Field(default=None, max_length=120)
     model: str | None = Field(default=None, max_length=120)
     vendor: str | None = Field(default=None, max_length=120)
     firmware_version: str | None = Field(default=None, max_length=120)

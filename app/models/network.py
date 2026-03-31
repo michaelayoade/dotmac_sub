@@ -901,6 +901,7 @@ class OntUnit(Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     serial_number: Mapped[str] = mapped_column(String(120), nullable=False)
+    vendor_serial_number: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
     vendor: Mapped[str | None] = mapped_column(String(120))
     firmware_version: Mapped[str | None] = mapped_column(String(120))
@@ -2073,4 +2074,30 @@ class OntFirmwareImage(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class OntConfigSnapshot(Base):
+    """Point-in-time TR-069 running configuration snapshot for an ONT."""
+
+    __tablename__ = "ont_config_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(String(60), nullable=False, default="tr069")
+    label: Mapped[str | None] = mapped_column(String(255))
+    device_info: Mapped[dict | None] = mapped_column(JSON)
+    wan: Mapped[dict | None] = mapped_column(JSON)
+    optical: Mapped[dict | None] = mapped_column(JSON)
+    wifi: Mapped[dict | None] = mapped_column(JSON)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

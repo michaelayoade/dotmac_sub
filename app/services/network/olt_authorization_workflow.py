@@ -48,6 +48,29 @@ class AuthorizationWorkflowResult:
     follow_up_operation_id: str | None = None
     duration_ms: int = 0
 
+    def to_dict(self) -> dict[str, object]:
+        """Serialize result to a JSON-safe dict."""
+        return {
+            "success": self.success,
+            "message": self.message,
+            "ont_unit_id": self.ont_unit_id,
+            "ont_id_on_olt": self.ont_id_on_olt,
+            "status": self.status,
+            "completed_authorization": self.completed_authorization,
+            "follow_up_operation_id": self.follow_up_operation_id,
+            "duration_ms": self.duration_ms,
+            "steps": [
+                {
+                    "step": s.step,
+                    "name": s.name,
+                    "success": s.success,
+                    "message": s.message,
+                    "duration_ms": s.duration_ms,
+                }
+                for s in self.steps
+            ],
+        }
+
 
 def _build_authorization_failure(
     steps: list[AuthorizationStepResult],

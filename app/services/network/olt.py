@@ -114,6 +114,101 @@ class OLTDevices(CRUDManager[OLTDevice]):
         )
         super().delete(db, device_id)
 
+    @staticmethod
+    def propagate_acs_to_onts(
+        db: Session, olt_id: str
+    ) -> dict[str, int]:
+        """Propagate OLT's ACS server to all its unbound ONTs.
+
+        Returns stats dict with updated, already_bound, total counts.
+        """
+        olt = db.get(OLTDevice, olt_id)
+        if not olt:
+            raise HTTPException(status_code=404, detail="OLT device not found")
+
+        acs_id = getattr(olt, "tr069_acs_server_id", None)
+        if not acs_id:
+            raise HTTPException(
+                status_code=400,
+                detail="OLT has no ACS server configured",
+            )
+
+        onts = list(
+            db.scalars(
+                select(OntUnit).where(OntUnit.olt_device_id == olt.id)
+            ).all()
+        )
+        total = len(onts)
+        updated = 0
+        already_bound = 0
+        for ont in onts:
+            if getattr(ont, "tr069_acs_server_id", None) == acs_id:
+                already_bound += 1
+            else:
+                ont.tr069_acs_server_id = acs_id
+                updated += 1
+        if updated:
+            db.commit()
+        return {"updated": updated, "already_bound": already_bound, "total": total}
+
+    @staticmethod
+    def backfill_pon_ports(
+        db: Session, olt_id: str
+    ) -> dict[str, int]:
+        """Create missing PON ports from ONT board/port data and link assignments.
+
+        Returns stats dict with ports_created, assignments_linked, total_onts.
+        """
+        olt = db.get(OLTDevice, olt_id)
+        if not olt:
+            raise HTTPException(status_code=404, detail="OLT device not found")
+
+        onts = list(
+            db.scalars(
+                select(OntUnit).where(OntUnit.olt_device_id == olt.id)
+            ).all()
+        )
+        total_onts = len(onts)
+        ports_created = 0
+        assignments_linked = 0
+
+        existing_ports: dict[str, PonPort] = {}
+        for port in db.scalars(
+            select(PonPort).where(PonPort.olt_id == olt.id)
+        ).all():
+            key = f"{getattr(port, 'board', '')}/{getattr(port, 'port', '')}"
+            existing_ports[key] = port
+
+        for ont in onts:
+            board = getattr(ont, "board", None)
+            port_str = getattr(ont, "port", None)
+            if not board or not port_str:
+                continue
+            key = f"{board}/{port_str}"
+            if key not in existing_ports:
+                import uuid as _uuid
+
+                new_port = PonPort(
+                    id=str(_uuid.uuid4()),
+                    olt_id=str(olt.id),
+                    board=board,
+                    port=port_str,
+                    label=f"{board}/{port_str}",
+                    is_active=True,
+                )
+                db.add(new_port)
+                db.flush()
+                existing_ports[key] = new_port
+                ports_created += 1
+
+        if ports_created:
+            db.commit()
+        return {
+            "ports_created": ports_created,
+            "assignments_linked": assignments_linked,
+            "total_onts": total_onts,
+        }
+
 
 class PonPorts(CRUDManager[PonPort]):
     model = PonPort

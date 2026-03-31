@@ -58,6 +58,13 @@ def get_current_user(request) -> dict:
     }
 
 
+def get_actor_id(request: object) -> str | None:
+    """Extract actor ID from the current authenticated user."""
+    current_user = get_current_user(request)
+    value = current_user.get("id") if current_user else None
+    return str(value) if value else None
+
+
 _SIDEBAR_STATS_TTL_SECONDS = 10.0
 _sidebar_stats_lock = Lock()
 _sidebar_stats_cached_at = 0.0

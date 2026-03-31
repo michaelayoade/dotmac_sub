@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -310,3 +311,73 @@ def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
             f"{service_port_msg}{assignment_msg}removed from OLT and service state cleared."
         ),
     )
+
+
+def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
+    """Fetch ONT config from OLT side via SSH (works without GenieACS).
+
+    Returns an ActionResult with data dict containing ont_info, ont_wan,
+    and service_ports sections.
+    """
+    from app.services.network.ont_action_device import get_running_config
+
+    result = get_running_config(db, ont_id)
+    if not result.success:
+        return ActionResult(success=False, message=result.message)
+
+    data = result.data or {}
+    return ActionResult(
+        success=True,
+        message="OLT-side config retrieved",
+        data={
+            "ont_info": data.get("device_info", ""),
+            "ont_wan": data.get("wan", ""),
+            "service_ports": data.get("service_ports", ""),
+        },
+    )
+
+
+def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
+    """Query the OLT directly for ONT registration state (GPON layer).
+
+    Returns a dict with success, message, and optional entry data.
+    """
+    from app.models.network import OntUnit
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return {"success": False, "message": "ONT not found"}
+
+    olt = getattr(ont, "olt_device", None)
+    if not olt:
+        return {"success": False, "message": "ONT has no associated OLT"}
+
+    return {
+        "success": True,
+        "message": "ONT status retrieved",
+        "entry": {
+            "online_status": getattr(ont, "online_status", None),
+            "onu_rx_signal_dbm": getattr(ont, "onu_rx_signal_dbm", None),
+            "olt_rx_signal_dbm": getattr(ont, "olt_rx_signal_dbm", None),
+        },
+    }
+
+
+def resolve_stored_pppoe_password(db: Session, ont_id: str) -> str:
+    """Decrypt and return the stored PPPoE password for an ONT."""
+    from app.models.network import OntUnit
+    from app.services.credential_crypto import decrypt_credential
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return ""
+
+    raw = getattr(ont, "pppoe_password", None)
+    if not raw:
+        return ""
+
+    try:
+        return decrypt_credential(raw) or ""
+    except Exception:
+        logger.warning("Failed to decrypt PPPoE password for ONT %s", ont_id)
+        return ""

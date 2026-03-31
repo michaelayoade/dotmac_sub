@@ -47,6 +47,7 @@ class ServiceOrderUpdate(BaseModel):
     order_type: ServiceOrderType | None = None
     project_type: ProjectType | None = None
     notes: str | None = None
+    execution_context: dict | None = None
 
 
 class ServiceOrderRead(ServiceOrderBase):

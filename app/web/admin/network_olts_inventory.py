@@ -812,9 +812,11 @@ def olt_authorize_ont(
             )
         return RedirectResponse(target, status_code=303)
 
-    result = web_network_olts_service.authorize_autofind_ont(
-        db, olt_id, fsp, serial_number
+    from app.services.network.olt_authorization_workflow import (
+        authorize_autofind_ont as _authorize_workflow,
     )
+
+    result = _authorize_workflow(db, olt_id, fsp, serial_number)
     status = getattr(result, "status", "success" if result.success else "error")
     completed_authorization = bool(
         getattr(result, "completed_authorization", False)

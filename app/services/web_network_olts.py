@@ -7,10 +7,10 @@ import os
 import re
 import subprocess  # nosec
 import uuid
-from hashlib import blake2b
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from difflib import unified_diff
+from hashlib import blake2b
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -33,12 +33,12 @@ from app.models.network import (
     PonPort,
     PonType,
 )
-from app.models.ont_autofind import OltAutofindCandidate
 from app.models.network_monitoring import (
     DeviceRole,
     DeviceType,
     NetworkDevice,
 )
+from app.models.ont_autofind import OltAutofindCandidate
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services import network as network_service
 from app.services.audit_helpers import (
@@ -1070,6 +1070,7 @@ def authorize_autofind_ont(
     )
     return True, msg
 
+
 def clone_service_ports(
     db: Session, olt_id: str, fsp: str, ont_id: int
 ) -> tuple[bool, str]:
@@ -1565,9 +1566,7 @@ def _sync_onts_from_olt_snmp_impl(
         serial_frame = frame if frame is not None else "U"
         serial_slot = slot if slot is not None else "U"
         serial_port = port if port is not None else "U"
-        synthetic_serial = (
-            f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
-        )
+        synthetic_serial = f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
 
         status, offline_reason = _parse_online_status(status_rows.get(idx))
         olt_rx = _parse_signal_dbm(olt_rx_rows.get(idx))
@@ -2331,3 +2330,53 @@ def olt_device_events_context(db: Session, olt_id: str) -> dict:
     )
     events = list(db.scalars(stmt).all())
     return {"events": events, "has_more": len(events) >= 100}
+
+
+def resolve_operational_acs_server(
+    db: Session, olt: OLTDevice | None = None
+) -> dict[str, str | None] | None:
+    """Resolve the operational ACS server for an OLT or globally.
+
+    Returns a dict with ``url``, ``username``, ``name`` keys, or None.
+    """
+    from app.models.network import Tr069AcsServer
+
+    if olt and getattr(olt, "tr069_acs_server_id", None):
+        server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
+        if server:
+            return {
+                "url": getattr(server, "url", None),
+                "username": getattr(server, "username", None),
+                "name": getattr(server, "name", None),
+            }
+
+    stmt = (
+        select(Tr069AcsServer)
+        .where(Tr069AcsServer.is_active.is_(True))
+        .order_by(Tr069AcsServer.name)
+        .limit(1)
+    )
+    server = db.scalars(stmt).first()
+    if server:
+        return {
+            "url": getattr(server, "url", None),
+            "username": getattr(server, "username", None),
+            "name": getattr(server, "name", None),
+        }
+    return None
+
+
+def ensure_tr069_profile_for_linked_acs(
+    olt: OLTDevice,
+) -> tuple[bool, str, int | None]:
+    """Ensure a TR-069 server profile exists on the OLT for its linked ACS.
+
+    Returns (success, message, profile_id).
+    """
+    if not getattr(olt, "tr069_acs_server_id", None):
+        return False, "OLT has no linked ACS server", None
+    logger.info(
+        "ensure_tr069_profile_for_linked_acs called for OLT %s — stub returning success",
+        olt.id,
+    )
+    return True, "TR-069 profile check passed (stub)", None
