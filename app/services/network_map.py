@@ -193,11 +193,16 @@ def build_network_map_context(db: Session) -> dict:
 
     # Fiber Segments
     segments = db.query(FiberSegment).filter(FiberSegment.is_active.is_(True)).all()
-    segment_geoms = (
-        db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom))
-        .filter(FiberSegment.is_active.is_(True), FiberSegment.route_geom.isnot(None))
-        .all()
-    )
+    segment_geoms: list[tuple[FiberSegment, str | None]] = []
+    if db.bind is not None and db.bind.dialect.name != "sqlite":
+        segment_geoms = (
+            db.query(FiberSegment, func.ST_AsGeoJSON(FiberSegment.route_geom))
+            .filter(
+                FiberSegment.is_active.is_(True),
+                FiberSegment.route_geom.isnot(None),
+            )
+            .all()
+        )
     for segment, geojson_str in segment_geoms:
         if not geojson_str:
             continue

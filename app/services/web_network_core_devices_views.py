@@ -1682,6 +1682,48 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             subscription.status.value if subscription.status else "unknown"
         )
 
+    provisioning_runs: list[dict[str, object]] = []
+    subscription_entity_id = (
+        assignment.subscription.id
+        if assignment and getattr(assignment, "subscription", None) is not None
+        else None
+    )
+    if subscription_entity_id is not None:
+        from app.models.provisioning import ProvisioningRun
+
+        run_stmt = (
+            select(ProvisioningRun)
+            .options(joinedload(ProvisioningRun.workflow))
+            .where(ProvisioningRun.subscription_id == subscription_entity_id)
+            .order_by(ProvisioningRun.created_at.desc())
+            .limit(10)
+        )
+        recent_runs = list(db.scalars(run_stmt).all())
+        for run in recent_runs:
+            results = []
+            if isinstance(run.output_payload, dict):
+                maybe_results = run.output_payload.get("results")
+                if isinstance(maybe_results, list):
+                    results = [item for item in maybe_results if isinstance(item, dict)]
+            provisioning_runs.append(
+                {
+                    "id": str(run.id),
+                    "workflow_name": (
+                        run.workflow.name
+                        if getattr(run, "workflow", None) is not None
+                        else None
+                    ),
+                    "status": run.status.value if run.status else "unknown",
+                    "created_at": run.created_at,
+                    "completed_at": run.completed_at,
+                    "step_count": len(results),
+                    "success_count": sum(
+                        1 for item in results if item.get("status") == "success"
+                    ),
+                    "error_message": run.error_message,
+                }
+            )
+
     # Manual profile state shown on the ONT detail screen
     profile_state: dict[str, object] = {}
     if ont.provisioning_profile_id:
@@ -1742,6 +1784,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "signal_info": signal_info,
         "network_path": network_path,
         "subscriber_info": subscriber_info,
+        "provisioning_runs": provisioning_runs,
         "profile_state": profile_state,
         "available_profile_templates": available_profile_templates,
         "available_firmware": available_firmware,

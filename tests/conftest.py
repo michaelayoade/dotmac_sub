@@ -5,6 +5,7 @@ from datetime import UTC
 from typing import Any
 
 import pytest
+from geoalchemy2 import Geometry
 from geoalchemy2.admin.dialects import sqlite as geoalchemy_sqlite_admin
 from sqlalchemy import String, TypeDecorator, create_engine, event
 from sqlalchemy.orm import sessionmaker
@@ -101,6 +102,9 @@ sqltypes.Uuid.result_processor = _sqlite_uuid_result_processor  # type: ignore[m
 # SQLite uses JSON instead of JSONB
 
 _original_jsonb_compile = None
+_original_geometry_bind_expression = Geometry.bind_expression
+_original_geometry_column_expression = Geometry.column_expression
+_original_geometry_result_processor = Geometry.result_processor
 
 
 def _patch_jsonb_for_sqlite():
@@ -119,6 +123,31 @@ def _patch_jsonb_for_sqlite():
 
 
 _patch_jsonb_for_sqlite()
+
+
+def _enable_sqlite_geometry_passthrough() -> None:
+    """Avoid Spatialite-only wrappers when tests run on plain SQLite."""
+
+    def _bind_expression(self, bindvalue):
+        return bindvalue
+
+    def _column_expression(self, col):
+        return col
+
+    def _result_processor(self, dialect, coltype):
+        if dialect.name == "sqlite":
+            return lambda value: value
+        return _original_geometry_result_processor(self, dialect, coltype)
+
+    Geometry.bind_expression = _bind_expression
+    Geometry.column_expression = _column_expression
+    Geometry.result_processor = _result_processor
+
+
+def _restore_sqlite_geometry_passthrough() -> None:
+    Geometry.bind_expression = _original_geometry_bind_expression
+    Geometry.column_expression = _original_geometry_column_expression
+    Geometry.result_processor = _original_geometry_result_processor
 
 
 def _disable_sqlite_spatial_admin() -> None:
@@ -179,8 +208,10 @@ def engine():
             try:
                 dbapi_connection.load_extension("mod_spatialite")
                 _enable_sqlite_spatial_admin()
+                _restore_sqlite_geometry_passthrough()
             except Exception:
                 _disable_sqlite_spatial_admin()
+                _enable_sqlite_geometry_passthrough()
                 pass  # Spatialite not available, some tests may fail
             cursor = dbapi_connection.cursor()
             cursor.execute("PRAGMA foreign_keys=ON")
