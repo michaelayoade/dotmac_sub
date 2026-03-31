@@ -147,19 +147,11 @@ def _update_service_order_execution_context_for_ont(
 def _get_profile_with_services(
     db: Session, profile_id: str
 ) -> OntProvisioningProfile | None:
-    """Fetch a provisioning profile with eagerly loaded WAN services."""
-    from sqlalchemy import select as sa_select
-    from sqlalchemy.orm import selectinload
-
+    """Fetch a provisioning profile by primary key."""
     pid = coerce_uuid(profile_id)
     if pid is None:
         return None
-    stmt = (
-        sa_select(OntProvisioningProfile)
-        .options(selectinload(OntProvisioningProfile.wan_services))
-        .where(OntProvisioningProfile.id == pid)
-    )
-    return db.scalars(stmt).first()
+    return db.get(OntProvisioningProfile, str(pid))
 
 
 @router.get(

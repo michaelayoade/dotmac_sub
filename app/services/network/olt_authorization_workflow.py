@@ -517,9 +517,11 @@ def get_autofind_candidate_by_serial(
     from app.models.ont_autofind import OltAutofindCandidate
 
     clean_serial = re.sub(r"[^A-Za-z0-9]", "", serial_number or "").upper()
-    candidates = db.query(OltAutofindCandidate).filter(
-        OltAutofindCandidate.olt_id == olt_id,
-        OltAutofindCandidate.is_active.is_(True),
+    candidates = db.scalars(
+        select(OltAutofindCandidate).where(
+            OltAutofindCandidate.olt_id == olt_id,
+            OltAutofindCandidate.is_active.is_(True),
+        )
     ).all()
     clean_fsp = (fsp or "").strip()
     return next(
@@ -548,8 +550,10 @@ def create_or_find_ont_for_authorized_serial(
 
     clean_serial = re.sub(r"[^A-Za-z0-9]", "", serial_number).upper()
 
-    existing = db.query(OntUnit).filter(
-        func.upper(func.replace(OntUnit.serial_number, "-", "")) == clean_serial,
+    existing = db.scalars(
+        select(OntUnit).where(
+            func.upper(func.replace(OntUnit.serial_number, "-", "")) == clean_serial,
+        )
     ).first()
     if existing:
         try:
@@ -571,9 +575,11 @@ def create_or_find_ont_for_authorized_serial(
             db.rollback()
             return None, f"Failed to update existing ONT record: {exc}"
 
-    candidates = db.query(OltAutofindCandidate).filter(
-        OltAutofindCandidate.olt_id == olt_id,
-        OltAutofindCandidate.is_active.is_(True),
+    candidates = db.scalars(
+        select(OltAutofindCandidate).where(
+            OltAutofindCandidate.olt_id == olt_id,
+            OltAutofindCandidate.is_active.is_(True),
+        )
     ).all()
     matched_candidate = next(
         (

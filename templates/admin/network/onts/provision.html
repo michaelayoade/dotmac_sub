@@ -15,13 +15,13 @@
     {% set initial_wan_protocol = "pppoe" %}
 {% endif %}
 <div class="space-y-6"
-     x-data="{
-        profileId: {{ (selected_profile_id or '') | tojson }},
-        tr069ProfileId: {{ (selected_tr069_profile_id or '') | tojson }},
+     x-data='{
+        profileId: {{ (selected_profile_id or "") | tojson }},
+        tr069ProfileId: {{ (selected_tr069_profile_id or "") | tojson }},
         wanProtocol: {{ initial_wan_protocol | tojson }},
-        onuMode: {{ (ont.onu_mode.value if ont.onu_mode else 'routing') | tojson }},
-        selectedVlan: {{ (ont.wan_vlan_id|string if ont.wan_vlan_id else '') | tojson }},
-        pppoeUser: {{ (pppoe_username or '') | tojson }},
+        onuMode: {{ (ont.onu_mode.value if ont.onu_mode else "routing") | tojson }},
+        selectedVlan: {{ (ont.wan_vlan_id|string if ont.wan_vlan_id else "") | tojson }},
+        pppoeUser: {{ (pppoe_username or "") | tojson }},
         showPass: false,
         vlanNasMap: {{ vlan_nas_map | tojson }},
         poolNasMap: {{ pool_nas_map | tojson }},
@@ -32,7 +32,7 @@
             if (!poolNas) return true;
             return poolNas === vlanNas;
         }
-     }"
+     }'
      x-init="
         if (profileId) {
             $nextTick(() => {

@@ -251,11 +251,24 @@ def ont_olt_status(
         )
 
     run_state = entry["run_state"]
-    state_color = (
-        "emerald" if run_state == "online"
-        else "rose" if run_state == "offline"
-        else "slate"
-    )
+
+    _RUN_STATE_CLASSES = {
+        "online": (
+            "inline-flex items-center rounded-full px-2 py-0.5 "
+            "text-xs font-medium bg-emerald-100 text-emerald-800 "
+            "dark:bg-emerald-900/40 dark:text-emerald-300"
+        ),
+        "offline": (
+            "inline-flex items-center rounded-full px-2 py-0.5 "
+            "text-xs font-medium bg-rose-100 text-rose-800 "
+            "dark:bg-rose-900/40 dark:text-rose-300"
+        ),
+        "_default": (
+            "inline-flex items-center rounded-full px-2 py-0.5 "
+            "text-xs font-medium bg-slate-100 text-slate-800 "
+            "dark:bg-slate-900/40 dark:text-slate-300"
+        ),
+    }
 
     rows = [
         ("Run State", entry["run_state"]),
@@ -274,10 +287,11 @@ def ont_olt_status(
     for label, value in rows:
         escaped_val = html_mod.escape(str(value))
         if label == "Run State":
+            badge_classes = _RUN_STATE_CLASSES.get(
+                run_state, _RUN_STATE_CLASSES["_default"]
+            )
             escaped_val = (
-                f'<span class="inline-flex items-center rounded-full px-2 py-0.5 '
-                f"text-xs font-medium bg-{state_color}-100 text-{state_color}-800 "
-                f'dark:bg-{state_color}-900/40 dark:text-{state_color}-300">'
+                f'<span class="{badge_classes}">'
                 f"{escaped_val}</span>"
             )
         html_rows.append(

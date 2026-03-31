@@ -7,12 +7,8 @@ reconciled until a follow-up read confirms the expected state on the OLT.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 from app.models.network import OLTDevice
-
-if TYPE_CHECKING:
-    pass
 
 
 @dataclass(frozen=True)
