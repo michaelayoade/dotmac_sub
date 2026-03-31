@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -20,9 +21,15 @@ from app.services import web_network_onts as web_network_onts_service
 from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
 
+_logger = logging.getLogger(__name__)
+
 try:
     from app.services.network.ont_config_snapshots import ont_config_snapshots
 except ImportError:
+    _logger.error(
+        "Failed to import ont_config_snapshots — config snapshot routes will be unavailable",
+        exc_info=True,
+    )
     ont_config_snapshots = None  # type: ignore[assignment]
 from app.web.request_parsing import parse_form_data_sync
 
@@ -972,6 +979,8 @@ def ont_capture_config_snapshot(
     """Capture a new config snapshot from TR-069 and return updated list."""
     form = parse_form_data_sync(request)
     label = _form_str(form, "label").strip() or None
+    if ont_config_snapshots is None:
+        raise HTTPException(status_code=501, detail="Config snapshots not available")
     error_msg = None
     try:
         ont_config_snapshots.capture(db, ont_id, label=label)
@@ -1007,6 +1016,8 @@ def ont_view_config_snapshot(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """View a single config snapshot detail in a slide-over."""
+    if ont_config_snapshots is None:
+        raise HTTPException(status_code=501, detail="Config snapshots not available")
     snapshot = ont_config_snapshots.get(db, snapshot_id, ont_id=ont_id)
     context = _base_context(request, db, active_page="onts")
     context["snapshot"] = snapshot
@@ -1027,6 +1038,8 @@ def ont_delete_config_snapshot(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Delete a config snapshot and return updated list."""
+    if ont_config_snapshots is None:
+        raise HTTPException(status_code=501, detail="Config snapshots not available")
     ont_config_snapshots.delete(db, snapshot_id, ont_id=ont_id)
     snapshots = ont_config_snapshots.list_for_ont(db, ont_id, limit=5)
     context = _base_context(request, db, active_page="onts")

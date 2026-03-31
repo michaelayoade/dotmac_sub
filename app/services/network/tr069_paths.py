@@ -23,6 +23,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from sqlalchemy.exc import SQLAlchemyError
+
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
@@ -405,9 +407,12 @@ class Tr069PathResolver:
                     path,
                 )
             return path
-        except Exception:
-            logger.debug(
-                "Vendor capability lookup failed for %s/%s", vendor, model,
+        except (SQLAlchemyError, ImportError) as exc:
+            logger.warning(
+                "Vendor capability lookup failed for %s/%s: %s",
+                vendor,
+                model,
+                exc,
                 exc_info=True,
             )
             return None

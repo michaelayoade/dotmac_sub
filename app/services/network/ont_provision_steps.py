@@ -543,7 +543,7 @@ def wait_tr069_bootstrap(
         try:
             _record_step(db, ont, "wait_tr069_bootstrap", result)
         except Exception:
-            logger.debug(
+            logger.warning(
                 "Failed to record wait_tr069_bootstrap step after bootstrap poll error",
                 exc_info=True,
             )
@@ -601,7 +601,7 @@ def queue_wait_tr069_bootstrap(
                 )
                 db.commit()
             except Exception:
-                logger.debug(
+                logger.warning(
                     "Failed to mark bootstrap operation %s as failed after queue error",
                     getattr(op, "id", None),
                     exc_info=True,

@@ -15,6 +15,7 @@ from time import monotonic
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit, PonPort
@@ -373,7 +374,7 @@ def run_post_authorization_follow_up(
         )
         resolve_ok = True
         resolve_msg = "Marked the discovered ONT as authorized."
-    except Exception as exc:
+    except (SQLAlchemyError, ValueError) as exc:
         logger.warning(
             "Failed to resolve autofind candidate for %s on %s %s: %s",
             serial_number,
@@ -397,7 +398,7 @@ def run_post_authorization_follow_up(
             )
         else:
             bind_ok, bind_msg = False, "OLT not found for ACS bind."
-    except Exception as exc:
+    except (OSError, SQLAlchemyError) as exc:
         logger.warning("ACS bind failed for ONT %s: %s", ont_unit_id, exc)
         bind_ok = False
         bind_msg = f"ACS bind failed: {exc}"
@@ -566,7 +567,7 @@ def create_or_find_ont_for_authorized_serial(
                     existing.tr069_acs_server_id = olt.tr069_acs_server_id
             db.commit()
             return str(existing.id), f"Using existing ONT record {existing.serial_number}."
-        except Exception as exc:
+        except SQLAlchemyError as exc:
             db.rollback()
             return None, f"Failed to update existing ONT record: {exc}"
 
@@ -608,7 +609,7 @@ def create_or_find_ont_for_authorized_serial(
     try:
         db.add(new_ont)
         db.commit()
-    except Exception as exc:
+    except SQLAlchemyError as exc:
         db.rollback()
         return None, f"Failed to create ONT record: {exc}"
 
@@ -713,6 +714,12 @@ def ensure_assignment_and_pon_port_for_authorized_ont(
 
         db.commit()
         return True, f"Linked ONT to PON port {pon_port.name}."
-    except Exception as exc:
+    except SQLAlchemyError as exc:
+        logger.error(
+            "Failed to link assignment/PON port for ONT %s on OLT %s: %s",
+            ont_unit_id,
+            olt_id,
+            exc,
+        )
         db.rollback()
         return False, f"Failed to link assignment/PON port: {exc}"

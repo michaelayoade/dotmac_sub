@@ -15,6 +15,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -257,10 +258,13 @@ class ProvisioningEnforcement:
             if ont.pppoe_password:
                 try:
                     password = decrypt_credential(ont.pppoe_password) or ""
-                except Exception:
+                except ValueError:
                     logger.warning(
-                        "Cannot decrypt PPPoE password for ONT %s", ont.serial_number,
+                        "Cannot decrypt PPPoE password for ONT %s, skipping",
+                        ont.serial_number,
                     )
+                    failed += 1
+                    continue
 
             if not password:
                 # Try to find password from AccessCredential
@@ -356,10 +360,12 @@ def _resolve_access_credential_password(db: Session, ont: OntUnit) -> str:
             from app.services.credential_crypto import decrypt_credential
 
             return decrypt_credential(cred.secret_hash) or ""
-    except Exception:
-        logger.debug(
-            "Could not resolve AccessCredential for username %s",
+    except (SQLAlchemyError, ValueError) as exc:
+        logger.warning(
+            "Could not resolve AccessCredential for ONT %s (username %s): %s",
+            ont.serial_number,
             ont.pppoe_username,
+            exc,
             exc_info=True,
         )
     return ""

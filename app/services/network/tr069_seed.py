@@ -137,6 +137,7 @@ def seed_vendor_capabilities(db: Session) -> int:
 
     inserted = 0
     for seed in _VENDOR_SEEDS:
+        seed = dict(seed)  # shallow copy to avoid mutating module-level data
         overrides = seed.pop("parameter_overrides", [])
         cap = VendorModelCapability(**seed)
         db.add(cap)
