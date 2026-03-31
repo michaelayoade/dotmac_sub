@@ -181,6 +181,19 @@ class RouterConfigService:
         )
         return list(db.execute(query).scalars().all())
 
+    @staticmethod
+    def list_push_results(
+        db: Session, router_id: uuid.UUID, limit: int = 20
+    ) -> list[RouterConfigPushResult]:
+        """Return recent push results for the given router, newest first."""
+        query = (
+            select(RouterConfigPushResult)
+            .where(RouterConfigPushResult.router_id == router_id)
+            .order_by(RouterConfigPushResult.created_at.desc())
+            .limit(limit)
+        )
+        return list(db.execute(query).scalars().all())
+
 
 class RouterTemplateService:
     @staticmethod

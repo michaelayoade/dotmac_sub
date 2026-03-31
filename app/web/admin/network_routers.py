@@ -168,37 +168,14 @@ def router_detail(
     context["tab"] = tab
 
     if tab == "interfaces":
-        from sqlalchemy import select
-
-        from app.models.router_management import RouterInterface
-
-        context["interfaces"] = list(
-            db.execute(
-                select(RouterInterface)
-                .where(RouterInterface.router_id == router_id)
-                .order_by(RouterInterface.name)
-            )
-            .scalars()
-            .all()
-        )
+        context["interfaces"] = RouterInventory.list_interfaces(db, router_id)
     elif tab == "config":
         context["snapshots"] = RouterConfigService.list_snapshots(
             db, router_id, limit=20
         )
     elif tab == "pushes":
-        from sqlalchemy import select
-
-        from app.models.router_management import RouterConfigPushResult
-
-        context["push_results"] = list(
-            db.execute(
-                select(RouterConfigPushResult)
-                .where(RouterConfigPushResult.router_id == router_id)
-                .order_by(RouterConfigPushResult.created_at.desc())
-                .limit(20)
-            )
-            .scalars()
-            .all()
+        context["push_results"] = RouterConfigService.list_push_results(
+            db, router_id, limit=20
         )
 
     return templates.TemplateResponse("admin/network/routers/detail.html", context)
