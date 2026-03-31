@@ -19,6 +19,7 @@ from app.services.network.ont_action_common import (
     build_tr069_params,
     detect_data_model_root,
     get_ont_client_or_error,
+    persist_data_model_root,
 )
 from app.services.settings_spec import resolve_value
 
@@ -137,6 +138,7 @@ def set_connection_request_credentials(
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
     params = build_tr069_params(
         root,
         {
@@ -183,6 +185,7 @@ def send_connection_request(db: Session, ont_id: str) -> ActionResult:
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
 
     try:
         device = client.get_device(device_id)
@@ -336,6 +339,7 @@ def set_pppoe_credentials(
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
     instance_index = max(1, instance_index)
 
     if root == "Device":
@@ -395,6 +399,7 @@ def enable_ipv6_on_wan(
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
 
     if root == "Device":
         params = {

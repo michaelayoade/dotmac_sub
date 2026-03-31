@@ -16,6 +16,31 @@ _ENCRYPTION_KEY_ENV = "CREDENTIAL_ENCRYPTION_KEY"
 _logger = logging.getLogger(__name__)
 _encryption_warning_logged = False
 
+ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
+    "NasDevice": (
+        "shared_secret",
+        "ssh_password",
+        "ssh_key",
+        "api_password",
+        "api_token",
+        "snmp_community",
+    ),
+    "NetworkDevice": (
+        "snmp_community",
+        "snmp_rw_community",
+        "snmp_auth_secret",
+        "snmp_priv_secret",
+    ),
+    "AccessCredential": ("secret_hash",),
+    "OLTDevice": ("ssh_password", "snmp_ro_community", "snmp_rw_community"),
+    "OntUnit": ("pppoe_password",),
+    "OntProfileWanService": ("pppoe_static_password",),
+    "Tr069AcsServer": ("cwmp_password", "connection_request_password"),
+    "WebhookEndpoint": ("secret",),
+    "PaymentMethod": ("token",),
+    "BankAccount": ("token",),
+}
+
 
 def get_encryption_key() -> bytes | None:
     """Get the Fernet encryption key from settings or environment.
@@ -95,6 +120,19 @@ def generate_encryption_key() -> str:
     return Fernet.generate_key().decode("ascii")
 
 
+def _coerce_encryption_key(encryption_key: str | bytes | None) -> bytes | None:
+    if not encryption_key:
+        return None
+    if isinstance(encryption_key, bytes):
+        return encryption_key
+    if not isinstance(encryption_key, str):
+        raise TypeError("encryption_key must be a str, bytes, or None")
+    try:
+        return encryption_key.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise ValueError("encryption_key must be ASCII-safe Fernet text") from exc
+
+
 def is_encrypted(value: str | None) -> bool:
     """Check if a value is already encrypted.
 
@@ -129,15 +167,29 @@ def encrypt_credential(value: str | None) -> str | None:
     if is_encrypted(value):
         return value
 
-    encryption_key = get_encryption_key()
-    if not encryption_key:
-        # No encryption configured - store with plain prefix
+    return encrypt_credential_with_key(value, get_encryption_key())
+
+
+def encrypt_credential_with_key(
+    value: str | None, encryption_key: str | bytes | None
+) -> str | None:
+    """Encrypt a credential using an explicit Fernet key.
+
+    If ``encryption_key`` is absent, the value is stored with a ``plain:`` prefix.
+    """
+    if not value:
+        return value
+    if is_encrypted(value):
+        return value
+
+    key_bytes = _coerce_encryption_key(encryption_key)
+    if not key_bytes:
         _logger.warning(
             "CREDENTIAL_ENCRYPTION_KEY not configured — storing credential as plaintext"
         )
         return f"plain:{value}"
 
-    fernet = Fernet(encryption_key)
+    fernet = Fernet(key_bytes)
     encrypted = fernet.encrypt(value.encode("utf-8"))
     return f"enc:{encrypted.decode('ascii')}"
 
@@ -163,12 +215,32 @@ def decrypt_credential(value: str | None) -> str | None:
         return value[6:]
 
     if value.startswith("enc:"):
-        encryption_key = get_encryption_key()
-        if not encryption_key:
+        return decrypt_credential_with_key(value, get_encryption_key())
+
+    # Legacy format (no prefix) - treat as plain
+    return value
+
+
+def decrypt_credential_with_key(
+    value: str | None, encryption_key: str | bytes | None
+) -> str | None:
+    """Decrypt a credential using an explicit Fernet key.
+
+    Legacy values without an ``enc:`` or ``plain:`` prefix are treated as plaintext.
+    """
+    if not value:
+        return value
+
+    if value.startswith("plain:"):
+        return value[6:]
+
+    if value.startswith("enc:"):
+        key_bytes = _coerce_encryption_key(encryption_key)
+        if not key_bytes:
             raise ValueError(
                 "Encrypted credential found but CREDENTIAL_ENCRYPTION_KEY not set"
             )
-        fernet = Fernet(encryption_key)
+        fernet = Fernet(key_bytes)
         try:
             decrypted = fernet.decrypt(value[4:].encode("ascii"))
             return decrypted.decode("utf-8")
@@ -177,24 +249,14 @@ def decrypt_credential(value: str | None) -> str | None:
         except Exception as e:
             raise ValueError(f"Failed to decrypt credential: {e}") from e
 
-    # Legacy format (no prefix) - treat as plain
     return value
 
 
 # Credential field names that should be encrypted
 ENCRYPTED_CREDENTIAL_FIELDS = frozenset(
-    {
-        "shared_secret",
-        "ssh_password",
-        "ssh_key",
-        "api_password",
-        "api_token",
-        "snmp_community",
-        "snmp_auth_secret",
-        "snmp_priv_secret",
-        "pppoe_password",
-    }
+    field for fields in ENCRYPTED_MODEL_FIELDS.values() for field in fields
 )
+ENCRYPTED_NAS_CREDENTIAL_FIELDS = frozenset(ENCRYPTED_MODEL_FIELDS["NasDevice"])
 
 
 def encrypt_nas_credentials(data: dict) -> dict:
@@ -207,7 +269,7 @@ def encrypt_nas_credentials(data: dict) -> dict:
         Dictionary with credential fields encrypted
     """
     result = dict(data)
-    for field in ENCRYPTED_CREDENTIAL_FIELDS:
+    for field in ENCRYPTED_NAS_CREDENTIAL_FIELDS:
         if field in result and result[field]:
             result[field] = encrypt_credential(result[field])
     return result

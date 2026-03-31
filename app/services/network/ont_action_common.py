@@ -24,6 +24,7 @@ class ActionResult:
     success: bool
     message: str
     data: dict[str, Any] | None = None
+    waiting: bool = False
 
 
 @dataclass
@@ -50,7 +51,8 @@ def detect_data_model_root(
     """Detect whether device uses Device (TR-181) or InternetGatewayDevice (TR-098).
 
     Checks the cached value on the model first, then queries GenieACS.
-    Caches the result on the model for future use.
+    Caches the result on the loaded model instance for reuse in the current
+    unit of work. Persistence is left to explicit write paths.
     """
     if ont.tr069_data_model in (TR069_ROOT_DEVICE, TR069_ROOT_IGD):
         return ont.tr069_data_model
@@ -64,7 +66,6 @@ def detect_data_model_root(
         else:
             root = TR069_ROOT_IGD
         ont.tr069_data_model = root
-        db.flush()
         return root
     except GenieACSError as exc:
         logger.warning(
@@ -73,6 +74,44 @@ def detect_data_model_root(
             exc,
         )
         return TR069_ROOT_IGD
+
+
+def persist_data_model_root(
+    device: OntUnit | CPEDevice,
+    root: str,
+) -> None:
+    """Persist a detected data-model root in an isolated transaction."""
+    if root not in (TR069_ROOT_DEVICE, TR069_ROOT_IGD):
+        return
+    device_id = getattr(device, "id", None)
+    if not device_id:
+        return
+
+    model_cls = type(device)
+
+    try:
+        from app.db import SessionLocal
+
+        db = SessionLocal()
+        try:
+            record = db.get(model_cls, str(device_id))
+            if record is None:
+                return
+            current = getattr(record, "tr069_data_model", None)
+            if current == root:
+                return
+            record.tr069_data_model = root  # type: ignore[attr-defined]
+            db.commit()
+        finally:
+            db.close()
+    except Exception:
+        logger.warning(
+            "Failed to persist TR-069 data model root %s for %s:%s",
+            root,
+            model_cls.__name__,
+            device_id,
+            exc_info=True,
+        )
 
 
 def build_tr069_params(

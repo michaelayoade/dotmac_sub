@@ -17,6 +17,7 @@ from app.services.network.ont_action_common import (
     build_tr069_params,
     detect_data_model_root,
     get_cpe_client_or_error,
+    persist_data_model_root,
 )
 from app.services.settings_spec import resolve_value
 
@@ -95,6 +96,7 @@ def set_connection_request_credentials(
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     root = detect_data_model_root(db, cpe, client, device_id)
+    persist_data_model_root(cpe, root)
     params = build_tr069_params(
         root,
         {
@@ -141,6 +143,7 @@ def send_connection_request(db: Session, cpe_id: str) -> ActionResult:
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     root = detect_data_model_root(db, cpe, client, device_id)
+    persist_data_model_root(cpe, root)
 
     try:
         device = client.get_device(device_id)
