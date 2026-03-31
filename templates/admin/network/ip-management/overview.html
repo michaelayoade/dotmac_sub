@@ -1,0 +1,263 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import status_badge %}
+
+{% block title %}IP Management Overview - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-8">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+            <a href="/admin/network" class="text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400 dark:hover:text-indigo-300">
+                Back to Network
+            </a>
+            <h1 class="mt-3 text-2xl font-bold text-slate-900 dark:text-white">IP Address Management Overview</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                Fast overview with previews. Use the dedicated inventory pages for full pool, block, address, and assignment lists.
+            </p>
+        </div>
+        <div class="flex flex-wrap items-center gap-3">
+            <form method="post" action="/admin/network/ip-management/reconcile-pools">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    Reconcile Existing Addresses
+                </button>
+            </form>
+            <a href="/admin/network/ip-management/blocks/new" class="rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                Add Block
+            </a>
+            <a href="/admin/network/ip-management/pools/new" class="rounded-xl bg-indigo-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-indigo-700">
+                Add Pool
+            </a>
+        </div>
+    </div>
+
+    {% for feedback in feedback_items %}
+    <div class="rounded-2xl border px-5 py-4 text-sm shadow-sm {% if feedback.status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/40 dark:bg-emerald-950/20 dark:text-emerald-200{% elif feedback.status == 'warning' %}border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/40 dark:bg-amber-950/20 dark:text-amber-200{% else %}border-rose-200 bg-rose-50 text-rose-900 dark:border-rose-900/40 dark:bg-rose-950/20 dark:text-rose-200{% endif %}">
+        <div class="flex items-start gap-3">
+            <div class="mt-0.5 flex h-8 w-8 items-center justify-center rounded-full {% if feedback.status == 'success' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300{% elif feedback.status == 'warning' %}bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300{% else %}bg-rose-100 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300{% endif %}">
+                {% if feedback.status == 'success' %}
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                {% elif feedback.status == 'warning' %}
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01"/></svg>
+                {% else %}
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v3m0 4h.01M10.29 3.86l-7.5 13A1 1 0 003.67 18h16.66a1 1 0 00.88-1.5l-7.5-13a1 1 0 00-1.74 0z"/></svg>
+                {% endif %}
+            </div>
+            <div>
+                <p class="text-sm font-semibold">
+                    {% if feedback.status == 'success' %}Operator action completed{% elif feedback.status == 'warning' %}Operator action completed with warnings{% else %}Operator action needs attention{% endif %}
+                </p>
+                <p class="mt-1 text-sm opacity-90">{{ feedback.message }}</p>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Pools</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_pools }}</p>
+            <a href="{{ links.pools }}" class="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Open full inventory</a>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Blocks</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_blocks }}</p>
+            <a href="{{ links.ipv4_networks }}" class="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Open IPv4 networks</a>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Assignments</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_assignments }}</p>
+            <a href="{{ links.assignments }}" class="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Open full assignments</a>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Addresses</p>
+            <p class="mt-1 text-3xl font-bold text-slate-900 dark:text-white">{{ stats.total_addresses }}</p>
+            <div class="mt-4 flex flex-wrap gap-3 text-sm">
+                <a href="{{ links.ipv4_addresses }}" class="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">IPv4</a>
+                <a href="{{ links.ipv6_addresses }}" class="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">IPv6</a>
+                <a href="{{ links.dual_stack }}" class="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Dual stack</a>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid gap-4 lg:grid-cols-4">
+        <a href="{{ links.pools }}" class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm hover:border-indigo-300 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-indigo-500">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Pool Inventory</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Standard and fallback pools with utilization and edit access.</p>
+        </a>
+        <a href="{{ links.ipv4_networks }}" class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm hover:border-indigo-300 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-indigo-500">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">IPv4 Networks</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Full IPv4 network inventory and block drill-down.</p>
+        </a>
+        <a href="{{ links.ipv6_networks }}" class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm hover:border-indigo-300 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-indigo-500">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">IPv6 Networks</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Prefix inventory with utilization and metadata.</p>
+        </a>
+        <a href="{{ links.calculator }}" class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm hover:border-indigo-300 dark:border-slate-700/60 dark:bg-slate-800 dark:hover:border-indigo-500">
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Calculator</h2>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Subnet planning and validation tools.</p>
+        </a>
+    </div>
+
+    <div class="grid gap-6 xl:grid-cols-2">
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Pool Preview</h2>
+                <a href="{{ links.pools }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">View all</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Name</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">CIDR</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Used</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Status</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for pool in pools %}
+                        {% set util = pool_utilization[pool.id|string] if pool_utilization else None %}
+                        <tr>
+                            <td class="px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">{{ pool.name }}</td>
+                            <td class="px-6 py-4 text-sm font-mono text-slate-600 dark:text-slate-300">{{ pool.cidr }}</td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                                {% if util %}{{ util.used }}/{{ util.total }}{% else %}-{% endif %}
+                            </td>
+                            <td class="px-6 py-4">
+                                {% if pool.is_active %}
+                                {{ status_badge("Active", "active", size="sm") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "inactive", size="sm") }}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="4" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No pools configured</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Block Preview</h2>
+                <a href="{{ links.ipv4_networks }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">View IPv4 networks</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">CIDR</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Pool</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Used</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for block in blocks %}
+                        {% set util = block_utilization[block.id|string] if block_utilization else None %}
+                        <tr>
+                            <td class="px-6 py-4 text-sm font-mono text-slate-900 dark:text-white">{{ block.cidr }}</td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ block.pool.name if block.pool else '-' }}</td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                                {% if util %}{{ util.used }}/{{ util.total }}{% else %}-{% endif %}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No blocks configured</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid gap-6 xl:grid-cols-2">
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Recent Assignments</h2>
+                <a href="{{ links.assignments }}" class="text-sm font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">View all</a>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full">
+                    <thead>
+                        <tr class="border-b border-slate-100 dark:border-slate-700/50">
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Subscriber</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Version</th>
+                            <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400">Created</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for assignment in assignments %}
+                        <tr>
+                            <td class="px-6 py-4 text-sm text-slate-900 dark:text-white">
+                                {{ assignment.subscriber.display_name if assignment.subscriber else assignment.subscriber_id }}
+                            </td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ assignment.ip_version.value if assignment.ip_version else '-' }}</td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">{{ assignment.created_at.strftime('%Y-%m-%d %H:%M') if assignment.created_at else '-' }}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="3" class="px-6 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No active assignments</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+                <h2 class="font-semibold text-slate-900 dark:text-white">Address Preview</h2>
+                <div class="flex items-center gap-3 text-sm">
+                    <a href="{{ links.ipv4_addresses }}" class="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">IPv4</a>
+                    <a href="{{ links.ipv6_addresses }}" class="font-medium text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">IPv6</a>
+                </div>
+            </div>
+            <div class="grid gap-4 p-6 md:grid-cols-2">
+                <div>
+                    <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">IPv4</h3>
+                    <ul class="space-y-2 text-sm">
+                        {% for addr in ipv4_addresses %}
+                        <li class="flex items-center justify-between rounded-xl border border-slate-200/60 px-3 py-2 dark:border-slate-700/60">
+                            <span class="font-mono text-slate-900 dark:text-white">{{ addr.address }}</span>
+                            <span class="text-slate-500 dark:text-slate-400">{{ addr.pool.name if addr.pool else '-' }}</span>
+                        </li>
+                        {% else %}
+                        <li class="text-slate-500 dark:text-slate-400">No IPv4 addresses</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div>
+                    <h3 class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">IPv6</h3>
+                    <ul class="space-y-2 text-sm">
+                        {% for addr in ipv6_addresses %}
+                        <li class="flex items-center justify-between rounded-xl border border-slate-200/60 px-3 py-2 dark:border-slate-700/60">
+                            <span class="truncate font-mono text-slate-900 dark:text-white">{{ addr.address }}</span>
+                            <span class="text-slate-500 dark:text-slate-400">{{ addr.pool.name if addr.pool else '-' }}</span>
+                        </li>
+                        {% else %}
+                        <li class="text-slate-500 dark:text-slate-400">No IPv6 addresses</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {% if activities %}
+    <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+        <div class="border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Recent Activity</h2>
+        </div>
+        <div class="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {% for activity in activities %}
+            <div class="px-6 py-4 text-sm">
+                <div class="font-medium text-slate-900 dark:text-white">{{ activity.title or activity.action }}</div>
+                <div class="mt-1 text-slate-500 dark:text-slate-400">{{ activity.description or activity.when or '' }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

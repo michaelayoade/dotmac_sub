@@ -1,0 +1,6 @@
+{% if success %}
+{% set message = success %}
+{% set status = 'success' %}
+{% set alert_classes = form_success_classes | default('rounded-lg border px-4 py-3 text-sm') %}
+{% include "components/feedback/alert.html" %}
+{% endif %}

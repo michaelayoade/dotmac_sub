@@ -1,0 +1,131 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles, icon_cog %}
+{% block title %}RADIUS Failover - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("blue", "cyan") }}
+{% set input_classes = "mt-1.5 w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-900 shadow-sm transition focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-700 dark:bg-slate-900 dark:text-white dark:focus:border-blue-400 dark:focus:ring-blue-400/20" %}
+{% set select_classes = input_classes + " pr-11" %}
+<div class="relative space-y-8">
+    {% call page_header(title="RADIUS Failover", subtitle="Choose the main server, backup server, and the rules for switching between them", icon=icon_cog(), color="blue", color2="cyan") %}{% endcall %}
+
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+
+        {% call card("Failover Settings", color="blue") %}
+        {% if not radius_servers %}
+        <div class="mb-5 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800/50 dark:bg-amber-900/20 dark:text-amber-300">
+            No RADIUS servers are configured yet. Add servers under the RADIUS area first, then return here to choose primary and backup servers.
+        </div>
+        {% endif %}
+
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Enable RADIUS Failover</label>
+                <select name="failover_enabled" class="{{ select_classes }}">
+                    <option value="true" {% if radius_failover.failover_enabled == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if radius_failover.failover_enabled != 'true' %}selected{% endif %}>Disabled</option>
+                </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Turn this on if the app should switch to a backup server when the main one is down.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Primary RADIUS Server</label>
+                <select name="failover_primary_server_id" class="{{ select_classes }}">
+                    <option value="">Select primary server</option>
+                    {% for server in radius_servers %}
+                    <option value="{{ server.id }}" {% if radius_failover.failover_primary_server_id == server.id|string %}selected{% endif %}>
+                        {{ server.name }}{% if not server.is_active %} (inactive){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">This is the server used during normal operation. Example: your main office RADIUS server.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Secondary RADIUS Server</label>
+                <select name="failover_secondary_server_id" class="{{ select_classes }}">
+                    <option value="">Select backup server</option>
+                    {% for server in radius_servers %}
+                    <option value="{{ server.id }}" {% if radius_failover.failover_secondary_server_id == server.id|string %}selected{% endif %}>
+                        {{ server.name }}{% if not server.is_active %} (inactive){% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">This is the backup used if the primary fails. Example: a second server in another site.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Health Check Method</label>
+                <select name="failover_health_check_method" class="{{ select_classes }}">
+                    <option value="auth_request" {% if not radius_failover.failover_health_check_method or radius_failover.failover_health_check_method == 'auth_request' %}selected{% endif %}>Test login request</option>
+                    <option value="ping" {% if radius_failover.failover_health_check_method == 'ping' %}selected{% endif %}>Ping</option>
+                    <option value="port_check" {% if radius_failover.failover_health_check_method == 'port_check' %}selected{% endif %}>Port check</option>
+                </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Decides how the app checks if a server is healthy.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Health Check Interval (seconds)</label>
+                <input type="number" min="5" name="failover_health_check_interval_seconds" value="{{ radius_failover.failover_health_check_interval_seconds or '30' }}" class="{{ input_classes }}">
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Example: <span class="font-mono">30</span> means check server health every 30 seconds.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Failure Threshold</label>
+                <input type="number" min="1" name="failover_failure_threshold" value="{{ radius_failover.failover_failure_threshold or '3' }}" class="{{ input_classes }}">
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Example: after 3 failed checks, switch to the backup server.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Recovery Threshold</label>
+                <input type="number" min="1" name="failover_recovery_threshold" value="{{ radius_failover.failover_recovery_threshold or '2' }}" class="{{ input_classes }}">
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Example: after 2 good checks, the server is treated as healthy again.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Auto Failback</label>
+                <select name="failover_auto_failback" class="{{ select_classes }}">
+                    <option value="true" {% if not radius_failover.failover_auto_failback or radius_failover.failover_auto_failback == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if radius_failover.failover_auto_failback == 'false' %}selected{% endif %}>Disabled</option>
+                </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">If enabled, the app returns to the primary server after it recovers.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Timeout Per Attempt (seconds)</label>
+                <input type="number" min="1" name="failover_timeout_seconds" value="{{ radius_failover.failover_timeout_seconds or '5' }}" class="{{ input_classes }}">
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">How long to wait before treating one attempt as failed.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Retry Attempts</label>
+                <input type="number" min="0" name="failover_retry_attempts" value="{{ radius_failover.failover_retry_attempts or '2' }}" class="{{ input_classes }}">
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Example: try the main server 2 times before moving to the backup.</p>
+            </div>
+
+            <div>
+                <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Log Failover Events</label>
+                <select name="failover_log_events" class="{{ select_classes }}">
+                    <option value="true" {% if not radius_failover.failover_log_events or radius_failover.failover_log_events == 'true' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if radius_failover.failover_log_events == 'false' %}selected{% endif %}>Disabled</option>
+                </select>
+                <p class="mt-1.5 text-xs text-slate-500 dark:text-slate-400">Keeps a record when the system switches from primary to backup or back again.</p>
+            </div>
+        </div>
+
+        <div class="mt-5 rounded-2xl border border-blue-200/70 bg-blue-50/70 p-4 dark:border-blue-900/40 dark:bg-blue-950/20">
+            <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Simple Example</h3>
+            <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">
+                If <span class="font-medium">RADIUS Server A</span> is your main server and it fails 3 checks in a row, the app will switch to <span class="font-medium">RADIUS Server B</span>.
+                If auto failback is on, the app will return to Server A after it passes the recovery checks again.
+            </p>
+        </div>
+        {% endcall %}
+
+        <div class="flex justify-end">
+            <button type="submit" class="rounded-lg bg-blue-600 px-6 py-2.5 text-sm font-medium text-white shadow-sm hover:bg-blue-700 transition">Save Failover Settings</button>
+        </div>
+    </form>
+</div>
+{{ animation_styles() }}
+{% endblock %}

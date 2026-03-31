@@ -1,0 +1,6 @@
+{% if error %}
+{% set message = error %}
+{% set status = 'warning' %}
+{% set alert_classes = partial_warning_classes | default('rounded-lg border px-4 py-3 text-sm') %}
+{% include "components/feedback/alert.html" %}
+{% endif %}

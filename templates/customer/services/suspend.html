@@ -1,0 +1,67 @@
+{% extends "layouts/customer.html" %}
+
+{% block title %}Pause Service - Customer Portal{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+    <div>
+        <nav class="mb-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
+            <a href="/portal/services" class="hover:text-[var(--color-brand-600)]">Services</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <a href="/portal/services/{{ subscription.id }}" class="hover:text-[var(--color-brand-600)]">{{ offer_name }}</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+            </svg>
+            <span class="text-stone-900 dark:text-white">Pause Service</span>
+        </nav>
+        <h1 class="text-2xl font-display font-bold text-stone-900 dark:text-white">Pause Your Service</h1>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Place this subscription on a temporary vacation hold for between 1 and {{ max_days }} days.</p>
+    </div>
+
+    {% if error %}
+    {% include "components/feedback/form_error.html" %}
+    {% endif %}
+
+    <div class="rounded-2xl border border-amber-200 bg-amber-50/70 p-5 text-sm text-amber-900 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-100">
+        Your service will be paused temporarily. Billing continues to follow your {{ billing_mode }} subscription policy while the hold is active.
+    </div>
+
+    <form action="/portal/services/{{ subscription.id }}/suspend" method="POST" class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="space-y-4" x-data="{ selectedDays: 7 }">
+            <div>
+                <label for="days" class="block text-sm font-semibold text-stone-900 dark:text-white">Hold duration</label>
+                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Choose how long the service should remain paused.</p>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-3">
+                {% for option in [7, 14, 30] %}
+                {% if option <= max_days %}
+                <label class="cursor-pointer">
+                    <input class="peer sr-only" type="radio" name="days_preset" value="{{ option }}" {% if loop.first %}checked{% endif %} @change="selectedDays = {{ option }}">
+                    <div class="rounded-xl border-2 border-stone-200 bg-stone-50 px-4 py-4 text-center text-sm font-semibold text-stone-700 transition peer-checked:border-[var(--color-brand-500)] peer-checked:bg-[var(--color-brand-50)] peer-checked:text-[var(--color-brand-700)] dark:border-stone-700 dark:bg-stone-900/40 dark:text-stone-300 dark:peer-checked:border-[var(--color-brand-400)] dark:peer-checked:bg-[var(--color-brand-900)]/20 dark:peer-checked:text-[var(--color-brand-300)]">
+                        {{ option }} days
+                    </div>
+                </label>
+                {% endif %}
+                {% endfor %}
+            </div>
+
+            <div>
+                <label for="days-custom" class="block text-sm font-medium text-stone-700 dark:text-stone-300">Or enter a custom duration</label>
+                <input id="days-custom" type="number" min="1" max="{{ max_days }}" placeholder="1-{{ max_days }}" class="mt-2 w-full rounded-xl border border-stone-300 px-3 py-2 text-sm text-stone-900 focus:border-[var(--color-brand-500)] focus:outline-none focus:ring-1 focus:ring-[var(--color-brand-500)] dark:border-stone-600 dark:bg-stone-700 dark:text-white" @input="selectedDays = Number($event.target.value || 0)">
+                <input type="hidden" name="days" :value="selectedDays || 7">
+            </div>
+        </div>
+
+        <div class="mt-6 flex items-center justify-between gap-3">
+            <a href="/portal/services/{{ subscription.id }}" class="text-sm font-medium text-stone-500 hover:text-stone-700 dark:text-stone-400 dark:hover:text-stone-200">Back to service</a>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-amber-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">
+                Confirm Vacation Hold
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

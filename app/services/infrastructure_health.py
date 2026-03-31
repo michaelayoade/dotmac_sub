@@ -1,0 +1,399 @@
+"""Infrastructure health checks for Docker-hosted services.
+
+Performs lightweight connectivity and version checks against all
+infrastructure dependencies (PostgreSQL, Redis, VictoriaMetrics,
+GenieACS, FreeRADIUS, MinIO, Celery, Nominatim).
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import socket
+import time
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
+
+import httpx
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
+logger = logging.getLogger(__name__)
+
+_CHECK_TIMEOUT = 3  # seconds for each health check
+
+
+@dataclass
+class ServiceStatus:
+    """Result of a single infrastructure health check."""
+
+    name: str
+    status: str  # "up", "down", "degraded"
+    version: str = ""
+    response_ms: float = 0.0
+    details: dict[str, object] = field(default_factory=dict)
+    checked_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    icon: str = ""  # SVG icon for the template
+
+
+def check_all_services(db: Session) -> list[ServiceStatus]:
+    """Run health checks against all infrastructure services.
+
+    Each check is independent — a failure in one does not affect others.
+    """
+    checks = [
+        _check_postgres,
+        _check_redis,
+        _check_victoriametrics,
+        _check_genieacs,
+        _check_radius_db,
+        _check_minio,
+        _check_celery,
+        _check_nominatim,
+    ]
+    results: list[ServiceStatus] = []
+    for check_fn in checks:
+        try:
+            result = check_fn(db)
+            results.append(result)
+        except Exception as exc:
+            logger.error("Infrastructure check %s crashed: %s", check_fn.__name__, exc)
+            results.append(
+                ServiceStatus(
+                    name=check_fn.__name__.replace("_check_", "").title(),
+                    status="down",
+                    details={"error": str(exc)},
+                )
+            )
+    return results
+
+
+# ── Individual checks ────────────────────────────────────────────────
+
+
+def _check_postgres(db: Session) -> ServiceStatus:
+    """Check PostgreSQL via the existing DB session."""
+    from sqlalchemy import text
+
+    start = time.monotonic()
+    try:
+        row = db.execute(text("SELECT version()")).scalar()
+        elapsed = (time.monotonic() - start) * 1000
+        version = ""
+        if row:
+            # "PostgreSQL 16.3 (Debian 16.3-1.pgdg120+1) on x86_64..."
+            parts = str(row).split()
+            if len(parts) >= 2:
+                version = parts[1]
+        return ServiceStatus(
+            name="PostgreSQL",
+            status="up",
+            version=version,
+            response_ms=round(elapsed, 1),
+            icon=_ICON_DATABASE,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        try:
+            db.rollback()
+        except Exception:
+            logger.debug("Rollback failed after PostgreSQL health check error", exc_info=True)
+        return ServiceStatus(
+            name="PostgreSQL",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_DATABASE,
+        )
+
+
+def _check_redis(db: Session) -> ServiceStatus:
+    """Check Redis via the session store client."""
+    from app.services.session_store import get_session_redis
+
+    start = time.monotonic()
+    try:
+        client = get_session_redis()
+        if client is None:
+            return ServiceStatus(
+                name="Redis",
+                status="down",
+                details={"error": "No Redis client available"},
+                icon=_ICON_CACHE,
+            )
+        client.ping()
+        all_info: dict = client.info()  # type: ignore[assignment]
+        elapsed = (time.monotonic() - start) * 1000
+        version = str(all_info.get("redis_version", ""))
+        uptime_seconds = all_info.get("uptime_in_seconds", 0)
+        used_memory_human = str(all_info.get("used_memory_human", ""))
+        connected_clients = all_info.get("connected_clients", 0)
+
+        details: dict[str, object] = {
+            "memory": used_memory_human,
+            "clients": connected_clients,
+        }
+        if uptime_seconds:
+            days = int(uptime_seconds) // 86400
+            hours = (int(uptime_seconds) % 86400) // 3600
+            details["uptime"] = f"{days}d {hours}h" if days else f"{hours}h"
+
+        return ServiceStatus(
+            name="Redis",
+            status="up",
+            version=version,
+            response_ms=round(elapsed, 1),
+            details=details,
+            icon=_ICON_CACHE,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="Redis",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_CACHE,
+        )
+
+
+def _check_victoriametrics(db: Session) -> ServiceStatus:
+    """Check VictoriaMetrics via its build info API."""
+    url = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
+    start = time.monotonic()
+    try:
+        resp = httpx.get(
+            f"{url.rstrip('/')}/api/v1/status/buildinfo",
+            timeout=_CHECK_TIMEOUT,
+        )
+        elapsed = (time.monotonic() - start) * 1000
+        version = ""
+        if resp.status_code == 200:
+            data = resp.json()
+            # VictoriaMetrics returns {"status":"success","data":{"version":"..."}}
+            version = (
+                data.get("data", {}).get("version", "")
+                or data.get("version", "")
+            )
+        return ServiceStatus(
+            name="VictoriaMetrics",
+            status="up" if resp.status_code == 200 else "degraded",
+            version=version,
+            response_ms=round(elapsed, 1),
+            icon=_ICON_CHART,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="VictoriaMetrics",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_CHART,
+        )
+
+
+def _check_genieacs(db: Session) -> ServiceStatus:
+    """Check GenieACS NBI API reachability."""
+    from app.models.tr069 import Tr069AcsServer
+
+    start = time.monotonic()
+    try:
+        # Get base_url from first active ACS server
+        from sqlalchemy import select
+
+        server = db.scalars(
+            select(Tr069AcsServer)
+            .where(Tr069AcsServer.is_active.is_(True))
+            .limit(1)
+        ).first()
+        if not server:
+            return ServiceStatus(
+                name="GenieACS",
+                status="degraded",
+                details={"error": "No ACS server configured"},
+                icon=_ICON_DEVICE,
+            )
+
+        base_url = server.base_url.rstrip("/")
+        resp = httpx.get(
+            f"{base_url}/devices/?projection=_id&limit=1",
+            timeout=_CHECK_TIMEOUT,
+        )
+        elapsed = (time.monotonic() - start) * 1000
+        device_count = None
+        if resp.status_code == 200:
+            try:
+                device_count = len(resp.json())
+            except Exception:
+                logger.debug(
+                    "Failed to decode GenieACS device count response",
+                    exc_info=True,
+                )
+
+        details: dict[str, object] = {"url": base_url}
+        if device_count is not None:
+            details["reachable"] = True
+
+        return ServiceStatus(
+            name="GenieACS",
+            status="up" if resp.status_code == 200 else "degraded",
+            version=server.name,
+            response_ms=round(elapsed, 1),
+            details=details,
+            icon=_ICON_DEVICE,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="GenieACS",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_DEVICE,
+        )
+
+
+def _check_radius_db(db: Session) -> ServiceStatus:
+    """Check RADIUS database reachability via TCP connect."""
+    host = os.getenv("RADIUS_DB_HOST", "radius-db")
+    try:
+        port = int(os.getenv("RADIUS_DB_PORT", "5432"))
+    except ValueError:
+        port = 5432
+    start = time.monotonic()
+    try:
+        sock = socket.create_connection((host, port), timeout=_CHECK_TIMEOUT)
+        sock.close()
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="RADIUS DB",
+            status="up",
+            version=f"{host}:{port}",
+            response_ms=round(elapsed, 1),
+            details={"host": host, "port": port},
+            icon=_ICON_SHIELD,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="RADIUS DB",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200], "host": host, "port": port},
+            icon=_ICON_SHIELD,
+        )
+
+
+def _check_minio(db: Session) -> ServiceStatus:
+    """Check MinIO/S3 via its health endpoint."""
+    url = os.getenv("S3_ENDPOINT_URL", "http://minio:9000")
+    start = time.monotonic()
+    try:
+        resp = httpx.get(
+            f"{url.rstrip('/')}/minio/health/live",
+            timeout=_CHECK_TIMEOUT,
+        )
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="MinIO",
+            status="up" if resp.status_code == 200 else "degraded",
+            response_ms=round(elapsed, 1),
+            icon=_ICON_STORAGE,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="MinIO",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_STORAGE,
+        )
+
+
+def _check_celery(db: Session) -> ServiceStatus:
+    """Check Celery worker availability."""
+    start = time.monotonic()
+    try:
+        from app.celery_app import celery_app
+
+        inspector = celery_app.control.inspect(timeout=1.0)
+        ping_result = inspector.ping()
+        elapsed = (time.monotonic() - start) * 1000
+
+        if not ping_result:
+            return ServiceStatus(
+                name="Celery",
+                status="down",
+                response_ms=round(elapsed, 1),
+                details={"error": "No workers responding"},
+                icon=_ICON_WORKER,
+            )
+
+        worker_names = list(ping_result.keys())
+        return ServiceStatus(
+            name="Celery",
+            status="up",
+            version=f"{len(worker_names)} worker{'s' if len(worker_names) != 1 else ''}",
+            response_ms=round(elapsed, 1),
+            details={"workers": worker_names},
+            icon=_ICON_WORKER,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="Celery",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_WORKER,
+        )
+
+
+def _check_nominatim(db: Session) -> ServiceStatus:
+    """Check Nominatim geocoding service."""
+    url = os.getenv("GEOCODING_BASE_URL", "http://nominatim:8080")
+    start = time.monotonic()
+    try:
+        resp = httpx.get(
+            f"{url.rstrip('/')}/status",
+            timeout=_CHECK_TIMEOUT,
+        )
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="Nominatim",
+            status="up" if resp.status_code == 200 else "degraded",
+            response_ms=round(elapsed, 1),
+            icon=_ICON_MAP,
+        )
+    except Exception as exc:
+        elapsed = (time.monotonic() - start) * 1000
+        return ServiceStatus(
+            name="Nominatim",
+            status="down",
+            response_ms=round(elapsed, 1),
+            details={"error": str(exc)[:200]},
+            icon=_ICON_MAP,
+        )
+
+
+# ── SVG Icons (inline, no external dependencies) ────────────────────
+
+_ICON_DATABASE = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4.03 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4.03 3 9 3s9-1.34 9-3V5"/></svg>'
+
+_ICON_CACHE = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>'
+
+_ICON_CHART = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>'
+
+_ICON_DEVICE = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>'
+
+_ICON_SHIELD = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>'
+
+_ICON_STORAGE = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>'
+
+_ICON_WORKER = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><circle cx="12" cy="12" r="3"/></svg>'
+
+_ICON_MAP = '<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>'

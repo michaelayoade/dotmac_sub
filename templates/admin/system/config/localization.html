@@ -1,0 +1,277 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header, card, animation_styles, icon_cog %}
+{% block title %}Localization - Admin{% endblock %}
+{% block content %}
+{{ ambient_background("emerald", "teal") }}
+<div class="relative space-y-8">
+    {% call page_header(title="Localization", subtitle="Language, formats, currency display, usage units, file names, and holiday calendar", icon=icon_cog(), color="emerald", color2="teal") %}{% endcall %}
+
+    <form method="POST" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+        <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
+        <input type="hidden" name="holiday_calendar" id="holiday-calendar-input" value="{{ holiday_calendar | tojson | e }}">
+
+        {% call card("Language & Display", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">System Language</label>
+                <input type="text" name="system_language" value="{{ localization.system_language or '' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 transition focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900" placeholder="English">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The main language used in the admin area.</p>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Date Format</label>
+                <select name="date_format" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="DD/MM/YYYY" {% if localization.date_format == 'DD/MM/YYYY' %}selected{% endif %}>DD/MM/YYYY</option>
+                    <option value="MM/DD/YYYY" {% if localization.date_format == 'MM/DD/YYYY' %}selected{% endif %}>MM/DD/YYYY</option>
+                    <option value="YYYY-MM-DD" {% if localization.date_format == 'YYYY-MM-DD' %}selected{% endif %}>YYYY-MM-DD</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Online Time Format</label>
+                <select name="online_time_format" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="HH:MM:SS" {% if localization.online_time_format == 'HH:MM:SS' %}selected{% endif %}>HH:MM:SS (00:00:00)</option>
+                    <option value="humanized" {% if localization.online_time_format == 'humanized' %}selected{% endif %}>Human readable (1h 20m)</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Time Format</label>
+                <select name="time_format" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="24_hours" {% if localization.time_format == '24_hours' %}selected{% endif %}>24 Hours</option>
+                    <option value="12_hours" {% if localization.time_format == '12_hours' %}selected{% endif %}>12 Hours</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Show Seconds</label>
+                <select name="show_seconds" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="true" {% if localization.show_seconds == 'true' %}selected{% endif %}>Yes</option>
+                    <option value="false" {% if localization.show_seconds != 'true' %}selected{% endif %}>No</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">First Day Of Week</label>
+                <select name="first_day_of_week" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="monday" {% if localization.first_day_of_week == 'monday' %}selected{% endif %}>Monday</option>
+                    <option value="sunday" {% if localization.first_day_of_week == 'sunday' %}selected{% endif %}>Sunday</option>
+                    <option value="saturday" {% if localization.first_day_of_week == 'saturday' %}selected{% endif %}>Saturday</option>
+                </select>
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Number & Workday Format", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Decimal Places</label>
+                <input type="number" min="0" max="6" name="decimal_places" value="{{ localization.decimal_places or '2' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Decimal Separator</label>
+                <input type="text" maxlength="1" name="decimal_separator" value="{{ localization.decimal_separator or '.' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Thousands Separator</label>
+                <input type="text" maxlength="1" name="thousands_separator" value="{{ localization.thousands_separator or '' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Voice Decimal Places</label>
+                <input type="number" min="0" max="6" name="voice_decimal_places" value="{{ localization.voice_decimal_places or '2' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start Of Working Hours</label>
+                <input type="time" name="working_hours_start" value="{{ localization.working_hours_start or '08:00' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">End Of Working Hours</label>
+                <input type="time" name="working_hours_end" value="{{ localization.working_hours_end or '20:00' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Weekends</label>
+                <input type="text" name="weekends" value="{{ localization.weekends or '' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900" placeholder="saturday,sunday">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Comma-separated day names used by operational schedules.</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Finance Format Settings", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Currency</label>
+                <input type="text" name="default_currency" value="{{ localization.default_currency or 'NGN' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm uppercase text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900" placeholder="NGN">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Currency Symbol</label>
+                <input type="text" name="currency_symbol" value="{{ localization.currency_symbol or '' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900" placeholder="₦">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Currency Display</label>
+                <select name="currency_display" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="before" {% if localization.currency_display == 'before' %}selected{% endif %}>Before amount</option>
+                    <option value="before_with_space" {% if localization.currency_display == 'before_with_space' %}selected{% endif %}>Before with space</option>
+                    <option value="after" {% if localization.currency_display == 'after' %}selected{% endif %}>After amount</option>
+                    <option value="after_with_space" {% if localization.currency_display == 'after_with_space' %}selected{% endif %}>After with space</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Tax Label</label>
+                <input type="text" name="tax_label" value="{{ localization.tax_label or 'VAT' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900" placeholder="VAT">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Finance Rounding</label>
+                <select name="finance_rounding" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="round_each_item" {% if localization.finance_rounding == 'round_each_item' %}selected{% endif %}>Round each item</option>
+                    <option value="round_total" {% if localization.finance_rounding == 'round_total' %}selected{% endif %}>Round total</option>
+                </select>
+            </div>
+            <div class="sm:col-span-2">
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invert Account Balance</label>
+                <select name="invert_account_balance" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="false" {% if localization.invert_account_balance != 'true' %}selected{% endif %}>No</option>
+                    <option value="true" {% if localization.invert_account_balance == 'true' %}selected{% endif %}>Yes</option>
+                </select>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Keep this off unless your team wants credits and debts shown in the opposite style.</p>
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Networking Statistics", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Statistic Usage Unit</label>
+                <select name="statistic_usage_unit" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                    <option value="MB" {% if localization.statistic_usage_unit == 'MB' %}selected{% endif %}>MB</option>
+                    <option value="GB" {% if localization.statistic_usage_unit == 'GB' %}selected{% endif %}>GB</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Statistic Usage Decimals</label>
+                <input type="number" min="0" max="6" name="statistic_usage_decimal_places" value="{{ localization.statistic_usage_decimal_places or '2' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Statistic Usage Decimal Separator</label>
+                <input type="text" maxlength="1" name="statistic_usage_decimal_separator" value="{{ localization.statistic_usage_decimal_separator or '.' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Statistic Usage Thousands Separator</label>
+                <input type="text" maxlength="1" name="statistic_usage_thousands_separator" value="{{ localization.statistic_usage_thousands_separator or '' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("PDF File Name Patterns", color="emerald") %}
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Invoice File Name</label>
+                <input type="text" name="invoice_filename_prefix" value="{{ localization.invoice_filename_prefix or 'invoice_' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Receipt File Name</label>
+                <input type="text" name="receipt_filename_prefix" value="{{ localization.receipt_filename_prefix or 'receipt_' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Credit Note File Name</label>
+                <input type="text" name="credit_note_filename_prefix" value="{{ localization.credit_note_filename_prefix or 'credit_note_' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Proforma Invoice File Name</label>
+                <input type="text" name="proforma_invoice_filename_prefix" value="{{ localization.proforma_invoice_filename_prefix or 'proforma_invoice_' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Quote File Name</label>
+                <input type="text" name="quote_filename_prefix" value="{{ localization.quote_filename_prefix or 'quote_' }}" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+            </div>
+        </div>
+        {% endcall %}
+
+        {% call card("Holiday Calendar", color="emerald") %}
+        <div class="space-y-4" x-data="holidayCalendar({{ holiday_calendar | tojson | safe }})">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div class="flex-1">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Date</label>
+                    <input x-model="draft.date" type="date" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900">
+                </div>
+                <div class="flex-[2]">
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Name</label>
+                    <input x-model="draft.name" type="text" class="mt-1 block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-emerald-500 dark:bg-slate-900 dark:text-white dark:ring-slate-700 dark:focus:bg-slate-900" placeholder="Public holiday name">
+                </div>
+                <button type="button" @click="add()" class="inline-flex items-center justify-center rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-emerald-700">Add Holiday</button>
+            </div>
+
+            <div class="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-800/80">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Date</th>
+                            <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Name</th>
+                            <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900/40">
+                        <template x-if="rows.length === 0">
+                            <tr>
+                                <td colspan="3" class="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No holidays added yet.</td>
+                            </tr>
+                        </template>
+                        <template x-for="(row, index) in rows" :key="`${row.date}-${row.name}-${index}`">
+                            <tr>
+                                <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200" x-text="row.date"></td>
+                                <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-200" x-text="row.name || 'Unnamed holiday'"></td>
+                                <td class="px-4 py-3 text-right">
+                                    <button type="button" @click="remove(index)" class="rounded-lg border border-rose-200 px-3 py-1.5 text-xs font-medium text-rose-600 transition hover:bg-rose-50 dark:border-rose-800/60 dark:text-rose-300 dark:hover:bg-rose-900/20">Remove</button>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Saved holiday dates are also reused by automation that skips public holidays.</p>
+        </div>
+        {% endcall %}
+
+        <div class="flex justify-end">
+            <button type="submit" class="inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-6 py-2.5 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:from-emerald-600 hover:to-teal-700 hover:shadow-emerald-500/40">Save Localization</button>
+        </div>
+    </form>
+</div>
+
+<script>
+function holidayCalendar(initialRows) {
+    const hiddenInput = document.getElementById('holiday-calendar-input');
+    const normalizeRows = (rows) => {
+        if (!Array.isArray(rows)) return [];
+        return rows
+            .map((row) => ({
+                date: String((row && row.date) || '').trim(),
+                name: String((row && row.name) || '').trim(),
+            }))
+            .filter((row) => row.date)
+            .sort((a, b) => a.date.localeCompare(b.date) || a.name.localeCompare(b.name));
+    };
+
+    return {
+        rows: normalizeRows(initialRows),
+        draft: { date: '', name: '' },
+        sync() {
+            if (hiddenInput) {
+                hiddenInput.value = JSON.stringify(this.rows);
+            }
+        },
+        add() {
+            const date = this.draft.date.trim();
+            const name = this.draft.name.trim();
+            if (!date) return;
+            this.rows = normalizeRows([...this.rows, { date, name }]);
+            this.draft = { date: '', name: '' };
+            this.sync();
+        },
+        remove(index) {
+            this.rows.splice(index, 1);
+            this.rows = normalizeRows(this.rows);
+            this.sync();
+        },
+        init() {
+            this.sync();
+        },
+    };
+}
+</script>
+{{ animation_styles() }}
+{% endblock %}
