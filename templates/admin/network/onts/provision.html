@@ -1,0 +1,547 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import card, status_badge %}
+
+{% block title %}Configure {{ ont.serial_number }} - Admin{% endblock %}
+
+{% block content %}
+{% set initial_wan_protocol = "pppoe" %}
+{% if ont.wan_mode and ont.wan_mode.value == "static_ip" %}
+    {% set initial_wan_protocol = "static" %}
+{% elif ont.wan_mode and ont.wan_mode.value == "dhcp" %}
+    {% set initial_wan_protocol = "dhcp" %}
+{% elif ont.wan_mode and ont.wan_mode.value == "bridge" %}
+    {% set initial_wan_protocol = "bridged" %}
+{% elif ont.wan_mode and ont.wan_mode.value == "pppoe" %}
+    {% set initial_wan_protocol = "pppoe" %}
+{% endif %}
+<div class="space-y-6"
+     x-data="{
+        profileId: {{ (selected_profile_id or '') | tojson }},
+        tr069ProfileId: {{ (selected_tr069_profile_id or '') | tojson }},
+        wanProtocol: {{ initial_wan_protocol | tojson }},
+        onuMode: {{ (ont.onu_mode.value if ont.onu_mode else 'routing') | tojson }},
+        selectedVlan: {{ (ont.wan_vlan_id|string if ont.wan_vlan_id else '') | tojson }},
+        pppoeUser: {{ (pppoe_username or '') | tojson }},
+        showPass: false,
+        vlanNasMap: {{ vlan_nas_map | tojson }},
+        poolNasMap: {{ pool_nas_map | tojson }},
+        poolMatchesVlan(poolId) {
+            if (!this.selectedVlan || !this.vlanNasMap[this.selectedVlan]) return true;
+            const vlanNas = this.vlanNasMap[this.selectedVlan];
+            const poolNas = this.poolNasMap[poolId];
+            if (!poolNas) return true;
+            return poolNas === vlanNas;
+        }
+     }"
+     x-init="
+        if (profileId) {
+            $nextTick(() => {
+                htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/profile-preview?profile_id=' + profileId, {target: '#profile-preview-panel', swap: 'innerHTML'});
+            });
+        }
+     ">
+
+    {# ── Header ── #}
+    <div>
+        <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
+            <a href="/admin/network/onts" class="hover:text-blue-600 dark:hover:text-blue-400">ONTs</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <a href="/admin/network/onts/{{ ont.id }}" class="hover:text-blue-600 dark:hover:text-blue-400">{{ ont.serial_number }}</a>
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            <span class="text-slate-900 dark:text-white">Configure</span>
+        </nav>
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Configure {{ ont.serial_number }}</h1>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                    {{ ont.vendor or '' }} {{ ont.model or '' }}
+                    {% if olt %} &middot; {{ olt.name }}{% endif %}
+                    {% if pon_label %} &middot; {{ pon_label }}{% endif %}
+                    &middot;
+                    {% if signal_info.online_status == 'online' %}
+                    <span class="text-emerald-600 dark:text-emerald-400">Online</span>
+                    {% else %}
+                    <span class="text-rose-600 dark:text-rose-400">{{ signal_info.online_status | title }}</span>
+                    {% endif %}
+                    {% if signal_info.olt_rx_dbm is not none %} &middot; {{ "%.1f"|format(signal_info.olt_rx_dbm) }} dBm{% endif %}
+                </p>
+            </div>
+            <a href="/admin/network/onts/{{ ont.id }}" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                Back to Detail
+            </a>
+        </div>
+    </div>
+
+    {# ── Hidden input for getFormData() compatibility ── #}
+    <input type="hidden" id="profile_id" name="profile_id" :value="profileId">
+
+    <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        {# ── Main Form (2 columns) ── #}
+        <div class="lg:col-span-2 space-y-6">
+
+            {# ── Subscriber & Plan ── #}
+            {% call card("Subscriber & Plan", color="indigo") %}
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscriber</label>
+                    {% if subscriber %}
+                    <div class="mt-1 flex items-center gap-2">
+                        <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ subscriber.first_name or '' }} {{ subscriber.last_name or '' }}</span>
+                        <a href="/admin/customers/person/{{ subscriber.id }}" class="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">View</a>
+                    </div>
+                    {% else %}
+                    <p class="mt-1 text-sm text-amber-600 dark:text-amber-400">No subscriber assigned. <a href="/admin/network/onts/{{ ont.id }}" class="underline">Assign first</a>.</p>
+                    {% endif %}
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Active Subscription</label>
+                    {% if subscription %}
+                    <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ subscription.offer_name or subscription.name or 'Active' }}</p>
+                    {% else %}
+                    <p class="mt-1 text-sm text-slate-400">No active subscription</p>
+                    {% endif %}
+                </div>
+            </div>
+            {% endcall %}
+
+            {# ── Section 1: Service Profile Selection (radio cards) ── #}
+            {% call card("Service Profile", color="blue") %}
+            <div class="space-y-2">
+                {% for profile in profiles %}
+                <label class="flex items-center gap-4 rounded-xl border p-4 cursor-pointer transition-all"
+                       :class="profileId === '{{ profile.id }}' ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-400 ring-2 ring-blue-500/20' : 'border-slate-200 bg-white hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600'">
+                    <input type="radio" name="profile_radio" value="{{ profile.id }}"
+                           x-model="profileId"
+                           hx-get="/admin/network/onts/{{ ont.id }}/profile-preview?profile_id={{ profile.id }}"
+                           hx-target="#profile-preview-panel"
+                           hx-swap="innerHTML"
+                           class="text-blue-600 focus:ring-blue-500">
+                    <div class="flex-1 min-w-0">
+                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ profile.name }}</p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">
+                            {{ profile.profile_type.value | title if profile.profile_type else 'General' }}
+                            &middot; {{ profile.config_method.value | upper if profile.config_method else 'TR-069' }}
+                            &middot; {{ profile.onu_mode.value | title if profile.onu_mode else 'Routing' }}
+                        </p>
+                    </div>
+                    {% if selected_profile_id and selected_profile_id|string == profile.id|string %}
+                    <span class="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">Selected</span>
+                    {% endif %}
+                </label>
+                {% endfor %}
+                {% if not profiles %}
+                <div class="text-center py-6">
+                    <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No provisioning profiles available.</p>
+                </div>
+                {% endif %}
+            </div>
+            <div class="mt-3">
+                <a href="/admin/network/olts/profiles" target="_blank"
+                   class="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Create New Profile
+                </a>
+            </div>
+
+            {# ── Profile Preview Panel (HTMX loaded) ── #}
+            <div id="profile-preview-panel" class="mt-4">
+                {% if selected_profile_id %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">Loading profile details...</p>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">Select a profile to see its configuration.</p>
+                {% endif %}
+            </div>
+            {% endcall %}
+
+            {# ── Section 2: OLT TR-069 Profile ── #}
+            {% call card("OLT TR-069 Profile", color="blue") %}
+            <div>
+                <label for="tr069_profile_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">TR-069 Profile</label>
+                <select id="tr069_profile_id" name="tr069_profile_id" x-model="tr069ProfileId"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Use auto selection</option>
+                    {% for profile in tr069_profiles or [] %}
+                    <option value="{{ profile.profile_id }}" {% if selected_tr069_profile_id and selected_tr069_profile_id|string == profile.profile_id|string %}selected{% endif %}>
+                        {{ profile.name or ('Profile ' ~ profile.profile_id) }} (ID {{ profile.profile_id }})
+                    </option>
+                    {% endfor %}
+                </select>
+                {% if resolved_tr069_profile_error %}
+                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ resolved_tr069_profile_error }}</p>
+                {% elif selected_tr069_profile_name %}
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Auto-selected: {{ selected_tr069_profile_name }} (ID {{ selected_tr069_profile_id }})</p>
+                {% elif tr069_profiles_error %}
+                <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">{{ tr069_profiles_error }}</p>
+                {% else %}
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose the OLT TR-069 profile when more than one valid option exists.</p>
+                {% endif %}
+            </div>
+            {% endcall %}
+
+            {# ── Section 3: Per-ONT Overrides (collapsible) ── #}
+            <details class="rounded-2xl border border-slate-200/60 dark:border-slate-700/60 overflow-hidden shadow-sm"
+                     {% if not selected_profile_id %}open{% endif %}>
+                <summary class="px-5 py-3.5 bg-slate-50 dark:bg-slate-800/60 cursor-pointer text-sm font-semibold text-slate-900 dark:text-white flex items-center justify-between select-none">
+                    <span class="flex items-center gap-2">
+                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
+                        Per-ONT Overrides
+                    </span>
+                    <span class="text-xs font-normal text-slate-500 dark:text-slate-400">Optional — profile defaults used when empty</span>
+                </summary>
+                <div class="p-5 space-y-5 bg-white dark:bg-slate-800">
+
+                    {# ── WAN Configuration ── #}
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                            <svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/></svg>
+                            WAN Configuration
+                        </h4>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div>
+                                <label for="wan_vlan" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
+                                <select id="wan_vlan" name="wan_vlan_id" x-model="selectedVlan"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">From profile</option>
+                                    {% for v in vlans %}
+                                    <option value="{{ v.id }}" {% if ont.wan_vlan_id and ont.wan_vlan_id|string == v.id|string %}selected{% endif %}>
+                                        VLAN {{ v.tag }} &mdash; {{ v.name }}{% if v.nas_device %} [{{ v.nas_device.name }}]{% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">ONU Mode</label>
+                                <div class="mt-2 flex gap-4">
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="radio" name="onu_mode" value="routing" x-model="onuMode"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        Routing
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="radio" name="onu_mode" value="bridging" x-model="onuMode"
+                                            @change="if (onuMode === 'bridging') wanProtocol = 'bridged'"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        Bridge
+                                    </label>
+                                </div>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">WAN Protocol</label>
+                                <div class="mt-2 flex flex-wrap gap-3">
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer"
+                                           :class="onuMode === 'bridging' ? 'opacity-50' : ''">
+                                        <input type="radio" name="wan_protocol" value="pppoe" x-model="wanProtocol"
+                                            :disabled="onuMode === 'bridging'"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        PPPoE
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer"
+                                           :class="onuMode === 'bridging' ? 'opacity-50' : ''">
+                                        <input type="radio" name="wan_protocol" value="dhcp" x-model="wanProtocol"
+                                            :disabled="onuMode === 'bridging'"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        DHCP
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer"
+                                           :class="onuMode === 'bridging' ? 'opacity-50' : ''">
+                                        <input type="radio" name="wan_protocol" value="static" x-model="wanProtocol"
+                                            :disabled="onuMode === 'bridging'"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        Static
+                                    </label>
+                                </div>
+                                <p x-show="onuMode === 'bridging'" x-cloak class="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                                    Bridge mode uses transparent pass-through, so WAN protocol selection is disabled.
+                                </p>
+                            </div>
+                        </div>
+
+                        {# ── Bridge mode info ── #}
+                        <div x-show="onuMode === 'bridging'" x-transition x-cloak
+                             class="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 dark:border-blue-800/50 dark:bg-blue-900/20">
+                            <p class="text-sm text-blue-700 dark:text-blue-300">
+                                <strong>Bridge mode:</strong> The ONT passes traffic transparently. The subscriber's router handles PPPoE/DHCP authentication.
+                                Only VLAN tagging and service-port configuration will be applied on the OLT.
+                            </p>
+                        </div>
+
+                        {# ── NAT toggle for routing mode ── #}
+                        <div x-show="onuMode === 'routing' && wanProtocol !== 'bridged'" x-transition x-cloak
+                             class="flex items-center gap-3">
+                            <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+                                <input type="checkbox" name="nat_enabled" checked
+                                    class="rounded text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                <span class="text-slate-700 dark:text-slate-300">NAT enabled</span>
+                            </label>
+                            <span class="text-xs text-slate-400">(Standard for residential)</span>
+                        </div>
+                    </div>
+
+                    {# ── Divider ── #}
+                    <hr class="border-slate-200 dark:border-slate-700">
+
+                    {# ── PPPoE Credentials ── #}
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                            <svg class="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+                            PPPoE Credentials
+                        </h4>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                                <label for="pppoe_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label>
+                                <input type="text" id="pppoe_username" name="pppoe_username" x-model="pppoeUser"
+                                    :disabled="!(wanProtocol === 'pppoe' && onuMode === 'routing')"
+                                    placeholder="Auto-generated if empty" maxlength="120"
+                                    :class="!(wanProtocol === 'pppoe' && onuMode === 'routing') ? 'opacity-60' : ''"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:disabled:bg-slate-800">
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                    <span x-show="wanProtocol === 'pppoe' && onuMode === 'routing'">Leave empty to auto-generate from sequence</span>
+                                    <span x-show="!(wanProtocol === 'pppoe' && onuMode === 'routing')" x-cloak>Available when ONU Mode is Routing and WAN Protocol is PPPoE</span>
+                                </p>
+                            </div>
+                            <div>
+                                <label for="pppoe_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label>
+                                <div class="relative mt-1">
+                                    <input :type="showPass ? 'text' : 'password'" id="pppoe_password" name="pppoe_password"
+                                        :disabled="!(wanProtocol === 'pppoe' && onuMode === 'routing')"
+                                        placeholder="From credential store" maxlength="120"
+                                        :class="!(wanProtocol === 'pppoe' && onuMode === 'routing') ? 'opacity-60' : ''"
+                                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 pr-9 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-slate-100 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:disabled:bg-slate-800">
+                                    <button type="button" @click="showPass = !showPass"
+                                        :disabled="!(wanProtocol === 'pppoe' && onuMode === 'routing')"
+                                        class="absolute inset-y-0 right-0 flex items-center pr-2.5 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                                        <svg x-show="!showPass" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                                        <svg x-show="showPass" x-cloak class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                                    </button>
+                                </div>
+                                {% if pppoe_password_hint %}
+                                <p class="mt-1 text-xs text-emerald-600 dark:text-emerald-400">{{ pppoe_password_hint }}</p>
+                                {% else %}
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave empty to auto-generate</p>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+
+                    {# ── DHCP Configuration (shown when DHCP selected) ── #}
+                    <div x-show="wanProtocol === 'dhcp' && onuMode === 'routing'" x-transition x-cloak>
+                        <hr class="border-slate-200 dark:border-slate-700 mb-5">
+                        <div class="space-y-4">
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                                <svg class="h-4 w-4 text-teal-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                                DHCP Configuration
+                            </h4>
+                            <div>
+                                <label for="ip_pool" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Pool</label>
+                                <select id="ip_pool" name="ip_pool_id"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Auto-assign from default pool</option>
+                                    {% for pool in ip_pools %}
+                                    <option value="{{ pool.id }}" x-show="poolMatchesVlan('{{ pool.id }}')">{{ pool.name }} &mdash; {{ pool.cidr }}</option>
+                                    {% endfor %}
+                                </select>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">ONT will receive an IP via DHCP from the selected pool</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# ── Static IP Configuration (shown when Static selected) ── #}
+                    <div x-show="wanProtocol === 'static' && onuMode === 'routing'" x-transition x-cloak>
+                        <hr class="border-slate-200 dark:border-slate-700 mb-5">
+                        <div class="space-y-4">
+                            <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                                <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                                Static IP Configuration
+                            </h4>
+                            <div>
+                                <label for="static_ip_pool" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Assign from Pool</label>
+                                <select id="static_ip_pool" name="static_ip_pool_id"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Manual entry below</option>
+                                    {% for pool in ip_pools %}
+                                    <option value="{{ pool.id }}" x-show="poolMatchesVlan('{{ pool.id }}')">Auto from {{ pool.name }} ({{ pool.cidr }})</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                                <div>
+                                    <label for="static_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Address</label>
+                                    <input type="text" id="static_ip" name="static_ip" placeholder="e.g. 172.16.202.50" maxlength="15"
+                                        pattern="^(\d{1,3}\.){3}\d{1,3}$"
+                                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="static_subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subnet Mask</label>
+                                    <input type="text" id="static_subnet" name="static_subnet" placeholder="255.255.255.0" value="255.255.255.0" maxlength="15"
+                                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="static_gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway</label>
+                                    <input type="text" id="static_gateway" name="static_gateway" placeholder="e.g. 172.16.202.1" maxlength="15"
+                                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="static_dns" class="block text-sm font-medium text-slate-700 dark:text-slate-300">DNS Servers</label>
+                                    <input type="text" id="static_dns" name="static_dns" placeholder="8.8.8.8, 8.8.4.4" maxlength="64"
+                                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# ── Divider ── #}
+                    <hr class="border-slate-200 dark:border-slate-700">
+
+                    {# ── Speed Profiles ── #}
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                            <svg class="h-4 w-4 text-violet-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                            Speed Profiles
+                        </h4>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                                <label for="speed_dl" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download</label>
+                                <select id="speed_dl" name="download_speed_profile_id"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">From profile</option>
+                                    {% for sp in speed_profiles_download %}
+                                    <option value="{{ sp.id }}" {% if ont.download_speed_profile_id and ont.download_speed_profile_id|string == sp.id|string %}selected{% endif %}>
+                                        {{ sp.name }} ({{ (sp.speed_kbps / 1000)|int }} Mbps)
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="speed_ul" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload</label>
+                                <select id="speed_ul" name="upload_speed_profile_id"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">From profile</option>
+                                    {% for sp in speed_profiles_upload %}
+                                    <option value="{{ sp.id }}" {% if ont.upload_speed_profile_id and ont.upload_speed_profile_id|string == sp.id|string %}selected{% endif %}>
+                                        {{ sp.name }} ({{ (sp.speed_kbps / 1000)|int }} Mbps)
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </details>
+
+            {# ── Section 4: Save Settings ── #}
+            <div class="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-800/40 dark:bg-blue-900/10">
+                <p class="text-sm text-blue-800 dark:text-blue-300">
+                    <strong>Save settings</strong> to store WAN configuration on the ONT record. Then use the per-step provisioning controls on the
+                    <a href="/admin/network/onts/{{ ont.id }}?tab=service" class="font-semibold underline hover:no-underline">Service tab</a>
+                    to execute device operations (service-ports, TR-069, PPPoE push).
+                </p>
+            </div>
+            <form method="POST" action="/admin/network/onts/{{ ont.id }}/save-provision-settings">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="profile_id" :value="profileId">
+                <input type="hidden" name="onu_mode" :value="onuMode">
+                <input type="hidden" name="wan_protocol" :value="wanProtocol">
+                <input type="hidden" name="wan_vlan_id" :value="selectedVlan">
+                <input type="hidden" name="pppoe_username" :value="pppoeUser">
+                <input type="hidden" id="pppoe_password_hidden" name="pppoe_password">
+                <button type="submit"
+                    class="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    Save Configuration
+                </button>
+            </form>
+
+        </div>
+
+        {# ── Sidebar (1 column) ── #}
+        <div class="space-y-4">
+            {# TR-069 / ACS Status #}
+            {% call card("TR-069 / ACS", color="blue") %}
+            <div class="space-y-3">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">ACS Bound</span>
+                    {% if acs_bound %}
+                    <span class="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+                        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        Yes
+                    </span>
+                    {% else %}
+                    <span class="text-xs text-rose-600 dark:text-rose-400">No</span>
+                    {% endif %}
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Provisioning Status</span>
+                    {% set prov_status = ont.provisioning_status.value if ont.provisioning_status else 'unprovisioned' %}
+                    {% set prov_classes = {
+                        'provisioned': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
+                        'failed': 'bg-rose-100 text-rose-800 dark:bg-rose-900 dark:text-rose-200',
+                        'drift_detected': 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200',
+                        'unprovisioned': 'bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200'
+                    } %}
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-medium {{ prov_classes[prov_status] or prov_classes['unprovisioned'] }}">
+                        {{ prov_status | replace('_', ' ') | title }}
+                    </span>
+                </div>
+                <p class="text-xs text-slate-500 dark:text-slate-400">
+                    This ONT uses the shared TR-069 service{% if operational_acs_server_name %} ({{ operational_acs_server_name }}){% endif %}. ACS management is controlled from the TR-069 admin area, not per-ONT.
+                </p>
+                {% if ont.last_provisioned_at %}
+                <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Provisioned</span>
+                    <span class="text-xs text-slate-600 dark:text-slate-400">{{ ont.last_provisioned_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                </div>
+                {% endif %}
+            </div>
+            {% endcall %}
+
+            {# Current WAN State #}
+            {% call card("Current WAN State", color="emerald") %}
+            <div class="space-y-2">
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">WAN IP</span>
+                    <span class="text-xs font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '—' }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">PPPoE Status</span>
+                    <span class="text-xs text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '—' }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">PPPoE User</span>
+                    <span class="text-xs font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '—' }}</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <span class="text-xs text-slate-500 dark:text-slate-400">MAC</span>
+                    <span class="text-xs font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '—' }}</span>
+                </div>
+            </div>
+            {% endcall %}
+
+            {# Device Info #}
+            {% call card("Device Info", color="slate") %}
+            <div class="space-y-2 text-xs">
+                <div class="flex justify-between"><span class="text-slate-500 dark:text-slate-400">Serial</span><span class="font-mono text-slate-900 dark:text-white">{{ ont.serial_number }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-500 dark:text-slate-400">Vendor</span><span class="text-slate-900 dark:text-white">{{ ont.vendor or '—' }}</span></div>
+                <div class="flex justify-between"><span class="text-slate-500 dark:text-slate-400">Model</span><span class="text-slate-900 dark:text-white">{{ ont.model or '—' }}</span></div>
+                {% if olt %}
+                <div class="flex justify-between"><span class="text-slate-500 dark:text-slate-400">OLT</span><span class="text-slate-900 dark:text-white">{{ olt.name }}</span></div>
+                {% endif %}
+                {% if pon_label %}
+                <div class="flex justify-between"><span class="text-slate-500 dark:text-slate-400">PON</span><span class="font-mono text-slate-900 dark:text-white">{{ pon_label }}</span></div>
+                {% endif %}
+            </div>
+            {% endcall %}
+        </div>
+    </div>
+</div>
+<script>
+{# Copy PPPoE password to hidden field before form submit #}
+document.addEventListener('submit', function(e) {
+    const hidden = document.getElementById('pppoe_password_hidden');
+    const visible = document.getElementById('pppoe_password');
+    if (hidden && visible) hidden.value = visible.value;
+});
+</script>
+{% endblock %}

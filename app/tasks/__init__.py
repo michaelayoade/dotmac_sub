@@ -40,6 +40,7 @@ from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
 from app.tasks.olt_polling import poll_all_olt_signals
+from app.tasks.ont_authorization import run_post_authorization_follow_up_task
 from app.tasks.ont_autofind import discover_all_olt_autofind
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
 from app.tasks.ont_discovery import discover_all_olt_onts
@@ -48,6 +49,7 @@ from app.tasks.ont_provisioning import (
     detect_profile_drift,
 )
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
+from app.tasks.provisioning_enforcement import run_enforcement
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.snmp import discover_interfaces as discover_snmp_interfaces
 from app.tasks.snmp import walk_interfaces as walk_snmp_interfaces
@@ -142,6 +144,8 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "discover_all_olt_autofind",
+    "run_post_authorization_follow_up_task",
+    "run_enforcement",
     "evaluate_alert_rules",
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",

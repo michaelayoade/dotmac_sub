@@ -3,10 +3,138 @@
 from __future__ import annotations
 
 import logging
+import re
+from dataclasses import dataclass
 
 from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class OntStatusEntry:
+    """Status of a single registered ONT on an OLT port."""
+
+    serial_number: str
+    run_state: str
+    config_state: str
+    match_state: str
+
+
+@dataclass
+class RegisteredOntEntry:
+    """An ONT serial registered on an OLT."""
+
+    fsp: str
+    onu_id: int
+    real_serial: str
+    run_state: str
+
+
+def get_ont_status(
+    olt: OLTDevice, fsp: str, ont_id: int
+) -> tuple[bool, str, OntStatusEntry | None]:
+    """Query the status of a specific ONT on an OLT port via SSH."""
+    from app.services.network import olt_ssh as core
+
+    ok, err = core._validate_fsp(fsp)
+    if not ok:
+        return False, err, None
+
+    parts = fsp.split("/")
+    port_num = parts[2]
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (core.SSHException, OSError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+    except Exception as exc:
+        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
+        return False, f"Unexpected error: {type(exc).__name__}", None
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        cmd = f"display ont info {parts[0]}/{parts[1]} {port_num} {ont_id}"
+        output = core._run_huawei_cmd(channel, cmd)
+
+        if core.is_error_output(output):
+            return False, f"OLT error: {output.strip()[-200:]}", None
+
+        kv: dict[str, str] = {}
+        for line in output.splitlines():
+            if ":" in line:
+                key, _, value = line.partition(":")
+                kv[key.strip().lower()] = value.strip()
+
+        serial = kv.get("serial number", kv.get("sn", ""))
+        entry = OntStatusEntry(
+            serial_number=serial,
+            run_state=kv.get("run state", "unknown"),
+            config_state=kv.get("config state", "unknown"),
+            match_state=kv.get("match state", "unknown"),
+        )
+        return True, "ONT status retrieved", entry
+    except Exception as exc:
+        logger.error("Error getting ONT status from OLT %s: %s", olt.name, exc)
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()
+
+
+def get_registered_ont_serials(
+    olt: OLTDevice,
+) -> tuple[bool, str, list[RegisteredOntEntry]]:
+    """Query all registered ONT serials across all ports on an OLT via SSH."""
+    from app.services.network import olt_ssh as core
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (core.SSHException, OSError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", []
+    except Exception as exc:
+        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
+        return False, f"Unexpected error: {type(exc).__name__}", []
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        output = core._run_huawei_cmd(
+            channel, "display ont info summary all", prompt=r"#\s*$"
+        )
+
+        entries: list[RegisteredOntEntry] = []
+        # Parse table rows: F/S/P  ONT-ID  SN  ...  RunState
+        for line in output.splitlines():
+            m = re.match(
+                r"\s*(\d+/\s*\d+/\s*\d+)\s+(\d+)\s+(\S+).*?(online|offline|unknown)",
+                line,
+                re.IGNORECASE,
+            )
+            if m:
+                fsp = m.group(1).replace(" ", "")
+                entries.append(
+                    RegisteredOntEntry(
+                        fsp=fsp,
+                        onu_id=int(m.group(2)),
+                        real_serial=m.group(3),
+                        run_state=m.group(4).lower(),
+                    )
+                )
+        return True, f"Found {len(entries)} registered ONTs", entries
+    except Exception as exc:
+        logger.error(
+            "Error getting registered ONT serials from OLT %s: %s", olt.name, exc
+        )
+        return False, f"Error: {exc}", []
+    finally:
+        transport.close()
 
 
 def _run_ont_config_command(

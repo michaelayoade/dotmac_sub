@@ -1,0 +1,88 @@
+{# Config Snapshot Detail — rendered inside slide-over panel #}
+<div class="space-y-6">
+    {# Metadata #}
+    <div class="flex items-center justify-between">
+        <div>
+            <p class="text-lg font-semibold text-slate-900 dark:text-white">{{ snapshot.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                Source: {{ snapshot.source }}{% if snapshot.label %} &middot; {{ snapshot.label }}{% endif %}
+            </p>
+        </div>
+    </div>
+
+    {# Device Info #}
+    {% if snapshot.device_info %}
+    <details open>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <svg class="h-4 w-4 text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            Device Info
+        </summary>
+        <dl class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {% for key, value in snapshot.device_info.items() %}
+            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </details>
+    {% endif %}
+
+    {# WAN Config #}
+    {% if snapshot.wan %}
+    <details open>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+            WAN Configuration
+        </summary>
+        <dl class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {% for key, value in snapshot.wan.items() %}
+            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </details>
+    {% endif %}
+
+    {# Optical Parameters #}
+    {% if snapshot.optical %}
+    <details>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            Optical Parameters
+        </summary>
+        <dl class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {% for key, value in snapshot.optical.items() %}
+            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </details>
+    {% endif %}
+
+    {# WiFi Settings #}
+    {% if snapshot.wifi %}
+    <details>
+        <summary class="cursor-pointer text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+            <svg class="h-4 w-4 text-indigo-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+            WiFi Settings
+        </summary>
+        <dl class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {% for key, value in snapshot.wifi.items() %}
+            <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <dt class="text-[11px] uppercase tracking-wider font-semibold text-slate-500 dark:text-slate-400">{{ key | replace('_', ' ') }}</dt>
+                <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value is not none else '—' }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </details>
+    {% endif %}
+
+    {% if not snapshot.device_info and not snapshot.wan and not snapshot.optical and not snapshot.wifi %}
+    <p class="py-8 text-center text-sm text-slate-500 dark:text-slate-400">No configuration data in this snapshot.</p>
+    {% endif %}
+</div>

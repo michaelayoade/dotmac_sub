@@ -1,0 +1,122 @@
+{# Profile Preview — HTMX partial loaded when operator selects a profile on the Configure page #}
+<div class="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-800/40 dark:bg-blue-900/10 space-y-4">
+    <div class="flex items-center justify-between">
+        <h4 class="text-sm font-bold text-slate-900 dark:text-white">{{ profile.name }}</h4>
+        <div class="flex items-center gap-2">
+            {% if profile.profile_type %}
+            <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase
+                {% if profile.profile_type.value == 'residential' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300
+                {% elif profile.profile_type.value == 'business' %}bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300
+                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                {{ profile.profile_type.value | replace('_', ' ') | title }}
+            </span>
+            {% endif %}
+            <a href="/admin/network/olts/profiles/{{ profile.id }}/edit"
+               class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                Edit Profile
+            </a>
+        </div>
+    </div>
+
+    {# Core Settings Grid #}
+    <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Config Method</dt>
+            <dd class="mt-0.5 text-sm font-medium text-slate-900 dark:text-white">
+                {% if profile.config_method %}
+                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                    {{ profile.config_method.value | upper }}
+                </span>
+                {% else %}—{% endif %}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">ONU Mode</dt>
+            <dd class="mt-0.5 text-sm font-medium text-slate-900 dark:text-white">
+                {{ profile.onu_mode.value | replace('_', ' ') | title if profile.onu_mode else '—' }}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">IP Protocol</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
+                {{ profile.ip_protocol.value | replace('_', ' ') | title if profile.ip_protocol else 'IPv4' }}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Mgmt IP</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
+                {{ profile.mgmt_ip_mode.value | replace('_', ' ') | title if profile.mgmt_ip_mode else '—' }}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Download Speed</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
+                {% if profile.download_speed_profile %}
+                {{ profile.download_speed_profile.name }} ({{ (profile.download_speed_profile.speed_kbps / 1000)|int }} Mbps)
+                {% else %}—{% endif %}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Upload Speed</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
+                {% if profile.upload_speed_profile %}
+                {{ profile.upload_speed_profile.name }} ({{ (profile.upload_speed_profile.speed_kbps / 1000)|int }} Mbps)
+                {% else %}—{% endif %}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">WiFi</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
+                {% if profile.wifi_enabled %}Enabled{% if profile.wifi_ssid_template %} · {{ profile.wifi_ssid_template }}{% endif %}
+                {% else %}Disabled{% endif %}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">VoIP</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ 'Enabled' if profile.voip_enabled else 'Disabled' }}</dd>
+        </div>
+    </dl>
+
+    {# WAN Services #}
+    {% if wan_services %}
+    <div>
+        <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">WAN Services ({{ wan_services | length }})</p>
+        <div class="overflow-x-auto rounded-lg border border-slate-200 dark:border-slate-700">
+            <table class="w-full text-left text-xs">
+                <thead class="bg-slate-100 dark:bg-slate-800">
+                    <tr>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">Name</th>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">Type</th>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">Connection</th>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">VLAN Mode</th>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">S-VLAN</th>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">C-VLAN</th>
+                        <th class="px-3 py-2 font-semibold text-slate-600 dark:text-slate-300">CoS</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+                    {% for svc in wan_services %}
+                    <tr class="bg-white dark:bg-slate-800/60">
+                        <td class="px-3 py-2 font-medium text-slate-900 dark:text-white">{{ svc.name or '—' }}</td>
+                        <td class="px-3 py-2">
+                            <span class="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase
+                                {% if svc.service_type and svc.service_type.value == 'internet' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300
+                                {% elif svc.service_type and svc.service_type.value == 'voip' %}bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300
+                                {% elif svc.service_type and svc.service_type.value == 'iptv' %}bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300
+                                {% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                                {{ svc.service_type.value if svc.service_type else '—' }}
+                            </span>
+                        </td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ svc.connection_type.value | replace('_', ' ') | title if svc.connection_type else '—' }}</td>
+                        <td class="px-3 py-2 text-slate-700 dark:text-slate-300">{{ svc.vlan_mode.value | replace('_', ' ') | title if svc.vlan_mode else '—' }}</td>
+                        <td class="px-3 py-2 font-mono text-slate-700 dark:text-slate-300">{{ svc.s_vlan if svc.s_vlan is not none else '—' }}</td>
+                        <td class="px-3 py-2 font-mono text-slate-700 dark:text-slate-300">{{ svc.c_vlan if svc.c_vlan is not none else '—' }}</td>
+                        <td class="px-3 py-2 font-mono text-slate-700 dark:text-slate-300">{{ svc.cos_priority if svc.cos_priority is not none else '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+</div>

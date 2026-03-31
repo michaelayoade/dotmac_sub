@@ -1,0 +1,30 @@
+{% macro disconnect_badge(reason, reason_display, href=None, size='sm') %}
+{% if reason_display %}
+{% set base_class = 'inline-flex items-center gap-1.5 rounded-full font-medium' %}
+{% set size_class = 'px-2.5 py-1 text-xs' if size == 'sm' else 'px-2.5 py-1 text-xs font-semibold' %}
+{% set icon_class = 'h-3.5 w-3.5' if size == 'sm' else 'h-4 w-4' %}
+{% set tone_class = 'bg-fuchsia-100 text-fuchsia-700 dark:bg-fuchsia-900/30 dark:text-fuchsia-300' if reason == 'los' else 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300' if reason == 'power_fail' else 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300' if reason == 'dying_gasp' else 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300' %}
+{% if href %}
+<a href="{{ href }}" class="{{ base_class }} {{ size_class }} {{ tone_class }} transition hover:-translate-y-0.5">
+{% else %}
+<span class="{{ base_class }} {{ size_class }} {{ tone_class }}">
+{% endif %}
+    {% if reason == 'los' %}
+    <svg class="{{ icon_class }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.464 15.536a5 5 0 010-7.072m7.072 7.072a5 5 0 000-7.072M5.636 18.364a9 9 0 010-12.728m12.728 12.728a9 9 0 000-12.728M4 4l16 16"/></svg>
+    {% elif reason == 'power_fail' %}
+    <svg class="{{ icon_class }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 2L4 14h6l-1 8 9-12h-6l1-8z"/></svg>
+    {% elif reason == 'dying_gasp' %}
+    <svg class="{{ icon_class }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M10.29 3.86l-7.5 13A1 1 0 003.66 18h16.68a1 1 0 00.87-1.5l-7.5-13a1 1 0 00-1.74 0z"/></svg>
+    {% else %}
+    <svg class="{{ icon_class }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M5 12a7 7 0 1114 0 7 7 0 01-14 0z"/></svg>
+    {% endif %}
+    {{ reason_display }}
+{% if href %}
+</a>
+{% else %}
+</span>
+{% endif %}
+{% else %}
+<span class="text-xs text-slate-400">&mdash;</span>
+{% endif %}
+{% endmacro %}
