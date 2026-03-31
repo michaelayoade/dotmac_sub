@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus, UserType
+from app.models.subscriber import (
+    Subscriber,
+    SubscriberCategory,
+    SubscriberStatus,
+    UserType,
+)
 from app.schemas.table_config import TableColumnPreference
 from app.services.table_config import TableConfigurationService, TableRegistry
 

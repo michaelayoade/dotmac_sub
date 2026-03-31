@@ -1,21 +1,14 @@
 import uuid
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.router_management import (
     Router,
-    RouterConfigPush,
-    RouterConfigPushResult,
     RouterConfigPushStatus,
-    RouterConfigSnapshot,
-    RouterConfigTemplate,
-    RouterPushResultStatus,
     RouterSnapshotSource,
     RouterTemplateCategory,
 )
 from app.schemas.router_management import (
-    RouterConfigPushCreate,
     RouterConfigTemplateCreate,
     RouterConfigTemplateUpdate,
 )

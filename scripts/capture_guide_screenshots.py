@@ -1,6 +1,5 @@
 """Capture screenshots for the DotMac Sub user guide using Playwright."""
 
-import time
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright

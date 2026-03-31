@@ -302,10 +302,12 @@ def test_invalidate_session():
         reseller_id="reseller-1",
         remember=False,
     )
-    assert token in reseller_portal._RESELLER_SESSIONS
+    # Session should be retrievable after creation
+    assert reseller_portal._get_session(token) is not None
 
     reseller_portal.invalidate_session(token)
-    assert token not in reseller_portal._RESELLER_SESSIONS
+    # Session should no longer be retrievable
+    assert reseller_portal._get_session(token) is None
 
 
 def test_invalidate_session_not_found():

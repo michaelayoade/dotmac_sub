@@ -8,13 +8,12 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-
-import pytest
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from starlette.requests import Request
 
 

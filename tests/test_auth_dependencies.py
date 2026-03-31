@@ -8,7 +8,13 @@ from starlette.requests import Request
 
 from app.models.auth import ApiKey, AuthProvider, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
-from app.models.rbac import Permission, Role, RolePermission, SubscriberRole, SystemUserRole
+from app.models.rbac import (
+    Permission,
+    Role,
+    RolePermission,
+    SubscriberRole,
+    SystemUserRole,
+)
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.services import auth_dependencies as auth_dep

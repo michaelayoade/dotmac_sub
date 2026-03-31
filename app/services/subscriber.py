@@ -827,7 +827,7 @@ class Subscribers(ListResponseMixin):
         import calendar
         from datetime import timedelta
 
-        from sqlalchemy import extract, literal_column, text
+        from sqlalchemy import extract
 
         now = datetime.now(UTC)
         month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)

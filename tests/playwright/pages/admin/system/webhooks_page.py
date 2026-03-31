@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from playwright.sync_api import Page, expect
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import Page, expect
 
 from tests.playwright.pages.admin.dashboard_page import AdminDashboardPage
 from tests.playwright.pages.base_page import BasePage

@@ -25,7 +25,7 @@ import urllib3
 from scripts.migration.db_connections import dotmac_session
 
 # Suppress SSL warnings only when TLS verification is explicitly disabled.
-if not os.environ.get("SPLYNX_VERIFY_TLS", "true").strip().lower() in {
+if os.environ.get("SPLYNX_VERIFY_TLS", "true").strip().lower() not in {
     "1",
     "true",
     "yes",

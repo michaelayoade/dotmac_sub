@@ -4,10 +4,6 @@ import pytest
 from fastapi import HTTPException
 
 from app.models.router_management import (
-    JumpHost,
-    Router,
-    RouterAccessMethod,
-    RouterInterface,
     RouterStatus,
 )
 from app.schemas.router_management import (

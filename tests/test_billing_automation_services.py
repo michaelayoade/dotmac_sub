@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
 from app.models.catalog import BillingCycle
-from app.services.events.types import EventType
 from app.services import billing_automation
+from app.services.events.types import EventType
 
 # =============================================================================
 # _add_months Tests

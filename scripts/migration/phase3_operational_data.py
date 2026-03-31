@@ -16,7 +16,7 @@ import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from scripts.migration.db_connections import (
     dotmac_session,

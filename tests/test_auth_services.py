@@ -6,8 +6,7 @@ import pytest
 from fastapi import HTTPException
 from starlette.requests import Request
 
-from app.models.auth import SessionStatus
-from app.models.auth import AuthProvider, UserCredential
+from app.models.auth import AuthProvider, SessionStatus, UserCredential
 from app.models.rbac import Role, SystemUserRole
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser

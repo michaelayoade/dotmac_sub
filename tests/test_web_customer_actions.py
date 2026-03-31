@@ -1,7 +1,7 @@
 from decimal import Decimal
 
-from app.models.billing import TaxRate
 from app.models.auth import UserCredential
+from app.models.billing import TaxRate
 from app.models.catalog import (
     AccessType,
     BillingMode,
@@ -14,8 +14,8 @@ from app.models.catalog import (
 )
 from app.models.enforcement_lock import EnforcementReason
 from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
-from app.services.account_lifecycle import has_active_lock
 from app.services import web_customer_actions as actions
+from app.services.account_lifecycle import has_active_lock
 
 
 def test_update_person_customer_persists_billing_overrides(db_session, subscriber):

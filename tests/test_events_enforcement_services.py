@@ -21,7 +21,11 @@ import pytest
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.catalog import NasDevice, NasVendor, SubscriptionStatus
-from app.models.notification import Notification, NotificationChannel, NotificationTemplate
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationTemplate,
+)
 from app.models.provisioning import ProvisioningVendor
 from app.models.subscriber import SubscriberStatus as AccountStatus
 from app.services.events.dispatcher import EventDispatcher

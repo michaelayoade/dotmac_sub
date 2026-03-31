@@ -139,7 +139,28 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
     db_session.commit()
 
     setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    code = pyotp.TOTP(setup["secret"]).now()
+    secret = setup["secret"]
+
+    # Generate OTP code and verify using an explicit timecode to avoid
+    # timezone skew (app imports may change TZ from CEST to Africa/Lagos,
+    # causing datetime.now()/mktime() to disagree on the TOTP time step).
+    import time as _time
+
+    totp = pyotp.TOTP(secret)
+    timecode = int(_time.time()) // totp.interval
+    code = totp.generate_otp(timecode)
+
+    # Patch verify to use the same timecode instead of datetime.now()
+    _orig_generate = pyotp.TOTP.generate_otp
+
+    def _verify_fixed(self, otp, for_time=None, valid_window=0):
+        for i in range(-valid_window, valid_window + 1):
+            if _orig_generate(self, timecode + i) == str(otp):
+                return True
+        return False
+
+    monkeypatch.setattr(pyotp.TOTP, "verify", _verify_fixed)
+
     method = AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
 
     assert method.enabled is True

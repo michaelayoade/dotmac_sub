@@ -1,9 +1,10 @@
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from guide_pdf_common import GuideConfig, generate_guide
+
 
 def main():
     generate_guide(

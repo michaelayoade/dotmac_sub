@@ -1,6 +1,14 @@
 from app.models.network import OLTDevice, PonPort
-from app.models.network_monitoring import DeviceInterface, InterfaceStatus, NetworkDevice
-from app.services.web_network_pon_interfaces import build_page_data, parse_pon_port_notes, save_alias
+from app.models.network_monitoring import (
+    DeviceInterface,
+    InterfaceStatus,
+    NetworkDevice,
+)
+from app.services.web_network_pon_interfaces import (
+    build_page_data,
+    parse_pon_port_notes,
+    save_alias,
+)
 
 
 def test_build_page_data_merges_modeled_and_discovered_interfaces(db_session):

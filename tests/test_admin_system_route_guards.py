@@ -30,9 +30,8 @@ def test_require_system_user_principal_rejects_subscriber():
 def test_dbi_principal_id_prefers_stable_actor_id(monkeypatch):
     request = SimpleNamespace()
     monkeypatch.setattr(
-        admin_system.web_admin_service,
-        "get_actor_id",
-        lambda _request: "system-user-1",
+        "app.web.admin.get_current_user",
+        lambda _request: {"subscriber_id": "system-user-1", "id": "system-user-1"},
     )
 
     assert admin_system._dbi_principal_id(request) == "system-user-1"

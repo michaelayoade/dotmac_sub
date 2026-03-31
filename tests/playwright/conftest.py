@@ -1,23 +1,28 @@
 from __future__ import annotations
 
-import os
 import json
-from uuid import UUID
+import os
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from uuid import UUID
 
 import pytest
-from starlette.requests import Request
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import expect, sync_playwright
+from starlette.requests import Request
 
 from app.db import SessionLocal
-from app.models.catalog import CatalogOffer, OfferStatus, Subscription, SubscriptionStatus
-from app.schemas.catalog import SubscriptionCreate
+from app.models.catalog import (
+    CatalogOffer,
+    OfferStatus,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.subscriber import Reseller, Subscriber, UserType
-from app.services import customer_portal, reseller_portal
+from app.schemas.catalog import SubscriptionCreate
 from app.services import catalog as catalog_service
+from app.services import customer_portal, reseller_portal
 from app.services.auth_flow import AuthFlow, issue_web_session_token
 from tests.playwright.helpers.api import api_post_form, bearer_headers
 from tests.playwright.helpers.auth import (
@@ -29,7 +34,6 @@ from tests.playwright.helpers.auth import (
 )
 from tests.playwright.helpers.config import E2ESettings
 from tests.playwright.helpers.data import ensure_person_subscriber_account
-from tests.playwright.pages.admin.login_page import AdminLoginPage
 
 CUSTOMER_PORTAL_PASSWORD = "CustomerPass123!"
 RESELLER_PORTAL_USERNAME = "e2e.reseller@example.com"

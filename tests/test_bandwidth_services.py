@@ -5,11 +5,11 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
-from app.models.catalog import NasDevice
-from app.tasks import bandwidth as bandwidth_tasks
 
+from app.models.catalog import NasDevice
 from app.schemas.bandwidth import BandwidthSampleCreate, BandwidthSampleUpdate
 from app.services import bandwidth as bandwidth_service
+from app.tasks import bandwidth as bandwidth_tasks
 
 
 def test_create_bandwidth_sample(db_session, subscription):

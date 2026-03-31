@@ -3,18 +3,15 @@
 import json
 from datetime import UTC, datetime, timedelta
 
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.network import OLTDevice
-from app.models.network import OntUnit
+from app.models.network import OLTDevice, OntUnit
 from app.models.network_monitoring import (
     Alert,
     AlertOperator,
     AlertSeverity,
     AlertStatus,
-    MetricType,
     DeviceMetric,
+    MetricType,
 )
-from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.schemas.network_monitoring import (
     AlertAcknowledgeRequest,
@@ -26,10 +23,10 @@ from app.schemas.network_monitoring import (
     PopSiteCreate,
     PopSiteUpdate,
 )
-from app.tasks import alert_evaluation as alert_evaluation_task
-from app.services import network_monitoring as monitoring_service
 from app.services import monitoring_metrics as monitoring_metrics_service
+from app.services import network_monitoring as monitoring_service
 from app.services import web_network_monitoring as web_network_monitoring_service
+from app.tasks import alert_evaluation as alert_evaluation_task
 
 
 def test_create_pop_site(db_session):

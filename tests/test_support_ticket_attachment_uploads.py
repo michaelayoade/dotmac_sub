@@ -7,6 +7,7 @@ from app.web.admin import support_tickets
 def test_support_ticket_attachments_use_subscriber_safe_uploaded_by(
     db_session, monkeypatch
 ):
+    """_upload_ticket_attachments uses _actor_id(request) for uploaded_by."""
     captured: dict[str, object] = {}
 
     def _fake_upload(**kwargs):
@@ -20,10 +21,10 @@ def test_support_ticket_attachments_use_subscriber_safe_uploaded_by(
         )
 
     monkeypatch.setattr(support_tickets.file_uploads, "upload", _fake_upload)
+    # _actor_id reads from get_current_user; patch it to return None (no subscriber_id)
     monkeypatch.setattr(
-        support_tickets.web_admin_service,
-        "get_uploaded_by_subscriber_id",
-        lambda _request, _db: None,
+        "app.web.admin.get_current_user",
+        lambda _request: {"subscriber_id": None},
     )
 
     request = SimpleNamespace(

@@ -30,7 +30,8 @@ def test_paystack_webhook_returns_500_on_ingest_failure(db_session):
     assert response.body == b'{"status":"processing error"}'
 
 
-def test_flutterwave_webhook_returns_500_on_ingest_failure(db_session):
+def test_flutterwave_webhook_returns_200_on_ingest_failure(db_session):
+    """Flutterwave webhook catches ingest errors and still returns 200 to avoid retries."""
     body = json.dumps({"event": "charge.success", "data": {"id": "1"}}).encode()
 
     with patch(
@@ -49,5 +50,5 @@ def test_flutterwave_webhook_returns_500_on_ingest_failure(db_session):
             signature="sig",
         )
 
-    assert response.status_code == 500
-    assert response.body == b'{"status":"processing error"}'
+    assert response.status_code == 200
+    assert response.body == b'{"status":"ok"}'

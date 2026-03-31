@@ -374,6 +374,21 @@ from app.models.rbac import (  # noqa: F401
     SystemUserPermission,
     SystemUserRole,
 )
+from app.models.router_management import (  # noqa: F401
+    JumpHost,
+    Router,
+    RouterAccessMethod,
+    RouterConfigPush,
+    RouterConfigPushResult,
+    RouterConfigPushStatus,
+    RouterConfigSnapshot,
+    RouterConfigTemplate,
+    RouterInterface,
+    RouterPushResultStatus,
+    RouterSnapshotSource,
+    RouterStatus,
+    RouterTemplateCategory,
+)
 from app.models.scheduler import ScheduledTask, ScheduleType  # noqa: F401
 from app.models.snmp import (  # noqa: F401
     SnmpAuthProtocol,
@@ -465,19 +480,4 @@ from app.models.wireguard import (  # noqa: F401
     WireGuardPeer,
     WireGuardPeerStatus,
     WireGuardServer,
-)
-from app.models.router_management import (  # noqa: F401
-    JumpHost,
-    Router,
-    RouterAccessMethod,
-    RouterConfigPush,
-    RouterConfigPushResult,
-    RouterConfigPushStatus,
-    RouterConfigSnapshot,
-    RouterConfigTemplate,
-    RouterInterface,
-    RouterPushResultStatus,
-    RouterSnapshotSource,
-    RouterStatus,
-    RouterTemplateCategory,
 )

@@ -6,6 +6,7 @@ Covers: ticket creation, password change, event types, route registration.
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+
 from app.services.events.types import EventType
 
 # ---------------------------------------------------------------------------
@@ -316,8 +317,8 @@ class TestPlanChangeUiHelpers:
         assert "prorated invoice or credit note" in copy["billing_message"]
 
     def test_get_fup_status_uses_highest_active_rule_threshold_for_allowance(self) -> None:
-        from app.services.customer_portal_flow_services import _get_fup_status
         from app.models.fup import FupDataUnit
+        from app.services.customer_portal_flow_services import _get_fup_status
 
         db = MagicMock()
         subscription_id = "00000000-0000-0000-0000-000000000123"

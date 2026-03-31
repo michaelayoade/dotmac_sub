@@ -1,4 +1,10 @@
-from app.models.catalog import AccessType, BillingCycle, NasVendor, PriceBasis, ServiceType
+from app.models.catalog import (
+    AccessType,
+    BillingCycle,
+    NasVendor,
+    PriceBasis,
+    ServiceType,
+)
 from app.schemas.catalog import (
     CatalogOfferCreate,
     CatalogOfferUpdate,

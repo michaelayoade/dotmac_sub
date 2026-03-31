@@ -4,8 +4,8 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 
 VERSIONS_DIR = Path("alembic/versions")

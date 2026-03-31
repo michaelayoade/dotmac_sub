@@ -12,8 +12,8 @@ import time
 from uuid import uuid4
 
 import pytest
-from playwright.sync_api import Page, expect
 from playwright.sync_api import Error as PlaywrightError
+from playwright.sync_api import Page, expect
 
 from tests.playwright.helpers.api import api_get, api_post_json, bearer_headers
 from tests.playwright.pages.admin.login_page import AdminLoginPage
@@ -429,7 +429,9 @@ class TestWorkOrderExecution:
 
     def test_dispatch_view_flow(self, admin_page: Page, settings):
         """Billing overview is reachable as an operational dashboard."""
-        from tests.playwright.pages.admin.billing.billing_overview_page import BillingOverviewPage
+        from tests.playwright.pages.admin.billing.billing_overview_page import (
+            BillingOverviewPage,
+        )
 
         overview = BillingOverviewPage(admin_page, settings.base_url)
         overview.goto()

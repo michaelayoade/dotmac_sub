@@ -2,9 +2,12 @@ import json
 from decimal import Decimal
 
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.subscriber import Address, SubscriberCategory
 from app.models.subscription_engine import SettingValueType
-from app.models.subscriber import Address, Subscriber, SubscriberCategory
-from app.services.web_customer_details import build_business_detail_snapshot, build_person_detail_snapshot
+from app.services.web_customer_details import (
+    build_business_detail_snapshot,
+    build_person_detail_snapshot,
+)
 
 
 def _billing_setting(key: str, value: str) -> DomainSetting:

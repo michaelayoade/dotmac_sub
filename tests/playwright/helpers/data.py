@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from tests.playwright.helpers.api import api_get, api_post_json, bearer_headers
+from tests.playwright.helpers.api import api_post_json, bearer_headers
 from tests.playwright.helpers.auth import AuthError, ensure_person
 
 

@@ -1,6 +1,6 @@
-from decimal import Decimal
-from datetime import UTC, datetime
 import sqlite3
+from datetime import UTC, datetime
+from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
 
@@ -10,11 +10,23 @@ from starlette.datastructures import FormData
 from app.models.billing import TaxRate
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
-from app.models.event_store import EventStatus, EventStore
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.event_store import EventStatus, EventStore
 from app.models.network import IPAssignment
-from app.models.notification import Notification, NotificationChannel, NotificationStatus, NotificationTemplate
-from app.models.radius import RadiusClient, RadiusServer, RadiusSyncJob, RadiusSyncRun, RadiusSyncStatus, RadiusUser
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+    NotificationTemplate,
+)
+from app.models.radius import (
+    RadiusClient,
+    RadiusServer,
+    RadiusSyncJob,
+    RadiusSyncRun,
+    RadiusSyncStatus,
+    RadiusUser,
+)
 from app.models.sequence import DocumentSequence
 from app.models.subscriber import Address, ChannelType, SubscriberChannel
 from app.models.subscription_engine import SettingValueType

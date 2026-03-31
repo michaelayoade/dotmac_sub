@@ -268,7 +268,13 @@ def test_fsp_hint_from_huawei_packed_index_decodes_frame_slot_port() -> None:
 def test_poll_sfp_modules_scopes_to_olt_and_uses_port_number_keys(
     db_session, monkeypatch
 ) -> None:
-    from app.models.network import OltCard, OltCardPort, OLTDevice, OltShelf, OltSfpModule
+    from app.models.network import (
+        OltCard,
+        OltCardPort,
+        OLTDevice,
+        OltSfpModule,
+        OltShelf,
+    )
     from app.services.network.olt_polling import poll_sfp_modules
 
     olt = OLTDevice(name="OLT-A", vendor="Huawei", mgmt_ip="10.0.0.1")

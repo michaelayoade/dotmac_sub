@@ -38,8 +38,6 @@ from app.api.imports import router as imports_router
 from app.api.integrations import router as integrations_router
 from app.api.nas import router as nas_router
 from app.api.network_catalog import router as network_catalog_router
-from app.api.router_management import jump_host_router as jump_host_mgmt_router
-from app.api.router_management import router as router_mgmt_router
 from app.api.network_olt_ops import router as network_olt_ops_router
 from app.api.network_ont_ops import router as network_ont_ops_router
 from app.api.nextcloud_talk import router as nextcloud_talk_router
@@ -47,6 +45,8 @@ from app.api.notifications import router as notifications_router
 from app.api.provisioning import router as provisioning_api_router
 from app.api.qualification import router as qualification_router
 from app.api.rbac import router as rbac_router
+from app.api.router_management import jump_host_router as jump_host_mgmt_router
+from app.api.router_management import router as router_mgmt_router
 from app.api.scheduler import router as scheduler_router
 from app.api.search import router as search_router
 from app.api.settings import router as settings_router
