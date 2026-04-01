@@ -795,8 +795,577 @@ def receive_inform(
     return {"status": "ok", "device_id": str(device.id), "event": event_str}
 
 
+# -----------------------------------------------------------------------------
+# ACS Enforcement Preset Management
+# -----------------------------------------------------------------------------
+
+PROVISION_NAME_PREFIX = "dotmac-enforce-acs"
+PRESET_NAME_PREFIX = "dotmac-enforce-acs"
+
+
+def _build_acs_provision_script(
+    cwmp_url: str,
+    cwmp_username: str | None = None,
+    cwmp_password: str | None = None,
+    periodic_inform_interval: int = 300,  # 5 minutes for timely NOC diagnostics
+) -> str:
+    """Build GenieACS provision script that enforces ACS URL on every inform.
+
+    This provision uses GenieACS's declare() function to set the ManagementServer
+    parameters. It handles both TR-181 (Device.*) and TR-098 (InternetGatewayDevice.*)
+    data models.
+
+    Args:
+        cwmp_url: The ACS CWMP URL to enforce
+        cwmp_username: Optional CWMP username
+        cwmp_password: Optional CWMP password
+        periodic_inform_interval: Inform interval in seconds (default 3600)
+
+    Returns:
+        JavaScript provision script
+    """
+    # Escape strings for JavaScript
+    def js_string(s: str | None) -> str:
+        if s is None:
+            return "null"
+        return '"' + s.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+    script_lines = [
+        "// DotMac ACS URL Enforcement Provision",
+        "// Automatically generated - do not edit manually",
+        f"// Target ACS: {cwmp_url}",
+        "",
+        "const now = Date.now();",
+        "",
+        "// Detect data model by checking which root exists",
+        'let root = "Device";',
+        'try {',
+        '  const dm = declare("Device.DeviceInfo.Manufacturer", {value: 1});',
+        '  if (!dm.value || dm.value[0] === undefined) {',
+        '    root = "InternetGatewayDevice";',
+        "  }",
+        "} catch (e) {",
+        '  root = "InternetGatewayDevice";',
+        "}",
+        "",
+        "// Set ManagementServer parameters",
+        f'declare(root + ".ManagementServer.URL", {{value: now}}, {{value: {js_string(cwmp_url)}}});',
+        f'declare(root + ".ManagementServer.PeriodicInformEnable", {{value: now}}, {{value: "true"}});',
+        f'declare(root + ".ManagementServer.PeriodicInformInterval", {{value: now}}, {{value: "{periodic_inform_interval}"}});',
+    ]
+
+    if cwmp_username:
+        script_lines.append(
+            f'declare(root + ".ManagementServer.Username", {{value: now}}, {{value: {js_string(cwmp_username)}}});'
+        )
+
+    if cwmp_password:
+        script_lines.append(
+            f'declare(root + ".ManagementServer.Password", {{value: now}}, {{value: {js_string(cwmp_password)}}});'
+        )
+
+    return "\n".join(script_lines)
+
+
+def _build_acs_preset(
+    preset_id: str,
+    provision_name: str,
+    *,
+    on_bootstrap: bool = True,
+    on_boot: bool = True,
+    on_periodic: bool = True,
+    precondition: str = "",
+    weight: int = 100,
+) -> dict:
+    """Build GenieACS preset definition.
+
+    Args:
+        preset_id: Unique preset ID
+        provision_name: Name of the provision script to run
+        on_bootstrap: Run on bootstrap event (device first contact)
+        on_boot: Run on boot event
+        on_periodic: Run on periodic inform
+        precondition: Optional MongoDB-style filter to limit which devices
+        weight: Preset priority (higher = runs later, default 100)
+
+    Returns:
+        Preset definition dict
+    """
+    events = {}
+    if on_bootstrap:
+        events["0 BOOTSTRAP"] = True
+    if on_boot:
+        events["1 BOOT"] = True
+    if on_periodic:
+        events["2 PERIODIC"] = True
+
+    return {
+        "_id": preset_id,
+        "channel": "default",
+        "weight": weight,
+        "schedule": "",
+        "events": events,
+        "precondition": precondition,
+        "configurations": [{"type": "provision", "name": provision_name}],
+    }
+
+
+def push_acs_enforcement_preset(
+    db: Session,
+    acs_server_id: str,
+    *,
+    on_bootstrap: bool = True,
+    on_boot: bool = True,
+    on_periodic: bool = True,
+    precondition: str = "",
+) -> dict:
+    """Push ACS enforcement provision and preset to GenieACS.
+
+    Creates a provision script that sets ManagementServer.URL to this ACS server's
+    CWMP URL, and a preset that runs it on specified events. This ensures all
+    devices will use this ACS regardless of any competing ACS configurations.
+
+    Args:
+        db: Database session
+        acs_server_id: The ACS server to enforce
+        on_bootstrap: Run on device bootstrap (first contact)
+        on_boot: Run on device boot
+        on_periodic: Run on periodic inform
+        precondition: MongoDB-style filter to limit affected devices
+
+    Returns:
+        Dict with provision_id, preset_id, and status
+    """
+    from app.services.credential_crypto import decrypt_credential
+
+    server = db.get(Tr069AcsServer, acs_server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="ACS server not found")
+
+    if not server.cwmp_url:
+        raise HTTPException(
+            status_code=400, detail="ACS server has no CWMP URL configured"
+        )
+
+    if not server.base_url:
+        raise HTTPException(
+            status_code=400, detail="ACS server has no GenieACS base URL configured"
+        )
+
+    # Build unique IDs based on server
+    server_slug = str(server.id).replace("-", "")[:12]
+    provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
+    preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
+
+    # Decrypt password if set
+    cwmp_password = None
+    if server.cwmp_password:
+        cwmp_password = decrypt_credential(server.cwmp_password)
+
+    # Build provision script using server's configured interval
+    provision_script = _build_acs_provision_script(
+        cwmp_url=server.cwmp_url,
+        cwmp_username=server.cwmp_username,
+        cwmp_password=cwmp_password,
+        periodic_inform_interval=server.periodic_inform_interval or 300,
+    )
+
+    # Build preset
+    preset = _build_acs_preset(
+        preset_id=preset_id,
+        provision_name=provision_name,
+        on_bootstrap=on_bootstrap,
+        on_boot=on_boot,
+        on_periodic=on_periodic,
+        precondition=precondition,
+        weight=100,  # High weight to run after other presets
+    )
+
+    # Push to GenieACS
+    client = GenieACSClient(server.base_url)
+
+    try:
+        # Create provision first
+        client.create_provision(provision_name, provision_script)
+        logger.info("Created ACS enforcement provision: %s", provision_name)
+    except GenieACSError as exc:
+        logger.error("Failed to create provision %s: %s", provision_name, exc)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create provision: {exc}"
+        ) from exc
+
+    try:
+        # Create preset
+        client.create_preset(preset)
+        logger.info("Created ACS enforcement preset: %s", preset_id)
+    except GenieACSError as exc:
+        logger.error("Failed to create preset %s: %s", preset_id, exc)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create preset: {exc}"
+        ) from exc
+
+    return {
+        "provision_id": provision_name,
+        "preset_id": preset_id,
+        "cwmp_url": server.cwmp_url,
+        "events": {
+            "bootstrap": on_bootstrap,
+            "boot": on_boot,
+            "periodic": on_periodic,
+        },
+        "status": "created",
+    }
+
+
+def remove_acs_enforcement_preset(db: Session, acs_server_id: str) -> dict:
+    """Remove ACS enforcement provision and preset from GenieACS.
+
+    Args:
+        db: Database session
+        acs_server_id: The ACS server whose enforcement to remove
+
+    Returns:
+        Dict with removal status
+    """
+    server = db.get(Tr069AcsServer, acs_server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="ACS server not found")
+
+    if not server.base_url:
+        raise HTTPException(
+            status_code=400, detail="ACS server has no GenieACS base URL configured"
+        )
+
+    server_slug = str(server.id).replace("-", "")[:12]
+    provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
+    preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
+
+    client = GenieACSClient(server.base_url)
+    removed = {"provision": False, "preset": False}
+
+    try:
+        client.delete_preset(preset_id)
+        removed["preset"] = True
+        logger.info("Removed ACS enforcement preset: %s", preset_id)
+    except GenieACSError as exc:
+        logger.warning("Failed to remove preset %s: %s", preset_id, exc)
+
+    try:
+        client.delete_provision(provision_name)
+        removed["provision"] = True
+        logger.info("Removed ACS enforcement provision: %s", provision_name)
+    except GenieACSError as exc:
+        logger.warning("Failed to remove provision %s: %s", provision_name, exc)
+
+    return {
+        "provision_id": provision_name,
+        "preset_id": preset_id,
+        "removed": removed,
+        "status": "removed" if any(removed.values()) else "not_found",
+    }
+
+
+def get_acs_enforcement_status(db: Session, acs_server_id: str) -> dict:
+    """Check if ACS enforcement preset exists in GenieACS.
+
+    Args:
+        db: Database session
+        acs_server_id: The ACS server to check
+
+    Returns:
+        Dict with existence status and details
+    """
+    server = db.get(Tr069AcsServer, acs_server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="ACS server not found")
+
+    if not server.base_url:
+        return {
+            "exists": False,
+            "error": "ACS server has no GenieACS base URL configured",
+        }
+
+    server_slug = str(server.id).replace("-", "")[:12]
+    provision_name = f"{PROVISION_NAME_PREFIX}-{server_slug}"
+    preset_id = f"{PRESET_NAME_PREFIX}-{server_slug}"
+
+    client = GenieACSClient(server.base_url)
+    status = {
+        "provision_id": provision_name,
+        "preset_id": preset_id,
+        "provision_exists": False,
+        "preset_exists": False,
+        "preset_details": None,
+    }
+
+    try:
+        provisions = client.list_provisions()
+        status["provision_exists"] = any(
+            p.get("_id") == provision_name for p in provisions
+        )
+    except GenieACSError as exc:
+        logger.warning("Failed to list provisions: %s", exc)
+
+    try:
+        presets = client.list_presets()
+        for preset in presets:
+            if preset.get("_id") == preset_id:
+                status["preset_exists"] = True
+                status["preset_details"] = {
+                    "events": preset.get("events", {}),
+                    "precondition": preset.get("precondition", ""),
+                    "weight": preset.get("weight", 0),
+                }
+                break
+    except GenieACSError as exc:
+        logger.warning("Failed to list presets: %s", exc)
+
+    status["exists"] = status["provision_exists"] and status["preset_exists"]
+    return status
+
+
 acs_servers = AcsServers()
 cpe_devices = CpeDevices()
 sessions = Sessions()
 parameters = Parameters()
 jobs = Jobs()
+
+
+# -----------------------------------------------------------------------------
+# Runtime Data Collection Provision
+# -----------------------------------------------------------------------------
+
+RUNTIME_PROVISION_NAME = "dotmac-runtime-collect"
+RUNTIME_PRESET_NAME = "dotmac-runtime-collect"
+
+
+def _build_runtime_collection_provision() -> str:
+    """Build GenieACS provision script that collects runtime parameters.
+
+    This provision uses GenieACS's declare() function with {value: 1} to
+    request the device report these parameters. It handles both TR-181
+    (Device.*) and TR-098 (InternetGatewayDevice.*) data models.
+
+    Returns:
+        JavaScript provision script
+    """
+    return '''// DotMac Runtime Data Collection Provision
+// Collects operational parameters for dashboard display
+
+const now = Date.now();
+
+// Detect data model by checking which root exists
+let root = "Device";
+try {
+  const dm = declare("Device.DeviceInfo.Manufacturer", {value: 1});
+  if (!dm.value || dm.value[0] === undefined) {
+    root = "InternetGatewayDevice";
+  }
+} catch (e) {
+  root = "InternetGatewayDevice";
+}
+
+// System info
+declare(root + ".DeviceInfo.SerialNumber", {value: 1});
+declare(root + ".DeviceInfo.SoftwareVersion", {value: 1});
+declare(root + ".DeviceInfo.UpTime", {value: 1});
+declare(root + ".DeviceInfo.MemoryStatus.Total", {value: 1});
+declare(root + ".DeviceInfo.MemoryStatus.Free", {value: 1});
+
+// WAN connection status - PPPoE
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.MACAddress", {value: 1});
+
+// WAN connection status - DHCP/Static IP
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress", {value: 1});
+declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress", {value: 1});
+
+// LAN configuration
+declare(root + ".LANDevice.1.LANHostConfigManagement.DHCPServerEnable", {value: 1});
+declare(root + ".LANDevice.1.LANHostConfigManagement.MinAddress", {value: 1});
+declare(root + ".LANDevice.1.LANHostConfigManagement.MaxAddress", {value: 1});
+declare(root + ".LANDevice.1.Hosts.HostNumberOfEntries", {value: 1});
+
+// WiFi configuration and clients
+declare(root + ".LANDevice.1.WLANConfiguration.1.Enable", {value: 1});
+declare(root + ".LANDevice.1.WLANConfiguration.1.SSID", {value: 1});
+declare(root + ".LANDevice.1.WLANConfiguration.1.Channel", {value: 1});
+declare(root + ".LANDevice.1.WLANConfiguration.1.TotalAssociations", {value: 1});
+declare(root + ".LANDevice.1.WLANConfiguration.1.Standard", {value: 1});
+declare(root + ".LANDevice.1.WLANConfiguration.1.BeaconType", {value: 1});
+
+// Ethernet port status
+declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.1.Status", {value: 1});
+declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress", {value: 1});
+declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.2.Status", {value: 1});
+declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.3.Status", {value: 1});
+declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.4.Status", {value: 1});
+'''
+
+
+def _build_runtime_preset(
+    *,
+    on_bootstrap: bool = True,
+    on_boot: bool = True,
+    on_periodic: bool = True,
+    weight: int = 50,
+) -> dict:
+    """Build GenieACS preset for runtime data collection.
+
+    Args:
+        on_bootstrap: Run on bootstrap event
+        on_boot: Run on boot event
+        on_periodic: Run on periodic inform
+        weight: Preset priority (lower = runs earlier)
+
+    Returns:
+        Preset definition dict
+    """
+    events = {}
+    if on_bootstrap:
+        events["0 BOOTSTRAP"] = True
+    if on_boot:
+        events["1 BOOT"] = True
+    if on_periodic:
+        events["2 PERIODIC"] = True
+
+    return {
+        "_id": RUNTIME_PRESET_NAME,
+        "channel": "default",
+        "weight": weight,
+        "schedule": "",
+        "events": events,
+        "precondition": "",
+        "configurations": [{"type": "provision", "name": RUNTIME_PROVISION_NAME}],
+    }
+
+
+def push_runtime_collection_preset(
+    db: Session,
+    acs_server_id: str,
+    *,
+    on_bootstrap: bool = True,
+    on_boot: bool = True,
+    on_periodic: bool = True,
+) -> dict:
+    """Push runtime data collection provision and preset to GenieACS.
+
+    Creates a provision that collects operational parameters (WiFi clients,
+    WAN status, LAN mode, etc.) and a preset that runs it on specified events.
+
+    Args:
+        db: Database session
+        acs_server_id: The ACS server to configure
+        on_bootstrap: Run on device bootstrap
+        on_boot: Run on device boot
+        on_periodic: Run on periodic inform
+
+    Returns:
+        Dict with provision_id, preset_id, and status
+    """
+    server = db.get(Tr069AcsServer, acs_server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="ACS server not found")
+
+    if not server.base_url:
+        raise HTTPException(
+            status_code=400, detail="ACS server has no GenieACS base URL configured"
+        )
+
+    provision_script = _build_runtime_collection_provision()
+    preset = _build_runtime_preset(
+        on_bootstrap=on_bootstrap,
+        on_boot=on_boot,
+        on_periodic=on_periodic,
+    )
+
+    client = GenieACSClient(server.base_url)
+
+    try:
+        client.create_provision(RUNTIME_PROVISION_NAME, provision_script)
+        logger.info("Created runtime collection provision: %s", RUNTIME_PROVISION_NAME)
+    except GenieACSError as exc:
+        logger.error(
+            "Failed to create provision %s: %s", RUNTIME_PROVISION_NAME, exc
+        )
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create provision: {exc}"
+        ) from exc
+
+    try:
+        client.create_preset(preset)
+        logger.info("Created runtime collection preset: %s", RUNTIME_PRESET_NAME)
+    except GenieACSError as exc:
+        logger.error("Failed to create preset %s: %s", RUNTIME_PRESET_NAME, exc)
+        raise HTTPException(
+            status_code=500, detail=f"Failed to create preset: {exc}"
+        ) from exc
+
+    return {
+        "provision_id": RUNTIME_PROVISION_NAME,
+        "preset_id": RUNTIME_PRESET_NAME,
+        "events": {
+            "bootstrap": on_bootstrap,
+            "boot": on_boot,
+            "periodic": on_periodic,
+        },
+        "status": "created",
+    }
+
+
+def get_runtime_collection_status(db: Session, acs_server_id: str) -> dict:
+    """Check if runtime collection preset exists in GenieACS.
+
+    Args:
+        db: Database session
+        acs_server_id: The ACS server to check
+
+    Returns:
+        Dict with existence status and details
+    """
+    server = db.get(Tr069AcsServer, acs_server_id)
+    if not server:
+        raise HTTPException(status_code=404, detail="ACS server not found")
+
+    if not server.base_url:
+        return {
+            "exists": False,
+            "error": "ACS server has no GenieACS base URL configured",
+        }
+
+    client = GenieACSClient(server.base_url)
+    status = {
+        "provision_id": RUNTIME_PROVISION_NAME,
+        "preset_id": RUNTIME_PRESET_NAME,
+        "provision_exists": False,
+        "preset_exists": False,
+    }
+
+    try:
+        provisions = client.list_provisions()
+        status["provision_exists"] = any(
+            p.get("_id") == RUNTIME_PROVISION_NAME for p in provisions
+        )
+    except GenieACSError as exc:
+        logger.warning("Failed to list provisions: %s", exc)
+
+    try:
+        presets = client.list_presets()
+        for preset in presets:
+            if preset.get("_id") == RUNTIME_PRESET_NAME:
+                status["preset_exists"] = True
+                status["preset_details"] = {
+                    "events": preset.get("events", {}),
+                    "weight": preset.get("weight", 0),
+                }
+                break
+    except GenieACSError as exc:
+        logger.warning("Failed to list presets: %s", exc)
+
+    status["exists"] = status["provision_exists"] and status["preset_exists"]
+    return status

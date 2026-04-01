@@ -115,6 +115,13 @@ _CONFIG_ACTIONS: dict[str, ConfigAction] = {
 
 
 def parse_acs_form(form) -> dict[str, object]:
+    # Parse periodic inform interval with validation
+    interval_str = str(form.get("periodic_inform_interval") or "300").strip()
+    try:
+        periodic_inform_interval = max(60, min(86400, int(interval_str)))
+    except ValueError:
+        periodic_inform_interval = 300
+
     return {
         "name": str(form.get("name") or "").strip(),
         "cwmp_url": str(form.get("cwmp_url") or "").strip(),
@@ -127,6 +134,7 @@ def parse_acs_form(form) -> dict[str, object]:
             form.get("connection_request_password") or ""
         ).strip(),
         "base_url": str(form.get("base_url") or "").strip(),
+        "periodic_inform_interval": periodic_inform_interval,
         "is_active": str(form.get("is_active") or "true").strip().lower()
         in ("1", "true", "on", "yes"),
         "notes": str(form.get("notes") or "").strip() or None,
@@ -183,6 +191,7 @@ def acs_form_snapshot_from_model(server) -> dict[str, object]:
         "connection_request_username": server.connection_request_username,
         "connection_request_password": "",  # nosec
         "base_url": server.base_url,
+        "periodic_inform_interval": getattr(server, "periodic_inform_interval", 300),
         "is_active": bool(server.is_active),
         "notes": server.notes or "",
     }

@@ -234,6 +234,178 @@ def tr069_sync_acs_get_fallback(acs_id: str) -> RedirectResponse:
     )
 
 
+# -----------------------------------------------------------------------------
+# ACS Enforcement Preset Management
+# -----------------------------------------------------------------------------
+
+
+@router.get("/tr069/acs/{acs_id}/enforcement-status")
+def tr069_acs_enforcement_status(
+    acs_id: str, db: Session = Depends(get_db)
+) -> dict:
+    """Get ACS enforcement preset status (JSON response for HTMX)."""
+    from app.services.tr069 import get_acs_enforcement_status
+
+    try:
+        return get_acs_enforcement_status(db, acs_id)
+    except Exception as exc:
+        return {"exists": False, "error": str(exc)}
+
+
+@router.post("/tr069/acs/{acs_id}/enforcement-preset")
+def tr069_push_enforcement_preset(
+    acs_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Push ACS enforcement preset to GenieACS.
+
+    This creates a provision and preset in GenieACS that enforces this
+    ACS server's URL on every device inform (bootstrap, boot, periodic).
+    """
+    from app.services.tr069 import push_acs_enforcement_preset
+
+    form = parse_form_data_sync(request)
+    on_bootstrap = str(form.get("on_bootstrap", "1")).strip() in ("1", "true", "on")
+    on_boot = str(form.get("on_boot", "1")).strip() in ("1", "true", "on")
+    on_periodic = str(form.get("on_periodic", "1")).strip() in ("1", "true", "on")
+    precondition = str(form.get("precondition") or "").strip()
+
+    try:
+        result = push_acs_enforcement_preset(
+            db,
+            acs_id,
+            on_bootstrap=on_bootstrap,
+            on_boot=on_boot,
+            on_periodic=on_periodic,
+            precondition=precondition,
+        )
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="create_enforcement_preset",
+            entity_type="tr069_acs_server",
+            entity_id=acs_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "preset_id": result.get("preset_id"),
+                "provision_id": result.get("provision_id"),
+                "cwmp_url": result.get("cwmp_url"),
+            },
+        )
+        message = quote_plus(
+            f"ACS enforcement preset created: {result.get('preset_id')}"
+        )
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
+@router.post("/tr069/acs/{acs_id}/enforcement-preset/remove")
+def tr069_remove_enforcement_preset(
+    acs_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Remove ACS enforcement preset from GenieACS."""
+    from app.services.tr069 import remove_acs_enforcement_preset
+
+    try:
+        result = remove_acs_enforcement_preset(db, acs_id)
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="remove_enforcement_preset",
+            entity_type="tr069_acs_server",
+            entity_id=acs_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "preset_id": result.get("preset_id"),
+                "provision_id": result.get("provision_id"),
+                "removed": result.get("removed"),
+            },
+        )
+        message = quote_plus("ACS enforcement preset removed")
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
+# -----------------------------------------------------------------------------
+# Runtime Data Collection Preset
+# -----------------------------------------------------------------------------
+
+
+@router.get("/tr069/acs/{acs_id}/runtime-status")
+def tr069_acs_runtime_status(acs_id: str, db: Session = Depends(get_db)) -> dict:
+    """Get runtime collection preset status (JSON response for HTMX)."""
+    from app.services.tr069 import get_runtime_collection_status
+
+    try:
+        return get_runtime_collection_status(db, acs_id)
+    except Exception as exc:
+        return {"exists": False, "error": str(exc)}
+
+
+@router.post("/tr069/acs/{acs_id}/runtime-preset")
+def tr069_push_runtime_preset(
+    acs_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Push runtime data collection preset to GenieACS.
+
+    This creates a provision and preset that collects operational parameters
+    (WiFi clients, WAN status, PPPoE status, LAN mode) on device inform.
+    """
+    from app.services.tr069 import push_runtime_collection_preset
+
+    try:
+        result = push_runtime_collection_preset(db, acs_id)
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="create_runtime_preset",
+            entity_type="tr069_acs_server",
+            entity_id=acs_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "preset_id": result.get("preset_id"),
+                "provision_id": result.get("provision_id"),
+            },
+        )
+        message = quote_plus(
+            f"Runtime collection preset created: {result.get('preset_id')}"
+        )
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
 @router.post("/tr069/devices/{device_id}/link")
 def tr069_link_device(
     device_id: str, request: Request, db: Session = Depends(get_db)

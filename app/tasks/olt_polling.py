@@ -181,13 +181,20 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
 
     from sqlalchemy import update
 
-    from app.models.network import OLTDevice, OntUnit, OnuOfflineReason, OnuOnlineStatus
+    from app.models.network import (
+        OLTDevice,
+        OntUnit,
+        OnuOfflineReason,
+        OnuOnlineStatus,
+        PollStatus,
+    )
 
     now = datetime.now(UTC)
     threshold = now - timedelta(minutes=stale_threshold_minutes)
 
-    # P2 FIX: Get OLTs that were successfully polled recently
-    # Only mark ONTs offline if their OLT was reachable
+    # P2 FIX: Get OLTs that were SUCCESSFULLY polled recently
+    # Only mark ONTs offline if their OLT was reachable AND poll succeeded
+    # This prevents false positives when OLT poll fails (timeout, network issue)
     olt_poll_threshold = now - timedelta(minutes=stale_threshold_minutes * 2)
     reachable_olt_ids = [
         olt.id
@@ -196,6 +203,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
                 OLTDevice.is_active.is_(True),
                 OLTDevice.last_poll_at.isnot(None),
                 OLTDevice.last_poll_at >= olt_poll_threshold,
+                OLTDevice.last_poll_status == PollStatus.success,
             )
         ).all()
     ]
