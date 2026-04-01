@@ -116,6 +116,14 @@ _AUDIT_SETTINGS_LOCK = Lock()
 
 
 def _seed_startup_settings() -> None:
+    # Enforce credential encryption if configured (P0 security fix)
+    from app.config import settings
+    from app.services.credential_crypto import require_encryption_key
+
+    if settings.enforce_credential_encryption:
+        require_encryption_key(enforce=True)
+        logger.info("Credential encryption enforcement enabled")
+
     try:
         ensure_storage_bucket()
     except Exception:

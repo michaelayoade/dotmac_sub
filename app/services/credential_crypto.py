@@ -2,6 +2,9 @@
 
 Provides Fernet encryption for storing sensitive credentials at rest.
 Follows the same pattern as wireguard_crypto.py for consistency.
+
+SECURITY: In production, CREDENTIAL_ENCRYPTION_KEY must be set.
+Use require_encryption_key() at startup to enforce this.
 """
 
 from __future__ import annotations
@@ -15,6 +18,7 @@ from cryptography.fernet import Fernet, InvalidToken
 _ENCRYPTION_KEY_ENV = "CREDENTIAL_ENCRYPTION_KEY"
 _logger = logging.getLogger(__name__)
 _encryption_warning_logged = False
+_encryption_key_required = False  # Set to True in production via require_encryption_key()
 
 ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
     "NasDevice": (
@@ -124,6 +128,57 @@ def generate_encryption_key() -> str:
     return Fernet.generate_key().decode("ascii")
 
 
+class EncryptionKeyMissingError(Exception):
+    """Raised when encryption key is required but not configured."""
+
+    pass
+
+
+def require_encryption_key(*, enforce: bool = True) -> bytes | None:
+    """Require encryption key to be configured.
+
+    Call this at application startup to enforce encryption in production.
+    After calling with enforce=True, all credential encryption operations
+    will fail if the key is not configured (instead of falling back to plaintext).
+
+    Args:
+        enforce: If True, raise error if key not configured. If False,
+                 just return the key (or None if not configured).
+
+    Returns:
+        The encryption key bytes if configured.
+
+    Raises:
+        EncryptionKeyMissingError: If enforce=True and key not configured.
+
+    Example:
+        # In app startup (main.py or similar):
+        from app.services.credential_crypto import require_encryption_key
+        require_encryption_key(enforce=not settings.debug)
+    """
+    global _encryption_key_required
+
+    key = get_encryption_key()
+
+    if enforce:
+        _encryption_key_required = True
+        if not key:
+            raise EncryptionKeyMissingError(
+                "CREDENTIAL_ENCRYPTION_KEY must be configured in production. "
+                "Set via environment variable, database setting, or OpenBao. "
+                "Generate a key with: python -c "
+                '"from app.services.credential_crypto import generate_encryption_key; '
+                'print(generate_encryption_key())"'
+            )
+
+    return key
+
+
+def is_encryption_required() -> bool:
+    """Check if encryption key enforcement is enabled."""
+    return _encryption_key_required
+
+
 def _coerce_encryption_key(encryption_key: str | bytes | None) -> bytes | None:
     if not encryption_key:
         return None
@@ -179,7 +234,11 @@ def encrypt_credential_with_key(
 ) -> str | None:
     """Encrypt a credential using an explicit Fernet key.
 
-    If ``encryption_key`` is absent, the value is stored with a ``plain:`` prefix.
+    If ``encryption_key`` is absent and encryption is not required,
+    the value is stored with a ``plain:`` prefix.
+
+    Raises:
+        EncryptionKeyMissingError: If encryption is required but key is missing.
     """
     if not value:
         return value
@@ -188,6 +247,11 @@ def encrypt_credential_with_key(
 
     key_bytes = _coerce_encryption_key(encryption_key)
     if not key_bytes:
+        if _encryption_key_required:
+            raise EncryptionKeyMissingError(
+                "Cannot store credential: CREDENTIAL_ENCRYPTION_KEY is required "
+                "but not configured. This is a security policy violation."
+            )
         _logger.warning(
             "CREDENTIAL_ENCRYPTION_KEY not configured — storing credential as plaintext"
         )

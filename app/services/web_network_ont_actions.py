@@ -14,6 +14,8 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
+from app.services.events import emit_event
+from app.services.events.types import EventType
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 
@@ -59,7 +61,7 @@ def execute_reboot(
     db: Session, ont_id: str, *, initiated_by: str | None = None
 ) -> ActionResult:
     """Execute reboot action with operation tracking."""
-    return run_tracked_action(
+    result = run_tracked_action(
         db,
         NetworkOperationType.ont_reboot,
         NetworkOperationTargetType.ont,
@@ -68,6 +70,26 @@ def execute_reboot(
         correlation_key=f"ont_reboot:{ont_id}",
         initiated_by=initiated_by,
     )
+
+    # Emit audit event for reboot operation
+    if result.success:
+        try:
+            ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+            emit_event(
+                db,
+                EventType.ont_rebooted,
+                {
+                    "ont_id": ont_id,
+                    "ont_serial": ont.serial_number if ont else None,
+                    "olt_id": str(ont.olt_device_id) if ont and ont.olt_device_id else None,
+                    "method": "tr069",
+                },
+                actor=initiated_by or "system",
+            )
+        except Exception as e:
+            logger.warning("Failed to emit ont_rebooted event: %s", e)
+
+    return result
 
 
 def execute_refresh(db: Session, ont_id: str) -> ActionResult:
@@ -84,7 +106,7 @@ def execute_factory_reset(
     db: Session, ont_id: str, *, initiated_by: str | None = None
 ) -> ActionResult:
     """Execute factory reset with operation tracking."""
-    return run_tracked_action(
+    result = run_tracked_action(
         db,
         NetworkOperationType.ont_factory_reset,
         NetworkOperationTargetType.ont,
@@ -93,6 +115,25 @@ def execute_factory_reset(
         correlation_key=f"ont_factory_reset:{ont_id}",
         initiated_by=initiated_by,
     )
+
+    # Emit audit event for factory reset operation
+    if result.success:
+        try:
+            ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+            emit_event(
+                db,
+                EventType.ont_factory_reset,
+                {
+                    "ont_id": ont_id,
+                    "ont_serial": ont.serial_number if ont else None,
+                    "olt_id": str(ont.olt_device_id) if ont and ont.olt_device_id else None,
+                },
+                actor=initiated_by or "system",
+            )
+        except Exception as e:
+            logger.warning("Failed to emit ont_factory_reset event: %s", e)
+
+    return result
 
 
 def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
@@ -159,7 +200,9 @@ def execute_enable_ipv6(
     )
 
 
-def execute_omci_reboot(db: Session, ont_id: str) -> tuple[bool, str]:
+def execute_omci_reboot(
+    db: Session, ont_id: str, *, initiated_by: str | None = None
+) -> tuple[bool, str]:
     """Reboot ONT via OMCI through the OLT."""
     from app.services.network.olt_ssh_ont import reboot_ont_omci
     from app.services.web_network_service_ports import _resolve_ont_olt_context
@@ -167,7 +210,30 @@ def execute_omci_reboot(db: Session, ont_id: str) -> tuple[bool, str]:
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
-    return reboot_ont_omci(olt, fsp, olt_ont_id)
+
+    ok, msg = reboot_ont_omci(olt, fsp, olt_ont_id)
+
+    # Emit audit event for reboot operation
+    if ok:
+        try:
+            emit_event(
+                db,
+                EventType.ont_rebooted,
+                {
+                    "ont_id": ont_id,
+                    "ont_serial": ont.serial_number if ont else None,
+                    "olt_id": str(olt.id),
+                    "olt_name": olt.name,
+                    "fsp": fsp,
+                    "ont_id_on_olt": olt_ont_id,
+                    "method": "omci",
+                },
+                actor=initiated_by or "system",
+            )
+        except Exception as e:
+            logger.warning("Failed to emit ont_rebooted event: %s", e)
+
+    return ok, msg
 
 
 def configure_management_ip(
@@ -220,7 +286,9 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     return bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
 
 
-def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
+def return_to_inventory(
+    db: Session, ont_id: str, *, initiated_by: str | None = None
+) -> ActionResult:
     """Release an ONT from the OLT, close assignment, and clear service state."""
     from app.services.network.olt_ssh_ont import deauthorize_ont
     from app.services.network.olt_ssh_service_ports import (
@@ -257,12 +325,47 @@ def return_to_inventory(db: Session, ont_id: str) -> ActionResult:
             )
         deleted_service_ports += 1
 
+        # Emit audit event for service port deletion
+        try:
+            emit_event(
+                db,
+                EventType.ont_service_port_deleted,
+                {
+                    "ont_id": ont_id,
+                    "ont_serial": ont.serial_number if ont else None,
+                    "olt_id": str(olt.id),
+                    "olt_name": olt.name,
+                    "service_port_index": service_port.index,
+                },
+                actor=initiated_by or "system",
+            )
+        except Exception as e:
+            logger.warning("Failed to emit ont_service_port_deleted event: %s", e)
+
     ok, msg = deauthorize_ont(olt, fsp, olt_ont_id)
     if not ok:
         return ActionResult(
             success=False,
             message=f"Failed to delete ONT from OLT: {msg}",
         )
+
+    # Emit audit event for ONT deauthorization
+    try:
+        emit_event(
+            db,
+            EventType.ont_deauthorized,
+            {
+                "ont_id": ont_id,
+                "ont_serial": ont.serial_number if ont else None,
+                "olt_id": str(olt.id),
+                "olt_name": olt.name,
+                "fsp": fsp,
+                "ont_id_on_olt": olt_ont_id,
+            },
+            actor=initiated_by or "system",
+        )
+    except Exception as e:
+        logger.warning("Failed to emit ont_deauthorized event: %s", e)
 
     active_assignment = db.scalars(
         select(OntAssignment)

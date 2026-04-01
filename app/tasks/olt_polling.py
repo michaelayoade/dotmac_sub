@@ -14,9 +14,24 @@ logger = logging.getLogger(__name__)
 
 
 def _olt_lock_key(olt_id: str) -> int:
-    """Generate a unique advisory lock key for an OLT device."""
-    # Use hash of OLT ID to create unique lock key in a different range
-    return 70420000 + (hash(olt_id) % 10000)
+    """Generate a unique advisory lock key for an OLT device.
+
+    P2 FIX: Use larger hash range to prevent collisions.
+    PostgreSQL advisory locks accept bigint (-2^63 to 2^63-1).
+    We use a 32-bit hash within a dedicated namespace to avoid collisions
+    with other advisory lock users while maintaining uniqueness.
+    """
+    import hashlib
+
+    # Use SHA256 for deterministic hashing (Python's hash() varies between runs)
+    # Take first 8 bytes as a signed 64-bit integer
+    hash_bytes = hashlib.sha256(olt_id.encode()).digest()[:8]
+    hash_int = int.from_bytes(hash_bytes, byteorder="big", signed=True)
+
+    # Use a namespace prefix (7042) shifted to high bits, combined with hash
+    # This gives us ~2^60 unique keys in a dedicated namespace
+    namespace = 7042 << 48
+    return namespace | (hash_int & 0x0000FFFFFFFFFFFF)
 
 
 @celery_app.task(name="app.tasks.olt_polling.poll_single_olt")
@@ -146,8 +161,14 @@ def poll_all_olt_signals() -> dict[str, int]:
 def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     """Mark ONTs as offline if they haven't been polled recently.
 
+    P2 FIX: Only marks ONTs offline if their parent OLT was successfully
+    polled recently. This prevents false-positives during OLT downtime
+    or network issues where the OLT itself was unreachable.
+
     ONTs that are currently 'online' but haven't had their signal_updated_at
-    refreshed within the threshold are marked offline with reason 'los'.
+    refreshed within the threshold are marked offline with reason 'los',
+    but only if the OLT's last_poll_at is recent (indicating the OLT
+    was reachable but the ONT wasn't seen).
 
     Args:
         db: Database session.
@@ -160,15 +181,36 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
 
     from sqlalchemy import update
 
-    from app.models.network import OntUnit, OnuOfflineReason, OnuOnlineStatus
+    from app.models.network import OLTDevice, OntUnit, OnuOfflineReason, OnuOnlineStatus
 
-    threshold = datetime.now(UTC) - timedelta(minutes=stale_threshold_minutes)
+    now = datetime.now(UTC)
+    threshold = now - timedelta(minutes=stale_threshold_minutes)
+
+    # P2 FIX: Get OLTs that were successfully polled recently
+    # Only mark ONTs offline if their OLT was reachable
+    olt_poll_threshold = now - timedelta(minutes=stale_threshold_minutes * 2)
+    reachable_olt_ids = [
+        olt.id
+        for olt in db.scalars(
+            select(OLTDevice).where(
+                OLTDevice.is_active.is_(True),
+                OLTDevice.last_poll_at.isnot(None),
+                OLTDevice.last_poll_at >= olt_poll_threshold,
+            )
+        ).all()
+    ]
+
+    if not reachable_olt_ids:
+        logger.info("No recently-polled OLTs found; skipping stale ONT marking")
+        return 0
 
     # Find stale ONTs: online status but not seen recently
+    # AND their OLT was recently polled (so the ONT should have been seen)
     result = db.execute(
         update(OntUnit)
         .where(OntUnit.online_status == OnuOnlineStatus.online)
         .where(OntUnit.is_active.is_(True))
+        .where(OntUnit.olt_device_id.in_(reachable_olt_ids))
         .where(
             (OntUnit.signal_updated_at < threshold)
             | (OntUnit.signal_updated_at.is_(None))
@@ -179,7 +221,15 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         )
     )
     db.commit()
-    return result.rowcount
+
+    marked = result.rowcount
+    if marked > 0:
+        logger.info(
+            "Marked %d stale ONTs offline (OLTs polled but ONTs not seen in %d min)",
+            marked,
+            stale_threshold_minutes,
+        )
+    return marked
 
 
 @celery_app.task(name="app.tasks.olt_polling.finalize_olt_polling")

@@ -31,7 +31,6 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.olt_polling_metrics import (
     _push_olt_health_metrics,
-    _push_signal_metrics,
 )
 from app.services.network.olt_polling_metrics import (
     push_signal_metrics_to_victoriametrics as push_signal_metrics_to_victoriametrics,  # noqa: F401 — re-export
@@ -51,8 +50,15 @@ from app.services.network.olt_polling_oids import (
     _resolve_oid_set,
 )
 from app.services.network.olt_polling_parsers import (
+    _DDM_BIAS_MAX_MA,
+    _DDM_BIAS_MIN_MA,
+    _DDM_TEMP_MAX_C,
+    _DDM_TEMP_MIN_C,
+    _DDM_VOLTAGE_MAX_V,
+    _DDM_VOLTAGE_MIN_V,
     OltHealthReading,
     OntSignalReading,
+    SNMPValidationError,
     _derive_offline_reason,
     _fsp_hint_from_index,
     _fsp_hint_from_ont,
@@ -206,6 +212,14 @@ def _build_reading_targets(
 
     by_external_id: dict[str, OntUnit] = {}
     by_fsp_hint: dict[str, list[OntUnit]] = {}
+    # P1 FIX: Add serial number index for more reliable matching
+    by_serial: dict[str, OntUnit] = {}
+
+    def _normalize_serial(val: str | None) -> str:
+        """Normalize serial number for matching (strip non-alphanumeric, uppercase)."""
+        import re
+        return re.sub(r"[^A-Za-z0-9]", "", str(val or "").strip()).upper()
+
     for ont in ordered_onts:
         # Skip inactive ONTs to prevent stale records from blocking active ones
         if not getattr(ont, "is_active", True):
@@ -213,6 +227,11 @@ def _build_reading_targets(
         external_id = str(getattr(ont, "external_id", "") or "").strip().lower()
         if external_id:
             by_external_id[external_id] = ont
+        # P1 FIX: Index by normalized serial number for reliable matching
+        ont_serial = _normalize_serial(getattr(ont, "serial_number", ""))
+        if ont_serial and not ont_serial.startswith(("HW-", "ZT-", "NK-", "OLT-")):
+            # Only index real serials, not synthetic ones
+            by_serial[ont_serial] = ont
         fsp_hint = _fsp_hint_from_ont(ont)
         if fsp_hint:
             by_fsp_hint.setdefault(fsp_hint, []).append(ont)
@@ -222,6 +241,7 @@ def _build_reading_targets(
     vendor_lower = str(getattr(olt, "vendor", "") or "").lower()
 
     ambiguous_fsp_matches = 0
+    serial_matches = 0
     for reading in sorted(readings, key=lambda r: _reading_sort_key(r.onu_index)):
         matched: OntUnit | None = None
 
@@ -241,7 +261,16 @@ def _build_reading_targets(
                 matched = ont
                 break
 
-        # 2) FSP hint match (frame/slot/port)
+        # P1 FIX: 2) Serial number match from SNMP (more reliable than FSP)
+        if matched is None and reading.serial_number_raw:
+            snmp_serial = _normalize_serial(reading.serial_number_raw)
+            if snmp_serial:
+                ont = by_serial.get(snmp_serial)
+                if ont and ont.id not in used_ont_ids:
+                    matched = ont
+                    serial_matches += 1
+
+        # 3) FSP hint match (frame/slot/port) - least reliable, only for single matches
         if matched is None:
             fsp_hint = _fsp_hint_from_index(reading.onu_index)
             if fsp_hint:
@@ -263,6 +292,13 @@ def _build_reading_targets(
         logger.warning(
             "Skipped %d SNMP readings on OLT %s due to ambiguous FSP-only matches",
             ambiguous_fsp_matches,
+            getattr(olt, "name", "unknown"),
+        )
+
+    if serial_matches:
+        logger.debug(
+            "Matched %d ONTs by serial number on OLT %s",
+            serial_matches,
             getattr(olt, "name", "unknown"),
         )
 
@@ -365,7 +401,7 @@ def poll_olt_ont_signals(
     olt: OLTDevice,
     *,
     community: str | None = None,
-) -> dict[str, int]:
+) -> dict[str, int | str]:
     """Poll all ONTs on an OLT for optical signal levels via SNMP.
 
     Updates OntUnit records with signal data in bulk.
@@ -385,6 +421,19 @@ def poll_olt_ont_signals(
     if not community:
         logger.warning("OLT %s has no SNMP community configured, skipping", olt.name)
         return {"polled": 0, "updated": 0, "errors": 0, "skipped": 1}
+
+    # P0: Validate SNMP parameters early to fail fast on invalid input
+    from app.services.network.olt_polling_parsers import (
+        _validate_snmp_community,
+        _validate_snmp_host,
+    )
+
+    try:
+        host = _validate_snmp_host(host)
+        community = _validate_snmp_community(community)
+    except SNMPValidationError as e:
+        logger.warning("OLT %s SNMP validation failed: %s", olt.name, e)
+        return {"polled": 0, "updated": 0, "errors": 1, "skipped": 0, "validation_error": str(e)}
 
     vendor = (olt.vendor or "").lower()
     oids = _resolve_oid_set(vendor)
@@ -513,14 +562,23 @@ def poll_olt_ont_signals(
                 temperature_c=_parse_ddm_value(
                     temperature_raw.get(idx, ""),
                     scale=ddm_scales.get("temperature", 1.0),
+                    min_value=_DDM_TEMP_MIN_C,
+                    max_value=_DDM_TEMP_MAX_C,
+                    metric="temperature",
                 ),
                 voltage_v=_parse_ddm_value(
                     voltage_raw.get(idx, ""),
                     scale=ddm_scales.get("voltage", 0.01),
+                    min_value=_DDM_VOLTAGE_MIN_V,
+                    max_value=_DDM_VOLTAGE_MAX_V,
+                    metric="voltage",
                 ),
                 bias_current_ma=_parse_ddm_value(
                     bias_current_raw.get(idx, ""),
                     scale=ddm_scales.get("bias_current", 0.001),
+                    min_value=_DDM_BIAS_MIN_MA,
+                    max_value=_DDM_BIAS_MAX_MA,
+                    metric="bias_current",
                 ),
                 offline_reason_raw=offline_reason_snmp_raw.get(idx),
                 serial_number_raw=serial_number_raw.get(idx),
@@ -982,7 +1040,7 @@ def _ping_host(host: str, count: int = 3, timeout: int = 5) -> bool:
         return False
 
 
-def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int]:
+def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
     """Poll a single OLT device for ONT signal levels and OLT health.
 
     This function is designed to be called in parallel by separate Celery tasks.
@@ -1075,7 +1133,7 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int]:
             result["health_collected"] = 1
     except Exception as e:
         logger.error("Failed to poll health for OLT %s: %s", olt.name, e)
-        result["errors"] = result.get("errors", 0) + 1
+        result["errors"] = int(result.get("errors", 0)) + 1
 
     # Auto-detect firmware/software version via sysDescr
     if community and olt.mgmt_ip:
@@ -1106,7 +1164,7 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int]:
         result["sfp_updated"] = sfp_result["updated"]
     except Exception as e:
         logger.error("Failed to poll SFP modules for OLT %s: %s", olt.name, e)
-        result["errors"] = result.get("errors", 0) + 1
+        result["errors"] = int(result.get("errors", 0)) + 1
 
     # Update OLT polling status for reachability tracking
     olt.last_poll_at = datetime.now(UTC)

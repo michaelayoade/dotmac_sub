@@ -93,6 +93,15 @@ class EventType(enum.Enum):
     ont_feature_toggled = "ont.feature_toggled"
     ont_ddm_alert = "ont.ddm_alert"
 
+    # ONT destructive operations (audit events)
+    ont_authorized = "ont.authorized"
+    ont_deauthorized = "ont.deauthorized"
+    ont_factory_reset = "ont.factory_reset"
+    ont_rebooted = "ont.rebooted"
+    ont_service_port_created = "ont.service_port_created"
+    ont_service_port_deleted = "ont.service_port_deleted"
+    ont_tr069_bound = "ont.tr069_bound"
+
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"

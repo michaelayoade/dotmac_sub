@@ -1513,8 +1513,10 @@ def _sync_onts_from_olt_snmp_impl(
     unresolved_topology = 0
     now = datetime.now(UTC)
     olt_tag = str(olt.id).split("-")[0].upper()
-    # Timestamp suffix for synthetic serials (YYMMDDHHMM format for uniqueness)
-    ts_suffix = now.strftime("%y%m%d%H%M")
+    # P1 FIX: Include microseconds in timestamp suffix to prevent collision
+    # when discovery runs multiple times in the same minute.
+    # Format: YYMMDDHHMMSS + 4 chars of microseconds (e.g., 2604011200301234)
+    ts_suffix = now.strftime("%y%m%d%H%M%S") + f"{now.microsecond:06d}"[:4]
 
     vendor_serial_prefix = {
         "huawei": "HW",

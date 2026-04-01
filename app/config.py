@@ -69,5 +69,11 @@ class Settings:
     router_snapshot_schedule: str = os.getenv("ROUTER_SNAPSHOT_SCHEDULE", "0 2 * * *")
     router_tunnel_cleanup_interval_min: int = int(os.getenv("ROUTER_TUNNEL_CLEANUP_MIN", "5"))
 
+    # Security: Enforce credential encryption in production
+    # Set to "true" to require CREDENTIAL_ENCRYPTION_KEY to be configured
+    enforce_credential_encryption: bool = os.getenv(
+        "ENFORCE_CREDENTIAL_ENCRYPTION", "false"
+    ).lower() in ("true", "1", "yes")
+
 
 settings = Settings()

@@ -116,13 +116,149 @@ def _fsp_hint_from_ont(ont: OntUnit) -> str | None:
 # SNMP subprocess helpers
 # ---------------------------------------------------------------------------
 
+# Characters that should never appear in SNMP host/OID parameters
+_SNMP_DANGEROUS_CHARS = frozenset("\n\r;|&`$(){}[]<>\\\"'")
+
+# Signal value sanity bounds (dBm)
+_SIGNAL_MIN_DBM = -50.0
+_SIGNAL_MAX_DBM = 10.0
+
+
+class SNMPValidationError(Exception):
+    """Raised when SNMP parameters fail validation."""
+
+    pass
+
+
+def _validate_snmp_host(host: str) -> str:
+    """Validate SNMP host is a safe IP address or hostname.
+
+    Args:
+        host: IP address or hostname string.
+
+    Returns:
+        Validated host string.
+
+    Raises:
+        SNMPValidationError: If host contains dangerous characters or is invalid.
+    """
+    import ipaddress
+
+    if not host or not isinstance(host, str):
+        raise SNMPValidationError("SNMP host is required")
+
+    host = host.strip()
+
+    # Check for dangerous characters that could be used for injection
+    if any(c in host for c in _SNMP_DANGEROUS_CHARS):
+        raise SNMPValidationError(f"SNMP host contains invalid characters: {host}")
+
+    # Check for spaces (not allowed in hostnames/IPs)
+    if " " in host:
+        raise SNMPValidationError(f"SNMP host contains spaces: {host}")
+
+    # Try to parse as IP address first (most common case)
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+
+    # Validate as hostname (alphanumeric, dots, hyphens only)
+    import re
+
+    if not re.match(r"^[a-zA-Z0-9]([a-zA-Z0-9\-\.]*[a-zA-Z0-9])?$", host):
+        raise SNMPValidationError(f"SNMP host is not a valid hostname: {host}")
+
+    if len(host) > 253:
+        raise SNMPValidationError(f"SNMP hostname too long: {len(host)} chars")
+
+    return host
+
+
+def _validate_snmp_oid(oid: str) -> str:
+    """Validate SNMP OID format.
+
+    Args:
+        oid: OID string (e.g., ".1.3.6.1.2.1.1.5.0").
+
+    Returns:
+        Validated OID string.
+
+    Raises:
+        SNMPValidationError: If OID format is invalid.
+    """
+    if not oid or not isinstance(oid, str):
+        raise SNMPValidationError("SNMP OID is required")
+
+    oid = oid.strip()
+
+    # Check for dangerous characters
+    if any(c in oid for c in _SNMP_DANGEROUS_CHARS):
+        raise SNMPValidationError(f"SNMP OID contains invalid characters: {oid}")
+
+    # OID should only contain digits, dots, and optionally start with 'iso'
+    import re
+
+    if not re.match(r"^(iso)?\.?[0-9]+(\.[0-9]+)*$", oid):
+        raise SNMPValidationError(f"SNMP OID format invalid: {oid}")
+
+    return oid
+
+
+def _validate_snmp_community(community: str) -> str:
+    """Validate SNMP community string.
+
+    Args:
+        community: Community string.
+
+    Returns:
+        Validated community string.
+
+    Raises:
+        SNMPValidationError: If community contains dangerous characters.
+    """
+    if not community or not isinstance(community, str):
+        raise SNMPValidationError("SNMP community is required")
+
+    # Check for characters that could break command line parsing
+    # Note: community strings can contain many characters, but not shell metacharacters
+    dangerous = frozenset("\n\r;|&`$(){}<>\\")
+    if any(c in community for c in dangerous):
+        raise SNMPValidationError("SNMP community contains invalid characters")
+
+    if len(community) > 256:
+        raise SNMPValidationError("SNMP community string too long")
+
+    return community
+
 
 def _run_olt_snmpwalk(
-    host: str, oid: str, community: str, timeout: int = 90
+    host: str, oid: str, community: str, timeout: int = 90, *, max_retries: int = 2
 ) -> list[str]:
-    """Run snmpbulkwalk (with snmpwalk fallback) against an OLT and return output lines."""
+    """Run snmpbulkwalk (with snmpwalk fallback) against an OLT and return output lines.
+
+    Args:
+        host: OLT IP address or hostname.
+        oid: SNMP OID to walk.
+        community: SNMP v2c community string.
+        timeout: Total timeout in seconds.
+        max_retries: Number of retries on transient failures (P2 fix).
+
+    Returns:
+        List of SNMP output lines.
+
+    Raises:
+        SNMPValidationError: If parameters fail validation.
+    """
     import shutil
     import subprocess  # nosec
+    import time
+
+    # P0: Validate all parameters before subprocess execution
+    host = _validate_snmp_host(host)
+    oid = _validate_snmp_oid(oid)
+    community = _validate_snmp_community(community)
 
     # Prefer snmpbulkwalk for performance on large tables
     use_bulk = shutil.which("snmpbulkwalk") is not None
@@ -141,24 +277,53 @@ def _run_olt_snmpwalk(
         host,
         oid,
     ]
-    result = subprocess.run(  # noqa: S603
-        args,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
-    if result.returncode != 0:
-        stderr = result.stderr.strip()
-        if "No Such Object" in stderr or "No Such Instance" in stderr:
-            return []
-        if stderr:
-            logger.warning(
-                "SNMP walk failed for %s OID %s: %s", host, oid, stderr[:200]
+
+    # P2: Retry on transient failures with exponential backoff
+    last_error = ""
+    for attempt in range(max_retries + 1):
+        try:
+            result = subprocess.run(  # noqa: S603
+                args,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=timeout,
             )
-            return []
-        return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+            if result.returncode == 0:
+                return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+            stderr = result.stderr.strip()
+            if "No Such Object" in stderr or "No Such Instance" in stderr:
+                return []
+
+            last_error = stderr[:200] if stderr else f"exit code {result.returncode}"
+
+            # Don't retry on definitive errors (authentication, no response)
+            if "Timeout" not in stderr and "No Response" not in stderr:
+                break
+
+            if attempt < max_retries:
+                sleep_time = 2 ** attempt  # 1s, 2s, 4s...
+                logger.debug(
+                    "SNMP walk retry %d/%d for %s OID %s after %ds",
+                    attempt + 1, max_retries, host, oid, sleep_time
+                )
+                time.sleep(sleep_time)
+
+        except subprocess.TimeoutExpired:
+            last_error = f"timeout after {timeout}s"
+            if attempt < max_retries:
+                logger.debug(
+                    "SNMP walk timeout retry %d/%d for %s OID %s",
+                    attempt + 1, max_retries, host, oid
+                )
+                continue
+            break
+
+    if last_error:
+        logger.warning("SNMP walk failed for %s OID %s: %s", host, oid, last_error)
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -252,15 +417,21 @@ def _parse_signal_value(
         # Vendors report in 0.01 dBm units typically.
         dbm = raw_int * scale
 
-    # Sanity check — optical signals are typically between 0 and -45 dBm
-    if dbm < -50.0 or dbm > 10.0:
+    # P1: Sanity bounds check — optical signals are typically between 0 and -45 dBm
+    # Reject values outside reasonable range to prevent data corruption from
+    # malformed SNMP responses or misconfigured OIDs
+    if dbm < _SIGNAL_MIN_DBM or dbm > _SIGNAL_MAX_DBM:
         # Might be in different units, try as-is
-        if -50.0 <= raw_int <= 10.0:
+        if _SIGNAL_MIN_DBM <= raw_int <= _SIGNAL_MAX_DBM:
             if stats is not None:
                 stats["parsed"] = stats.get("parsed", 0) + 1
             return float(raw_int)
         if stats is not None:
             stats["out_of_range"] = stats.get("out_of_range", 0) + 1
+        logger.debug(
+            "Signal value out of range: raw=%d, computed=%.2f dBm (valid: %.1f to %.1f)",
+            raw_int, dbm, _SIGNAL_MIN_DBM, _SIGNAL_MAX_DBM
+        )
         return None
     if stats is not None:
         stats["parsed"] = stats.get("parsed", 0) + 1
@@ -282,15 +453,34 @@ def _parse_distance(raw: str) -> int | None:
     return value
 
 
-def _parse_ddm_value(raw: str, *, scale: float = 1.0) -> float | None:
+# DDM value sanity bounds
+_DDM_TEMP_MIN_C = -40.0
+_DDM_TEMP_MAX_C = 100.0
+_DDM_VOLTAGE_MIN_V = 0.0
+_DDM_VOLTAGE_MAX_V = 5.0
+_DDM_BIAS_MIN_MA = 0.0
+_DDM_BIAS_MAX_MA = 150.0
+
+
+def _parse_ddm_value(
+    raw: str,
+    *,
+    scale: float = 1.0,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    metric: str = "",
+) -> float | None:
     """Parse a generic DDM numeric value from SNMP (temperature, voltage, bias current).
 
     Args:
         raw: Raw SNMP value string.
         scale: Multiplier to convert raw integer to real units.
+        min_value: Minimum valid value (P1 bounds check).
+        max_value: Maximum valid value (P1 bounds check).
+        metric: Metric name for logging.
 
     Returns:
-        Parsed float value, or None if unparseable/missing.
+        Parsed float value, or None if unparseable/missing/out of bounds.
     """
     if not raw:
         return None
@@ -306,7 +496,22 @@ def _parse_ddm_value(raw: str, *, scale: float = 1.0) -> float | None:
         return None
     if raw_int in _SIGNAL_SENTINELS:
         return None
-    return round(raw_int * scale, 4)
+
+    value = round(raw_int * scale, 4)
+
+    # P1: Bounds checking for DDM values
+    if min_value is not None and value < min_value:
+        logger.debug(
+            "DDM %s value below minimum: %.4f < %.4f", metric or "value", value, min_value
+        )
+        return None
+    if max_value is not None and value > max_value:
+        logger.debug(
+            "DDM %s value above maximum: %.4f > %.4f", metric or "value", value, max_value
+        )
+        return None
+
+    return value
 
 
 def _parse_online_status(raw: str) -> bool | None:

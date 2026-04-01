@@ -7,6 +7,13 @@ import re
 from dataclasses import dataclass
 
 from app.models.network import OLTDevice
+from app.services.network.olt_validators import (
+    ValidationError,
+    validate_ip_address,
+    validate_ont_id,
+    validate_subnet_mask,
+    validate_vlan_id,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -208,6 +215,24 @@ def configure_ont_iphost(
     if not ok:
         return False, err
 
+    # Validate numeric parameters before CLI interpolation
+    try:
+        validate_ont_id(ont_id)
+        validate_vlan_id(vlan_id)
+    except ValidationError as e:
+        return False, e.message
+
+    # Validate IP addresses for static mode before CLI interpolation
+    if ip_mode != "dhcp":
+        if not ip_address or not subnet or not gateway:
+            return False, "Static IP mode requires ip_address, subnet, and gateway"
+        try:
+            ip_address = validate_ip_address(ip_address, "ip_address")
+            subnet = validate_subnet_mask(subnet, "subnet_mask")
+            gateway = validate_ip_address(gateway, "gateway")
+        except ValidationError as e:
+            return False, e.message
+
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
     port_num = parts[2]
@@ -233,8 +258,7 @@ def configure_ont_iphost(
         if ip_mode == "dhcp":
             cmd = f"ont ipconfig {port_num} {ont_id} ip-index 0 dhcp vlan {vlan_id}"
         else:
-            if not ip_address or not subnet or not gateway:
-                return False, "Static IP mode requires ip_address, subnet, and gateway"
+            # ip_address, subnet, gateway already validated above
             cmd = (
                 f"ont ipconfig {port_num} {ont_id} "
                 f"ip-index 0 static ip-address {ip_address} "
@@ -336,6 +360,12 @@ def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
     ok, err = core._validate_fsp(fsp)
     if not ok:
         return False, err
+
+    # Validate ont_id before CLI interpolation
+    try:
+        validate_ont_id(ont_id)
+    except ValidationError as e:
+        return False, e.message
 
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
@@ -709,6 +739,12 @@ def factory_reset_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool,
     if not ok:
         return False, err
 
+    # Validate ont_id before CLI interpolation
+    try:
+        validate_ont_id(ont_id)
+    except ValidationError as e:
+        return False, e.message
+
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
     port_num = parts[2]
@@ -770,6 +806,13 @@ def remote_ping_ont(
     if not ok:
         return False, err
 
+    # SECURITY: Validate IP address before CLI interpolation to prevent injection
+    try:
+        ip_address = validate_ip_address(ip_address, "ip_address")
+        validate_ont_id(ont_id)
+    except ValidationError as e:
+        return False, e.message
+
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
     port_num = parts[2]
@@ -825,6 +868,12 @@ def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
     ok, err = core._validate_fsp(fsp)
     if not ok:
         return False, err
+
+    # Validate ont_id before CLI interpolation
+    try:
+        validate_ont_id(ont_id)
+    except ValidationError as e:
+        return False, e.message
 
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
