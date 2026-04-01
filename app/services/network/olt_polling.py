@@ -207,6 +207,9 @@ def _build_reading_targets(
     by_external_id: dict[str, OntUnit] = {}
     by_fsp_hint: dict[str, list[OntUnit]] = {}
     for ont in ordered_onts:
+        # Skip inactive ONTs to prevent stale records from blocking active ones
+        if not getattr(ont, "is_active", True):
+            continue
         external_id = str(getattr(ont, "external_id", "") or "").strip().lower()
         if external_id:
             by_external_id[external_id] = ont

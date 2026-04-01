@@ -1547,7 +1547,13 @@ def _sync_onts_from_olt_snmp_impl(
         distance = _parse_distance_m(distance_rows.get(idx))
 
         # First check in-memory cache, then verify with database query
-        ont = by_external_id.get(external_id) or by_serial.get(synthetic_serial)
+        # Track match method to avoid overwriting external_id when matched by serial
+        matched_by_external_id = False
+        ont = by_external_id.get(external_id)
+        if ont:
+            matched_by_external_id = True
+        else:
+            ont = by_serial.get(synthetic_serial)
 
         # If not in cache, do a database lookup to handle race conditions
         if ont is None:
@@ -1559,11 +1565,14 @@ def _sync_onts_from_olt_snmp_impl(
             ).first()
             if ont:
                 # Found in DB but not in cache - add to cache
+                matched_by_external_id = True
                 by_external_id[external_id] = ont
                 if ont.serial_number:
                     by_serial[ont.serial_number] = ont
 
         if ont is None:
+            # Only set external_id if no other ONT already has it
+            new_external_id = external_id if external_id not in by_external_id else None
             ont = OntUnit(
                 serial_number=synthetic_serial,
                 model=olt.model,
@@ -1574,14 +1583,15 @@ def _sync_onts_from_olt_snmp_impl(
                 gpon_channel=GponChannel.gpon,
                 board=board,
                 port=port,
-                external_id=external_id,
+                external_id=new_external_id,
                 name=f"ONU {fsp}:{onu}" if fsp else f"ONU unresolved:{idx}",
                 online_status=status,
                 tr069_acs_server_id=olt.tr069_acs_server_id,
             )
             db.add(ont)
             created += 1
-            by_external_id[external_id] = ont
+            if new_external_id:
+                by_external_id[new_external_id] = ont
             by_serial[synthetic_serial] = ont
         else:
             updated += 1
@@ -1590,7 +1600,18 @@ def _sync_onts_from_olt_snmp_impl(
             ont.model = ont.model or olt.model
             ont.board = board
             ont.port = port
-            ont.external_id = external_id
+            # Only set external_id if:
+            # 1. Matched by external_id (confirming the match), or
+            # 2. ONT has no external_id set, AND no other active ONT has this external_id
+            if matched_by_external_id:
+                ont.external_id = external_id
+            elif not ont.external_id:
+                # Check if another active ONT already has this external_id
+                conflict = by_external_id.get(external_id)
+                if conflict is None or conflict.id == ont.id:
+                    ont.external_id = external_id
+                    by_external_id[external_id] = ont
+                # else: skip setting external_id to avoid conflict
             ont.pon_type = PonType.gpon
             ont.gpon_channel = GponChannel.gpon
             ont.online_status = status
