@@ -130,6 +130,9 @@ class GenieACSClient:
 
         Returns:
             Device document
+
+        Raises:
+            GenieACSError: If device not found or request fails
         """
         encoded_id = quote(device_id, safe="")
         try:
@@ -137,11 +140,20 @@ class GenieACSClient:
             return cast(dict[str, Any], response.json())
         except GenieACSMethodNotAllowedError:
             # Some GenieACS deployments reject GET /devices/{id} but still support
-            # query-based lookup on /devices.
+            # query-based lookup on /devices. Try both exact match and regex.
             devices = self.list_devices(query={"_id": device_id})
             if devices:
                 return devices[0]
-            raise
+            # Try regex match on serial number suffix (device_id format: OUI-Class-Serial)
+            parts = device_id.rsplit("-", 1)
+            if len(parts) == 2:
+                serial_suffix = parts[1]
+                devices = self.list_devices(
+                    query={"_id": {"$regex": f".*-{serial_suffix}$"}}
+                )
+                if devices:
+                    return devices[0]
+            raise GenieACSError(f"Device not found: {device_id}")
 
     def delete_device(self, device_id: str) -> None:
         """Delete device.
