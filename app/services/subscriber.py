@@ -830,7 +830,6 @@ class Subscribers(ListResponseMixin):
         from sqlalchemy import extract
 
         now = datetime.now(UTC)
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         thirty_days_ago = now - timedelta(days=30)
 
         # Base filter for visible subscribers (excludes system_user and splynx deleted)
@@ -870,7 +869,7 @@ class Subscribers(ListResponseMixin):
             .filter(Subscriber.status == SubscriberStatus.canceled)
             .label("canceled"),
             func.count(Subscriber.id)
-            .filter(effective_created_at >= month_start)
+            .filter(effective_created_at >= thirty_days_ago)
             .label("new_this_month"),
             func.count(Subscriber.id)
             .filter(

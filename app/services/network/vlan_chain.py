@@ -74,21 +74,10 @@ def validate_chain(
         )
         return result
 
-    # Try to find provisioning profile via subscription → offer
+    # Try to find provisioning profile directly from ONT
     profile: OntProvisioningProfile | None = None
-    if assignment.subscription_id:
-        from app.models.catalog import Subscription
-
-        sub = db.get(Subscription, str(assignment.subscription_id))
-        if sub and hasattr(sub, "offer") and sub.offer:
-            offer = sub.offer
-            if (
-                hasattr(offer, "provisioning_profile_id")
-                and offer.provisioning_profile_id
-            ):
-                profile = db.get(
-                    OntProvisioningProfile, str(offer.provisioning_profile_id)
-                )
+    if ont.provisioning_profile_id:
+        profile = db.get(OntProvisioningProfile, str(ont.provisioning_profile_id))
 
     if not profile:
         result.warnings.append(

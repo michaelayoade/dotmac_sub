@@ -186,7 +186,6 @@ def ensure_cpe_for_ont(
         assignment_subscriber_id = cast("UUID", assignment.subscriber_id)
         device = CPEDevice(
             subscriber_id=assignment_subscriber_id,
-            subscription_id=getattr(assignment, "subscription_id", None),
             service_address_id=getattr(assignment, "service_address_id", None),
             device_type=DeviceType.other,
             status=DeviceStatus.active
@@ -207,7 +206,6 @@ def ensure_cpe_for_ont(
 
     if assignment and getattr(assignment, "subscriber_id", None) is not None:
         existing.subscriber_id = cast("UUID", assignment.subscriber_id)
-        existing.subscription_id = cast("UUID | None", assignment.subscription_id)
         existing.service_address_id = cast("UUID | None", assignment.service_address_id)
         if existing.installed_at is None and assignment.assigned_at is not None:
             existing.installed_at = assignment.assigned_at
@@ -242,7 +240,6 @@ class CPEDevices(CRUDManager[CPEDevice]):
         network_validators.validate_cpe_device_links(
             db,
             str(payload.subscriber_id),
-            str(payload.subscription_id) if payload.subscription_id else None,
             str(payload.service_address_id) if payload.service_address_id else None,
         )
         data = payload.model_dump()
@@ -277,7 +274,6 @@ class CPEDevices(CRUDManager[CPEDevice]):
     def list(
         db: Session,
         subscriber_id: str | None,
-        subscription_id: str | None,
         order_by: str,
         order_dir: str,
         limit: int,
@@ -288,7 +284,6 @@ class CPEDevices(CRUDManager[CPEDevice]):
             query,
             {
                 CPEDevice.subscriber_id: subscriber_id,
-                CPEDevice.subscription_id: subscription_id,
             },
         )
         query = _apply_ordering(
@@ -306,12 +301,10 @@ class CPEDevices(CRUDManager[CPEDevice]):
             raise HTTPException(status_code=404, detail="CPE device not found")
         data = payload.model_dump(exclude_unset=True)
         subscriber_id = str(data.get("subscriber_id", device.subscriber_id))
-        subscription_id = data.get("subscription_id", device.subscription_id)
         service_address_id = data.get("service_address_id", device.service_address_id)
         network_validators.validate_cpe_device_links(
             db,
             subscriber_id,
-            str(subscription_id) if subscription_id else None,
             str(service_address_id) if service_address_id else None,
         )
         data = _normalize_cpe_data(data)

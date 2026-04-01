@@ -873,12 +873,11 @@ def assign_ipv4_address(
 
     existing_assignment = getattr(address_record, "assignment", None)
     previous_assignment = active_assignment or existing_assignment
+    # Check if already assigned to the same subscriber - skip reassignment
     if active_assignment:
         if str(
             getattr(active_assignment, "subscriber_id", "") or ""
-        ) == normalized_subscriber_id and str(
-            getattr(active_assignment, "subscription_id", "") or ""
-        ) == str(normalized_subscription_id or ""):
+        ) == normalized_subscriber_id:
             return {
                 "address": address_record,
                 "assignment": active_assignment,
@@ -886,30 +885,10 @@ def assign_ipv4_address(
                 "created": False,
                 "reassigned": False,
             }
-    if previous_assignment and getattr(previous_assignment, "subscription_id", None):
-        try:
-            prior_subscription = catalog_service.subscriptions.get(
-                db=db,
-                subscription_id=str(previous_assignment.subscription_id),
-            )
-        except Exception:
-            prior_subscription = None
-        if (
-            prior_subscription
-            and str(getattr(prior_subscription, "ipv4_address", "") or "").strip()
-            == state["ip_address"]
-        ):
-            catalog_service.subscriptions.update(
-                db=db,
-                subscription_id=str(prior_subscription.id),
-                payload=SubscriptionUpdate.model_validate({"ipv4_address": None}),
-            )
 
+    # IP assignments now link directly to subscribers, not subscriptions
     assignment_payload = {
         "account_id": UUID(normalized_subscriber_id),
-        "subscription_id": UUID(normalized_subscription_id)
-        if normalized_subscription_id
-        else None,
         "ip_version": IPVersion.ipv4,
         "ipv4_address_id": address_record.id,
         "is_active": True,
@@ -979,7 +958,6 @@ def build_ip_management_data(
     assignments = network_service.ip_assignments.list(
         db=db,
         subscriber_id=None,
-        subscription_id=None,
         is_active=True,
         order_by="created_at",
         order_dir="desc",
@@ -1430,7 +1408,6 @@ def build_ip_assignments_data(db) -> dict[str, object]:
     assignments = network_service.ip_assignments.list(
         db=db,
         subscriber_id=None,
-        subscription_id=None,
         is_active=True,
         order_by="created_at",
         order_dir="desc",
@@ -1456,7 +1433,6 @@ def build_dual_stack_data(
     assignments = network_service.ip_assignments.list(
         db=db,
         subscriber_id=None,
-        subscription_id=None,
         is_active=True,
         order_by="created_at",
         order_dir="desc",
@@ -1473,12 +1449,12 @@ def build_dual_stack_data(
     subscriber_filter = subscriber_query_text.lower()
     location_filter = location_query_text.lower()
 
-    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+    # Group by subscriber + service_address (devices link to subscribers, not subscriptions)
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
     for assignment in assignments:
         subscriber_id = str(getattr(assignment, "subscriber_id", "") or "")
-        subscription_id = str(getattr(assignment, "subscription_id", "") or "")
         service_address_id = str(getattr(assignment, "service_address_id", "") or "")
-        key = (subscriber_id, subscription_id, service_address_id)
+        key = (subscriber_id, service_address_id)
 
         row = grouped.get(key)
         if row is None:
@@ -1504,12 +1480,6 @@ def build_dual_stack_data(
                 "subscriber_name": display_name or "Unknown Subscriber",
                 "account_number": str(
                     getattr(subscriber, "account_number", "") or ""
-                ).strip()
-                or None,
-                "subscription_id": subscription_id or None,
-                "subscription_ref": str(
-                    getattr(getattr(assignment, "subscription", None), "service_id", "")
-                    or ""
                 ).strip()
                 or None,
                 "service_address_id": service_address_id or None,

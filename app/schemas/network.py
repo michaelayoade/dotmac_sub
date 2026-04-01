@@ -25,7 +25,6 @@ class CPEDeviceBase(BaseModel):
     subscriber_id: UUID = Field(
         validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType = DeviceType.router
     status: DeviceStatus = DeviceStatus.active
@@ -45,7 +44,6 @@ class CPEDeviceUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     device_type: DeviceType | None = None
     status: DeviceStatus | None = None
@@ -167,8 +165,6 @@ class IPAssignmentBase(BaseModel):
     subscriber_id: UUID = Field(
         validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
-    subscription_add_on_id: UUID | None = None
     service_address_id: UUID | None = None
     ip_version: IPVersion = IPVersion.ipv4
     ipv4_address_id: UUID | None = None
@@ -196,8 +192,6 @@ class IPAssignmentUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
-    subscription_add_on_id: UUID | None = None
     service_address_id: UUID | None = None
     ip_version: IPVersion | None = None
     ipv4_address_id: UUID | None = None
@@ -566,7 +560,6 @@ class OntAssignmentBase(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool = True
@@ -583,7 +576,6 @@ class OntAssignmentUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool | None = None
@@ -779,7 +771,6 @@ class SplitterPortAssignmentBase(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool = True
@@ -795,7 +786,6 @@ class SplitterPortAssignmentUpdate(BaseModel):
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
-    subscription_id: UUID | None = None
     service_address_id: UUID | None = None
     assigned_at: datetime | None = None
     active: bool | None = None

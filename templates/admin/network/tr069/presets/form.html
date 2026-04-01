@@ -1,0 +1,115 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import ambient_background, page_header %}
+
+{% block title %}{% if is_edit %}Edit{% else %}New{% endif %} Preset - TR-069 - Admin{% endblock %}
+
+{% block content %}
+{{ ambient_background("sky", "blue") }}
+
+<div class="relative space-y-8">
+    <div>
+        <a href="/admin/network/tr069/presets{% if selected_server_id %}?acs_server_id={{ selected_server_id }}{% endif %}" class="inline-flex items-center gap-1 text-sm font-medium text-sky-600 transition-colors hover:text-sky-700 dark:text-sky-400 dark:hover:text-sky-300">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
+            </svg>
+            Back to Presets
+        </a>
+    </div>
+    {% call page_header(
+        title="{% if is_edit %}Edit{% else %}New{% endif %} Preset",
+        subtitle="{% if is_edit %}Update preset configuration{% else %}Create a new GenieACS preset{% endif %}",
+        icon='<svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>',
+        color="sky",
+        color2="blue",
+        breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "TR-069", "href": "/admin/network/tr069"}, {"label": "Presets", "href": "/admin/network/tr069/presets"}, {"label": "{% if is_edit %}Edit{% else %}New{% endif %}"}]
+    ) %}
+    {% endcall %}
+
+    {% if error %}
+    <div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+        {{ error }}
+    </div>
+    {% endif %}
+
+    <form method="POST" action="{% if is_edit %}/admin/network/tr069/presets/{{ preset_id }}{% else %}/admin/network/tr069/presets{% endif %}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <h3 class="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">Basic Settings</h3>
+
+            <div class="grid gap-4 md:grid-cols-2">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">ACS Server</label>
+                    <select name="acs_server_id" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        {% for server in servers %}
+                        <option value="{{ server.id }}" {% if selected_server_id == server.id|string %}selected{% endif %}>{{ server.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Preset ID (Name)</label>
+                    <input type="text" name="preset_id" value="{{ preset._id if preset else '' }}" {% if is_edit %}readonly{% endif %} required
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white {% if is_edit %}bg-slate-100 dark:bg-slate-600{% endif %}"
+                        placeholder="my-preset-name">
+                    <p class="mt-1 text-xs text-slate-500">Unique identifier for this preset (cannot be changed after creation)</p>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Weight</label>
+                    <input type="number" name="weight" value="{{ preset.weight if preset else 0 }}" required
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                        placeholder="0">
+                    <p class="mt-1 text-xs text-slate-500">Lower weight = higher priority (0 is highest)</p>
+                </div>
+
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Events</label>
+                    <input type="text" name="events" value="{{ preset.events.keys()|list|join(', ') if preset and preset.events else '' }}"
+                        class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                        placeholder="0 BOOTSTRAP, 1 BOOT, 2 PERIODIC">
+                    <p class="mt-1 text-xs text-slate-500">Comma-separated event codes that trigger this preset</p>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Precondition</label>
+                <input type="text" name="precondition" value="{{ preset.precondition if preset else '' }}"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                    placeholder="DeviceID.ProductClass = 'HG8245H'">
+                <p class="mt-1 text-xs text-slate-500">Filter expression to match devices (leave empty to apply to all devices)</p>
+            </div>
+        </div>
+
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-6 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <h3 class="mb-4 text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-400">Configurations</h3>
+
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Configurations (JSON)</label>
+                <textarea name="configurations" rows="10"
+                    class="w-full rounded-lg border border-slate-300 px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                    placeholder='[{"type": "value", "name": "Device.WiFi.SSID.1.SSID", "value": "MyNetwork"}]'>{{ preset.configurations|tojson(indent=2) if preset and preset.configurations else '[]' }}</textarea>
+                <p class="mt-1 text-xs text-slate-500">JSON array of configuration items. Each item should have: type (value/provision/age), name, and value.</p>
+            </div>
+
+            <div class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-900/50">
+                <h4 class="mb-2 text-sm font-medium text-slate-700 dark:text-slate-300">Configuration Examples</h4>
+                <pre class="overflow-x-auto text-xs text-slate-600 dark:text-slate-400">[
+  {"type": "value", "name": "Device.WiFi.SSID.1.SSID", "value": "MyNetwork"},
+  {"type": "value", "name": "Device.WiFi.Radio.1.Enable", "value": true},
+  {"type": "provision", "name": "my-provision-script", "args": []},
+  {"type": "age", "name": "Device.", "age": 86400}
+]</pre>
+            </div>
+        </div>
+
+        <div class="flex justify-end gap-4">
+            <a href="/admin/network/tr069/presets{% if selected_server_id %}?acs_server_id={{ selected_server_id }}{% endif %}"
+                class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">Cancel</a>
+            <button type="submit" class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">
+                {% if is_edit %}Update Preset{% else %}Create Preset{% endif %}
+            </button>
+        </div>
+    </form>
+</div>
+{% endblock %}

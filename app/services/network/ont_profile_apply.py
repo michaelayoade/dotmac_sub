@@ -93,7 +93,7 @@ def resolve_profile_for_ont(
         if profile and profile.is_active:
             return profile
 
-    # 2. From subscription → offer → default_ont_profile_id
+    # 2. Business account default (need business subscriber from assignment)
     from app.models.network import OntAssignment
 
     active_assignment = db.scalars(
@@ -102,27 +102,6 @@ def resolve_profile_for_ont(
             OntAssignment.active.is_(True),
         )
     ).first()
-
-    if active_assignment and active_assignment.subscription_id:
-        from app.models.catalog import CatalogOffer, Subscription
-
-        subscription = db.get(Subscription, active_assignment.subscription_id)
-        if subscription and subscription.offer_id:
-            offer = db.get(CatalogOffer, subscription.offer_id)
-            if offer and offer.default_ont_profile_id:
-                stmt = (
-                    select(OntProvisioningProfile)
-                    .options(selectinload(OntProvisioningProfile.wan_services))
-                    .where(
-                        OntProvisioningProfile.id == offer.default_ont_profile_id,
-                        OntProvisioningProfile.is_active.is_(True),
-                    )
-                )
-                profile = db.scalars(stmt).first()
-                if profile:
-                    return profile
-
-    # 3. Business account default (need business subscriber from assignment)
     if active_assignment and active_assignment.subscriber_id:
         from app.models.subscriber import Subscriber
 

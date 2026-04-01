@@ -130,9 +130,9 @@ def _run_olt_snmpwalk(
     args = [
         cmd,
         "-t",
-        "10",
+        "30",  # 30 second timeout per request (some OLTs are slow)
         "-r",
-        "2",
+        "1",   # 1 retry (total 60s max per OID)
         "-m",
         "",
         "-v2c",
@@ -202,25 +202,6 @@ def _parse_snmp_table(
         if not index:
             continue
         # Extract value after type prefix
-        value = value_part.split(": ", 1)[-1].strip().strip('"')
-        if value.lower().startswith("no such"):
-            continue
-        parsed[index] = value
-    return parsed
-
-
-def _parse_snmp_table_composite(
-    lines: list[str], *, base_oid: str | None = None
-) -> dict[str, str]:
-    """Parse SNMP walk output preserving composite indexes (e.g., shelf.slot.port.onu)."""
-    parsed: dict[str, str] = {}
-    for line in lines:
-        if " = " not in line:
-            continue
-        oid_part, value_part = line.split(" = ", 1)
-        index = _extract_index_from_oid(oid_part, base_oid=base_oid)
-        if not index:
-            continue
         value = value_part.split(": ", 1)[-1].strip().strip('"')
         if value.lower().startswith("no such"):
             continue

@@ -39,7 +39,11 @@ from app.tasks.network_operations import cleanup_old_operations
 from app.tasks.notifications import deliver_notification_queue
 from app.tasks.oauth import check_token_health, refresh_expiring_tokens
 from app.tasks.olt_config_backup import backup_all_olts
-from app.tasks.olt_polling import poll_all_olt_signals
+from app.tasks.olt_polling import (
+    finalize_olt_polling,
+    poll_all_olt_signals,
+    poll_single_olt,
+)
 from app.tasks.ont_authorization import run_post_authorization_follow_up_task
 from app.tasks.ont_autofind import discover_all_olt_autofind
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
@@ -59,6 +63,9 @@ from app.tasks.tr069 import (
 )
 from app.tasks.tr069 import (
     cleanup_tr069_records,
+)
+from app.tasks.tr069 import (
+    execute_bulk_action as tr069_execute_bulk_action,
 )
 from app.tasks.tr069 import (
     execute_pending_jobs as tr069_execute_pending_jobs,
@@ -118,6 +125,8 @@ __all__ = [
     "trim_bandwidth_stream",
     "backup_all_olts",
     "poll_all_olt_signals",
+    "poll_single_olt",
+    "finalize_olt_polling",
     "discover_all_olt_onts",
     "run_bulk_activation_job",
     "run_service_migration_job",
@@ -137,6 +146,7 @@ __all__ = [
     "snapshot_mrr",
     "tr069_sync_all_acs_devices",
     "tr069_execute_pending_jobs",
+    "tr069_execute_bulk_action",
     "tr069_check_device_health",
     "cleanup_tr069_records",
     "run_scheduled_backups",

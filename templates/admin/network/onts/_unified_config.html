@@ -1,0 +1,288 @@
+{# Unified ONT Configuration Page - All config in one view with lazy-loaded accordion sections #}
+
+<div class="space-y-4" x-data="{
+    openSection: 'mgmt-ip',
+    loadedSections: { 'mgmt-ip': true },
+    loadSection(section, url, target) {
+        if (!this.loadedSections[section]) {
+            this.loadedSections[section] = true;
+            htmx.ajax('GET', url, { target: target, swap: 'innerHTML' });
+        }
+    }
+}">
+    {# Quick Actions Bar #}
+    <div class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+            <span>ONT Configuration</span>
+            <span class="font-mono text-slate-900 dark:text-white">{{ ont.serial_number }}</span>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            <button hx-post="/admin/network/onts/{{ ont.id }}/refresh"
+                    hx-swap="none"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Refresh Status
+            </button>
+            <button hx-post="/admin/network/onts/{{ ont.id }}/actions/omci-reboot"
+                    hx-confirm="Reboot this ONT via OMCI? The subscriber will lose connectivity briefly."
+                    hx-swap="none"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Reboot (OMCI)
+            </button>
+            {% if has_tr069 %}
+            <button hx-post="/admin/network/onts/{{ ont.id }}/reboot"
+                    hx-confirm="Reboot this ONT via TR-069?"
+                    hx-swap="none"
+                    class="inline-flex items-center gap-1.5 rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Reboot (TR-069)
+            </button>
+            {% endif %}
+        </div>
+    </div>
+
+    {# ==================== MANAGEMENT IP SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'mgmt-ip' ? '' : 'mgmt-ip'"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Management IP</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {% if mgmt_ip_summary.mode %}
+                        {{ mgmt_ip_summary.mode | upper }}{% if mgmt_ip_summary.vlan %} on VLAN {{ mgmt_ip_summary.vlan }}{% endif %}{% if mgmt_ip_summary.ip %} &middot; {{ mgmt_ip_summary.ip }}{% endif %}
+                        {% else %}
+                        Configure DHCP or static IP for ONT management
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if mgmt_ip_summary.mode %}
+                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if mgmt_ip_summary.mode == 'dhcp' else 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' }}">
+                    {{ mgmt_ip_summary.mode | upper }}
+                </span>
+                {% endif %}
+                <svg :class="openSection === 'mgmt-ip' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'mgmt-ip'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="mgmt-ip-content">
+                {% include "admin/network/onts/_config_mgmt_ip.html" %}
+            </div>
+        </div>
+    </div>
+
+    {# ==================== SERVICE PORTS SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'service-ports' ? '' : 'service-ports'; loadSection('service-ports', '/admin/network/onts/{{ ont.id }}/config/service-ports', '#service-ports-section-content')"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
+                    <svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Service Ports</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {% if service_ports_count is defined and service_ports_count > 0 %}
+                        {{ service_ports_count }} service port{{ 's' if service_ports_count != 1 else '' }} configured
+                        {% else %}
+                        Manage VLAN service ports on OLT
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if service_ports_count is defined and service_ports_count > 0 %}
+                <span class="inline-flex items-center rounded-full bg-violet-100 px-2 py-0.5 text-xs font-medium text-violet-800 dark:bg-violet-900/30 dark:text-violet-300">
+                    {{ service_ports_count }}
+                </span>
+                {% endif %}
+                <svg :class="openSection === 'service-ports' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'service-ports'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="service-ports-section-content">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-500">Loading service ports...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== WAN / PPPoE SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'wan' ? '' : 'wan'; loadSection('wan', '/admin/network/onts/{{ ont.id }}/config/wan', '#wan-section-content')"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
+                    <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">WAN / PPPoE</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {% if wan_summary.pppoe_user %}
+                        PPPoE: {{ wan_summary.pppoe_user }}{% if wan_summary.wan_ip %} &middot; {{ wan_summary.wan_ip }}{% endif %}
+                        {% else %}
+                        Configure WAN connection and PPPoE credentials
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if wan_summary.status %}
+                <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300' if wan_summary.status == 'connected' else 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400' }}">
+                    {{ wan_summary.status | title }}
+                </span>
+                {% endif %}
+                <svg :class="openSection === 'wan' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'wan'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="wan-section-content">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-500">Loading WAN configuration...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== WIFI SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'wifi' ? '' : 'wifi'; loadSection('wifi', '/admin/network/onts/{{ ont.id }}/config/wifi', '#wifi-section-content')"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
+                    <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">WiFi Settings</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        {% if wifi_summary.ssid %}
+                        SSID: {{ wifi_summary.ssid }}
+                        {% else %}
+                        Configure wireless network name and password
+                        {% endif %}
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                {% if wifi_summary.ssid %}
+                <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 font-mono truncate max-w-32">
+                    {{ wifi_summary.ssid | truncate(16) }}
+                </span>
+                {% endif %}
+                <svg :class="openSection === 'wifi' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'wifi'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="wifi-section-content">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-500">Loading WiFi settings...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== TR-069 PROFILE SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'tr069-profile' ? '' : 'tr069-profile'; loadSection('tr069-profile', '/admin/network/onts/{{ ont.id }}/config/tr069-profile', '#tr069-profile-section-content')"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-indigo-100 dark:bg-indigo-900/30">
+                    <svg class="h-4 w-4 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">TR-069 Profile</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Bind ACS server profile for remote management
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <svg :class="openSection === 'tr069-profile' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'tr069-profile'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="tr069-profile-section-content">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-500">Loading TR-069 profiles...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== LAN / ETHERNET SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'lan' ? '' : 'lan'; loadSection('lan', '/admin/network/onts/{{ ont.id }}/config/lan', '#lan-section-content')"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-cyan-100 dark:bg-cyan-900/30">
+                    <svg class="h-4 w-4 text-cyan-600 dark:text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">LAN / Ethernet Ports</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        View ethernet port status and connected hosts
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <svg :class="openSection === 'lan' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'lan'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="lan-section-content">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-500">Loading LAN information...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    {# ==================== DIAGNOSTICS SECTION ==================== #}
+    <div class="rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800 overflow-hidden">
+        <button type="button"
+                @click="openSection = openSection === 'diagnostics' ? '' : 'diagnostics'; loadSection('diagnostics', '/admin/network/onts/{{ ont.id }}/config/diagnostics', '#diagnostics-section-content')"
+                class="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors">
+            <div class="flex items-center gap-3">
+                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-rose-100 dark:bg-rose-900/30">
+                    <svg class="h-4 w-4 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L9 20l-1 1h8l-1-1-.75-3M3 13h18M5 17h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
+                </div>
+                <div>
+                    <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Diagnostics</h3>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Run ping, traceroute and other network tests
+                    </p>
+                </div>
+            </div>
+            <div class="flex items-center gap-2">
+                <svg :class="openSection === 'diagnostics' ? 'rotate-180' : ''" class="h-5 w-5 text-slate-400 transition-transform duration-200" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+            </div>
+        </button>
+        <div x-show="openSection === 'diagnostics'" x-collapse x-cloak>
+            <div class="border-t border-slate-200 dark:border-slate-700 px-5 py-4" id="diagnostics-section-content">
+                <div class="flex items-center justify-center py-8">
+                    <svg class="h-5 w-5 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <span class="ml-2 text-sm text-slate-500">Loading diagnostics...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>

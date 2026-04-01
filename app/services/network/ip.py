@@ -48,10 +48,6 @@ class IPAssignments(CRUDManager[IPAssignment]):
         network_validators.validate_ip_assignment_links(
             db,
             str(payload.subscriber_id),
-            str(payload.subscription_id) if payload.subscription_id else None,
-            str(payload.subscription_add_on_id)
-            if payload.subscription_add_on_id
-            else None,
             str(payload.service_address_id) if payload.service_address_id else None,
         )
         assignment = IPAssignment(**payload.model_dump())
@@ -68,7 +64,6 @@ class IPAssignments(CRUDManager[IPAssignment]):
     def list(
         db: Session,
         subscriber_id: str | None,
-        subscription_id: str | None,
         is_active: bool | None,
         order_by: str,
         order_dir: str,
@@ -80,7 +75,6 @@ class IPAssignments(CRUDManager[IPAssignment]):
             query,
             {
                 IPAssignment.subscriber_id: subscriber_id,
-                IPAssignment.subscription_id: subscription_id,
             },
         )
         query = apply_active_state(query, IPAssignment.is_active, is_active)
@@ -102,18 +96,12 @@ class IPAssignments(CRUDManager[IPAssignment]):
             raise HTTPException(status_code=404, detail="IP assignment not found")
         data = payload.model_dump(exclude_unset=True)
         subscriber_id = str(data.get("subscriber_id", assignment.subscriber_id))
-        subscription_id = data.get("subscription_id", assignment.subscription_id)
-        subscription_add_on_id = data.get(
-            "subscription_add_on_id", assignment.subscription_add_on_id
-        )
         service_address_id = data.get(
             "service_address_id", assignment.service_address_id
         )
         network_validators.validate_ip_assignment_links(
             db,
             subscriber_id,
-            str(subscription_id) if subscription_id else None,
-            str(subscription_add_on_id) if subscription_add_on_id else None,
             str(service_address_id) if service_address_id else None,
         )
         for key, value in data.items():

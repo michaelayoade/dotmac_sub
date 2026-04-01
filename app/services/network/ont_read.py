@@ -104,7 +104,6 @@ class OntReadFacade:
                     else None
                 )
             )
-            result["subscription_id"] = assignment.subscription_id
             result["pon_port_name"] = (
                 assignment.pon_port.name if assignment.pon_port else None
             )
@@ -113,7 +112,6 @@ class OntReadFacade:
             result.update(
                 subscriber_id=None,
                 subscriber_name=None,
-                subscription_id=None,
                 pon_port_name=None,
                 olt_name=ont.olt_device.name if ont.olt_device else None,
             )

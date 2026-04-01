@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.network import CPEDevice, OntAssignment, OntUnit
-from app.models.tr069 import Tr069CpeDevice, Tr069JobStatus
+from app.models.tr069 import Tr069CpeDevice, Tr069Job, Tr069JobStatus
 from app.schemas.network import OntUnitCreate
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
@@ -49,6 +49,68 @@ _JOB_ACTIONS: dict[str, JobAction] = {
     ),
     "reboot": JobAction(label="Reboot Device", command="reboot"),
     "factory_reset": JobAction(label="Factory Reset", command="factoryReset"),
+}
+
+
+# Config push actions use setParameterValues - need parameter values at runtime
+@dataclass
+class ConfigAction:
+    """Defines a config push action with its TR-069 parameter mappings."""
+
+    label: str
+    description: str
+    parameters: list[str]  # List of parameter paths that can be set
+
+
+_CONFIG_ACTIONS: dict[str, ConfigAction] = {
+    "wifi_ssid": ConfigAction(
+        label="Set WiFi SSID",
+        description="Change the WiFi network name (SSID)",
+        parameters=[
+            "Device.WiFi.SSID.1.SSID",
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+        ],
+    ),
+    "wifi_password": ConfigAction(
+        label="Set WiFi Password",
+        description="Change the WiFi password (WPA key)",
+        parameters=[
+            "Device.WiFi.AccessPoint.1.Security.KeyPassphrase",
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+        ],
+    ),
+    "wifi_enable": ConfigAction(
+        label="Enable WiFi",
+        description="Turn on the WiFi radio",
+        parameters=[
+            "Device.WiFi.Radio.1.Enable",
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+        ],
+    ),
+    "wifi_disable": ConfigAction(
+        label="Disable WiFi",
+        description="Turn off the WiFi radio",
+        parameters=[
+            "Device.WiFi.Radio.1.Enable",
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+        ],
+    ),
+    "pppoe_username": ConfigAction(
+        label="Set PPPoE Username",
+        description="Change the PPPoE username for WAN connection",
+        parameters=[
+            "Device.PPP.Interface.1.Username",
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
+        ],
+    ),
+    "pppoe_password": ConfigAction(
+        label="Set PPPoE Password",
+        description="Change the PPPoE password for WAN connection",
+        parameters=[
+            "Device.PPP.Interface.1.Password",
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Password",
+        ],
+    ),
 }
 
 
@@ -369,6 +431,7 @@ def tr069_dashboard_data(
         "recent_jobs": jobs,
         "managed_cpes": managed_cpes,
         "job_actions": _JOB_ACTIONS,
+        "config_actions": _CONFIG_ACTIONS,
         "cpe_typeahead_map": cpe_typeahead_map,
         "cpe_typeahead_labels": list(cpe_typeahead_map.keys()),
         "cpe_display_by_id": cpe_display_by_id,
@@ -446,3 +509,139 @@ def create_ont_from_tr069_device(
     db.commit()
     db.refresh(ont)
     return ont, True
+
+
+def get_config_actions() -> dict[str, ConfigAction]:
+    """Return available config push actions."""
+    return _CONFIG_ACTIONS
+
+
+def create_config_push_job(
+    db: Session,
+    *,
+    tr069_device_id: str,
+    action_key: str,
+    value: str,
+) -> Tr069Job:
+    """Create a config push job (setParameterValues) for a TR-069 device.
+
+    Args:
+        db: Database session
+        tr069_device_id: TR-069 CPE device ID
+        action_key: Config action key (e.g., 'wifi_ssid', 'pppoe_username')
+        value: Value to set
+
+    Returns:
+        Created job
+    """
+    config_action = _CONFIG_ACTIONS.get(action_key)
+    if config_action is None:
+        raise ValueError(f"Unknown config action: {action_key}")
+
+    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
+    if not device:
+        raise ValueError("TR-069 device not found")
+
+    # Build parameter values - try TR-181 path first, fallback to TR-098
+    # Device. paths are TR-181, InternetGatewayDevice. paths are TR-098
+    parameter_path = config_action.parameters[0]  # Primary path
+    parameter_value = value
+
+    # Handle boolean toggle actions
+    if action_key == "wifi_enable":
+        parameter_value = "true"
+    elif action_key == "wifi_disable":
+        parameter_value = "false"
+
+    # Create job with setParameterValues command
+    payload = Tr069JobCreate(
+        device_id=coerce_uuid(tr069_device_id),
+        name=config_action.label,
+        command="setParameterValues",
+        payload={
+            "parameterValues": [[parameter_path, parameter_value, "xsd:string"]],
+        },
+    )
+    job = tr069_service.jobs.create(db=db, payload=payload)
+
+    # Execute immediately
+    return tr069_service.jobs.execute(db=db, job_id=str(job.id))
+
+
+def create_firmware_download_job(
+    db: Session,
+    *,
+    tr069_device_id: str,
+    firmware_url: str,
+    filename: str | None = None,
+) -> Tr069Job:
+    """Create a firmware download job for a TR-069 device.
+
+    Args:
+        db: Database session
+        tr069_device_id: TR-069 CPE device ID
+        firmware_url: URL to download firmware from
+        filename: Optional filename for the firmware
+
+    Returns:
+        Created job
+    """
+    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
+    if not device:
+        raise ValueError("TR-069 device not found")
+
+    if not firmware_url or not firmware_url.strip():
+        raise ValueError("Firmware URL is required")
+
+    # Build download task payload
+    task_payload: dict[str, object] = {
+        "fileType": "1 Firmware Upgrade Image",
+        "url": firmware_url.strip(),
+    }
+    if filename and filename.strip():
+        task_payload["filename"] = filename.strip()
+
+    payload = Tr069JobCreate(
+        device_id=coerce_uuid(tr069_device_id),
+        name="Firmware Update",
+        command="download",
+        payload=task_payload,
+    )
+    job = tr069_service.jobs.create(db=db, payload=payload)
+
+    # Execute immediately
+    return tr069_service.jobs.execute(db=db, job_id=str(job.id))
+
+
+def queue_bulk_action(
+    device_ids: list[str],
+    action: str,
+    params: dict | None = None,
+) -> str:
+    """Queue a bulk action for multiple TR-069 devices.
+
+    Args:
+        device_ids: List of TR-069 device UUIDs
+        action: Action to execute (refresh, reboot, factory_reset, config_push, firmware)
+        params: Additional parameters for certain actions
+
+    Returns:
+        Celery task ID
+    """
+    if not device_ids:
+        raise ValueError("No devices selected for bulk action")
+
+    valid_actions = {"refresh", "reboot", "factory_reset", "config_push", "firmware"}
+    if action not in valid_actions:
+        raise ValueError(f"Invalid bulk action: {action}")
+
+    from app.tasks.tr069 import execute_bulk_action
+
+    task = execute_bulk_action.delay(device_ids, action, params or {})
+    logger.info(
+        "Queued bulk TR-069 action %s for %d devices, task_id=%s",
+        action,
+        len(device_ids),
+        task.id,
+    )
+    return str(task.id)

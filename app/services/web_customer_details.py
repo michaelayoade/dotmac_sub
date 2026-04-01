@@ -722,7 +722,6 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
     )
     cpe_devices = (
         db.query(CPEDevice)
-        .options(selectinload(CPEDevice.subscription))
         .filter(CPEDevice.subscriber_id.in_(account_ids))
         .order_by(CPEDevice.updated_at.desc())
         .limit(10)
@@ -733,7 +732,6 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         .options(
             selectinload(IPAssignment.ipv4_address),
             selectinload(IPAssignment.ipv6_address),
-            selectinload(IPAssignment.subscription),
         )
         .filter(IPAssignment.subscriber_id.in_(account_ids))
         .order_by(IPAssignment.updated_at.desc())
@@ -744,7 +742,6 @@ def _build_relationship_data(db: Session, account_ids: list[UUID]) -> dict[str, 
         db.query(OntAssignment)
         .options(
             selectinload(OntAssignment.ont_unit),
-            selectinload(OntAssignment.subscription),
             selectinload(OntAssignment.pon_port),
         )
         .filter(OntAssignment.subscriber_id.in_(account_ids))

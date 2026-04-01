@@ -127,7 +127,6 @@ class TestCPEDevicesCRUD:
         devices = network_service.cpe_devices.list(
             db_session,
             subscriber_id=str(subscriber.id),
-            subscription_id=None,
             order_by="created_at",
             order_dir="asc",
             limit=100,
@@ -140,7 +139,6 @@ class TestCPEDevicesCRUD:
         devices = network_service.cpe_devices.list(
             db_session,
             subscriber_id=str(uuid.uuid4()),
-            subscription_id=None,
             order_by="created_at",
             order_dir="asc",
             limit=100,
@@ -1098,7 +1096,6 @@ class TestOntAssignmentsCRUD:
         cpes = network_service.cpe_devices.list(
             db_session,
             subscriber_id=str(subscriber.id),
-            subscription_id=None,
             order_by="created_at",
             order_dir="desc",
             limit=20,

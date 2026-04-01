@@ -598,6 +598,14 @@ def build_beat_schedule() -> dict:
             enabled=True,
             interval_seconds=max(olt_poll_minutes * 60, 60),
         )
+        # Finalize OLT polling - push aggregated metrics (runs 90s after poll dispatch)
+        _sync_scheduled_task(
+            session,
+            name="olt_polling_finalize",
+            task_name="app.tasks.olt_polling.finalize_olt_polling",
+            enabled=True,
+            interval_seconds=max(olt_poll_minutes * 60, 60),
+        )
 
         # ONT discovery (SNMP walk → upsert OntUnit rows)
         ont_discovery_minutes = _resolve_int(
@@ -736,6 +744,98 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.wireguard.sync_peer_stats",
             enabled=wg_stats_sync_enabled,
             interval_seconds=wg_stats_sync_interval,
+        )
+
+        # TR-069 ACS device sync - syncs devices from GenieACS
+        tr069_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_sync_enabled",
+            "TR069_SYNC_ENABLED",
+            True,
+        )
+        tr069_sync_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_sync_interval_seconds",
+            1800,  # 30 minutes
+        )
+        tr069_sync_interval = max(tr069_sync_interval, 300)  # Min: 5 minutes
+        _sync_scheduled_task(
+            session,
+            name="tr069_device_sync",
+            task_name="app.tasks.tr069.sync_all_acs_devices",
+            enabled=tr069_sync_enabled,
+            interval_seconds=tr069_sync_interval,
+        )
+
+        # TR-069 job execution - executes queued jobs and retries failed
+        tr069_jobs_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_job_execution_enabled",
+            "TR069_JOB_EXECUTION_ENABLED",
+            True,
+        )
+        tr069_jobs_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_job_execution_interval_seconds",
+            60,  # 1 minute
+        )
+        tr069_jobs_interval = max(tr069_jobs_interval, 30)  # Min: 30 seconds
+        _sync_scheduled_task(
+            session,
+            name="tr069_job_executor",
+            task_name="app.tasks.tr069.execute_pending_jobs",
+            enabled=tr069_jobs_enabled,
+            interval_seconds=tr069_jobs_interval,
+        )
+
+        # TR-069 device health check - monitors last_inform freshness
+        tr069_health_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_health_check_enabled",
+            "TR069_HEALTH_CHECK_ENABLED",
+            True,
+        )
+        tr069_health_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_health_check_interval_seconds",
+            7200,  # 2 hours
+        )
+        tr069_health_interval = max(tr069_health_interval, 300)  # Min: 5 minutes
+        _sync_scheduled_task(
+            session,
+            name="tr069_health_checker",
+            task_name="app.tasks.tr069.check_device_health",
+            enabled=tr069_health_enabled,
+            interval_seconds=tr069_health_interval,
+        )
+
+        # TR-069 record cleanup - deletes old sessions and jobs
+        tr069_cleanup_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_cleanup_enabled",
+            "TR069_CLEANUP_ENABLED",
+            True,
+        )
+        tr069_cleanup_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_cleanup_interval_seconds",
+            86400,  # Daily
+        )
+        tr069_cleanup_interval = max(tr069_cleanup_interval, 3600)  # Min: 1 hour
+        _sync_scheduled_task(
+            session,
+            name="tr069_record_cleanup",
+            task_name="app.tasks.tr069.cleanup_tr069_records",
+            enabled=tr069_cleanup_enabled,
+            interval_seconds=tr069_cleanup_interval,
         )
 
         # Event retry - retries failed event handlers

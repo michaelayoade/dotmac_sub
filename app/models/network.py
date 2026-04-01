@@ -47,6 +47,14 @@ class DeviceStatus(enum.Enum):
     retired = "retired"
 
 
+class PollStatus(enum.Enum):
+    """Status of the last SNMP polling attempt."""
+
+    success = "success"
+    failed = "failed"
+    timeout = "timeout"
+
+
 class PortType(enum.Enum):
     pon = "pon"
     ethernet = "ethernet"
@@ -246,9 +254,6 @@ class CPEDevice(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
-    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id")
-    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -276,7 +281,6 @@ class CPEDevice(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="cpe_devices")
-    subscription = relationship("Subscription", back_populates="cpe_devices")
     service_address = relationship("Address")
     ports = relationship(
         "Port",
@@ -421,12 +425,6 @@ class IPAssignment(Base):
     subscriber_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
     )
-    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id")
-    )
-    subscription_add_on_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscription_add_ons.id")
-    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -455,8 +453,6 @@ class IPAssignment(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="ip_assignments")
-    subscription = relationship("Subscription", back_populates="ip_assignments")
-    subscription_add_on = relationship("SubscriptionAddOn")
     service_address = relationship("Address")
     ipv4_address = relationship("IPv4Address", back_populates="assignment")
     ipv6_address = relationship("IPv6Address", back_populates="assignment")
@@ -630,6 +626,17 @@ class OLTDevice(Base):
     )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Polling health tracking
+    last_poll_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_poll_status: Mapped[PollStatus | None] = mapped_column(
+        Enum(PollStatus, name="pollstatus", create_constraint=False)
+    )
+    last_poll_error: Mapped[str | None] = mapped_column(String(500))
+    consecutive_poll_failures: Mapped[int] = mapped_column(Integer, default=0)
+    # Ping reachability (network layer)
+    last_ping_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_ping_ok: Mapped[bool | None] = mapped_column(Boolean)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -646,6 +653,16 @@ class OLTDevice(Base):
     tr069_acs_server = relationship("Tr069AcsServer")
     vlans = relationship("Vlan", back_populates="olt_device")
     ip_pools = relationship("IpPool", back_populates="olt_device")
+
+    @property
+    def is_reachable(self) -> bool:
+        """UI-friendly property: True if OLT responds to ping."""
+        return self.last_ping_ok is True
+
+    @property
+    def is_snmp_ok(self) -> bool:
+        """True if last SNMP poll succeeded."""
+        return self.last_poll_status == PollStatus.success
 
 
 class OltConfigBackupType(enum.Enum):
@@ -1083,9 +1100,6 @@ class OntAssignment(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id")
-    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -1105,7 +1119,6 @@ class OntAssignment(Base):
     ont_unit = relationship("OntUnit", back_populates="assignments")
     pon_port = relationship("PonPort", back_populates="ont_assignments")
     subscriber = relationship("Subscriber", back_populates="ont_assignments")
-    subscription = relationship("Subscription", back_populates="ont_assignments")
     service_address = relationship("Address")
 
 
@@ -1268,9 +1281,6 @@ class SplitterPortAssignment(Base):
     subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
-    subscription_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscriptions.id")
-    )
     service_address_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
@@ -1289,7 +1299,6 @@ class SplitterPortAssignment(Base):
 
     splitter_port = relationship("SplitterPort", back_populates="assignments")
     subscriber = relationship("Subscriber")
-    subscription = relationship("Subscription")
     service_address = relationship("Address")
 
 

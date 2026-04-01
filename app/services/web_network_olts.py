@@ -50,6 +50,10 @@ from app.services.credential_crypto import decrypt_credential, encrypt_credentia
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network.olt_polling_parsers import (
+    _decode_huawei_packed_fsp,
+    _split_onu_index,
+)
 from app.services.web_network_ont_autofind import _find_ont_by_serial
 
 logger = logging.getLogger(__name__)
@@ -1006,7 +1010,6 @@ def _persist_authorized_ont_inventory(
                 ont_unit_id=ont.id,
                 pon_port_id=pon_port.id,
                 subscriber_id=active_assignment.subscriber_id,
-                subscription_id=active_assignment.subscription_id,
                 service_address_id=active_assignment.service_address_id,
                 notes=active_assignment.notes,
                 active=True,
@@ -1270,36 +1273,6 @@ def _parse_online_status(
             return OnuOnlineStatus.offline, OnuOfflineReason.dying_gasp
         return OnuOnlineStatus.offline, OnuOfflineReason.unknown
     return OnuOnlineStatus.unknown, None
-
-
-def _split_onu_index(raw_index: str) -> tuple[str, ...] | None:
-    parts = [p for p in str(raw_index).split(".") if p.isdigit()]
-    if len(parts) < 2:
-        return None
-    if len(parts) >= 4:
-        return parts[-4], parts[-3], parts[-2], parts[-1]
-    # Packed Huawei format: <packed_fsp>.<onu_id>
-    return parts[-2], parts[-1]
-
-
-def _decode_huawei_packed_fsp(packed_value: int) -> str | None:
-    """Best-effort decode of Huawei packed FSP index to frame/slot/port."""
-    if packed_value < 0:
-        return None
-    # Common Huawei ifIndex base used for GPON UNI rows.
-    base = 0xFA000000
-    if packed_value < base:
-        return None
-    delta = packed_value - base
-    if delta % 256 != 0:
-        return None
-    slot_port = delta // 256
-    frame = 0
-    slot = slot_port // 16
-    port = slot_port % 16
-    if slot < 0 or port < 0:
-        return None
-    return f"{frame}/{slot}/{port}"
 
 
 def _run_simple_v2c_walk(

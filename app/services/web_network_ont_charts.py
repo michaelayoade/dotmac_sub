@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.bandwidth import BandwidthSample
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.olt_polling import get_signal_thresholds
 from app.services.network.ont_metrics import (
@@ -89,13 +90,34 @@ def _build_traffic_fallback_from_bandwidth_samples(
         .limit(1)
     )
     assignment = db.scalars(assignment_stmt).first()
-    if not assignment or not assignment.subscription_id:
+    if not assignment or not assignment.subscriber_id:
         return ChartData(
             time_range=time_range,
             available=False,
             error=(
                 "No traffic history data available for this ONT. "
-                "No active subscription assignment was found for fallback sampling."
+                "No active subscriber assignment was found for fallback sampling."
+            ),
+        )
+
+    # Find active subscription for this subscriber to lookup bandwidth samples
+    subscription_stmt = (
+        select(Subscription)
+        .where(
+            Subscription.subscriber_id == assignment.subscriber_id,
+            Subscription.status == SubscriptionStatus.active,
+        )
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+    )
+    subscription = db.scalars(subscription_stmt).first()
+    if not subscription:
+        return ChartData(
+            time_range=time_range,
+            available=False,
+            error=(
+                "No traffic history data available for this ONT. "
+                "No active subscription found for the assigned subscriber."
             ),
         )
 
@@ -104,7 +126,7 @@ def _build_traffic_fallback_from_bandwidth_samples(
     sample_stmt = (
         select(BandwidthSample)
         .where(
-            BandwidthSample.subscription_id == assignment.subscription_id,
+            BandwidthSample.subscription_id == subscription.id,
             BandwidthSample.sample_at >= start,
             BandwidthSample.sample_at <= now,
         )
@@ -208,13 +230,34 @@ def _build_traffic_from_vm_subscription_aggregates(
         .limit(1)
     )
     assignment = db.scalars(assignment_stmt).first()
-    if not assignment or not assignment.subscription_id:
+    if not assignment or not assignment.subscriber_id:
         return ChartData(
             time_range=time_range,
             available=False,
             error=(
                 "No traffic history data available for this ONT. "
-                "No active subscription assignment was found for aggregate lookup."
+                "No active subscriber assignment was found for aggregate lookup."
+            ),
+        )
+
+    # Find active subscription for this subscriber
+    subscription_stmt = (
+        select(Subscription)
+        .where(
+            Subscription.subscriber_id == assignment.subscriber_id,
+            Subscription.status == SubscriptionStatus.active,
+        )
+        .order_by(Subscription.created_at.desc())
+        .limit(1)
+    )
+    subscription = db.scalars(subscription_stmt).first()
+    if not subscription:
+        return ChartData(
+            time_range=time_range,
+            available=False,
+            error=(
+                "No traffic history data available for this ONT. "
+                "No active subscription found for the assigned subscriber."
             ),
         )
 
@@ -226,7 +269,7 @@ def _build_traffic_from_vm_subscription_aggregates(
         "7d": "30m",
         "30d": "2h",
     }.get(time_range, "5m")
-    subscription_id = str(assignment.subscription_id)
+    subscription_id = str(subscription.id)
 
     rx_query = f'bandwidth_rx_bps_avg{{subscription_id="{subscription_id}"}}'
     tx_query = f'bandwidth_tx_bps_avg{{subscription_id="{subscription_id}"}}'

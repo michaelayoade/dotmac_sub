@@ -765,9 +765,6 @@ class Subscription(Base):
     radius_profile = relationship("RadiusProfile", back_populates="subscriptions")
     add_ons = relationship("SubscriptionAddOn", back_populates="subscription")
     service_orders = relationship("ServiceOrder", back_populates="subscription")
-    cpe_devices = relationship("CPEDevice", back_populates="subscription")
-    ip_assignments = relationship("IPAssignment", back_populates="subscription")
-    ont_assignments = relationship("OntAssignment", back_populates="subscription")
     lifecycle_events = relationship(
         "SubscriptionLifecycleEvent", back_populates="subscription"
     )

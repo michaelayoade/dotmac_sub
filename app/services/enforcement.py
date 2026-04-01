@@ -598,7 +598,6 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
     Returns:
         Dict with counts of each cleanup action
     """
-    from app.models.network import IPAssignment
     from app.models.radius import RadiusUser
 
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
@@ -655,17 +654,8 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
                 ru.is_active = False
                 stats["radius_users_removed"] += 1
 
-    # 4. Release IP assignments
-    ip_assignments = (
-        db.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == subscription.id)
-        .filter(IPAssignment.is_active.is_(True))
-        .all()
-    )
-    for assignment in ip_assignments:
-        assignment.is_active = False
-        stats["ip_assignments_released"] += 1
-    # Clear IP from subscription
+    # 4. Clear IP from subscription (IP assignments are now subscriber-level)
+    # IP assignments are managed independently of subscriptions
     subscription.ipv4_address = None
     subscription.ipv6_address = None
 

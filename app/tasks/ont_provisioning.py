@@ -59,7 +59,7 @@ def auto_link_profiles() -> dict[str, int]:
         from app.models.network import OntAssignment, OntUnit
         from app.services.network.ont_profile_apply import resolve_profile_for_ont
 
-        # Find ONTs with active assignments but no profile
+        # Find ONTs with active assignments (to subscribers) but no profile
         stmt = (
             select(OntUnit.id)
             .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
@@ -67,7 +67,7 @@ def auto_link_profiles() -> dict[str, int]:
                 OntUnit.provisioning_profile_id.is_(None),
                 OntUnit.is_active.is_(True),
                 OntAssignment.active.is_(True),
-                OntAssignment.subscription_id.isnot(None),
+                OntAssignment.subscriber_id.isnot(None),
             )
             .limit(500)
         )

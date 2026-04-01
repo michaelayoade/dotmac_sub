@@ -538,10 +538,9 @@ def build_payments_list_data(
                     days=now.weekday()
                 )
             elif date_range == "month":
-                start = datetime(now.year, now.month, 1, tzinfo=UTC)
+                start = now - timedelta(days=30)
             else:
-                quarter_start_month = ((now.month - 1) // 3) * 3 + 1
-                start = datetime(now.year, quarter_start_month, 1, tzinfo=UTC)
+                start = now - timedelta(days=90)
             scoped = scoped.where(Payment.created_at >= start)
         return scoped
 

@@ -322,3 +322,147 @@ def tr069_device_action(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
             status_code=303,
         )
+
+
+@router.post("/tr069/devices/{device_id}/config")
+def tr069_config_push(
+    device_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Push configuration to a TR-069 device via setParameterValues."""
+    form = parse_form_data_sync(request)
+    action_key = str(form.get("config_action") or "").strip()
+    value = str(form.get("config_value") or "").strip()
+    acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
+
+    try:
+        job = web_network_tr069_service.create_config_push_job(
+            db,
+            tr069_device_id=device_id,
+            action_key=action_key,
+            value=value,
+        )
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="config_push",
+            entity_type="tr069_device",
+            entity_id=device_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "config_action": action_key,
+                "job_id": str(job.id),
+            },
+        )
+        message = quote_plus(f"Config pushed: {job.name}")
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
+@router.post("/tr069/devices/{device_id}/firmware")
+def tr069_firmware_update(
+    device_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Push firmware update to a TR-069 device."""
+    form = parse_form_data_sync(request)
+    firmware_url = str(form.get("firmware_url") or "").strip()
+    filename = str(form.get("filename") or "").strip() or None
+    acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
+
+    try:
+        job = web_network_tr069_service.create_firmware_download_job(
+            db,
+            tr069_device_id=device_id,
+            firmware_url=firmware_url,
+            filename=filename,
+        )
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="firmware_update",
+            entity_type="tr069_device",
+            entity_id=device_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "firmware_url": firmware_url,
+                "filename": filename,
+                "job_id": str(job.id),
+            },
+        )
+        message = quote_plus(f"Firmware update queued: {job.name}")
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )
+
+
+@router.post("/tr069/bulk-action")
+def tr069_bulk_action(
+    request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Execute an action on multiple TR-069 devices."""
+    form = parse_form_data_sync(request)
+    device_ids_raw = str(form.get("device_ids") or "").strip()
+    action = str(form.get("bulk_action") or "").strip()
+    acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
+
+    # Parse device IDs (comma-separated)
+    device_ids = [d.strip() for d in device_ids_raw.split(",") if d.strip()]
+
+    try:
+        if not device_ids:
+            raise ValueError("No devices selected")
+        if not action:
+            raise ValueError("No action selected")
+
+        task_id = web_network_tr069_service.queue_bulk_action(
+            device_ids=device_ids,
+            action=action,
+            params=None,
+        )
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="bulk_action",
+            entity_type="tr069_devices",
+            entity_id=task_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "action": action,
+                "device_count": len(device_ids),
+                "task_id": task_id,
+            },
+        )
+        message = quote_plus(f"Bulk {action} queued for {len(device_ids)} device(s)")
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )

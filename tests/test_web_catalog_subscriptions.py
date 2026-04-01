@@ -645,7 +645,7 @@ def test_create_subscription_with_audit_uses_requested_free_ipv4(
 
     assignment = (
         db_session.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == created.id)
+        .filter(IPAssignment.subscriber_id == created.subscriber_id)
         .one()
     )
     assert assignment.ipv4_address is not None
@@ -704,7 +704,7 @@ def test_update_subscription_with_audit_persists_added_ipv4_assignment(
 
     assignment = (
         db_session.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == updated.id)
+        .filter(IPAssignment.subscriber_id == updated.subscriber_id)
         .filter(IPAssignment.is_active.is_(True))
         .one()
     )
@@ -846,7 +846,7 @@ def test_update_subscription_with_audit_deallocates_removed_ipv4_assignments(
 
     active_assignments = (
         db_session.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == updated.id)
+        .filter(IPAssignment.subscriber_id == updated.subscriber_id)
         .filter(IPAssignment.is_active.is_(True))
         .all()
     )
@@ -856,7 +856,7 @@ def test_update_subscription_with_audit_deallocates_removed_ipv4_assignments(
 
     inactive_assignments = (
         db_session.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == updated.id)
+        .filter(IPAssignment.subscriber_id == updated.subscriber_id)
         .filter(IPAssignment.is_active.is_(False))
         .all()
     )

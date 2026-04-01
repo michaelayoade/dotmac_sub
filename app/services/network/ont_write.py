@@ -358,7 +358,6 @@ class OntWriteService:
             ont_unit_id=ont.id,
             pon_port_id=target_port.id,
             subscriber_id=current.subscriber_id if current else None,
-            subscription_id=current.subscription_id if current else None,
             active=True,
             assigned_at=datetime.now(UTC),
             notes="Moved from previous assignment",

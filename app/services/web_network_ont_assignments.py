@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.schemas.network import OntAssignmentCreate
-from app.services import catalog as catalog_service
 from app.services import network as network_service
 from app.services import subscriber as subscriber_service
 from app.services.common import coerce_uuid
@@ -17,7 +16,11 @@ logger = logging.getLogger(__name__)
 
 
 def assignment_form_dependencies(db: Session) -> dict[str, object]:
-    """Return common select options for ONT assignment form."""
+    """Return common select options for ONT assignment form.
+
+    Note: ONT assignments link directly to subscribers, not subscriptions.
+    This enables independent OLT management without requiring subscription context.
+    """
     return {
         "pon_ports": network_service.pon_ports.list(
             db=db,
@@ -31,16 +34,6 @@ def assignment_form_dependencies(db: Session) -> dict[str, object]:
         # Accounts are now fetched via HTMX typeahead search instead
         # of loading all 500 into a static <select> dropdown.
         "accounts": [],
-        "subscriptions": catalog_service.subscriptions.list(
-            db=db,
-            subscriber_id=None,
-            offer_id=None,
-            status=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
-        ),
         "addresses": subscriber_service.addresses.list(
             db=db,
             subscriber_id=None,
@@ -57,7 +50,6 @@ def parse_form_values(form) -> dict[str, object]:
     return {
         "pon_port_id": form.get("pon_port_id", "").strip(),
         "account_id": form.get("account_id", "").strip() or None,
-        "subscription_id": form.get("subscription_id", "").strip() or None,
         "service_address_id": form.get("service_address_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
     }
@@ -98,11 +90,6 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
         ont_unit_id=ont.id,
         pon_port_id=resolved_pon_port_id,
         subscriber_id=coerce_uuid(str(values["account_id"])),
-        subscription_id=(
-            coerce_uuid(str(values["subscription_id"]))
-            if values.get("subscription_id")
-            else None
-        ),
         service_address_id=(
             coerce_uuid(str(values["service_address_id"]))
             if values.get("service_address_id")
@@ -120,7 +107,6 @@ def form_payload(values: dict[str, object]) -> dict[str, object]:
     return {
         "pon_port_id": values.get("pon_port_id"),
         "account_id": values.get("account_id"),
-        "subscription_id": values.get("subscription_id"),
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
     }

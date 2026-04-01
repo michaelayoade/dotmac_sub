@@ -57,6 +57,11 @@ htmlcov/
 scripts/migration/.rebind_checkpoints/
 /tmp/smartolt_*.json
 
+# Sensitive credential exports
+wifi_credentials.csv
+SmartOLT_onus_list.csv
+*_credentials.csv
+
 # Reference materials & artifacts
 screenshots/
 uploads/

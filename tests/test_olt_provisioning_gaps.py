@@ -1179,7 +1179,6 @@ class TestOntAssignmentValidation:
             {
                 "pon_port_id": "",
                 "account_id": "acct-1",
-                "subscription_id": None,
                 "service_address_id": None,
                 "notes": None,
             }

@@ -61,9 +61,6 @@ def validate_cpe_devices(db: Session, payloads: list) -> list[ValidationIssue]:
             network.validate_cpe_device_links(
                 db,
                 str(_get(payload, "account_id")),
-                str(_get(payload, "subscription_id"))
-                if _get(payload, "subscription_id")
-                else None,
                 str(_get(payload, "service_address_id"))
                 if _get(payload, "service_address_id")
                 else None,
@@ -80,12 +77,6 @@ def validate_ip_assignments(db: Session, payloads: list) -> list[ValidationIssue
             network.validate_ip_assignment_links(
                 db,
                 str(_get(payload, "account_id")),
-                str(_get(payload, "subscription_id"))
-                if _get(payload, "subscription_id")
-                else None,
-                str(_get(payload, "subscription_add_on_id"))
-                if _get(payload, "subscription_add_on_id")
-                else None,
                 str(_get(payload, "service_address_id"))
                 if _get(payload, "service_address_id")
                 else None,

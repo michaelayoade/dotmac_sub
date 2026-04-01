@@ -101,6 +101,26 @@
         {% endfor %}
     </datalist>
 
+    <!-- Bulk Actions Toolbar -->
+    <div id="bulk-actions-bar" class="hidden rounded-2xl border border-sky-200/60 bg-sky-50 p-4 shadow-sm dark:border-sky-800/40 dark:bg-sky-900/20">
+        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" class="flex flex-wrap items-center gap-4">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+            <input type="hidden" id="bulk-device-ids" name="device_ids" value="">
+            <div class="flex items-center gap-2">
+                <span class="text-sm font-medium text-sky-700 dark:text-sky-300"><span id="selected-count">0</span> device(s) selected</span>
+            </div>
+            <select name="bulk_action" required class="rounded-lg border border-sky-300 bg-white px-3 py-2 text-sm dark:border-sky-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select action...</option>
+                <option value="refresh">Refresh All</option>
+                <option value="reboot">Reboot All</option>
+                <option value="factory_reset">Factory Reset All</option>
+            </select>
+            <button type="submit" class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">Execute Bulk Action</button>
+            <button type="button" onclick="clearBulkSelection()" class="rounded-lg border border-sky-300 bg-white px-4 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-600 dark:bg-slate-800 dark:text-sky-300">Clear Selection</button>
+        </form>
+    </div>
+
     <div class="space-y-4">
         <div class="rounded-2xl border border-amber-200/60 bg-white shadow-sm dark:border-amber-800/40 dark:bg-slate-800">
             <div class="border-b border-amber-100 px-4 py-3 dark:border-amber-900/40">
@@ -110,6 +130,9 @@
                 <table class="min-w-full">
                     <thead>
                         <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                            <th class="w-10 px-4 py-3">
+                                <input type="checkbox" class="bulk-select-all rounded border-slate-300 dark:border-slate-600" data-table="unconfigured">
+                            </th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Identity</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Last Inform</th>
@@ -121,6 +144,9 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for device in unconfigured_devices %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                            <td class="w-10 px-4 py-3">
+                                <input type="checkbox" class="bulk-device-checkbox rounded border-slate-300 dark:border-slate-600" value="{{ device.id }}" data-table="unconfigured">
+                            </td>
                             <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">
                                 <div>{{ device.display_serial_number or device.serial_number or '-' }}</div>
                                 {% if device.display_serial_number and device.serial_number and device.display_serial_number != device.serial_number %}
@@ -173,11 +199,13 @@
                                         <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">{{ action.label }}</button>
                                     </form>
                                     {% endfor %}
+                                    <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Configure</button>
+                                    <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">Firmware</button>
                                 </div>
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="6" class="px-6 py-6 text-center text-sm text-slate-500">No unconfigured TR-069 devices.</td></tr>
+                        <tr><td colspan="7" class="px-6 py-6 text-center text-sm text-slate-500">No unconfigured TR-069 devices.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -192,6 +220,9 @@
                 <table class="min-w-full">
                     <thead>
                         <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
+                            <th class="w-10 px-4 py-3">
+                                <input type="checkbox" class="bulk-select-all rounded border-slate-300 dark:border-slate-600" data-table="configured">
+                            </th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Identity</th>
                             <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Last Inform</th>
@@ -203,6 +234,9 @@
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for device in configured_devices %}
                         <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/30">
+                            <td class="w-10 px-4 py-3">
+                                <input type="checkbox" class="bulk-device-checkbox rounded border-slate-300 dark:border-slate-600" value="{{ device.id }}" data-table="configured">
+                            </td>
                             <td class="px-4 py-3 font-mono text-sm text-slate-900 dark:text-white">
                                 <div>{{ device.display_serial_number or device.serial_number or '-' }}</div>
                                 {% if device.display_serial_number and device.serial_number and device.display_serial_number != device.serial_number %}
@@ -259,11 +293,13 @@
                                         <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">{{ action.label }}</button>
                                     </form>
                                     {% endfor %}
+                                    <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Configure</button>
+                                    <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">Firmware</button>
                                 </div>
                             </td>
                         </tr>
                         {% else %}
-                        <tr><td colspan="6" class="px-6 py-6 text-center text-sm text-slate-500">No configured TR-069 devices.</td></tr>
+                        <tr><td colspan="7" class="px-6 py-6 text-center text-sm text-slate-500">No configured TR-069 devices.</td></tr>
                         {% endfor %}
                     </tbody>
                 </table>
@@ -297,6 +333,62 @@
     </div>
 </div>
 
+<!-- Config Push Modal -->
+<div id="config-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
+    <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800">
+        <h3 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Configure Device</h3>
+        <form id="config-form" method="POST" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Configuration Action</label>
+                <select name="config_action" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Select action...</option>
+                    {% for key, action in config_actions.items() %}
+                    <option value="{{ key }}">{{ action.label }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div id="config-value-wrapper">
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Value</label>
+                <input type="text" name="config_value" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Enter value">
+                <p class="mt-1 text-xs text-slate-500" id="config-action-description"></p>
+            </div>
+            <div class="flex justify-end gap-2">
+                <button type="button" onclick="closeConfigModal()" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">Cancel</button>
+                <button type="submit" class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white hover:bg-sky-700">Apply Config</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Firmware Update Modal -->
+<div id="firmware-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
+    <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800">
+        <h3 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Firmware Update</h3>
+        <form id="firmware-form" method="POST" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Firmware URL</label>
+                <input type="url" name="firmware_url" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="https://example.com/firmware.bin">
+                <p class="mt-1 text-xs text-slate-500">URL where the device will download the firmware</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Filename (optional)</label>
+                <input type="text" name="filename" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="firmware.bin">
+            </div>
+            <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                <strong>Warning:</strong> Firmware updates may take several minutes. The device may reboot during the process.
+            </div>
+            <div class="flex justify-end gap-2">
+                <button type="button" onclick="closeFirmwareModal()" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">Cancel</button>
+                <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white hover:bg-amber-700">Start Update</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
 (() => {
     const labelToId = {{ cpe_typeahead_map | tojson }};
@@ -319,6 +411,146 @@
         searchInput.addEventListener("blur", syncHidden);
         form.addEventListener("submit", syncHidden);
     }
+
+    // Config action descriptions
+    const configDescriptions = {
+        {% for key, action in config_actions.items() %}
+        "{{ key }}": "{{ action.description }}",
+        {% endfor %}
+    };
+
+    // Config actions that don't need value input
+    const noValueActions = ["wifi_enable", "wifi_disable"];
+
+    // Update description and value visibility when action changes
+    const configSelect = document.querySelector('select[name="config_action"]');
+    const configValueWrapper = document.getElementById("config-value-wrapper");
+    const configDescription = document.getElementById("config-action-description");
+    const configValueInput = document.querySelector('input[name="config_value"]');
+
+    if (configSelect) {
+        configSelect.addEventListener("change", () => {
+            const action = configSelect.value;
+            if (configDescription) {
+                configDescription.textContent = configDescriptions[action] || "";
+            }
+            if (configValueWrapper && configValueInput) {
+                if (noValueActions.includes(action)) {
+                    configValueWrapper.style.display = "none";
+                    configValueInput.required = false;
+                    configValueInput.value = "";
+                } else {
+                    configValueWrapper.style.display = "block";
+                    configValueInput.required = action !== "";
+                }
+            }
+        });
+    }
 })();
+
+function openConfigModal(deviceId) {
+    const modal = document.getElementById("config-modal");
+    const form = document.getElementById("config-form");
+    if (modal && form) {
+        form.action = "/admin/network/tr069/devices/" + deviceId + "/config";
+        form.querySelector('select[name="config_action"]').value = "";
+        form.querySelector('input[name="config_value"]').value = "";
+        document.getElementById("config-action-description").textContent = "";
+        document.getElementById("config-value-wrapper").style.display = "block";
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+    }
+}
+
+function closeConfigModal() {
+    const modal = document.getElementById("config-modal");
+    if (modal) {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+    }
+}
+
+function openFirmwareModal(deviceId) {
+    const modal = document.getElementById("firmware-modal");
+    const form = document.getElementById("firmware-form");
+    if (modal && form) {
+        form.action = "/admin/network/tr069/devices/" + deviceId + "/firmware";
+        form.querySelector('input[name="firmware_url"]').value = "";
+        form.querySelector('input[name="filename"]').value = "";
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+    }
+}
+
+function closeFirmwareModal() {
+    const modal = document.getElementById("firmware-modal");
+    if (modal) {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+    }
+}
+
+// Close modals when clicking outside
+document.getElementById("config-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "config-modal") closeConfigModal();
+});
+document.getElementById("firmware-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "firmware-modal") closeFirmwareModal();
+});
+
+// Bulk selection handling
+const selectedDevices = new Set();
+
+function updateBulkUI() {
+    const bulkBar = document.getElementById("bulk-actions-bar");
+    const countEl = document.getElementById("selected-count");
+    const deviceIdsInput = document.getElementById("bulk-device-ids");
+
+    if (selectedDevices.size > 0) {
+        bulkBar.classList.remove("hidden");
+        countEl.textContent = selectedDevices.size;
+        deviceIdsInput.value = Array.from(selectedDevices).join(",");
+    } else {
+        bulkBar.classList.add("hidden");
+        countEl.textContent = "0";
+        deviceIdsInput.value = "";
+    }
+}
+
+function clearBulkSelection() {
+    selectedDevices.clear();
+    document.querySelectorAll(".bulk-device-checkbox").forEach(cb => cb.checked = false);
+    document.querySelectorAll(".bulk-select-all").forEach(cb => cb.checked = false);
+    updateBulkUI();
+}
+
+// Individual checkbox change
+document.querySelectorAll(".bulk-device-checkbox").forEach(checkbox => {
+    checkbox.addEventListener("change", () => {
+        if (checkbox.checked) {
+            selectedDevices.add(checkbox.value);
+        } else {
+            selectedDevices.delete(checkbox.value);
+        }
+        updateBulkUI();
+    });
+});
+
+// Select all checkbox change
+document.querySelectorAll(".bulk-select-all").forEach(selectAll => {
+    selectAll.addEventListener("change", () => {
+        const table = selectAll.dataset.table;
+        const checkboxes = document.querySelectorAll(`.bulk-device-checkbox[data-table="${table}"]`);
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = selectAll.checked;
+            if (selectAll.checked) {
+                selectedDevices.add(checkbox.value);
+            } else {
+                selectedDevices.delete(checkbox.value);
+            }
+        });
+        updateBulkUI();
+    });
+});
 </script>
 {% endblock %}

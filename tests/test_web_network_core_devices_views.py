@@ -62,7 +62,6 @@ def test_ont_detail_page_data_uses_unified_subscriber_name_and_status(db_session
             ont_unit_id=ont.id,
             pon_port_id=pon.id,
             subscriber_id=subscriber.id,
-            subscription_id=subscription.id,
             active=True,
         )
     )
@@ -122,7 +121,6 @@ def test_ont_detail_page_data_includes_recent_provisioning_runs(db_session):
             ont_unit_id=ont.id,
             pon_port_id=pon.id,
             subscriber_id=subscriber.id,
-            subscription_id=subscription.id,
             active=True,
         )
     )

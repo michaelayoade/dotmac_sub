@@ -22,7 +22,7 @@
         } else if (activeTab === 'configuration') {
             const trigger = document.querySelector('[data-tab=\"configuration\"]');
             if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/iphost-config', {target: '#configuration-content', swap: 'innerHTML'});
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#configuration-content', swap: 'innerHTML'});
         }
      ">
     {# Header #}
@@ -88,12 +88,12 @@
             </button>
             <button type="button"
                     data-tab-trigger="configuration"
-                    hx-get="/admin/network/onts/{{ ont.id }}/iphost-config"
+                    hx-get="/admin/network/onts/{{ ont.id }}/unified-config"
                     hx-target="#configuration-content"
                     hx-swap="innerHTML"
                     @click="activeTab = 'configuration'"
                     class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 Configuration
             </button>
             <a href="/admin/network/onts/{{ ont.id }}/edit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
@@ -274,13 +274,13 @@
             </button>
             <button type="button"
                     data-tab="configuration"
-                    hx-get="/admin/network/onts/{{ ont.id }}/iphost-config"
+                    hx-get="/admin/network/onts/{{ ont.id }}/unified-config"
                     hx-target="#configuration-content"
                     hx-swap="innerHTML"
                     @click="activeTab = 'configuration'; $el.dataset.loaded = '1'"
                     :class="activeTab === 'configuration' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 Configuration
             </button>
         </nav>
@@ -288,74 +288,38 @@
 
     {# ===================== OVERVIEW TAB ===================== #}
     <div x-show="activeTab === 'overview'" x-transition>
-        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <div class="grid grid-cols-1 gap-6 lg:grid-cols-3"
+             {% if preview_mode %}
+             x-data='{
+                open: false,
+                currentOltId: {{ (ont.olt_device_id|string if ont.olt_device_id else "") | tojson }},
+                currentOltName: {{ ((network_path.get("olt_name") or (ont.olt_device.name if ont.olt_device is defined and ont.olt_device else ""))) | tojson }},
+                currentBoard: {{ (ont.board or "") | tojson }},
+                currentPort: {{ (ont.port or "") | tojson }},
+                draftOltId: {{ (ont.olt_device_id|string if ont.olt_device_id else "") | tojson }},
+                draftBoard: {{ (ont.board or "") | tojson }},
+                draftPort: {{ (ont.port or "") | tojson }},
+                openModal() {
+                    this.draftOltId = this.currentOltId;
+                    this.draftBoard = this.currentBoard;
+                    this.draftPort = this.currentPort;
+                    this.open = true;
+                },
+                applyMove() {
+                    const select = this.$refs.oltSelect;
+                    this.currentOltId = this.draftOltId;
+                    this.currentBoard = this.draftBoard;
+                    this.currentPort = this.draftPort;
+                    this.currentOltName = select && select.selectedIndex >= 0
+                        ? select.options[select.selectedIndex].text
+                        : this.currentOltName;
+                    this.open = false;
+                }
+             }'
+             {% endif %}>
             <div class="lg:col-span-2 space-y-6">
                 {% if preview_mode %}
-                {% set preview_initial_olt_id = ont.olt_device_id|string if ont.olt_device_id else '' %}
-                {% set preview_initial_olt_name = network_path.get('olt_name') or '' %}
-                {% if not preview_initial_olt_name and ont.olt_device is defined and ont.olt_device %}
-                    {% set preview_initial_olt_name = ont.olt_device.name %}
-                {% endif %}
-                <div
-                    x-data='{
-                        open: false,
-                        currentOltId: {{ preview_initial_olt_id | tojson }},
-                        currentOltName: {{ preview_initial_olt_name | tojson }},
-                        currentBoard: {{ (ont.board or "") | tojson }},
-                        currentPort: {{ (ont.port or "") | tojson }},
-                        draftOltId: {{ preview_initial_olt_id | tojson }},
-                        draftBoard: {{ (ont.board or "") | tojson }},
-                        draftPort: {{ (ont.port or "") | tojson }},
-                        openModal() {
-                            this.draftOltId = this.currentOltId;
-                            this.draftBoard = this.currentBoard;
-                            this.draftPort = this.currentPort;
-                            this.open = true;
-                        },
-                        applyMove() {
-                            const select = this.$refs.oltSelect;
-                            this.currentOltId = this.draftOltId;
-                            this.currentBoard = this.draftBoard;
-                            this.currentPort = this.draftPort;
-                            this.currentOltName = select && select.selectedIndex >= 0
-                                ? select.options[select.selectedIndex].text
-                                : this.currentOltName;
-                            this.open = false;
-                        }
-                    }'
-                    class="space-y-4"
-                >
-                    {% call card("ONU Placement Preview", color="blue") %}
-                    <div class="flex flex-col gap-4 rounded-xl border border-slate-200 bg-slate-50/80 p-4 dark:border-slate-700 dark:bg-slate-800/60 sm:flex-row sm:items-start sm:justify-between">
-                        <div class="flex items-center gap-3">
-                            <a href="/admin/network/onts/{{ ont.id }}/preview?tab=configuration"
-                               class="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
-                               title="Open configuration preview">
-                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-                            </a>
-                            <button type="button"
-                                    @click="openModal()"
-                                    class="text-sm font-medium text-blue-600 underline decoration-blue-300 underline-offset-4 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
-                                Move ONU
-                            </button>
-                        </div>
-                    </div>
-                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-3">
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
-                            <dd class="mt-1 text-sm font-medium text-slate-900 dark:text-white" x-text="currentOltName || 'Not set'"></dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Board</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentBoard || 'Not set'"></dd>
-                        </div>
-                        <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Port</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentPort || 'Not set'"></dd>
-                        </div>
-                    </dl>
-                    {% endcall %}
-
+                <div>
                     <div x-show="open" x-cloak x-transition class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
                         <div class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
                              @click.outside="open = false"
@@ -419,30 +383,60 @@
 
                 {# Device Information #}
                 {% call card("Device Information", color="blue") %}
-                <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-                    <div>
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.serial_number }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '-' }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.firmware_version or '-' }}</dd>
-                    </div>
-                    {% if ont.notes %}
-                    <div class="sm:col-span-2">
-                        <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
-                        <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ ont.notes }}</dd>
-                    </div>
-                    {% endif %}
-                </dl>
+                <div class="space-y-4">
+                    <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.serial_number }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.vendor or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Model</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.model or '-' }}</dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Firmware</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ ont.firmware_version or '-' }}</dd>
+                        </div>
+                        {% if ont.notes %}
+                        <div class="sm:col-span-2">
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ ont.notes }}</dd>
+                        </div>
+                        {% endif %}
+                    </dl>
+                    <details class="border-t border-slate-200 pt-4 dark:border-slate-700">
+                        <summary class="cursor-pointer list-none inline-flex items-center gap-2 text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                            <span>See more</span>
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                        </summary>
+                        <div class="mt-4 space-y-4">
+                            <div>
+                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Device ID</p>
+                                <p class="text-sm text-slate-900 dark:text-white font-mono">{{ ont.id | string | truncate(20, True, '...') }}</p>
+                            </div>
+                            {% if signal_info and signal_info.offline_reason_display %}
+                            <div>
+                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Offline Reason</p>
+                                <p class="text-sm text-rose-600 dark:text-rose-400">{{ signal_info.offline_reason_display }}</p>
+                            </div>
+                            {% endif %}
+                            {% if signal_info and signal_info.last_seen_at %}
+                            <div>
+                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Seen Online</p>
+                                <p class="text-sm text-slate-900 dark:text-white">{{ signal_info.last_seen_at.strftime('%Y-%m-%d %H:%M') }}</p>
+                            </div>
+                            {% endif %}
+                            <div>
+                                <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
+                                <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '&mdash;' }}</p>
+                            </div>
+                        </div>
+                    </details>
+                </div>
                 {% endcall %}
 
                 {# Customer Information #}
@@ -515,8 +509,80 @@
             {# Sidebar #}
             <div class="space-y-6">
                 {# Network Path #}
-                {% if network_path %}
-                {% call card("Network Path", color="blue") %}
+                {% if network_path or preview_mode %}
+                {% set network_path_actions = none %}
+                {% if preview_mode %}
+                {% set network_path_actions %}
+                <div class="flex items-center gap-3">
+                    <a href="/admin/network/onts/{{ ont.id }}/preview?tab=configuration"
+                       class="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-300 bg-white text-slate-600 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300"
+                       title="Open configuration preview">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                    </a>
+                    <button type="button"
+                            @click="openModal()"
+                            class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                        Move ONU
+                    </button>
+                </div>
+                {% endset %}
+                {% endif %}
+                {% call card("Network Path", color="blue", actions=network_path_actions) %}
+                {% if preview_mode %}
+                <div class="space-y-4">
+                    <div class="flex items-center gap-3">
+                        <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                            <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">OLT</p>
+                            {% if network_path.get('olt_id') %}
+                            <a href="/admin/network/olts/{{ network_path.olt_id }}"
+                               class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400"
+                               x-text="currentOltName || 'Not set'"></a>
+                            {% else %}
+                            <p class="text-sm font-medium text-slate-900 dark:text-white" x-text="currentOltName || 'Not set'"></p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-slate-100 dark:bg-slate-700/70">
+                            <svg class="h-3.5 w-3.5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M5 19h14M7 7h10a2 2 0 012 2v10H5V9a2 2 0 012-2z"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Board</p>
+                            <p class="text-sm text-slate-900 dark:text-white" x-text="currentBoard || 'Not set'"></p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-slate-100 dark:bg-slate-700/70">
+                            <svg class="h-3.5 w-3.5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h16M4 12h16M4 17h16"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Port</p>
+                            <p class="text-sm text-slate-900 dark:text-white" x-text="currentPort || 'Not set'"></p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-slate-100 dark:bg-slate-700/70">
+                            <svg class="h-3.5 w-3.5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-8 4h5m-5-8h8m3 11H5a2 2 0 01-2-2V7a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2z"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PON Port</p>
+                            <p class="text-sm text-slate-900 dark:text-white">{{ network_path.get('pon_port') or 'Not set' }}</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-blue-300 pl-4 dark:border-blue-700">
+                        <div class="flex h-7 w-7 items-center justify-center rounded-md bg-blue-100 dark:bg-blue-900/30">
+                            <svg class="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.75 17L6 20.75M14.25 17L18 20.75M12 3v9m0 0l-3-3m3 3l3-3M5 14a7 7 0 0114 0"/></svg>
+                        </div>
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONT</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.serial_number }}</p>
+                        </div>
+                    </div>
+                </div>
+                {% else %}
                 <div class="space-y-3">
                     {% if network_path.olt_name %}
                     <div class="flex items-center gap-3">
@@ -552,34 +618,9 @@
                         </div>
                     </div>
                 </div>
+                {% endif %}
                 {% endcall %}
                 {% endif %}
-
-                {# Quick Info #}
-                {% call card("Quick Info", color="slate") %}
-                <div class="space-y-4">
-                    <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Device ID</p>
-                        <p class="text-sm text-slate-900 dark:text-white font-mono">{{ ont.id | string | truncate(20, True, '...') }}</p>
-                    </div>
-                    {% if signal_info and signal_info.offline_reason_display %}
-                    <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Offline Reason</p>
-                        <p class="text-sm text-rose-600 dark:text-rose-400">{{ signal_info.offline_reason_display }}</p>
-                    </div>
-                    {% endif %}
-                    {% if signal_info and signal_info.last_seen_at %}
-                    <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Last Seen Online</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ signal_info.last_seen_at.strftime('%Y-%m-%d %H:%M') }}</p>
-                    </div>
-                    {% endif %}
-                    <div>
-                        <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '&mdash;' }}</p>
-                    </div>
-                </div>
-                {% endcall %}
 
                 {# Observed Runtime Snapshot #}
                 {% call card("Observed Runtime", color="indigo") %}

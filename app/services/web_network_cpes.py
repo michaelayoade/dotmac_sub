@@ -49,11 +49,15 @@ def _vendor_from_serial(value: str | None) -> str | None:
 
 
 def resolve_authoritative_cpe_mac(db: Session, cpe: CPEDevice) -> str | None:
-    """Return the best MAC for a CPE, preferring linked active ONT inventory."""
+    """Return the best MAC for a CPE, preferring linked active ONT inventory.
+
+    CPE devices link directly to subscribers (not subscriptions), enabling
+    independent OLT management.
+    """
     serial_number = str(getattr(cpe, "serial_number", "") or "").strip()
     subscriber_id = getattr(cpe, "subscriber_id", None)
-    subscription_id = getattr(cpe, "subscription_id", None)
 
+    # First try by serial number match
     if serial_number:
         ont = db.scalars(
             select(OntUnit)
@@ -65,19 +69,7 @@ def resolve_authoritative_cpe_mac(db: Session, cpe: CPEDevice) -> str | None:
         if ont_mac:
             return ont_mac
 
-    if subscription_id is not None:
-        ont = db.scalars(
-            select(OntUnit)
-            .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
-            .where(OntAssignment.subscription_id == subscription_id)
-            .where(OntAssignment.active.is_(True))
-            .order_by(OntAssignment.updated_at.desc(), OntAssignment.created_at.desc())
-            .limit(1)
-        ).first()
-        ont_mac = normalize_mac_address(getattr(ont, "mac_address", None))
-        if ont_mac:
-            return ont_mac
-
+    # Then try by subscriber's active ONT assignment
     if subscriber_id is not None:
         ont = db.scalars(
             select(OntUnit)
@@ -204,7 +196,6 @@ def parse_cpe_form(form) -> dict[str, object]:
             installed_at = None
     return {
         "subscriber_id": str(form.get("subscriber_id") or "").strip(),
-        "subscription_id": str(form.get("subscription_id") or "").strip() or None,
         "service_address_id": str(form.get("service_address_id") or "").strip() or None,
         "device_type": _normalize_cpe_device_type(form.get("device_type")),
         "status": str(form.get("status") or "").strip() or DeviceStatus.active.value,
@@ -236,7 +227,6 @@ def cpe_form_snapshot_from_model(cpe) -> dict[str, object]:
     return {
         "id": str(cpe.id),
         "subscriber_id": str(cpe.subscriber_id),
-        "subscription_id": str(cpe.subscription_id) if cpe.subscription_id else "",
         "service_address_id": str(cpe.service_address_id)
         if cpe.service_address_id
         else "",
@@ -293,8 +283,6 @@ def create_cpe(db, values: dict[str, object]):
     normalized = dict(values)
     normalized["account_id"] = coerce_uuid(str(values.get("subscriber_id") or ""))
     normalized.pop("subscriber_id", None)
-    if values.get("subscription_id"):
-        normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
         normalized["service_address_id"] = coerce_uuid(
             str(values.get("service_address_id"))
@@ -323,8 +311,6 @@ def update_cpe(db, *, cpe_id: str, values: dict[str, object]):
     if values.get("subscriber_id"):
         normalized["account_id"] = coerce_uuid(str(values.get("subscriber_id")))
     normalized.pop("subscriber_id", None)
-    if values.get("subscription_id"):
-        normalized["subscription_id"] = coerce_uuid(str(values.get("subscription_id")))
     if values.get("service_address_id"):
         normalized["service_address_id"] = coerce_uuid(
             str(values.get("service_address_id"))
@@ -396,7 +382,6 @@ def build_cpe_list_data(
     devices = network_service.cpe_devices.list(
         db=db,
         subscriber_id=subscriber_filter,
-        subscription_id=None,
         order_by="created_at",
         order_dir="desc",
         limit=5000,

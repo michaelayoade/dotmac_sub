@@ -258,7 +258,6 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
         db: Session,
         splitter_port_id: str | None,
         subscriber_id: str | None,
-        subscription_id: str | None,
         is_active: bool | None,
         order_by: str,
         order_dir: str,
@@ -271,7 +270,6 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
             {
                 SplitterPortAssignment.splitter_port_id: coerce_uuid(splitter_port_id),
                 SplitterPortAssignment.subscriber_id: coerce_uuid(subscriber_id),
-                SplitterPortAssignment.subscription_id: coerce_uuid(subscription_id),
             },
         )
         query = apply_active_state(query, SplitterPortAssignment.active, is_active)

@@ -4,7 +4,6 @@ from app.services.network.olt_polling import (
     _build_reading_targets,
     _parse_signal_value,
     _parse_snmp_table,
-    _parse_snmp_table_composite,
 )
 from app.services.network.olt_polling_parsers import _fsp_hint_from_index
 
@@ -18,10 +17,11 @@ def test_parse_snmp_table_last_token_index() -> None:
 
 
 def test_parse_snmp_table_composite_index() -> None:
+    """Test that composite indexes are preserved when base_oid is provided."""
     lines = [
         "iso.3.6.1.4.1.2011.6.128.1.1.2.51.1.4.4194320384.3 = INTEGER: -1950",
     ]
-    parsed = _parse_snmp_table_composite(
+    parsed = _parse_snmp_table(
         lines,
         base_oid=".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4",
     )

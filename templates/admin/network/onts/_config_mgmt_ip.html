@@ -1,0 +1,151 @@
+{# Management IP Configuration Section - Improved DHCP/Static display #}
+
+{# Current Configuration Display #}
+{% if iphost_config %}
+<div class="mb-5">
+    <div class="flex items-center justify-between mb-3">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Configuration</h4>
+        {% if iphost_ok %}
+        <span class="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
+            <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+            Retrieved from OLT
+        </span>
+        {% endif %}
+    </div>
+    {% if iphost_ok %}
+    <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-800/60">
+        <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {% for key, value in iphost_config.items() %}
+            <div class="{% if 'mode' in key.lower() or 'ip address' in key.lower() %}col-span-1{% endif %}">
+                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">{{ key }}</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">
+                    {% if value %}
+                    {% if 'mode' in key.lower() %}
+                    <span class="inline-flex items-center gap-1">
+                        {% if 'dhcp' in value|lower %}
+                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
+                        {% else %}
+                        <span class="h-2 w-2 rounded-full bg-blue-500"></span>
+                        {% endif %}
+                        {{ value }}
+                    </span>
+                    {% else %}
+                    {{ value }}
+                    {% endif %}
+                    {% else %}
+                    <span class="text-slate-400">&mdash;</span>
+                    {% endif %}
+                </dd>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% else %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+        <p class="text-sm text-amber-700 dark:text-amber-300">{{ iphost_msg or 'Unable to retrieve current configuration from OLT.' }}</p>
+    </div>
+    {% endif %}
+</div>
+{% endif %}
+
+{# Configuration Form #}
+<div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
+     x-data="{ ipMode: '{{ initial_iphost_form.ip_mode if initial_iphost_form else 'dhcp' }}' }">
+    <div class="flex items-center justify-between mb-4">
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure Management IP</h4>
+        <div class="flex items-center gap-2">
+            <button type="button"
+                    @click="ipMode = 'dhcp'"
+                    :class="ipMode === 'dhcp' ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-700' : 'bg-white text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-600'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-l-lg border transition-colors">
+                DHCP
+            </button>
+            <button type="button"
+                    @click="ipMode = 'static'"
+                    :class="ipMode === 'static' ? 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-700' : 'bg-white text-slate-600 border-slate-300 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-600'"
+                    class="px-3 py-1.5 text-xs font-medium rounded-r-lg border -ml-px transition-colors">
+                Static IP
+            </button>
+        </div>
+    </div>
+
+    {# Mode Explanation #}
+    <div class="mb-4 rounded-lg px-3 py-2 text-xs" :class="ipMode === 'dhcp' ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300' : 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'">
+        <template x-if="ipMode === 'dhcp'">
+            <p><strong>DHCP Mode:</strong> The ONT will obtain its management IP address automatically from a DHCP server on the selected VLAN. This is the recommended mode for most deployments.</p>
+        </template>
+        <template x-if="ipMode === 'static'">
+            <p><strong>Static IP Mode:</strong> Manually assign a fixed IP address to the ONT. Use this when you need a predictable management IP or when no DHCP server is available on the management VLAN.</p>
+        </template>
+    </div>
+
+    <form hx-post="/admin/network/onts/{{ ont.id if ont else '' }}/actions/configure-mgmt-ip"
+          hx-swap="none"
+          class="space-y-4">
+        <input type="hidden" name="ip_mode" :value="ipMode">
+
+        {# VLAN Selection - Always visible #}
+        <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Management VLAN</label>
+            <select name="vlan_id" required class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <option value="">Select VLAN for management traffic</option>
+                {% for vlan in vlans %}
+                <option value="{{ vlan.tag }}" {% if initial_iphost_form and initial_iphost_form.vlan_id == vlan.tag|string %}selected{% endif %}>
+                    {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}{% if vlan.description %} ({{ vlan.description }}){% endif %}
+                </option>
+                {% endfor %}
+            </select>
+            {% if not vlans %}
+            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">No VLANs are assigned to this ONT's OLT. Please configure VLANs first.</p>
+            {% else %}
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The VLAN that carries management traffic to/from this ONT.</p>
+            {% endif %}
+        </div>
+
+        {# Static IP Fields - Only visible when static mode selected #}
+        <div x-show="ipMode === 'static'" x-transition x-cloak class="space-y-4">
+            <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">IP Address</label>
+                    <input type="text"
+                           name="ip_address"
+                           value="{{ initial_iphost_form.ip_address if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}"
+                           placeholder="192.168.1.100"
+                           pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">IPv4 address for ONT management</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Subnet Mask</label>
+                    <input type="text"
+                           name="subnet"
+                           value="{{ initial_iphost_form.subnet if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}"
+                           placeholder="255.255.255.0"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Network subnet mask</p>
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Gateway</label>
+                    <input type="text"
+                           name="gateway"
+                           value="{{ initial_iphost_form.gateway if initial_iphost_form and initial_iphost_form.ip_mode == 'static' else '' }}"
+                           placeholder="192.168.1.1"
+                           class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Default gateway IP</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex items-center justify-between pt-2">
+            <p class="text-xs text-slate-500 dark:text-slate-400">
+                Changes are applied immediately via SSH to the OLT.
+            </p>
+            <button type="submit"
+                    {% if not vlans %}disabled{% endif %}
+                    class="inline-flex items-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 transition-all">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                Apply Configuration
+            </button>
+        </div>
+    </form>
+</div>

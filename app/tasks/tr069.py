@@ -381,3 +381,152 @@ def _emit_job_event(db, emit_event, event_type, job: Tr069Job) -> None:
         )
     except Exception as e:
         logger.warning("Failed to emit TR-069 job event: %s", e)
+
+
+@celery_app.task(name="app.tasks.tr069.execute_bulk_action")
+def execute_bulk_action(
+    device_ids: list[str],
+    action: str,
+    params: dict | None = None,
+) -> dict[str, int]:
+    """Execute an action on multiple TR-069 devices.
+
+    Args:
+        device_ids: List of Tr069CpeDevice UUIDs.
+        action: Action name (refresh, reboot, factory_reset, config_push, firmware).
+        params: Additional parameters for the action.
+
+    Returns:
+        Statistics dict with processed/errors/skipped counts.
+    """
+    from app.services.common import coerce_uuid
+    from app.services.tr069 import Jobs
+
+    logger.info("Starting bulk TR-069 %s for %d device(s)", action, len(device_ids))
+    db = SessionLocal()
+    processed = 0
+    errors = 0
+    skipped = 0
+    params = params or {}
+
+    try:
+        for device_id_str in device_ids:
+            try:
+                device_id = coerce_uuid(device_id_str)
+                device = db.get(Tr069CpeDevice, device_id)
+                if not device:
+                    logger.warning("TR-069 device %s not found, skipping", device_id_str)
+                    skipped += 1
+                    continue
+
+                # Build and execute job based on action type
+                job = _create_bulk_job(db, device_id, action, params)
+                if job is None:
+                    skipped += 1
+                    continue
+
+                result = Jobs.execute(db, str(job.id))
+                if result.status == Tr069JobStatus.succeeded:
+                    processed += 1
+                else:
+                    logger.warning(
+                        "Bulk %s failed for TR-069 device %s: %s",
+                        action,
+                        device_id_str,
+                        result.error,
+                    )
+                    errors += 1
+            except Exception as exc:
+                logger.error(
+                    "Bulk %s error for TR-069 device %s: %s", action, device_id_str, exc
+                )
+                errors += 1
+
+        db.commit()
+    except Exception as exc:
+        logger.error("Bulk TR-069 action %s failed: %s", action, exc)
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+    stats = {"processed": processed, "errors": errors, "skipped": skipped}
+    logger.info("Bulk TR-069 %s complete: %s", action, stats)
+    return stats
+
+
+def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | None:
+    """Create a TR-069 job for a bulk action."""
+    from uuid import UUID
+
+    from app.schemas.tr069 import Tr069JobCreate
+    from app.services.tr069 import Jobs
+
+    # Map action to job definition
+    job_definitions: dict[str, dict] = {
+        "refresh": {
+            "name": "Refresh Parameters",
+            "command": "refreshObject",
+            "payload": {"objectName": "Device."},
+        },
+        "reboot": {
+            "name": "Reboot Device",
+            "command": "reboot",
+            "payload": None,
+        },
+        "factory_reset": {
+            "name": "Factory Reset",
+            "command": "factoryReset",
+            "payload": None,
+        },
+    }
+
+    if action in job_definitions:
+        defn = job_definitions[action]
+        payload = Tr069JobCreate(
+            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            name=defn["name"],
+            command=defn["command"],
+            payload=defn["payload"],
+        )
+        return Jobs.create(db, payload)
+
+    if action == "config_push":
+        # Config push requires parameter path and value in params
+        parameter_path = params.get("parameter_path")
+        parameter_value = params.get("parameter_value")
+        if not parameter_path:
+            logger.warning("config_push requires parameter_path")
+            return None
+        payload = Tr069JobCreate(
+            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            name="Config Push",
+            command="setParameterValues",
+            payload={
+                "parameterValues": [[parameter_path, parameter_value, "xsd:string"]],
+            },
+        )
+        return Jobs.create(db, payload)
+
+    if action == "firmware":
+        # Firmware update requires URL in params
+        firmware_url = params.get("firmware_url")
+        if not firmware_url:
+            logger.warning("firmware requires firmware_url")
+            return None
+        task_payload: dict = {
+            "fileType": "1 Firmware Upgrade Image",
+            "url": firmware_url,
+        }
+        if params.get("filename"):
+            task_payload["filename"] = params["filename"]
+        payload = Tr069JobCreate(
+            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            name="Firmware Update",
+            command="download",
+            payload=task_payload,
+        )
+        return Jobs.create(db, payload)
+
+    logger.warning("Unknown bulk action: %s", action)
+    return None

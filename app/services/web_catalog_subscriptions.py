@@ -625,9 +625,10 @@ def _subscription_ipv4_form_rows(
     *,
     subscription_obj: Subscription,
 ) -> tuple[list[str], list[str]]:
+    # Query by subscriber_id since IP assignments link to subscribers, not subscriptions
     assignments = (
         db.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == subscription_obj.id)
+        .filter(IPAssignment.subscriber_id == subscription_obj.subscriber_id)
         .filter(IPAssignment.ip_version == IPVersion.ipv4)
         .filter(IPAssignment.is_active.is_(True))
         .order_by(IPAssignment.created_at.asc())
@@ -1020,7 +1021,7 @@ def _allocate_ipv4_assignments_for_subscription(
             if (
                 existing_address
                 and existing_assignment
-                and existing_assignment.subscription_id == subscription_obj.id
+                and existing_assignment.subscriber_id == subscription_obj.subscriber_id
                 and existing_assignment.is_active
                 and existing_address.pool_id == block.pool_id
             ):
@@ -1035,7 +1036,6 @@ def _allocate_ipv4_assignments_for_subscription(
             raise ValueError(f"No available IPv4 address in block {block.cidr}.")
         assignment_payload = {
             "account_id": subscription_obj.subscriber_id,
-            "subscription_id": subscription_obj.id,
             "ip_version": IPVersion.ipv4,
             "ipv4_address_id": address.id,
             "is_active": True,
@@ -1077,9 +1077,10 @@ def _sync_ipv4_assignments_for_subscription(
         selected_ips=selected_ips,
     )
     desired_set = {ip for ip in desired_ips if ip}
+    # Query by subscriber_id since IP assignments link to subscribers, not subscriptions
     active_assignments = (
         db.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == subscription_obj.id)
+        .filter(IPAssignment.subscriber_id == subscription_obj.subscriber_id)
         .filter(IPAssignment.ip_version == IPVersion.ipv4)
         .filter(IPAssignment.is_active.is_(True))
         .all()
@@ -1305,7 +1306,9 @@ def _password_sync_evidence(credential: AccessCredential | None) -> dict[str, st
     }
 
 
-def _ip_assignment_mode(subscription: Subscription) -> tuple[str, str]:
+def _ip_assignment_mode(
+    db: Session, subscription: Subscription
+) -> tuple[str, str]:
     mode = str(subscription.service_status_raw or "").strip().lower()
     if mode == "dynamic":
         return ("Dynamic pool", "IP is assigned from RADIUS/DHCP pool at session time.")
@@ -1319,13 +1322,17 @@ def _ip_assignment_mode(subscription: Subscription) -> tuple[str, str]:
             "Static assignment",
             "Subscription stores a fixed IPv4 address directly.",
         )
-    if any(
-        getattr(assignment, "is_active", False)
-        for assignment in (subscription.ip_assignments or [])
-    ):
+    # Query IP assignments by subscriber (devices link to subscribers, not subscriptions)
+    has_active_ip = (
+        db.query(IPAssignment)
+        .filter(IPAssignment.subscriber_id == subscription.subscriber_id)
+        .filter(IPAssignment.is_active.is_(True))
+        .first()
+    ) is not None
+    if has_active_ip:
         return (
             "Assigned IP",
-            "Subscription has active IP assignments linked in inventory.",
+            "Subscriber has active IP assignments linked in inventory.",
         )
     return (
         "Unspecified",
@@ -1626,7 +1633,7 @@ def subscription_detail_context(
         key=lambda event: event.created_at or datetime.min.replace(tzinfo=UTC),
         reverse=True,
     )
-    ip_assignment_mode, ip_assignment_detail = _ip_assignment_mode(subscription)
+    ip_assignment_mode, ip_assignment_detail = _ip_assignment_mode(db, subscription)
     has_service_orders = bool(subscription.service_orders)
     domain_events = _subscription_domain_events(db, subscription)
     notification_evidence = _subscription_notifications(db, subscription)

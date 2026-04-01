@@ -81,7 +81,6 @@ def test_subscriber_search_matches_cabinet(db_session, subscription, olt_device)
         ont_unit_id=ont.id,
         pon_port_id=pon_port.id,
         subscriber_id=subscription.subscriber_id,
-        subscription_id=subscription.id,
         active=True,
     )
     db_session.add(assignment)

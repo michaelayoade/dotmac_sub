@@ -251,6 +251,8 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: dotmac-sub-dev-token
     env_file:
     - .env
     depends_on:
@@ -258,6 +260,7 @@ services:
     - redis
     - victoriametrics
     - minio
+    - openbao
     volumes:
     - ./app:/app/app
     command:

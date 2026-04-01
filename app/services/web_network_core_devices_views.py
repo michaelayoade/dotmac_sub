@@ -15,7 +15,12 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.catalog import NasDevice, NasDeviceStatus
+from app.models.catalog import (
+    NasDevice,
+    NasDeviceStatus,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.network import CPEDevice
 from app.models.network_monitoring import (
     DeviceInterface,
@@ -25,6 +30,7 @@ from app.models.network_monitoring import (
 )
 from app.models.subscriber import SubscriberCategory
 from app.services import network as network_service
+from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
@@ -93,25 +99,6 @@ def _extract_tx_power_dbm(*values: object) -> float | None:
             except ValueError:
                 continue
     return None
-
-
-def _decode_huawei_packed_fsp(packed_value: int) -> str | None:
-    """Best-effort decode of Huawei packed FSP index to frame/slot/port."""
-    if packed_value < 0:
-        return None
-    base = 0xFA000000
-    if packed_value < base:
-        return None
-    delta = packed_value - base
-    if delta % 256 != 0:
-        return None
-    slot_port = delta // 256
-    frame = 0
-    slot = slot_port // 16
-    port = slot_port % 16
-    if slot < 0 or port < 0:
-        return None
-    return f"{frame}/{slot}/{port}"
 
 
 def _normalize_ont_port_display(board: object, port: object) -> str | None:
@@ -558,33 +545,14 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     signal_data: dict[str, dict[str, object]] = {}
     pon_port_display_by_ont_id: dict[str, str] = {}
     ont_mac_by_ont_id: dict[str, str] = {}
-    assignment_subscription_ids = {
-        getattr(a, "subscription_id", None)
-        for a in ont_assignments
-        if getattr(a, "subscription_id", None) is not None
-    }
+    # Get subscriber IDs from assignments to find related CPE devices
+    # Note: Devices link to subscribers, not subscriptions (for independent OLT management)
     assignment_subscriber_ids = {
         getattr(a, "subscriber_id", None)
         for a in ont_assignments
         if getattr(a, "subscriber_id", None) is not None
     }
-    cpe_mac_by_subscription_id: dict[object, str] = {}
     cpe_mac_by_subscriber_id: dict[object, str] = {}
-    if assignment_subscription_ids:
-        cpes_by_subscription = list(
-            db.scalars(
-                select(CPEDevice)
-                .where(CPEDevice.subscription_id.in_(assignment_subscription_ids))
-                .order_by(CPEDevice.updated_at.desc(), CPEDevice.created_at.desc())
-            ).all()
-        )
-        for cpe in cpes_by_subscription:
-            subscription_id = getattr(cpe, "subscription_id", None)
-            mac = str(getattr(cpe, "mac_address", "") or "").strip()
-            if subscription_id is None or not mac:
-                continue
-            if subscription_id not in cpe_mac_by_subscription_id:
-                cpe_mac_by_subscription_id[subscription_id] = mac
     if assignment_subscriber_ids:
         cpes_by_subscriber = list(
             db.scalars(
@@ -610,12 +578,9 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             ont_mac_by_ont_id[ont_id] = ont_mac
         assignment = assignment_by_ont_id.get(ont_id)
         if assignment:
-            subscription_id = getattr(assignment, "subscription_id", None)
             subscriber_id = getattr(assignment, "subscriber_id", None)
             cpe_mac = None
-            if subscription_id is not None:
-                cpe_mac = cpe_mac_by_subscription_id.get(subscription_id)
-            if not cpe_mac and subscriber_id is not None:
+            if subscriber_id is not None:
                 cpe_mac = cpe_mac_by_subscriber_id.get(subscriber_id)
             if cpe_mac:
                 ont_mac_by_ont_id[ont_id] = cpe_mac
@@ -1672,8 +1637,21 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             str(subscriber_info["status"]),
             SUBSCRIBER_STATUS_CLASSES["unknown"],
         )
-    if assignment and assignment.subscription:
-        subscription = assignment.subscription
+    # Look up active subscription for subscriber (no longer directly on assignment)
+    subscription = None
+    if assignment and assignment.subscriber_id:
+        subscription_stmt = (
+            select(Subscription)
+            .where(
+                Subscription.subscriber_id == assignment.subscriber_id,
+                Subscription.status == SubscriptionStatus.active,
+            )
+            .order_by(Subscription.created_at.desc())
+            .limit(1)
+        )
+        subscription = db.scalars(subscription_stmt).first()
+
+    if subscription:
         subscriber_info["subscription_id"] = str(subscription.id)
         subscriber_info["plan_name"] = (
             subscription.offer.name
@@ -1685,11 +1663,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         )
 
     provisioning_runs: list[dict[str, object]] = []
-    subscription_entity_id = (
-        assignment.subscription.id
-        if assignment and getattr(assignment, "subscription", None) is not None
-        else None
-    )
+    subscription_entity_id = subscription.id if subscription else None
     if subscription_entity_id is not None:
         from app.models.provisioning import ProvisioningRun
 

@@ -533,7 +533,10 @@ class Parameters(ListResponseMixin):
             query,
             order_by,
             order_dir,
-            {"updated_at": Tr069Parameter.updated_at, "name": Tr069Parameter.name},
+            {
+                "name": Tr069Parameter.name,
+                "updated_at": Tr069Parameter.updated_at,
+            },
         )
         return apply_pagination(query, limit, offset).all()
 

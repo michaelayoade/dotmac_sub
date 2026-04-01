@@ -1649,3 +1649,276 @@ def ont_iphost_config(
         }
     )
     return templates.TemplateResponse("admin/network/onts/_mgmt_config.html", context)
+
+
+# -- Unified Configuration Page Routes -----------------------------------------
+
+
+@router.get(
+    "/onts/{ont_id}/unified-config",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_unified_config(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Unified configuration page with accordion sections."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    # Get basic info for summary badges (without full data load)
+    ok, msg, iphost_config = web_network_ont_actions_service.fetch_iphost_config(
+        db, ont_id
+    )
+    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
+    tr069_profiles, tr069_profiles_error = (
+        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    )
+
+    # Build summary info for accordion headers
+    initial_form = _initial_iphost_form(ont, iphost_config)
+    mgmt_ip_summary = {
+        "mode": initial_form.get("ip_mode"),
+        "vlan": initial_form.get("vlan_id"),
+        "ip": initial_form.get("ip_address") if initial_form.get("ip_mode") == "static" else None,
+    }
+
+    # Get service ports count (lightweight check)
+    try:
+        sp_data = web_network_service_ports_service.list_context(db, ont_id)
+        service_ports_count = len(sp_data.get("service_ports", []))
+    except Exception:
+        service_ports_count = 0
+
+    # Get TR-069 summary if available
+    wan_summary = {
+        "pppoe_user": getattr(ont, "pppoe_username", None),
+        "wan_ip": getattr(ont, "observed_wan_ip", None),
+        "status": getattr(ont, "observed_pppoe_status", None),
+    }
+
+    # WiFi summary from observed data
+    wifi_summary = {
+        "ssid": None,  # Would need TR-069 call to get current SSID
+    }
+
+    # Check if TR-069 is available
+    has_tr069 = bool(getattr(ont, "mac_address", None))
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont": ont,
+            "iphost_config": iphost_config,
+            "iphost_ok": ok,
+            "iphost_msg": msg,
+            "initial_iphost_form": initial_form,
+            "vlans": vlans,
+            "tr069_profiles": tr069_profiles,
+            "tr069_profiles_error": tr069_profiles_error,
+            "mgmt_ip_summary": mgmt_ip_summary,
+            "service_ports_count": service_ports_count,
+            "wan_summary": wan_summary,
+            "wifi_summary": wifi_summary,
+            "has_tr069": has_tr069,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/network/onts/_unified_config.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/config/service-ports",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_service_ports(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Service ports section for unified config."""
+    data = web_network_service_ports_service.list_context(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    return templates.TemplateResponse(
+        "admin/network/onts/_config_service_ports.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/config/wan",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_wan(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: WAN/PPPoE section for unified config."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        return templates.TemplateResponse(
+            "admin/network/onts/_config_wan.html",
+            {"request": request, "error": "ONT not found"},
+        )
+
+    # Try to get TR-069 data
+    tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont_id": ont_id,
+            "tr069_available": tr069 and tr069.get("available"),
+            "wan_info": tr069.get("wan") if tr069 else None,
+            "current_pppoe_user": tr069.get("wan", {}).get("PPPoE Username") if tr069 else None,
+        }
+    )
+    return templates.TemplateResponse("admin/network/onts/_config_wan.html", context)
+
+
+@router.get(
+    "/onts/{ont_id}/config/wifi",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_wifi(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: WiFi section for unified config."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        return templates.TemplateResponse(
+            "admin/network/onts/_config_wifi.html",
+            {"request": request, "error": "ONT not found"},
+        )
+
+    # Try to get TR-069 data
+    tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont_id": ont_id,
+            "tr069_available": tr069 and tr069.get("available"),
+            "wireless_info": tr069.get("wireless") if tr069 else None,
+            "current_ssid": tr069.get("wireless", {}).get("SSID") if tr069 else None,
+        }
+    )
+    return templates.TemplateResponse("admin/network/onts/_config_wifi.html", context)
+
+
+@router.get(
+    "/onts/{ont_id}/config/tr069-profile",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_tr069_profile(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: TR-069 profile binding section for unified config."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        return templates.TemplateResponse(
+            "admin/network/onts/_config_tr069_profile.html",
+            {"request": request, "error": "ONT not found"},
+        )
+
+    tr069_profiles, tr069_profiles_error = (
+        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    )
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont_id": ont_id,
+            "tr069_profiles": tr069_profiles,
+            "tr069_profiles_error": tr069_profiles_error,
+            "current_profile": None,  # Would need to fetch from OLT
+            "current_profile_id": None,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/network/onts/_config_tr069_profile.html", context
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/config/lan",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_lan(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: LAN/Ethernet section for unified config."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        return templates.TemplateResponse(
+            "admin/network/onts/_config_lan.html",
+            {"request": request, "error": "ONT not found"},
+        )
+
+    # Try to get TR-069 data
+    tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont_id": ont_id,
+            "tr069_available": tr069 and tr069.get("available"),
+            "lan_info": tr069.get("lan") if tr069 else None,
+            "ethernet_ports": tr069.get("ethernet_ports") if tr069 else None,
+            "lan_hosts": tr069.get("lan_hosts") if tr069 else None,
+        }
+    )
+    return templates.TemplateResponse("admin/network/onts/_config_lan.html", context)
+
+
+@router.get(
+    "/onts/{ont_id}/config/diagnostics",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_config_diagnostics(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Diagnostics section for unified config."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    if not ont:
+        return templates.TemplateResponse(
+            "admin/network/onts/_config_diagnostics.html",
+            {"request": request, "error": "ONT not found"},
+        )
+
+    # Check TR-069 availability
+    tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(
+        {
+            "ont_id": ont_id,
+            "tr069_available": tr069 and tr069.get("available"),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/network/onts/_config_diagnostics.html", context
+    )

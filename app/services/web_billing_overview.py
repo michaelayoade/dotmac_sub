@@ -156,10 +156,9 @@ def build_invoices_list_data(
                     days=now.weekday()
                 )
             elif date_range == "month":
-                start = datetime(now.year, now.month, 1, tzinfo=UTC)
+                start = now - timedelta(days=30)
             else:
-                quarter_start_month = ((now.month - 1) // 3) * 3 + 1
-                start = datetime(now.year, quarter_start_month, 1, tzinfo=UTC)
+                start = now - timedelta(days=90)
             scoped = scoped.filter(Invoice.created_at >= start)
         return scoped
 
@@ -526,6 +525,7 @@ def build_ar_aging_data(
         for invoice in buckets[key]
     ]
     this_month_start = date(today.year, today.month, 1)
+    this_month_end = _month_end(this_month_start)
     previous_month_end = this_month_start - timedelta(days=1)
     last_month_start = date(previous_month_end.year, previous_month_end.month, 1)
 
@@ -536,14 +536,18 @@ def build_ar_aging_data(
         if not due_at:
             return False
         if selected_debtor_period == "this_month":
-            return this_month_start <= due_at <= today
+            return this_month_start <= due_at <= this_month_end
         if selected_debtor_period == "last_month":
             return last_month_start <= due_at <= previous_month_end
         return True
 
+    debtor_source_invoices = (
+        filtered_invoices if selected_debtor_period != "all" else overdue_invoices
+    )
+
     debtor_totals: dict[UUID, float] = {}
     debtor_names: dict[UUID, str] = {}
-    for invoice in overdue_invoices:
+    for invoice in debtor_source_invoices:
         if not _debtor_period_match(invoice):
             continue
         account_id = invoice.account_id

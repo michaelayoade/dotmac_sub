@@ -234,7 +234,6 @@ class TestMoveOnt:
 
         current_assignment = MagicMock()
         current_assignment.subscriber_id = "sub-1"
-        current_assignment.subscription_id = "subscr-1"
 
         scalar_result = MagicMock()
         scalar_result.first.return_value = current_assignment

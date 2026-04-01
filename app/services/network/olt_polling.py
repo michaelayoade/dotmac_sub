@@ -22,6 +22,7 @@ from app.models.network import (
     OntUnit,
     OnuOfflineReason,
     OnuOnlineStatus,
+    PollStatus,
     PonPort,
 )
 from app.models.network_monitoring import NetworkDevice
@@ -61,7 +62,6 @@ from app.services.network.olt_polling_parsers import (
     _parse_online_status,
     _parse_signal_value,
     _parse_snmp_table,
-    _parse_snmp_table_composite,
     _parse_sysdescr,
     _parse_uptime_ticks,
     _reading_sort_key,
@@ -387,22 +387,17 @@ def poll_olt_ont_signals(
     oids = _resolve_oid_set(vendor)
     scale = _get_signal_scale(vendor)
 
-    # Huawei ONT indexes are composite (e.g., 4194320384.0), preserve full indexes.
-    parse_table = (
-        _parse_snmp_table_composite if "huawei" in vendor else _parse_snmp_table
-    )
-
     # Walk signal tables from OLT
-    olt_rx_raw = parse_table(
+    olt_rx_raw = _parse_snmp_table(
         _run_olt_snmpwalk(host, oids["olt_rx"], community),
         base_oid=oids["olt_rx"],
     )
-    onu_rx_raw = parse_table(
+    onu_rx_raw = _parse_snmp_table(
         _run_olt_snmpwalk(host, oids["onu_rx"], community),
         base_oid=oids["onu_rx"],
     )
     distance_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids.get("distance", ""), community),
             base_oid=oids.get("distance", ""),
         )
@@ -410,7 +405,7 @@ def poll_olt_ont_signals(
         else {}
     )
     status_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids.get("status", ""), community),
             base_oid=oids.get("status", ""),
         )
@@ -420,7 +415,7 @@ def poll_olt_ont_signals(
 
     # DDM health telemetry walks (optional — missing OIDs are silently skipped)
     onu_tx_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids["onu_tx"], community),
             base_oid=oids["onu_tx"],
         )
@@ -428,7 +423,7 @@ def poll_olt_ont_signals(
         else {}
     )
     temperature_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids["temperature"], community),
             base_oid=oids["temperature"],
         )
@@ -436,7 +431,7 @@ def poll_olt_ont_signals(
         else {}
     )
     voltage_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids["voltage"], community),
             base_oid=oids["voltage"],
         )
@@ -444,7 +439,7 @@ def poll_olt_ont_signals(
         else {}
     )
     bias_current_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids["bias_current"], community),
             base_oid=oids["bias_current"],
         )
@@ -452,7 +447,7 @@ def poll_olt_ont_signals(
         else {}
     )
     offline_reason_snmp_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids["offline_reason"], community),
             base_oid=oids["offline_reason"],
         )
@@ -460,7 +455,7 @@ def poll_olt_ont_signals(
         else {}
     )
     serial_number_raw = (
-        parse_table(
+        _parse_snmp_table(
             _run_olt_snmpwalk(host, oids["serial_number"], community),
             base_oid=oids["serial_number"],
         )
@@ -966,112 +961,175 @@ def poll_sfp_modules(
     }
 
 
-def poll_all_olts(db: Session) -> dict[str, int]:
-    """Poll all active OLT devices for ONT signal levels and OLT health.
+def _ping_host(host: str, count: int = 3, timeout: int = 5) -> bool:
+    """Ping a host and return True if reachable.
+
+    Uses 3 pings with 5 second timeout each to handle high-latency links.
+    """
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            ["ping", "-c", str(count), "-W", str(timeout), host],
+            capture_output=True,
+            timeout=timeout * count + 5,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int]:
+    """Poll a single OLT device for ONT signal levels and OLT health.
+
+    This function is designed to be called in parallel by separate Celery tasks.
+    Each invocation handles its own database transaction.
+
+    Args:
+        db: Database session (caller manages transaction).
+        olt_id: UUID string of the OLT device to poll.
 
     Returns:
-        Aggregate stats: {olts_polled, total_polled, total_updated, total_errors}.
+        Stats dict: {olt_name, polled, updated, errors, health_collected, sfp_updated}.
     """
-    stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True))
-    olts = list(db.scalars(stmt).all())
+    import subprocess
+    from uuid import UUID
 
-    if not olts:
-        logger.info("No active OLTs found for signal polling")
-        return {
-            "olts_polled": 0,
-            "total_polled": 0,
-            "total_updated": 0,
-            "total_errors": 0,
-        }
+    olt = db.get(OLTDevice, UUID(olt_id))
+    if not olt:
+        logger.warning("OLT %s not found for polling", olt_id)
+        return {"olt_name": "unknown", "polled": 0, "updated": 0, "errors": 1}
 
-    totals: dict[str, int] = {
-        "olts_polled": 0,
-        "total_polled": 0,
-        "total_updated": 0,
-        "total_errors": 0,
+    if not olt.is_active:
+        logger.info("Skipping inactive OLT %s", olt.name)
+        return {"olt_name": olt.name, "polled": 0, "updated": 0, "errors": 0, "skipped": 1}
+
+    result: dict[str, int | str] = {
+        "olt_name": olt.name,
+        "polled": 0,
+        "updated": 0,
+        "errors": 0,
+        "health_collected": 0,
+        "sfp_updated": 0,
     }
 
-    health_map: dict[str, OltHealthReading] = {}
+    # Ping check first - updates reachability status
+    host = olt.mgmt_ip or olt.hostname
+    if host:
+        ping_ok = _ping_host(host)
+        olt.last_ping_at = datetime.now(UTC)
+        olt.last_ping_ok = ping_ok
+        if not ping_ok:
+            logger.warning("OLT %s (%s) not reachable via ping", olt.name, host)
+            olt.last_poll_status = PollStatus.failed
+            olt.last_poll_error = "Ping failed - host unreachable"
+            olt.consecutive_poll_failures = (olt.consecutive_poll_failures or 0) + 1
+            olt.last_poll_at = datetime.now(UTC)
+            db.commit()
+            return {
+                "olt_name": olt.name,
+                "polled": 0,
+                "updated": 0,
+                "errors": 1,
+                "ping_failed": 1,
+            }
 
-    for olt in olts:
-        snmp_cfg = _get_olt_snmp_config(db, olt)
-        community = (
-            str(snmp_cfg.get("community")).strip()
-            if snmp_cfg.get("community") is not None
-            else None
-        )
+    snmp_cfg = _get_olt_snmp_config(db, olt)
+    community = (
+        str(snmp_cfg.get("community")).strip()
+        if snmp_cfg.get("community") is not None
+        else None
+    )
+
+    # Track polling status for reachability
+    poll_failed = False
+    poll_error_msg: str | None = None
+    is_timeout = False
+
+    # Poll ONT signals
+    try:
+        poll_result = poll_olt_ont_signals(db, olt, community=community)
+        result["polled"] = poll_result["polled"]
+        result["updated"] = poll_result["updated"]
+        result["errors"] = poll_result["errors"]
+    except subprocess.TimeoutExpired as e:
+        logger.error("Failed to poll OLT %s ONT signals: %s", olt.name, e)
+        result["errors"] = 1
+        poll_failed = True
+        is_timeout = True
+        poll_error_msg = f"SNMP timeout after {getattr(e, 'timeout', 90)}s"
+    except Exception as e:
+        logger.error("Failed to poll OLT %s ONT signals: %s", olt.name, e)
+        result["errors"] = 1
+        poll_failed = True
+        poll_error_msg = str(e)[:500]
+
+    # Poll OLT hardware health
+    health: OltHealthReading | None = None
+    try:
+        health = poll_olt_health(olt, community=community)
+        if health:
+            result["health_collected"] = 1
+    except Exception as e:
+        logger.error("Failed to poll health for OLT %s: %s", olt.name, e)
+        result["errors"] = result.get("errors", 0) + 1
+
+    # Auto-detect firmware/software version via sysDescr
+    if community and olt.mgmt_ip:
         try:
-            result = poll_olt_ont_signals(db, olt, community=community)
-            totals["olts_polled"] += 1
-            totals["total_polled"] += result["polled"]
-            totals["total_updated"] += result["updated"]
-            totals["total_errors"] += result["errors"]
+            sys_descr = _snmpget_value(olt.mgmt_ip, _SYSDESCR_OID, community)
+            if sys_descr:
+                fw, sw = _parse_sysdescr(sys_descr, olt.vendor or "")
+                if sw and sw != olt.software_version:
+                    logger.debug(
+                        "Auto-detected software_version for OLT %s: %s",
+                        olt.name,
+                        sw,
+                    )
+                    olt.software_version = sw
+                if fw and fw != olt.firmware_version:
+                    logger.debug(
+                        "Auto-detected firmware_version for OLT %s: %s",
+                        olt.name,
+                        fw,
+                    )
+                    olt.firmware_version = fw
         except Exception as e:
-            logger.error("Failed to poll OLT %s: %s", olt.name, e)
-            totals["total_errors"] += 1
+            logger.debug("sysDescr fetch failed for OLT %s: %s", olt.name, e)
 
-        # Poll OLT hardware health
-        try:
-            health = poll_olt_health(olt, community=community)
-            health_map[olt.name] = health
-        except Exception as e:
-            logger.error("Failed to poll health for OLT %s: %s", olt.name, e)
+    # Poll SFP module metrics
+    try:
+        sfp_result = poll_sfp_modules(db, olt, community=community)
+        result["sfp_updated"] = sfp_result["updated"]
+    except Exception as e:
+        logger.error("Failed to poll SFP modules for OLT %s: %s", olt.name, e)
+        result["errors"] = result.get("errors", 0) + 1
 
-        # Auto-detect firmware/software version via sysDescr
-        if community and olt.mgmt_ip:
-            try:
-                sys_descr = _snmpget_value(olt.mgmt_ip, _SYSDESCR_OID, community)
-                if sys_descr:
-                    fw, sw = _parse_sysdescr(sys_descr, olt.vendor or "")
-                    if sw and sw != olt.software_version:
-                        logger.debug(
-                            "Auto-detected software_version for OLT %s: %s",
-                            olt.name,
-                            sw,
-                        )
-                        olt.software_version = sw
-                    if fw and fw != olt.firmware_version:
-                        logger.debug(
-                            "Auto-detected firmware_version for OLT %s: %s",
-                            olt.name,
-                            fw,
-                        )
-                        olt.firmware_version = fw
-                else:
-                    logger.debug("sysDescr empty for OLT %s", olt.name)
-            except Exception as e:
-                logger.debug("sysDescr fetch failed for OLT %s: %s", olt.name, e)
-
-        # Poll SFP module metrics
-        try:
-            sfp_result = poll_sfp_modules(db, olt, community=community)
-            totals["sfp_updated"] = totals.get("sfp_updated", 0) + sfp_result["updated"]
-        except Exception as e:
-            logger.error("Failed to poll SFP modules for OLT %s: %s", olt.name, e)
+    # Update OLT polling status for reachability tracking
+    olt.last_poll_at = datetime.now(UTC)
+    if poll_failed:
+        olt.last_poll_status = PollStatus.timeout if is_timeout else PollStatus.failed
+        olt.last_poll_error = poll_error_msg
+        olt.consecutive_poll_failures = (olt.consecutive_poll_failures or 0) + 1
+    else:
+        olt.last_poll_status = PollStatus.success
+        olt.last_poll_error = None
+        olt.consecutive_poll_failures = 0
 
     db.commit()
 
-    # Push signal metrics to VictoriaMetrics after DB updates
-    try:
-        metrics_count = _push_signal_metrics(db)
-        totals["metrics_pushed"] = metrics_count
-    except Exception as e:
-        logger.error("Signal metrics push failed: %s", e)
-        totals["metrics_pushed"] = 0
-
-    # Push OLT health metrics
-    try:
-        health_count = _push_olt_health_metrics(health_map)
-        totals["health_metrics_pushed"] = health_count
-    except Exception as e:
-        logger.error("OLT health metrics push failed: %s", e)
-        totals["health_metrics_pushed"] = 0
+    # Push health metrics for this OLT
+    if health:
+        try:
+            _push_olt_health_metrics({olt.name: health})
+        except Exception as e:
+            logger.error("OLT %s health metrics push failed: %s", olt.name, e)
 
     logger.info(
-        "OLT signal polling complete: %d OLTs, %d ONTs polled, %d updated, %d errors",
-        totals["olts_polled"],
-        totals["total_polled"],
-        totals["total_updated"],
-        totals["total_errors"],
+        "OLT %s polling complete: %d ONTs polled, %d updated, %d errors",
+        olt.name,
+        result["polled"],
+        result["updated"],
+        result["errors"],
     )
-    return totals
+    return result

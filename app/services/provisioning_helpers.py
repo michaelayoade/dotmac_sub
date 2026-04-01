@@ -212,7 +212,7 @@ def _ensure_ip_assignment_for_version(
 ) -> tuple[IPAssignment | None, IPv4Address | IPv6Address | None]:
     assignment = (
         db.query(IPAssignment)
-        .filter(IPAssignment.subscription_id == subscription.id)
+        .filter(IPAssignment.subscriber_id == subscription.subscriber_id)
         .filter(IPAssignment.ip_version == ip_version)
         .filter(IPAssignment.is_active.is_(True))
         .first()
@@ -222,7 +222,7 @@ def _ensure_ip_assignment_for_version(
     if not assignment:
         inactive_assignment = (
             db.query(IPAssignment)
-            .filter(IPAssignment.subscription_id == subscription.id)
+            .filter(IPAssignment.subscriber_id == subscription.subscriber_id)
             .filter(IPAssignment.ip_version == ip_version)
             .filter(IPAssignment.is_active.is_(False))
             .order_by(IPAssignment.updated_at.desc())
@@ -315,7 +315,7 @@ def _ensure_ip_assignment_for_version(
                 detail=f"No available {version_key} addresses in pool {pool.name}.",
             )
 
-    if address.assignment and address.assignment.subscription_id != subscription.id:
+    if address.assignment and address.assignment.subscriber_id != subscription.subscriber_id:
         raise HTTPException(
             status_code=400,
             detail=f"{version_key} address is already assigned.",
@@ -326,7 +326,6 @@ def _ensure_ip_assignment_for_version(
     else:
         assignment_payload = IPAssignmentCreate(
             subscriber_id=subscription.subscriber_id,
-            subscription_id=subscription.id,
             service_address_id=subscription.service_address_id,
             ip_version=ip_version,
             ipv4_address_id=address.id if ip_version == IPVersion.ipv4 else None,
@@ -394,7 +393,7 @@ def _extend_provisioning_context(
         return context
     device = (
         db.query(CPEDevice)
-        .filter(CPEDevice.subscription_id == subscription.id)
+        .filter(CPEDevice.subscriber_id == subscription.subscriber_id)
         .filter(CPEDevice.status == DeviceStatus.active)
         .order_by(CPEDevice.created_at.desc())
         .first()

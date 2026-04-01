@@ -65,11 +65,11 @@ _VENDOR_SIGNAL_SCALE: dict[str, float] = {
 }
 
 # DDM value scale factors per vendor.
-# Temperature: integer degrees C (scale 1.0) for most vendors.
+# Temperature: 0.1°C units for Huawei, 1.0 for others.
 # Voltage: 0.01V units for Huawei/ZTE, 0.001V for Nokia.
 # Bias current: 0.001 mA for Huawei, 0.002 mA for ZTE, 0.001 for Nokia.
 _VENDOR_DDM_SCALES: dict[str, dict[str, float]] = {
-    "huawei": {"temperature": 1.0, "voltage": 0.01, "bias_current": 0.001},
+    "huawei": {"temperature": 0.1, "voltage": 0.01, "bias_current": 0.001},
     "zte": {"temperature": 1.0, "voltage": 0.01, "bias_current": 0.002},
     "nokia": {"temperature": 1.0, "voltage": 0.001, "bias_current": 0.001},
 }
