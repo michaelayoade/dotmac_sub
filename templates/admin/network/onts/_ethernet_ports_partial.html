@@ -32,11 +32,11 @@
                     <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ status }}</span>
                     {% endif %}
                 </td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ port.get('MaxBitRate', port.get('speed', '&mdash;')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ port.get('DuplexMode', port.get('duplex', '&mdash;')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.get('MACAddress', port.get('mac', '&mdash;')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesSent', '&mdash;') }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesReceived', '&mdash;') }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-slate-600 dark:text-slate-300">{{ port.get('MaxBitRate', port.get('speed', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ port.get('DuplexMode', port.get('duplex', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.get('MACAddress', port.get('mac', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesSent', '—') }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesReceived', '—') }}</td>
             </tr>
             {% endfor %}
         </tbody>

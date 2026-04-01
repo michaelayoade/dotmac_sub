@@ -1,43 +1,61 @@
 {# Management IP Configuration Section - Improved DHCP/Static display #}
 
-{# Current Configuration Display #}
+{# Current Configuration Display - Formatted #}
 {% if iphost_config %}
 <div class="mb-5">
     <div class="flex items-center justify-between mb-3">
-        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Configuration</h4>
+        <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Current Configuration from OLT</h4>
         {% if iphost_ok %}
         <span class="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
             <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
-            Retrieved from OLT
+            Live
         </span>
         {% endif %}
     </div>
     {% if iphost_ok %}
     <div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-800/60">
-        <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {% for key, value in iphost_config.items() %}
-            <div class="{% if 'mode' in key.lower() or 'ip address' in key.lower() %}col-span-1{% endif %}">
-                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">{{ key }}</dt>
-                <dd class="text-sm font-mono text-slate-900 dark:text-white">
-                    {% if value %}
-                    {% if 'mode' in key.lower() %}
+        {# Use initial_iphost_form which already has parsed values #}
+        {% set ip_mode = initial_iphost_form.ip_mode if initial_iphost_form else '' %}
+        {% set vlan_id = initial_iphost_form.vlan_id if initial_iphost_form else '' %}
+        {% set ip_addr = initial_iphost_form.ip_address if initial_iphost_form else '' %}
+        {% set subnet = initial_iphost_form.subnet if initial_iphost_form else '' %}
+        {% set gateway = initial_iphost_form.gateway if initial_iphost_form else '' %}
+
+        <div class="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-5">
+            {# IP Mode - Highlighted #}
+            <div class="rounded-md px-3 py-2 {{ 'bg-emerald-100 dark:bg-emerald-900/30' if ip_mode == 'dhcp' else 'bg-blue-100 dark:bg-blue-900/30' if ip_mode == 'static' else 'bg-white dark:bg-slate-700' }}">
+                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">IP Mode</dt>
+                <dd class="text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if ip_mode == 'dhcp' else 'text-blue-700 dark:text-blue-300' if ip_mode == 'static' else 'text-slate-900 dark:text-white' }}">
+                    {% if ip_mode %}
                     <span class="inline-flex items-center gap-1">
-                        {% if 'dhcp' in value|lower %}
-                        <span class="h-2 w-2 rounded-full bg-emerald-500"></span>
-                        {% else %}
-                        <span class="h-2 w-2 rounded-full bg-blue-500"></span>
-                        {% endif %}
-                        {{ value }}
+                        <span class="h-2 w-2 rounded-full {{ 'bg-emerald-500' if ip_mode == 'dhcp' else 'bg-blue-500' }}"></span>
+                        {{ ip_mode | upper }}
                     </span>
-                    {% else %}
-                    {{ value }}
-                    {% endif %}
                     {% else %}
                     <span class="text-slate-400">&mdash;</span>
                     {% endif %}
                 </dd>
             </div>
-            {% endfor %}
+            {# VLAN #}
+            <div>
+                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">Management VLAN</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ vlan_id if vlan_id else '&mdash;' | safe }}</dd>
+            </div>
+            {# IP Address #}
+            <div>
+                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">IP Address</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ ip_addr if ip_addr else '&mdash;' | safe }}</dd>
+            </div>
+            {# Subnet #}
+            <div>
+                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">Subnet Mask</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ subnet if subnet else '&mdash;' | safe }}</dd>
+            </div>
+            {# Gateway #}
+            <div>
+                <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">Gateway</dt>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ gateway if gateway else '&mdash;' | safe }}</dd>
+            </div>
         </div>
     </div>
     {% else %}
@@ -82,6 +100,7 @@
     <form hx-post="/admin/network/onts/{{ ont.id if ont else '' }}/actions/configure-mgmt-ip"
           hx-swap="none"
           class="space-y-4">
+        {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="ip_mode" :value="ipMode">
 
         {# VLAN Selection - Always visible #}

@@ -12,28 +12,75 @@
 </div>
 {% else %}
 
-{# Current WiFi Status #}
+{# Current WiFi Status - Formatted Display #}
 {% if wireless_info %}
 <div class="mb-4">
     <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Current WiFi Settings</h4>
-    <div class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {% for key, value in wireless_info.items() %}
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {# SSID - Highlight #}
+        {% set ssid = wireless_info.get('SSID') %}
+        {% if ssid %}
+        <div class="rounded-lg bg-amber-50 border border-amber-200 px-3 py-2 dark:bg-amber-900/20 dark:border-amber-800">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">Network Name (SSID)</dt>
+            <dd class="mt-0.5 text-sm font-semibold text-amber-700 dark:text-amber-300">{{ ssid }}</dd>
+        </div>
+        {% endif %}
+        {# Enabled Status #}
+        {% set enabled = wireless_info.get('Enabled') or wireless_info.get('Enable') %}
+        {% if enabled is not none %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
-            <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-            {% if key == 'Password' and value %}
-            <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white" x-data="{ revealed: false }">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Enabled</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">
+                {% if enabled == true or enabled == '1' or enabled == 'true' or enabled == 'Yes' %}
+                <span class="inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-400">
+                    <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                    Yes
+                </span>
+                {% else %}
+                <span class="text-slate-500">No</span>
+                {% endif %}
+            </dd>
+        </div>
+        {% endif %}
+        {# Channel #}
+        {% set channel = wireless_info.get('Channel') %}
+        {% if channel %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">Channel</dt>
+            <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ channel }}</dd>
+        </div>
+        {% endif %}
+        {# Security Mode #}
+        {% set security = wireless_info.get('Security Mode') or wireless_info.get('SecurityMode') or wireless_info.get('BeaconType') %}
+        {% if security %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">Security Mode</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ security }}</dd>
+        </div>
+        {% endif %}
+        {# Password - Hidden by default #}
+        {% set password = wireless_info.get('Password') or wireless_info.get('PreSharedKey') or wireless_info.get('KeyPassphrase') %}
+        {% if password %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60" x-data="{ revealed: false }">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Password</dt>
+            <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">
                 <span x-show="!revealed">&bull;&bull;&bull;&bull;&bull;&bull;&bull;&bull;
                     <button type="button" @click="revealed = true" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">show</button>
                 </span>
-                <span x-show="revealed" x-cloak>{{ value }}
+                <span x-show="revealed" x-cloak>{{ password }}
                     <button type="button" @click="revealed = false" class="ml-1 text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">hide</button>
                 </span>
             </dd>
-            {% else %}
-            <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
-            {% endif %}
         </div>
-        {% endfor %}
+        {% endif %}
+        {# Bandwidth/Standard #}
+        {% set standard = wireless_info.get('Standard') or wireless_info.get('OperatingStandards') %}
+        {% if standard %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">WiFi Standard</dt>
+            <dd class="mt-0.5 text-sm text-slate-900 dark:text-white">{{ standard }}</dd>
+        </div>
+        {% endif %}
     </div>
 </div>
 {% endif %}
@@ -46,6 +93,7 @@
         <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-ssid"
               hx-swap="none"
               class="space-y-3">
+            {% include "components/forms/csrf_input.html" %}
             <div>
                 <input type="text"
                        name="ssid"
@@ -70,6 +118,7 @@
         <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-password"
               hx-swap="none"
               class="space-y-3">
+            {% include "components/forms/csrf_input.html" %}
             <div>
                 <div class="relative">
                     <input :type="showPassword ? 'text' : 'password'"

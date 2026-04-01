@@ -17,10 +17,10 @@
         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
             {% for host in lan_hosts %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-900 dark:text-white">{{ host.get('HostName', host.get('hostname', '&mdash;')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-900 dark:text-white">{{ host.get('IPAddress', host.get('ip_address', '&mdash;')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ host.get('MACAddress', host.get('mac_address', '&mdash;')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ host.get('InterfaceType', host.get('interface', '&mdash;')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-900 dark:text-white">{{ host.get('HostName', host.get('hostname', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-900 dark:text-white">{{ host.get('IPAddress', host.get('ip_address', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ host.get('MACAddress', host.get('mac_address', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ host.get('InterfaceType', host.get('interface', '—')) }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5">
                     {% set active = host.get('Active', host.get('active', '')) %}
                     {% if active == '1' or active == 'true' or active == True %}

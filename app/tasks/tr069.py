@@ -530,3 +530,100 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
 
     logger.warning("Unknown bulk action: %s", action)
     return None
+
+
+@celery_app.task(name="app.tasks.tr069.refresh_ont_runtime_data")
+def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
+    """Periodically refresh TR-069 runtime data for ONTs.
+
+    Fetches TR-069 parameters from GenieACS and persists observed runtime
+    fields (WAN IP, PPPoE status, WiFi clients, etc.) to OntUnit records.
+
+    Only processes ONTs that have TR-069/GenieACS configured and haven't
+    been updated recently (>1 hour stale).
+
+    Args:
+        batch_size: Maximum ONTs to process per run.
+
+    Returns:
+        Stats: {processed, updated, errors, skipped}.
+    """
+    from app.models.network import OntUnit
+    from app.services.network.ont_tr069 import ont_tr069
+
+    logger.info("Starting TR-069 ONT runtime refresh (batch_size=%d)", batch_size)
+    db = SessionLocal()
+    try:
+        now = datetime.now(UTC)
+        stale_cutoff = now - timedelta(hours=1)
+
+        # Find ONTs with stale or missing runtime data
+        # Prioritize ONTs that have never been updated or are oldest
+        stmt = (
+            select(OntUnit)
+            .where(OntUnit.is_active.is_(True))
+            .where(
+                (OntUnit.observed_runtime_updated_at.is_(None))
+                | (OntUnit.observed_runtime_updated_at < stale_cutoff)
+            )
+            .order_by(OntUnit.observed_runtime_updated_at.asc().nulls_first())
+            .limit(batch_size)
+        )
+        onts = list(db.scalars(stmt).all())
+
+        if not onts:
+            logger.info("No ONTs need runtime refresh")
+            return {"processed": 0, "updated": 0, "errors": 0, "skipped": 0}
+
+        processed = 0
+        updated = 0
+        errors = 0
+        skipped = 0
+
+        for ont in onts:
+            try:
+                processed += 1
+                summary = ont_tr069.get_device_summary(
+                    db, str(ont.id), persist_observed_runtime=True
+                )
+                if summary.available:
+                    updated += 1
+                elif summary.error:
+                    # Not an error if device simply isn't TR-069 managed
+                    if "not managed" in (summary.error or "").lower():
+                        skipped += 1
+                    else:
+                        logger.debug(
+                            "TR-069 runtime fetch failed for ONT %s: %s",
+                            ont.serial_number,
+                            summary.error,
+                        )
+                        errors += 1
+                else:
+                    skipped += 1
+            except Exception as exc:
+                logger.warning(
+                    "Error refreshing TR-069 runtime for ONT %s: %s",
+                    ont.serial_number,
+                    exc,
+                )
+                errors += 1
+
+        logger.info(
+            "TR-069 ONT runtime refresh: %d processed, %d updated, %d errors, %d skipped",
+            processed,
+            updated,
+            errors,
+            skipped,
+        )
+        return {
+            "processed": processed,
+            "updated": updated,
+            "errors": errors,
+            "skipped": skipped,
+        }
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()

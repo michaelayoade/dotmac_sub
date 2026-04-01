@@ -838,6 +838,29 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_cleanup_interval,
         )
 
+        # TR-069 ONT runtime refresh - updates observed WAN/WiFi/LAN data
+        tr069_runtime_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_ont_runtime_refresh_enabled",
+            "TR069_ONT_RUNTIME_REFRESH_ENABLED",
+            True,
+        )
+        tr069_runtime_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_ont_runtime_refresh_interval_seconds",
+            1800,  # 30 minutes
+        )
+        tr069_runtime_interval = max(tr069_runtime_interval, 300)  # Min: 5 minutes
+        _sync_scheduled_task(
+            session,
+            name="tr069_ont_runtime_refresh",
+            task_name="app.tasks.tr069.refresh_ont_runtime_data",
+            enabled=tr069_runtime_enabled,
+            interval_seconds=tr069_runtime_interval,
+        )
+
         # Event retry - retries failed event handlers
         event_retry_enabled = _effective_bool(
             session,

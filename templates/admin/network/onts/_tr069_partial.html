@@ -42,7 +42,7 @@
                 {% for key, value in tr069.system.items() %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
                     <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
                 </div>
                 {% endfor %}
             </dl>
@@ -66,7 +66,7 @@
                 {% for key, value in tr069.wan.items() %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
                     <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
                 </div>
                 {% endfor %}
             </dl>
@@ -87,7 +87,7 @@
                 {% for key, value in tr069.lan.items() %}
                 <div class="rounded-md bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
                     <dt class="text-xs text-slate-500 dark:text-slate-400">{{ key }}</dt>
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
                 </div>
                 {% endfor %}
             </dl>
@@ -127,7 +127,7 @@
                         </span>
                     </dd>
                     {% else %}
-                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '&mdash;' }}</dd>
+                    <dd class="mt-0.5 text-sm font-mono text-slate-900 dark:text-white">{{ value if value is not none else '—' }}</dd>
                     {% endif %}
                 </div>
                 {% endfor %}
@@ -177,9 +177,9 @@
                             <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">{{ port.Status or 'Down' }}</span>
                             {% endif %}
                         </td>
-                        <td class="px-4 py-2 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.MaxBitRate or '&mdash;' }}</td>
-                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ port.DuplexMode or '&mdash;' }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ port.MACAddress or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.MaxBitRate or '—' }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ port.DuplexMode or '—' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ port.MACAddress or '—' }}</td>
                         <td class="px-4 py-2 text-right">
                             {% set is_enabled = port.Enable == true or port.Enable == '1' or port.Enable == 'true' %}
                             {% if is_enabled %}
@@ -229,10 +229,10 @@
                 <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                     {% for host in tr069.lan_hosts %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-4 py-2 text-sm text-slate-900 dark:text-white">{{ host.HostName or '&mdash;' }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ host.IPAddress or '&mdash;' }}</td>
-                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ host.MACAddress or '&mdash;' }}</td>
-                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ host.InterfaceType or '&mdash;' }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-900 dark:text-white">{{ host.HostName or '—' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ host.IPAddress or '—' }}</td>
+                        <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ host.MACAddress or '—' }}</td>
+                        <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ host.InterfaceType or '—' }}</td>
                         <td class="px-4 py-2 text-sm">
                             {% if host.Active == true or host.Active == '1' or host.Active == 'true' %}
                             <span class="h-2 w-2 rounded-full bg-emerald-500 inline-block"></span>

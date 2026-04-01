@@ -233,43 +233,73 @@
     </div>
     {% endif %}
 
-    {# Tab Navigation #}
-    <div class="overflow-x-auto border-b border-slate-200 dark:border-slate-700">
-        <nav class="flex min-w-max gap-6 -mb-px">
+    {# Tab Navigation - Responsive: icons-only on mobile, full labels on larger screens #}
+    <div class="overflow-x-auto border-b border-slate-200 dark:border-slate-700 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
+        <nav class="flex min-w-max gap-1 sm:gap-4 lg:gap-6 -mb-px" role="tablist" aria-label="ONT detail tabs">
             <button @click="activeTab = 'overview'"
+                    role="tab"
+                    :aria-selected="activeTab === 'overview'"
+                    :tabindex="activeTab === 'overview' ? 0 : -1"
+                    id="tab-overview"
+                    aria-controls="panel-overview"
                     :class="activeTab === 'overview' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                Overview
+                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <span class="hidden sm:inline">Overview</span>
             </button>
             <button @click="activeTab = 'network'"
+                    role="tab"
+                    :aria-selected="activeTab === 'network'"
+                    :tabindex="activeTab === 'network' ? 0 : -1"
+                    id="tab-network"
+                    aria-controls="panel-network"
                     :class="activeTab === 'network' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
-                Network
+                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+                <span class="hidden sm:inline">Network</span>
             </button>
             <button @click="activeTab = 'history'"
+                    role="tab"
+                    :aria-selected="activeTab === 'history'"
+                    :tabindex="activeTab === 'history' ? 0 : -1"
+                    id="tab-history"
+                    aria-controls="panel-history"
                     :class="activeTab === 'history' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                 History
             </button>
             <button data-tab="tr069" @click="activeTab = 'tr069'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/tr069', {target: '#tr069-content', swap: 'innerHTML'}) }"
+                    role="tab"
+                    :aria-selected="activeTab === 'tr069'"
+                    :tabindex="activeTab === 'tr069' ? 0 : -1"
+                    id="tab-tr069"
+                    aria-controls="panel-tr069"
                     :class="activeTab === 'tr069' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
                 TR-069
             </button>
             <button data-tab="charts" @click="activeTab = 'charts'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/charts', {target: '#charts-content', swap: 'innerHTML'}) }"
+                    role="tab"
+                    :aria-selected="activeTab === 'charts'"
+                    :tabindex="activeTab === 'charts' ? 0 : -1"
+                    id="tab-charts"
+                    aria-controls="panel-charts"
                     :class="activeTab === 'charts' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
                 Charts
             </button>
             <button data-tab="service-ports" @click="activeTab = 'service-ports'; if (!$el.dataset.loaded) { $el.dataset.loaded = '1'; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'}) }"
+                    role="tab"
+                    :aria-selected="activeTab === 'service-ports'"
+                    :tabindex="activeTab === 'service-ports' ? 0 : -1"
+                    id="tab-service-ports"
+                    aria-controls="panel-service-ports"
                     :class="activeTab === 'service-ports' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
                 Service Ports
             </button>
             <button type="button"
@@ -278,9 +308,14 @@
                     hx-target="#configuration-content"
                     hx-swap="innerHTML"
                     @click="activeTab = 'configuration'; $el.dataset.loaded = '1'"
+                    role="tab"
+                    :aria-selected="activeTab === 'configuration'"
+                    :tabindex="activeTab === 'configuration' ? 0 : -1"
+                    id="tab-configuration"
+                    aria-controls="panel-configuration"
                     :class="activeTab === 'configuration' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
-                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
                 Configuration
             </button>
         </nav>
@@ -432,7 +467,7 @@
                             {% endif %}
                             <div>
                                 <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Created</p>
-                                <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '&mdash;' }}</p>
+                                <p class="text-sm text-slate-900 dark:text-white">{{ ont.created_at.strftime('%B %d, %Y') if ont.created_at else '—' }}</p>
                             </div>
                         </div>
                     </details>
@@ -629,40 +664,40 @@
                 <div class="space-y-3">
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</p>
-                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '&mdash;' }}</p>
+                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</p>
-                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '&mdash;' }}</p>
+                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</p>
-                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '&mdash;' }}</p>
+                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '&mdash;' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</p>
                         {% set wan_mode_value = ont.wan_mode.value if ont.wan_mode and ont.wan_mode.value is defined else ont.wan_mode %}
-                        <p class="text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '&mdash;') | replace('_', ' ') | title }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Mode</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ (ont.observed_lan_mode or '&mdash;') | replace('_', ' ') | title }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ (ont.observed_lan_mode or '—') | replace('_', ' ') | title }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</p>
-                        <p class="text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_wifi_clients if ont.observed_wifi_clients is not none else '&mdash;' }}</p>
+                        <p class="text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_wifi_clients if ont.observed_wifi_clients is not none else '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Hosts</p>
-                        <p class="text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_lan_hosts if ont.observed_lan_hosts is not none else '&mdash;' }}</p>
+                        <p class="text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_lan_hosts if ont.observed_lan_hosts is not none else '—' }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Runtime Updated</p>
-                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.observed_runtime_updated_at.strftime('%Y-%m-%d %H:%M') if ont.observed_runtime_updated_at else '&mdash;' }}</p>
+                        <p class="text-sm text-slate-900 dark:text-white">{{ ont.observed_runtime_updated_at.strftime('%Y-%m-%d %H:%M') if ont.observed_runtime_updated_at else '—' }}</p>
                     </div>
                 </div>
                 {% else %}
@@ -893,21 +928,21 @@
             {% set has_runtime = ont.mac_address or ont.observed_wan_ip or ont.pppoe_username or ont.observed_pppoe_status or ont.observed_lan_mode or (ont.observed_wifi_clients is not none) or (ont.observed_lan_hosts is not none) or ont.observed_runtime_updated_at %}
             {% if has_runtime %}
             <dl class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '&mdash;' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '&mdash;' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '&mdash;' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '&mdash;' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">MAC Address</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.mac_address or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN IP</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.observed_wan_ip or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE User</dt><dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white">{{ ont.pppoe_username or '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">PPPoE Status</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ ont.observed_pppoe_status or '—' }}</dd></div>
                 <div>
                     <dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WAN Mode</dt>
                     {% set wan_mode_value = ont.wan_mode.value if ont.wan_mode and ont.wan_mode.value is defined else ont.wan_mode %}
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '&mdash;') | replace('_', ' ') | title }}</dd>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</dd>
                 </div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Mode</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (ont.observed_lan_mode or '&mdash;') | replace('_', ' ') | title }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_wifi_clients if ont.observed_wifi_clients is not none else '&mdash;' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Hosts</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_lan_hosts if ont.observed_lan_hosts is not none else '&mdash;' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Mode</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (ont.observed_lan_mode or '—') | replace('_', ' ') | title }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_wifi_clients if ont.observed_wifi_clients is not none else '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Hosts</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_lan_hosts if ont.observed_lan_hosts is not none else '—' }}</dd></div>
             </dl>
             <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
-                Runtime updated: {{ ont.observed_runtime_updated_at.strftime('%Y-%m-%d %H:%M') if ont.observed_runtime_updated_at else '&mdash;' }}
+                Runtime updated: {{ ont.observed_runtime_updated_at.strftime('%Y-%m-%d %H:%M') if ont.observed_runtime_updated_at else '—' }}
             </div>
             {% else %}
             <p class="text-sm text-slate-500 dark:text-slate-400">No runtime snapshot yet. Open TR-069 tab or click Get Status to refresh.</p>
@@ -928,11 +963,11 @@
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">PON Port</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.pon_port.name if assignment.pon_port else '&mdash;' }}</dd>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.pon_port.name if assignment.pon_port else '—' }}</dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned Date</dt>
-                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.assigned_at.strftime('%b %d, %Y') if assignment.assigned_at else '&mdash;' }}</dd>
+                    <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ assignment.assigned_at.strftime('%b %d, %Y') if assignment.assigned_at else '—' }}</dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Subscriber</dt>
@@ -1046,7 +1081,7 @@
                 <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                     {% for pa in past_assignments %}
                     <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '&mdash;' }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-900 dark:text-white">{{ pa.pon_port.name if pa.pon_port else '—' }}</td>
                         <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
                             {% if pa.pon_port and pa.pon_port.olt %}{{ pa.pon_port.olt.name }}{% else %}&mdash;{% endif %}
                         </td>
@@ -1057,8 +1092,8 @@
                             </a>
                             {% else %}&mdash;{% endif %}
                         </td>
-                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '&mdash;' }}</td>
-                        <td class="px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ pa.notes or '&mdash;' }}</td>
+                        <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-500 dark:text-slate-400">{{ pa.assigned_at.strftime('%b %d, %Y') if pa.assigned_at else '—' }}</td>
+                        <td class="px-6 py-3 text-sm text-slate-500 dark:text-slate-400">{{ pa.notes or '—' }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>
