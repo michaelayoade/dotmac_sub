@@ -882,6 +882,20 @@ def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | 
                 olt.id,
                 exc_info=True,
             )  # Non-critical; SSH test already passed
+
+        # Queue CLI output capture for parser testing (non-blocking)
+        try:
+            from app.tasks.olt_capture import capture_olt_samples_task
+
+            capture_olt_samples_task.delay(str(olt.id))
+            logger.debug("Queued CLI capture for OLT %s", olt.id)
+        except Exception:
+            logger.debug(
+                "CLI capture task queue failed for OLT %s",
+                olt.id,
+                exc_info=True,
+            )  # Non-critical
+
         return True, f"{message} ({policy_key})", policy_key
     return ok, message, policy_key
 
@@ -1488,16 +1502,19 @@ def _sync_onts_from_olt_snmp_impl(
     existing_onts = list(
         db.scalars(select(OntUnit).where(OntUnit.olt_device_id == olt.id)).all()
     )
+    # Match ONTs by external_id only - synthetic serials are not used for matching
+    # to avoid collision risks when devices are replaced at the same position
     by_external_id = {
         str(o.external_id): o for o in existing_onts if getattr(o, "external_id", None)
     }
-    by_serial = {o.serial_number: o for o in existing_onts if o.serial_number}
 
     created = 0
     updated = 0
     unresolved_topology = 0
     now = datetime.now(UTC)
     olt_tag = str(olt.id).split("-")[0].upper()
+    # Timestamp suffix for synthetic serials (YYMMDDHHMM format for uniqueness)
+    ts_suffix = now.strftime("%y%m%d%H%M")
 
     vendor_serial_prefix = {
         "huawei": "HW",
@@ -1539,21 +1556,20 @@ def _sync_onts_from_olt_snmp_impl(
         serial_frame = frame if frame is not None else "U"
         serial_slot = slot if slot is not None else "U"
         serial_port = port if port is not None else "U"
-        synthetic_serial = f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
+        # Include timestamp in synthetic serial to ensure uniqueness across discoveries
+        # Format: VENDOR-OLTTAG-FSP_ONU-TIMESTAMP (e.g., HW-BD2DBC50-0031-2604011200)
+        synthetic_serial = (
+            f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}-{ts_suffix}"
+        )
 
         status, offline_reason = _parse_online_status(status_rows.get(idx))
         olt_rx = _parse_signal_dbm(olt_rx_rows.get(idx))
         onu_rx = _parse_signal_dbm(onu_rx_rows.get(idx))
         distance = _parse_distance_m(distance_rows.get(idx))
 
-        # First check in-memory cache, then verify with database query
-        # Track match method to avoid overwriting external_id when matched by serial
-        matched_by_external_id = False
+        # Match by external_id only - synthetic serials are not used for matching
+        # This prevents collision issues when devices are replaced at the same position
         ont = by_external_id.get(external_id)
-        if ont:
-            matched_by_external_id = True
-        else:
-            ont = by_serial.get(synthetic_serial)
 
         # If not in cache, do a database lookup to handle race conditions
         if ont is None:
@@ -1565,14 +1581,10 @@ def _sync_onts_from_olt_snmp_impl(
             ).first()
             if ont:
                 # Found in DB but not in cache - add to cache
-                matched_by_external_id = True
                 by_external_id[external_id] = ont
-                if ont.serial_number:
-                    by_serial[ont.serial_number] = ont
 
         if ont is None:
-            # Only set external_id if no other ONT already has it
-            new_external_id = external_id if external_id not in by_external_id else None
+            # Create new ONT with external_id as primary identifier
             ont = OntUnit(
                 serial_number=synthetic_serial,
                 model=olt.model,
@@ -1583,16 +1595,14 @@ def _sync_onts_from_olt_snmp_impl(
                 gpon_channel=GponChannel.gpon,
                 board=board,
                 port=port,
-                external_id=new_external_id,
+                external_id=external_id,
                 name=f"ONU {fsp}:{onu}" if fsp else f"ONU unresolved:{idx}",
                 online_status=status,
                 tr069_acs_server_id=olt.tr069_acs_server_id,
             )
             db.add(ont)
             created += 1
-            if new_external_id:
-                by_external_id[new_external_id] = ont
-            by_serial[synthetic_serial] = ont
+            by_external_id[external_id] = ont
         else:
             updated += 1
             ont.olt_device_id = olt.id
@@ -1600,18 +1610,8 @@ def _sync_onts_from_olt_snmp_impl(
             ont.model = ont.model or olt.model
             ont.board = board
             ont.port = port
-            # Only set external_id if:
-            # 1. Matched by external_id (confirming the match), or
-            # 2. ONT has no external_id set, AND no other active ONT has this external_id
-            if matched_by_external_id:
-                ont.external_id = external_id
-            elif not ont.external_id:
-                # Check if another active ONT already has this external_id
-                conflict = by_external_id.get(external_id)
-                if conflict is None or conflict.id == ont.id:
-                    ont.external_id = external_id
-                    by_external_id[external_id] = ont
-                # else: skip setting external_id to avoid conflict
+            # Always confirm external_id since we matched by it
+            ont.external_id = external_id
             ont.pon_type = PonType.gpon
             ont.gpon_channel = GponChannel.gpon
             ont.online_status = status

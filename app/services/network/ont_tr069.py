@@ -449,15 +449,34 @@ class OntTR069:
             str(summary.system.get("Serial") or "").strip() if summary.system else ""
         )
         if tr069_serial:
-            # Replace synthetic SNMP serials with real TR-069 serials when available.
             current_serial = str(getattr(ont, "serial_number", "") or "")
-            if (
+            is_synthetic = (
                 not current_serial
                 or current_serial.startswith("HW-")
                 or current_serial.startswith("ZT-")
                 or current_serial.startswith("NK-")
                 or current_serial.startswith("OLT-")
-            ):
+            )
+            if is_synthetic:
+                # Replace synthetic SNMP serial with real TR-069 serial
+                logger.info(
+                    "ONT %s: replacing synthetic serial '%s' with TR-069 serial '%s'",
+                    ont.id,
+                    current_serial,
+                    tr069_serial[:120],
+                )
+                ont.serial_number = tr069_serial[:120]
+            elif current_serial != tr069_serial[:120]:
+                # Hardware replacement detected - real serial changed
+                logger.warning(
+                    "ONT %s HARDWARE CHANGE DETECTED: serial changed from '%s' to '%s' "
+                    "(position: %s, external_id: %s)",
+                    ont.id,
+                    current_serial,
+                    tr069_serial[:120],
+                    getattr(ont, "board", "?") or "?",
+                    getattr(ont, "external_id", "?") or "?",
+                )
                 ont.serial_number = tr069_serial[:120]
 
         mac_address = OntTR069._choose_mac_address(summary)
