@@ -946,6 +946,10 @@ class OntUnit(Base):
     offline_reason: Mapped[OnuOfflineReason | None] = mapped_column(
         Enum(OnuOfflineReason, name="onuofflinereason", create_constraint=False),
     )
+    # Flap protection: count consecutive offline polls before emitting event
+    consecutive_offline_polls: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0"
+    )
     zone_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("network_zones.id")
     )

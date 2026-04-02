@@ -1879,6 +1879,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
         max_value=100,
     ),
     SettingSpec(
+        domain=SettingDomain.network_monitoring,
+        key="ont_offline_poll_threshold",
+        label="ONT Offline Poll Threshold",
+        env_var="ONT_OFFLINE_POLL_THRESHOLD",
+        value_type=SettingValueType.integer,
+        default=2,
+        min_value=1,
+        max_value=10,
+    ),
+    SettingSpec(
         domain=SettingDomain.radius,
         key="default_auth_port",
         env_var="RADIUS_DEFAULT_AUTH_PORT",

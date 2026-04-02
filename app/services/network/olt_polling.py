@@ -143,6 +143,7 @@ def get_signal_thresholds(db: Session) -> tuple[float, float]:
 _DEFAULT_SIGNAL_DELTA_DB = 3.0
 
 _DEFAULT_ALERT_COOLDOWN_MINUTES = 30
+_DEFAULT_OFFLINE_POLL_THRESHOLD = 2
 
 # DDM health thresholds — alert when exceeded
 _DDM_TEMPERATURE_WARN_C = 65.0
@@ -165,6 +166,21 @@ def _get_alert_cooldown_seconds(db: Session) -> int:
         return max(minutes, 5) * 60
     except Exception:
         return _DEFAULT_ALERT_COOLDOWN_MINUTES * 60
+
+
+def _get_offline_poll_threshold(db: Session) -> int:
+    """Load offline poll threshold from settings (consecutive polls before offline event)."""
+    try:
+        from app.models.domain_settings import SettingDomain
+        from app.services.settings_spec import resolve_value
+
+        raw = resolve_value(
+            db, SettingDomain.network_monitoring, "ont_offline_poll_threshold"
+        )
+        threshold = int(str(raw)) if raw is not None else _DEFAULT_OFFLINE_POLL_THRESHOLD
+        return max(threshold, 1)
+    except Exception:
+        return _DEFAULT_OFFLINE_POLL_THRESHOLD
 
 
 # ---------------------------------------------------------------------------
@@ -619,6 +635,7 @@ def poll_olt_ont_signals(
     )
     warn_thresh, crit_thresh = get_signal_thresholds(db)
     alert_cooldown_sec = _get_alert_cooldown_seconds(db)
+    offline_poll_threshold = _get_offline_poll_threshold(db)
     status_transitions: list[tuple[OntUnit, str, dict]] = []
 
     for ont, reading in targets:
@@ -646,23 +663,33 @@ def poll_olt_ont_signals(
                     update_values["online_status"] = OnuOnlineStatus.online
                     update_values["last_seen_at"] = now
                     update_values["offline_reason"] = None
+                    # Reset flap counter when online
+                    update_values["consecutive_offline_polls"] = 0
                 else:
-                    update_values["online_status"] = OnuOnlineStatus.offline
-                    status_val = status_raw.get(reading.onu_index, "")
-                    reason = _derive_offline_reason(status_val)
-                    if reason is None:
-                        update_values["offline_reason"] = None
-                    else:
-                        try:
-                            update_values["offline_reason"] = OnuOfflineReason(reason)
-                        except ValueError:
-                            update_values["offline_reason"] = OnuOfflineReason.unknown
+                    # Flap protection: increment offline counter and only mark offline
+                    # after consecutive polls reach threshold
+                    new_offline_count = (ont.consecutive_offline_polls or 0) + 1
+                    update_values["consecutive_offline_polls"] = new_offline_count
+
+                    if new_offline_count >= offline_poll_threshold:
+                        # Threshold reached - mark as offline
+                        update_values["online_status"] = OnuOnlineStatus.offline
+                        status_val = status_raw.get(reading.onu_index, "")
+                        reason = _derive_offline_reason(status_val)
+                        if reason is None:
+                            update_values["offline_reason"] = None
+                        else:
+                            try:
+                                update_values["offline_reason"] = OnuOfflineReason(reason)
+                            except ValueError:
+                                update_values["offline_reason"] = OnuOfflineReason.unknown
+                    # If threshold not reached, keep current status but track the poll
 
             # Use SNMP offline_reason OID if available (more precise than status code)
+            # Only apply if we're actually transitioning to offline (threshold reached)
             if (
                 reading.offline_reason_raw
-                and reading.is_online is not None
-                and not reading.is_online
+                and update_values.get("online_status") == OnuOnlineStatus.offline
             ):
                 snmp_reason = _derive_offline_reason(reading.offline_reason_raw)
                 if snmp_reason:
