@@ -4,8 +4,43 @@
 {% if tr069 and tr069.available %}
 <div class="space-y-6"
      data-initial-ssid="{{ (tr069.wireless.SSID or '')|tojson|forceescape }}"
-     data-initial-pppoe-user="{{ (tr069.wan.get('PPPoE Username', '') or '')|tojson|forceescape }}"
+     data-initial-pppoe-user="{{ (tr069.wan.get('Username', '') or '')|tojson|forceescape }}"
      x-data="{ sysOpen: true, wanOpen: true, lanOpen: true, wifiOpen: true, ethOpen: true, hostsOpen: false, diagOpen: false, showSsidModal: false, showPasswordModal: false, showPppoeModal: false, showPingModal: false, ssid: JSON.parse($el.dataset.initialSsid || '&quot;&quot;'), wifiPassword: '', pppoeUser: JSON.parse($el.dataset.initialPppoeUser || '&quot;&quot;'), pppoePass: '', pingHost: '8.8.8.8', pingCount: 4, actionPending: false, actionMessage: '', actionType: 'info', getCsrfToken: function() { const meta = document.querySelector('meta[name=\\'csrf-token\\']'); if (meta && meta.content) return meta.content; const cookie = document.cookie.match(new RegExp('csrf_token=([^;]+)')); return cookie ? cookie[1] : ''; }, submitAction: async function(url, options, pendingMessage) { this.actionPending = true; this.actionMessage = pendingMessage || 'Applying change...'; this.actionType = 'info'; try { const token = this.getCsrfToken(); const requestOptions = Object.assign({}, options || {}); requestOptions.headers = Object.assign({}, (options && options.headers) || {}, token ? {'X-CSRF-Token': token} : {}); if (requestOptions.body instanceof FormData && token && !requestOptions.body.has('_csrf_token')) { requestOptions.body.append('_csrf_token', token); } const response = await fetch(url, requestOptions); const raw = await response.text(); let data = {}; if (raw) { try { data = JSON.parse(raw); } catch (e) { data = { message: raw, success: response.ok }; } } const ok = response.ok && data.success !== false; const message = data.message || (ok ? 'Action completed.' : 'Request failed (' + response.status + ')'); const type = ok ? 'success' : 'error'; this.actionMessage = message; this.actionType = type; htmx.trigger(document.body, 'showToast', {message: message, type: type}); return ok; } catch (error) { const message = (error && error.message) ? error.message : 'Request failed.'; this.actionMessage = message; this.actionType = 'error'; htmx.trigger(document.body, 'showToast', {message: message, type: 'error'}); return false; } finally { this.actionPending = false; } } }">
+    <div class="rounded-xl border px-4 py-3 {% if tr069.source == 'cache' %}border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/60 dark:bg-amber-950/20 dark:text-amber-200{% else %}border-emerald-200 bg-emerald-50 text-emerald-900 dark:border-emerald-900/60 dark:bg-emerald-950/20 dark:text-emerald-200{% endif %}">
+        <div class="flex flex-wrap items-center justify-between gap-3 text-sm">
+            <div class="flex items-center gap-2">
+                <span class="inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold {% if tr069.source == 'cache' %}bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200{% else %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200{% endif %}">
+                    {{ 'Cached Snapshot' if tr069.source == 'cache' else 'Live ACS Data' }}
+                </span>
+                {% if tr069.fetched_at %}
+                <span>Updated {{ tr069.fetched_at.strftime('%Y-%m-%d %H:%M') }}</span>
+                {% endif %}
+            </div>
+            {% if tr069.error %}
+            <span class="text-xs font-medium opacity-90">{{ tr069.error }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {% set summary_cards = [
+            ('MAC Address', tr069.system.get('MAC Address') or tr069.system.get('Serial')),
+            ('WAN IP', tr069.wan.get('WAN IP')),
+            ('PPPoE User', tr069.wan.get('Username')),
+            ('PPPoE Status', tr069.wan.get('Status')),
+            ('WAN Mode', tr069.wan.get('Connection Type')),
+            ('LAN Mode', 'Router' if tr069.lan.get('DHCP Enabled') in [true, '1', 'true', 'True', 'yes'] else 'Bridge' if tr069.lan.get('DHCP Enabled') in [false, '0', 'false', 'False', 'no'] else none),
+            ('WiFi Clients', tr069.wireless.get('Connected Clients')),
+            ('LAN Hosts', (tr069.lan_hosts | length) if tr069.lan_hosts else tr069.lan.get('Connected Hosts'))
+        ] %}
+        {% for label, value in summary_cards %}
+        <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">{{ label }}</div>
+            <div class="mt-2 text-sm font-mono text-slate-900 dark:text-white break-all">{{ value if value not in [none, ''] else '—' }}</div>
+        </div>
+        {% endfor %}
+    </div>
+
     <div class="flex flex-wrap items-center justify-end gap-2">
         <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/refresh"
                 hx-swap="none"
@@ -183,13 +218,13 @@
                         <td class="px-4 py-2 text-right">
                             {% set is_enabled = port.Enable == true or port.Enable == '1' or port.Enable == 'true' %}
                             {% if is_enabled %}
-                            <button hx-post="/admin/network/onts/{{ ont.id }}/lan-port?port={{ port.index }}&enabled=false"
+                            <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/lan-port?port={{ port.index }}&enabled=false"
                                 hx-swap="none"
                                 class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
                                 Disable
                             </button>
                             {% else %}
-                            <button hx-post="/admin/network/onts/{{ ont.id }}/lan-port?port={{ port.index }}&enabled=true"
+                            <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/lan-port?port={{ port.index }}&enabled=true"
                                 hx-swap="none"
                                 class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
                                 Enable
@@ -246,6 +281,21 @@
             </table>
         </div>
     </div>
+    {% endif %}
+
+    {% if tr069.raw_device %}
+    <details class="rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800">
+        <summary class="flex cursor-pointer items-center justify-between px-5 py-3">
+            <div class="flex items-center gap-2">
+                <svg class="h-4 w-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
+                <span class="text-sm font-semibold text-slate-900 dark:text-white">Raw ACS Device Data</span>
+            </div>
+            <svg class="h-4 w-4 text-slate-400 transition-transform details-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </summary>
+        <div class="border-t border-slate-200 px-5 py-4 dark:border-slate-700">
+            <pre class="max-h-[32rem] overflow-auto rounded-lg bg-slate-950 px-4 py-3 text-xs text-slate-100">{{ tr069.raw_device | tojson(indent=2) }}</pre>
+        </div>
+    </details>
     {% endif %}
 
     {# Diagnostics Section #}

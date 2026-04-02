@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 
+from app.schemas.network import OntUnitRead
 from app.schemas.network_ont_ops import (
     OntActionResponse,
     OntBulkActionRequest,
@@ -90,6 +93,24 @@ class TestOntEnrichedReadSchema:
         )
         assert read.signal_quality == "good"
         assert read.capabilities["wifi"] is True
+
+
+class TestOntUnitReadSchema:
+    def test_generic_ont_read_exposes_separated_status_fields(self):
+        read = OntUnitRead(
+            id="00000000-0000-0000-0000-000000000002",
+            serial_number="HWTC-5678",
+            online_status="offline",
+            acs_status="online",
+            effective_status="online",
+            effective_status_source="acs",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        assert read.online_status == "offline"
+        assert read.acs_status == "online"
+        assert read.effective_status == "online"
+        assert read.effective_status_source == "acs"
 
 
 class TestBulkActionResponse:

@@ -180,6 +180,7 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
     """HTMX partial: auto-refreshing KPI cards + alarm/outage summary."""
     from app.services.network_monitoring import (
         NetworkDevices,
+        get_onu_olt_status_summary,
         get_onu_status_summary,
         get_pon_outage_summary,
     )
@@ -187,7 +188,8 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
     stats = NetworkDevices.get_monitoring_dashboard_stats(
         db, format_duration=_format_duration, format_bps=_format_bps
     )
-    onu_summary = get_onu_status_summary(db)
+    ont_service_summary = get_onu_status_summary(db)
+    ont_olt_link_summary = get_onu_olt_status_summary(db)
     pon_outages = get_pon_outage_summary(db)
     alarms_data = web_network_monitoring_service.alarms_page_data(
         db, severity=None, status=None
@@ -203,7 +205,8 @@ def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
     context = {
         "request": request,
         "stats": stats.get("stats", {}),
-        "onu_summary": onu_summary,
+        "ont_service_summary": ont_service_summary,
+        "ont_olt_link_summary": ont_olt_link_summary,
         "pon_outages": pon_outages,
         "alarms": alarms_data.get("alarms", []),
         "vpn_tunnels": vpn_tunnels,

@@ -3,7 +3,8 @@
 import json
 from datetime import UTC, datetime, timedelta
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
 from app.models.network_monitoring import (
     Alert,
     AlertOperator,
@@ -26,6 +27,7 @@ from app.schemas.network_monitoring import (
 from app.services import monitoring_metrics as monitoring_metrics_service
 from app.services import network_monitoring as monitoring_service
 from app.services import web_network_monitoring as web_network_monitoring_service
+from app.services.network import olt_polling_metrics as olt_polling_metrics_service
 from app.tasks import alert_evaluation as alert_evaluation_task
 
 
@@ -142,6 +144,150 @@ def test_onu_auth_trend_returns_json_safe_series(db_session):
     assert all(isinstance(value, int) for value in trend["values"])
     json.dumps(trend["labels"])
     json.dumps(trend["values"])
+
+
+def test_get_onu_status_summary_uses_effective_status(db_session):
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-SUM-1",
+                online_status=OnuOnlineStatus.offline,
+                effective_status=OnuOnlineStatus.online,
+            ),
+            OntUnit(
+                serial_number="ONT-SUM-2",
+                online_status=OnuOnlineStatus.online,
+                effective_status=OnuOnlineStatus.offline,
+            ),
+            OntUnit(
+                serial_number="ONT-SUM-3",
+                online_status=OnuOnlineStatus.unknown,
+                effective_status=OnuOnlineStatus.unknown,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    summary = monitoring_service.get_onu_status_summary(db_session)
+
+    assert summary["total"] == 3
+    assert summary["online"] == 1
+    assert summary["offline"] == 1
+
+
+def test_get_onu_olt_status_summary_uses_raw_olt_status(db_session):
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-OLT-SUM-1",
+                online_status=OnuOnlineStatus.online,
+                effective_status=OnuOnlineStatus.offline,
+            ),
+            OntUnit(
+                serial_number="ONT-OLT-SUM-2",
+                online_status=OnuOnlineStatus.offline,
+                effective_status=OnuOnlineStatus.online,
+            ),
+            OntUnit(
+                serial_number="ONT-OLT-SUM-3",
+                online_status=OnuOnlineStatus.unknown,
+                effective_status=OnuOnlineStatus.online,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    summary = monitoring_service.get_onu_olt_status_summary(db_session)
+
+    assert summary["total"] == 3
+    assert summary["online"] == 1
+    assert summary["offline"] == 1
+    assert summary["unknown"] == 1
+
+
+def test_get_onu_status_trend_includes_effective_and_raw_olt_series(monkeypatch):
+    def _fake_vm_range_query(query: str, start, end, step):
+        samples = {
+            'onu_status_total{status="online"}': [["1712000000", "5"]],
+            'onu_status_total{status="offline"}': [["1712000000", "2"]],
+            'onu_olt_status_total{status="online"}': [["1712000000", "4"]],
+            'onu_olt_status_total{status="offline"}': [["1712000000", "3"]],
+            "sum(onu_signal_low)": [["1712000000", "1"]],
+        }
+        values = samples.get(query, [])
+        return [{"values": values}] if values else []
+
+    monkeypatch.setattr(
+        web_network_monitoring_service,
+        "_vm_range_query",
+        _fake_vm_range_query,
+    )
+
+    trend = web_network_monitoring_service._get_onu_status_trend(hours=24)
+
+    assert trend["has_data"] is True
+    assert trend["online"] == [5.0]
+    assert trend["offline"] == [2.0]
+    assert trend["olt_online"] == [4.0]
+    assert trend["olt_offline"] == [3.0]
+    assert trend["low_signal"] == [1.0]
+
+
+def test_push_signal_metrics_uses_effective_status_and_separate_olt_counts(
+    db_session, monkeypatch
+):
+    captured: dict[str, str] = {}
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, url, content, headers):
+            captured["url"] = url
+            captured["content"] = content
+            captured["headers"] = headers
+            return _FakeResponse()
+
+    monkeypatch.setattr(olt_polling_metrics_service.httpx, "Client", _FakeClient)
+
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-METRIC-1",
+                is_active=True,
+                signal_updated_at=datetime.now(UTC),
+                online_status=OnuOnlineStatus.offline,
+                effective_status=OnuOnlineStatus.online,
+            ),
+            OntUnit(
+                serial_number="ONT-METRIC-2",
+                is_active=True,
+                signal_updated_at=datetime.now(UTC),
+                online_status=OnuOnlineStatus.online,
+                effective_status=OnuOnlineStatus.offline,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    lines_written = olt_polling_metrics_service._push_signal_metrics(db_session)
+    payload = captured["content"]
+
+    assert lines_written > 0
+    assert 'onu_status_total{status="online"} 1 ' in payload
+    assert 'onu_status_total{status="offline"} 1 ' in payload
+    assert 'onu_olt_status_total{status="online"} 1 ' in payload
+    assert 'onu_olt_status_total{status="offline"} 1 ' in payload
 
 
 def test_create_device_interface(db_session, network_device):

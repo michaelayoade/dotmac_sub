@@ -278,7 +278,9 @@ class CPEDevices(CRUDManager[CPEDevice]):
         order_dir: str,
         limit: int,
         offset: int,
+        subscription_id: str | None = None,
     ):
+        del subscription_id  # Reserved for legacy callers; CPEs are subscriber-scoped.
         query = db.query(CPEDevice)
         query = apply_optional_equals(
             query,

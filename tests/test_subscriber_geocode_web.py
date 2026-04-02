@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import uuid
 
+from app.models.network import OnuOnlineStatus, OntAssignment, OntUnit
 from app.models.subscriber import Address, Subscriber
 from app.services.web_subscriber_details import build_subscriber_detail_snapshot
 from app.web.admin import subscribers as subscribers_web
@@ -83,3 +84,30 @@ def test_subscriber_geocode_endpoint_updates_coordinates(db_session):
     assert response.status_code == 200
     assert round(float(address.latitude), 6) == 6.500001
     assert round(float(address.longitude), 6) == 3.300001
+
+
+def test_subscriber_detail_snapshot_equipment_uses_effective_ont_status(db_session):
+    subscriber = _create_subscriber(db_session)
+    ont = OntUnit(
+        serial_number="ONT-SUB-1",
+        name="Subscriber ONT",
+        online_status=OnuOnlineStatus.offline,
+        effective_status=OnuOnlineStatus.online,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    db_session.add(
+        OntAssignment(
+            subscriber_id=subscriber.id,
+            ont_unit_id=ont.id,
+            active=True,
+        )
+    )
+    db_session.commit()
+
+    snapshot = build_subscriber_detail_snapshot(db_session, subscriber, subscriber.id)
+
+    equipment = snapshot["equipment"]
+    assert len(equipment) == 1
+    assert equipment[0]["type"] == "ONT"
+    assert equipment[0]["online"] is True

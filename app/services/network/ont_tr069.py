@@ -63,35 +63,50 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
     },
     "wan": {
         "Connection Type": [
+            # Wildcard paths to match any WAN index
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.ConnectionType",
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.ConnectionType",
+            # Legacy fixed paths for backwards compatibility
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType",
             f"{_DEV}.PPP.Interface.1.ConnectionStatus",
         ],
         "WAN IP": [
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.ExternalIPAddress",
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.ExternalIPAddress",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress",
             f"{_DEV}.IP.Interface.1.IPv4Address.1.IPAddress",
             f"{_DEV}.DHCPv4.Client.1.IPAddress",
         ],
         "Username": [
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Username",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
             f"{_DEV}.PPP.Interface.1.Username",
         ],
         "Status": [
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.ConnectionStatus",
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.ConnectionStatus",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus",
             f"{_DEV}.IP.Interface.1.Status",
         ],
         "Uptime": [
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Uptime",
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.Uptime",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Uptime",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.Uptime",
         ],
         "DNS Servers": [
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.DNSServers",
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.DNSServers",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DNSServers",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DNSServers",
             f"{_DEV}.DNS.Client.Server.1.DNSServer",
         ],
         "Gateway": [
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.DefaultGateway",
+            f"{_IGD}.WANDevice.*.WANConnectionDevice.*.WANIPConnection.*.DefaultGateway",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DefaultGateway",
             f"{_IGD}.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DefaultGateway",
             f"{_DEV}.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
@@ -99,52 +114,64 @@ PARAM_GROUPS: dict[str, dict[str, list[str]]] = {
     },
     "lan": {
         "LAN IP": [
+            f"{_IGD}.LANDevice.*.LANHostConfigManagement.IPInterface.*.IPInterfaceIPAddress",
             f"{_IGD}.LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceIPAddress",
             f"{_DEV}.IP.Interface.2.IPv4Address.1.IPAddress",
         ],
         "Subnet Mask": [
+            f"{_IGD}.LANDevice.*.LANHostConfigManagement.IPInterface.*.IPInterfaceSubnetMask",
             f"{_IGD}.LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceSubnetMask",
             f"{_DEV}.IP.Interface.2.IPv4Address.1.SubnetMask",
         ],
         "DHCP Enabled": [
+            f"{_IGD}.LANDevice.*.LANHostConfigManagement.DHCPServerEnable",
             f"{_IGD}.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
             f"{_DEV}.DHCPv4.Server.Enable",
         ],
         "DHCP Start": [
+            f"{_IGD}.LANDevice.*.LANHostConfigManagement.MinAddress",
             f"{_IGD}.LANDevice.1.LANHostConfigManagement.MinAddress",
             f"{_DEV}.DHCPv4.Server.Pool.1.MinAddress",
         ],
         "DHCP End": [
+            f"{_IGD}.LANDevice.*.LANHostConfigManagement.MaxAddress",
             f"{_IGD}.LANDevice.1.LANHostConfigManagement.MaxAddress",
             f"{_DEV}.DHCPv4.Server.Pool.1.MaxAddress",
         ],
         "Connected Hosts": [
+            f"{_IGD}.LANDevice.*.Hosts.HostNumberOfEntries",
             f"{_IGD}.LANDevice.1.Hosts.HostNumberOfEntries",
             f"{_DEV}.Hosts.HostNumberOfEntries",
         ],
     },
     "wireless": {
         "Enabled": [
+            f"{_IGD}.LANDevice.*.WLANConfiguration.*.Enable",
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.Enable",
             f"{_DEV}.WiFi.SSID.1.Enable",
         ],
         "SSID": [
+            f"{_IGD}.LANDevice.*.WLANConfiguration.*.SSID",
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.SSID",
             f"{_DEV}.WiFi.SSID.1.SSID",
         ],
         "Channel": [
+            f"{_IGD}.LANDevice.*.WLANConfiguration.*.Channel",
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.Channel",
             f"{_DEV}.WiFi.Radio.1.Channel",
         ],
         "Standard": [
+            f"{_IGD}.LANDevice.*.WLANConfiguration.*.Standard",
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.Standard",
             f"{_DEV}.WiFi.Radio.1.OperatingStandards",
         ],
         "Security Mode": [
+            f"{_IGD}.LANDevice.*.WLANConfiguration.*.BeaconType",
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.BeaconType",
             f"{_DEV}.WiFi.AccessPoint.1.Security.ModeEnabled",
         ],
         "Connected Clients": [
+            f"{_IGD}.LANDevice.*.WLANConfiguration.*.TotalAssociations",
             f"{_IGD}.LANDevice.1.WLANConfiguration.1.TotalAssociations",
             f"{_DEV}.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries",
         ],
@@ -181,6 +208,9 @@ class TR069Summary:
     ethernet_ports: list[dict[str, Any]] = field(default_factory=list)
     lan_hosts: list[dict[str, Any]] = field(default_factory=list)
     available: bool = False
+    source: str = "live"
+    fetched_at: datetime | None = None
+    raw_device: dict[str, Any] | None = None
     error: str | None = None
 
 
@@ -219,14 +249,65 @@ def _resolve_param_paths_from_capability(
     return None
 
 
+def _extract_wildcard_value(
+    device: dict[str, Any],
+    path_pattern: str,
+) -> Any:
+    """Search for a parameter value at any index in the device document.
+
+    Supports paths like 'WANDevice.*.WANConnectionDevice.*.WANPPPConnection.*.Status'
+    where '*' matches any numeric index (1, 2, 3, etc.).
+
+    Returns the first value found at any matching path.
+    """
+
+    parts = path_pattern.split(".")
+
+    def search(current: Any, remaining_parts: list[str]) -> Any:
+        if not remaining_parts:
+            # Reached end of path - extract value
+            if isinstance(current, dict) and "_value" in current:
+                return current["_value"]
+            return None
+
+        if not isinstance(current, dict):
+            return None
+
+        part = remaining_parts[0]
+        rest = remaining_parts[1:]
+
+        if part == "*":
+            # Wildcard - try all numeric keys
+            for key in sorted(current.keys()):
+                if key.isdigit():
+                    result = search(current[key], rest)
+                    if result is not None:
+                        return result
+            return None
+        else:
+            # Exact match
+            if part in current:
+                return search(current[part], rest)
+            return None
+
+    return search(device, parts)
+
+
 def _extract_first(
     client: GenieACSClient,
     device: dict[str, Any],
     param_paths: list[str],
 ) -> Any:
-    """Try multiple parameter paths, return first non-None value."""
+    """Try multiple parameter paths, return first non-None value.
+
+    Supports wildcard paths with '*' for any numeric index.
+    """
     for path in param_paths:
-        val = client.extract_parameter_value(device, path)
+        if "*" in path:
+            # Use wildcard search
+            val = _extract_wildcard_value(device, path)
+        else:
+            val = client.extract_parameter_value(device, path)
         if val is not None:
             return val
     return None
@@ -325,6 +406,13 @@ class OntTR069:
 
         resolved = resolve_genieacs(db, ont)
         if not resolved:
+            cached_summary = OntTR069._summary_from_snapshot(ont)
+            if cached_summary:
+                cached_summary.error = (
+                    "Showing cached TR-069 snapshot. "
+                    "No live ACS device or server could be resolved."
+                )
+                return cached_summary
             return TR069Summary(
                 error="This device is not managed via TR-069. "
                 "No matching CPE device or ACS server was found."
@@ -335,12 +423,22 @@ class OntTR069:
             device = client.get_device(device_id)
         except GenieACSError as e:
             logger.error("TR-069 fetch failed for ONT %s: %s", ont.serial_number, e)
+            cached_summary = OntTR069._summary_from_snapshot(ont)
+            if cached_summary:
+                cached_summary.error = f"Showing cached TR-069 snapshot. Live fetch failed: {e}"
+                return cached_summary
             return TR069Summary(error=f"Failed to fetch TR-069 data: {e}")
 
         ont_vendor = getattr(ont, "vendor", None)
         ont_model = getattr(ont, "model", None)
 
-        summary = TR069Summary(available=True, ont_id=str(ont.id))
+        summary = TR069Summary(
+            available=True,
+            ont_id=str(ont.id),
+            source="live",
+            fetched_at=datetime.now(UTC),
+            raw_device=device,
+        )
         summary.system = _extract_group(
             client, device, "system", db=db, vendor=ont_vendor, model=ont_model
         )
@@ -401,6 +499,53 @@ class OntTR069:
             OntTR069._persist_observed_runtime(db, ont, summary)
 
         return summary
+
+    @staticmethod
+    def _snapshot_payload(summary: TR069Summary) -> dict[str, Any]:
+        fetched_at = summary.fetched_at or datetime.now(UTC)
+        return {
+            "ont_id": summary.ont_id,
+            "system": summary.system,
+            "wan": summary.wan,
+            "lan": summary.lan,
+            "wireless": summary.wireless,
+            "ethernet_ports": summary.ethernet_ports,
+            "lan_hosts": summary.lan_hosts,
+            "fetched_at": fetched_at.isoformat(),
+            "raw_device": summary.raw_device,
+        }
+
+    @staticmethod
+    def _summary_from_snapshot(ont: OntUnit) -> TR069Summary | None:
+        snapshot = getattr(ont, "tr069_last_snapshot", None)
+        if not isinstance(snapshot, dict) or not snapshot:
+            return None
+
+        fetched_at = None
+        fetched_at_raw = snapshot.get("fetched_at")
+        if isinstance(fetched_at_raw, str) and fetched_at_raw:
+            try:
+                fetched_at = datetime.fromisoformat(fetched_at_raw)
+            except ValueError:
+                fetched_at = None
+
+        return TR069Summary(
+            ont_id=str(ont.id),
+            system=dict(snapshot.get("system") or {}),
+            wan=dict(snapshot.get("wan") or {}),
+            lan=dict(snapshot.get("lan") or {}),
+            wireless=dict(snapshot.get("wireless") or {}),
+            ethernet_ports=list(snapshot.get("ethernet_ports") or []),
+            lan_hosts=list(snapshot.get("lan_hosts") or []),
+            available=True,
+            source="cache",
+            fetched_at=fetched_at
+            or getattr(ont, "tr069_last_snapshot_at", None)
+            or getattr(ont, "observed_runtime_updated_at", None),
+            raw_device=snapshot.get("raw_device")
+            if isinstance(snapshot.get("raw_device"), dict)
+            else None,
+        )
 
     @staticmethod
     def _to_int(value: Any) -> int | None:
@@ -558,7 +703,10 @@ class OntTR069:
             ont.observed_wifi_clients = wifi_clients
         if lan_hosts_count is not None:
             ont.observed_lan_hosts = lan_hosts_count
-        ont.observed_runtime_updated_at = datetime.now(UTC)
+        observed_at = summary.fetched_at or datetime.now(UTC)
+        ont.observed_runtime_updated_at = observed_at
+        ont.tr069_last_snapshot = OntTR069._snapshot_payload(summary)
+        ont.tr069_last_snapshot_at = observed_at
 
         db.add(ont)
         db.commit()

@@ -37,23 +37,55 @@
         </div>
     </div>
 
-    {% if onu_summary and onu_summary.total > 0 %}
+    {% if ont_service_summary and ont_service_summary.total > 0 %}
     <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
         <div class="rounded-xl border border-emerald-200/70 bg-white px-4 py-3 dark:border-emerald-900/30 dark:bg-slate-800/80">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONTs Online</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.online }}</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service Online</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.online }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective status after ACS fallback</p>
         </div>
         <div class="rounded-xl border border-rose-200/70 bg-white px-4 py-3 dark:border-rose-900/30 dark:bg-slate-800/80">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONTs Offline</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.offline }}</p>
+            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Service Offline</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.offline }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Effective service loss</p>
         </div>
         <div class="rounded-xl border border-amber-200/70 bg-white px-4 py-3 dark:border-amber-900/30 dark:bg-slate-800/80">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.low_signal }}</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.low_signal }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optical warning threshold breached</p>
         </div>
         <div class="rounded-xl border border-slate-200/70 bg-white px-4 py-3 dark:border-slate-700/60 dark:bg-slate-800/80">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Total ONTs</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ onu_summary.total }}</p>
+            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.total }}</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Managed inventory count</p>
+        </div>
+    </div>
+    {% endif %}
+
+    {% if ont_olt_link_summary and ont_olt_link_summary.total > 0 %}
+    <div class="rounded-2xl border border-slate-200/70 bg-white/90 px-4 py-4 dark:border-slate-700/60 dark:bg-slate-800/80">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Raw PON Link State</p>
+                <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Direct OLT link view before ACS fallback or derived service resolution.</p>
+            </div>
+            <div class="rounded-full border border-slate-200 px-2.5 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:text-slate-300">
+                Physical layer
+            </div>
+        </div>
+        <div class="mt-4 grid gap-3 md:grid-cols-3">
+            <div class="rounded-xl border border-emerald-200/70 bg-emerald-50/60 px-4 py-3 dark:border-emerald-900/30 dark:bg-emerald-900/10">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-emerald-700 dark:text-emerald-300">PON Online</p>
+                <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.online }}</p>
+            </div>
+            <div class="rounded-xl border border-rose-200/70 bg-rose-50/60 px-4 py-3 dark:border-rose-900/30 dark:bg-rose-900/10">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-rose-700 dark:text-rose-300">PON Offline</p>
+                <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.offline }}</p>
+            </div>
+            <div class="rounded-xl border border-slate-200/70 bg-slate-50/80 px-4 py-3 dark:border-slate-700/60 dark:bg-slate-900/20">
+                <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">PON Unknown</p>
+                <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_olt_link_summary.unknown }}</p>
+            </div>
         </div>
     </div>
     {% endif %}

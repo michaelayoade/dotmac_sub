@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import uuid
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +38,7 @@ from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
 from app.services import web_network_service_ports as web_network_service_ports_service
+from app.services.network.ont_tr069 import TR069Summary
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -1143,13 +1144,89 @@ def ont_set_wifi_password(
     )
 
 
+@router.get(
+    "/onts/{ont_id}/wifi-controls",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_wifi_controls(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: WiFi controls with current SSID pre-filled."""
+    from app.services.network.ont_read import OntReadFacade
+
+    tr069_summary = OntReadFacade.get_tr069_summary(db, ont_id)
+    current_ssid = None
+    no_tr069 = True
+    if tr069_summary.get("available"):
+        no_tr069 = False
+        wireless = tr069_summary.get("wireless") or {}
+        current_ssid = wireless.get("SSID") or wireless.get("ssid")
+
+    context = {
+        "request": request,
+        "ont_id": ont_id,
+        "current_ssid": current_ssid,
+        "no_tr069": no_tr069,
+    }
+    return templates.TemplateResponse(
+        "admin/network/onts/_wifi_controls.html", context
+    )
+
+
+def _lan_ports_partial_response(
+    request: Request,
+    db: Session,
+    ont_id: str,
+    *,
+    toast_message: str | None = None,
+    toast_type: str = "success",
+) -> HTMLResponse:
+    """Return the LAN ports controls partial with current port status."""
+    from app.services.network.ont_read import OntReadFacade
+
+    # Check TR-069 availability separately from port data
+    tr069_summary = OntReadFacade.get_tr069_summary(db, ont_id)
+    no_tr069 = not tr069_summary.get("available", False)
+
+    # Get ethernet ports (may be empty even if TR-069 is available)
+    ethernet_ports = OntReadFacade.get_ethernet_ports(db, ont_id) if not no_tr069 else []
+
+    context = {
+        "request": request,
+        "ont_id": ont_id,
+        "ethernet_ports": ethernet_ports,
+        "no_tr069": no_tr069,
+    }
+    response = templates.TemplateResponse(
+        "admin/network/onts/_lan_ports_controls.html", context
+    )
+    if toast_message:
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": toast_message, "type": toast_type}}
+        )
+    return response
+
+
+@router.get(
+    "/onts/{ont_id}/lan-ports-status",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_lan_ports_status(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: LAN port status with toggle controls."""
+    return _lan_ports_partial_response(request, db, ont_id)
+
+
 @router.post(
     "/onts/{ont_id}/lan-port",
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ont_toggle_lan_port(
     request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> Response:
     """Toggle LAN port on ONT via GenieACS TR-069."""
     port_str = request.query_params.get("port", "1")
     enabled_str = request.query_params.get("enabled", "true")
@@ -1175,6 +1252,17 @@ def ont_toggle_lan_port(
             "enabled": enabled,
         },
     )
+
+    # Return HTML partial if called via HTMX, otherwise JSON
+    if request.headers.get("HX-Request"):
+        return _lan_ports_partial_response(
+            request,
+            db,
+            ont_id,
+            toast_message=result.message,
+            toast_type="success" if result.success else "error",
+        )
+
     status_code = 200 if result.success else 502
     headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
@@ -1182,6 +1270,56 @@ def ont_toggle_lan_port(
         status_code=status_code,
         headers=headers,
     )
+
+
+@router.get(
+    "/onts/{ont_id}/profile-form",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_profile_form(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: Profile selection form with available templates."""
+    from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
+
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    available_profile_templates = ont_provisioning_profiles.list(db, is_active=True, limit=50)
+    current_profile_id = str(ont.provisioning_profile_id) if ont and ont.provisioning_profile_id else None
+
+    context = {
+        "request": request,
+        "ont_id": ont_id,
+        "available_profile_templates": available_profile_templates,
+        "current_profile_id": current_profile_id,
+    }
+    return templates.TemplateResponse("admin/network/onts/_profile_form.html", context)
+
+
+@router.get(
+    "/onts/{ont_id}/firmware-form",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_firmware_form(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """HTMX partial: Firmware selection form with available images."""
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    ont_vendor = str(getattr(ont, "vendor", "") or "").strip() if ont else ""
+    available_firmware = web_network_onts_service.get_active_firmware_images(
+        db,
+        vendor_contains=ont_vendor or None,
+        limit=20,
+    )
+
+    context = {
+        "request": request,
+        "ont_id": ont_id,
+        "available_firmware": available_firmware,
+        "ont_vendor": ont_vendor,
+    }
+    return templates.TemplateResponse("admin/network/onts/_firmware_form.html", context)
 
 
 @router.post(
@@ -1770,15 +1908,15 @@ def ont_config_wan(
 
     # Try to get TR-069 data
     tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
+    tr069 = cast(TR069Summary | None, tr069_data.get("tr069"))
 
     context = _base_context(request, db, active_page="onts")
     context.update(
         {
             "ont_id": ont_id,
-            "tr069_available": tr069 and tr069.get("available"),
-            "wan_info": tr069.get("wan") if tr069 else None,
-            "current_pppoe_user": tr069.get("wan", {}).get("PPPoE Username") if tr069 else None,
+            "tr069_available": tr069 and tr069.available,
+            "wan_info": tr069.wan if tr069 else None,
+            "current_pppoe_user": (tr069.wan or {}).get("Username") if tr069 else None,
         }
     )
     return templates.TemplateResponse("admin/network/onts/_config_wan.html", context)
@@ -1804,15 +1942,15 @@ def ont_config_wifi(
 
     # Try to get TR-069 data
     tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
+    tr069 = cast(TR069Summary | None, tr069_data.get("tr069"))
 
     context = _base_context(request, db, active_page="onts")
     context.update(
         {
             "ont_id": ont_id,
-            "tr069_available": tr069 and tr069.get("available"),
-            "wireless_info": tr069.get("wireless") if tr069 else None,
-            "current_ssid": tr069.get("wireless", {}).get("SSID") if tr069 else None,
+            "tr069_available": tr069 and tr069.available,
+            "wireless_info": tr069.wireless if tr069 else None,
+            "current_ssid": (tr069.wireless or {}).get("SSID") if tr069 else None,
         }
     )
     return templates.TemplateResponse("admin/network/onts/_config_wifi.html", context)
@@ -1875,16 +2013,16 @@ def ont_config_lan(
 
     # Try to get TR-069 data
     tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
+    tr069 = cast(TR069Summary | None, tr069_data.get("tr069"))
 
     context = _base_context(request, db, active_page="onts")
     context.update(
         {
             "ont_id": ont_id,
-            "tr069_available": tr069 and tr069.get("available"),
-            "lan_info": tr069.get("lan") if tr069 else None,
-            "ethernet_ports": tr069.get("ethernet_ports") if tr069 else None,
-            "lan_hosts": tr069.get("lan_hosts") if tr069 else None,
+            "tr069_available": tr069 and tr069.available,
+            "lan_info": tr069.lan if tr069 else None,
+            "ethernet_ports": tr069.ethernet_ports if tr069 else None,
+            "lan_hosts": tr069.lan_hosts if tr069 else None,
         }
     )
     return templates.TemplateResponse("admin/network/onts/_config_lan.html", context)
@@ -1910,13 +2048,13 @@ def ont_config_diagnostics(
 
     # Check TR-069 availability
     tr069_data = web_network_ont_tr069_service.tr069_tab_data(db, ont_id)
-    tr069 = tr069_data.get("tr069")
+    tr069 = cast(TR069Summary | None, tr069_data.get("tr069"))
 
     context = _base_context(request, db, active_page="onts")
     context.update(
         {
             "ont_id": ont_id,
-            "tr069_available": tr069 and tr069.get("available"),
+            "tr069_available": tr069 and tr069.available,
         }
     )
     return templates.TemplateResponse(

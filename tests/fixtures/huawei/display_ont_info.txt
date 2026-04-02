@@ -1,0 +1,12 @@
+  { <cr>||<K> }:
+
+  F/S/P   ONT         SN                  Control     Run      Config   Match    Description
+          ID                              flag        state    state    state
+  ----------------------------------------------------------------------------
+  0/2/1   0   HWTC7D4733C3                active      online   normal   match    Customer-001
+  0/2/1   1   HWTC7D4733C4                active      online   normal   match
+  0/2/2   0   HWTC7D4733C5                active      offline  normal   match    Customer-003
+  0/2/2   1   HWTCAABBCCDD                active      online   normal   mismatch
+  ----------------------------------------------------------------------------
+  In port 0/2/1, the total of ONTs are: 2, online: 2
+  In port 0/2/2, the total of ONTs are: 2, online: 1

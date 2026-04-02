@@ -1,0 +1,9 @@
+Value PROFILE_ID (\d+)
+Value NAME (\S+)
+Value BINDING_COUNT (\d*)
+Value TYPE (\S*)
+
+Start
+  ^\s*${PROFILE_ID}\s+${NAME}\s*$$ -> Record
+  ^\s*${PROFILE_ID}\s+${NAME}\s+${BINDING_COUNT}\s*$$ -> Record
+  ^\s*${PROFILE_ID}\s+${NAME}\s+${TYPE}\s+${BINDING_COUNT}\s*$$ -> Record

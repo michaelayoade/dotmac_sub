@@ -186,6 +186,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         OntUnit,
         OnuOfflineReason,
         OnuOnlineStatus,
+        OntStatusSource,
         PollStatus,
     )
 
@@ -226,6 +227,9 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         .values(
             online_status=OnuOnlineStatus.offline,
             offline_reason=OnuOfflineReason.los,
+            effective_status=OnuOnlineStatus.offline,
+            effective_status_source=OntStatusSource.olt,
+            status_resolved_at=now,
         )
     )
     db.commit()

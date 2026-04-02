@@ -5,7 +5,7 @@ import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from typing import Any
-from urllib.parse import urlencode, urljoin
+from urllib.parse import urlencode, urljoin, urlparse
 
 from sqlalchemy.orm import Session
 
@@ -80,11 +80,19 @@ def _setting_bool(db: Session | None, key: str, default: bool) -> bool:
 
 
 def _setting_value(db: Session | None, key: str) -> str | None:
+    return _setting_value_for_domain(db, SettingDomain.notification, key)
+
+
+def _setting_value_for_domain(
+    db: Session | None,
+    domain: SettingDomain,
+    key: str,
+) -> str | None:
     if db is None:
         return None
     setting = (
         db.query(DomainSetting)
-        .filter(DomainSetting.domain == SettingDomain.notification)
+        .filter(DomainSetting.domain == domain)
         .filter(DomainSetting.key == key)
         .filter(DomainSetting.is_active.is_(True))
         .first()
@@ -455,12 +463,69 @@ def get_smtp_config(
     return _get_smtp_config(db, sender_key=sender_key, activity=activity)
 
 
-def _get_app_url(db: Session | None) -> str:
-    return (
+def _normalize_base_url(value: str | None) -> str:
+    normalized = (value or "").strip()
+    if not normalized:
+        return ""
+    if not normalized.startswith(("http://", "https://")):
+        normalized = f"https://{normalized}"
+    return normalized.rstrip("/")
+
+
+def _is_local_hostname(hostname: str | None) -> bool:
+    normalized = (hostname or "").strip().lower()
+    return normalized in {"", "localhost", "127.0.0.1", "::1"}
+
+
+def _is_local_base_url(value: str | None) -> bool:
+    if not value:
+        return True
+    normalized = value.strip()
+    if not normalized:
+        return True
+    parsed = urlparse(normalized if "://" in normalized else f"https://{normalized}")
+    return _is_local_hostname(parsed.hostname)
+
+
+def _configured_domain_url(db: Session | None, key: str) -> str:
+    raw_value = _setting_value_for_domain(db, SettingDomain.auth, key) or ""
+    if _is_local_base_url(raw_value):
+        return ""
+    return _normalize_base_url(raw_value)
+
+
+def _configured_app_url(db: Session | None) -> str:
+    return _normalize_base_url(
         _env_value("APP_URL")
         or _setting_value(db, "app_url")
-        or "http://localhost:8000"
     )
+
+
+def _get_app_url(db: Session | None, *, next_login_path: str | None = None) -> str:
+    preferred_domain_keys = ["selfcare_domain"]
+    fallback_domain_keys = ["selfcare_domain", "admin_domain", "reseller_domain"]
+    route = (next_login_path or "").strip()
+    if route.startswith("/reseller"):
+        preferred_domain_keys = ["reseller_domain"]
+        fallback_domain_keys = ["selfcare_domain"]
+
+    for key in preferred_domain_keys:
+        domain_url = _configured_domain_url(db, key)
+        if domain_url:
+            return domain_url
+
+    app_url = _configured_app_url(db)
+    if app_url and not _is_local_base_url(app_url):
+        return app_url
+
+    for key in fallback_domain_keys:
+        domain_url = _configured_domain_url(db, key)
+        if domain_url:
+            return domain_url
+
+    if app_url:
+        return app_url
+    return "http://localhost:8000"
 
 
 def _get_company_name(db: Session | None) -> str:
@@ -808,7 +873,11 @@ def test_smtp_connection(
 
 
 def send_password_reset_email(
-    db: Session, to_email: str, reset_token: str, person_name: str | None = None
+    db: Session,
+    to_email: str,
+    reset_token: str,
+    person_name: str | None = None,
+    next_login_path: str | None = None,
 ) -> bool:
     """
     Send a password reset email.
@@ -822,8 +891,11 @@ def send_password_reset_email(
     Returns:
         True if email was sent successfully, False otherwise
     """
-    app_url = _get_app_url(db)
-    reset_url = f"{app_url}/auth/reset-password?token={reset_token}"
+    app_url = _get_app_url(db, next_login_path=next_login_path)
+    query = {"token": reset_token}
+    if next_login_path and next_login_path.startswith("/"):
+        query["next_login"] = next_login_path
+    reset_url = f"{app_url}/auth/reset-password?{urlencode(query)}"
 
     # Get configurable expiry minutes
     expiry_minutes = (
@@ -909,7 +981,7 @@ def send_user_invite_email(
     Returns:
         True if email was sent successfully, False otherwise
     """
-    app_url = _get_app_url(db)
+    app_url = _get_app_url(db, next_login_path=next_login_path)
     query = {"token": reset_token}
     if next_login_path and next_login_path.startswith("/"):
         query["next_login"] = next_login_path

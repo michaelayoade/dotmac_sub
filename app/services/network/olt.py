@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models.network import (
     OltCard,
@@ -50,6 +50,12 @@ from app.services.network._common import (
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
 logger = logging.getLogger(__name__)
+
+
+_ONT_STATUS_LOADS = (
+    joinedload(OntUnit.tr069_acs_server),
+    joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
+)
 
 
 class OLTDevices(CRUDManager[OLTDevice]):
@@ -344,7 +350,7 @@ class OntUnits(CRUDManager[OntUnit]):
         limit: int,
         offset: int,
     ) -> list[OntUnit]:
-        stmt = select(OntUnit)
+        stmt = select(OntUnit).options(*_ONT_STATUS_LOADS)
         stmt = apply_active_state(stmt, OntUnit.is_active, is_active)
         stmt = _apply_ordering(
             stmt,
@@ -379,7 +385,7 @@ class OntUnits(CRUDManager[OntUnit]):
         """
         from app.services.network.olt_polling import get_signal_thresholds
 
-        stmt = select(OntUnit)
+        stmt = select(OntUnit).options(*_ONT_STATUS_LOADS)
 
         # Filter by OLT or PON port via active assignment join
         if pon_port_id:
@@ -431,7 +437,9 @@ class OntUnits(CRUDManager[OntUnit]):
         from app.models.network import OnuOnlineStatus
 
         if online_status and online_status in ("online", "offline", "unknown"):
-            stmt = stmt.where(OntUnit.online_status == OnuOnlineStatus(online_status))
+            stmt = stmt.where(
+                OntUnit.effective_status == OnuOnlineStatus(online_status)
+            )
 
         # Filter by vendor
         if vendor:

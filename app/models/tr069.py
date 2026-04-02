@@ -2,7 +2,18 @@ import enum
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,6 +71,14 @@ class Tr069AcsServer(Base):
 
 class Tr069CpeDevice(Base):
     __tablename__ = "tr069_cpe_devices"
+    __table_args__ = (
+        Index(
+            "uq_tr069_cpe_devices_active_ont_unit_id",
+            "ont_unit_id",
+            unique=True,
+            postgresql_where=text("is_active AND ont_unit_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -76,6 +95,7 @@ class Tr069CpeDevice(Base):
     serial_number: Mapped[str | None] = mapped_column(String(120))
     oui: Mapped[str | None] = mapped_column(String(8))
     product_class: Mapped[str | None] = mapped_column(String(120))
+    genieacs_device_id: Mapped[str | None] = mapped_column(String(255), index=True)
     connection_request_url: Mapped[str | None] = mapped_column(String(255))
     last_inform_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

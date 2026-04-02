@@ -87,11 +87,13 @@ class GenieACSClient:
                 response.raise_for_status()
                 return response
         except httpx.HTTPStatusError as e:
+            # 405 is expected for some endpoints (handled with fallback), log at debug
+            if e.response.status_code == 405:
+                logger.debug("GenieACS 405 on %s %s (will use fallback)", method, path)
+                raise GenieACSMethodNotAllowedError("API error: 405") from e
             logger.error(
                 f"GenieACS API error: {e.response.status_code} - {e.response.text}"
             )
-            if e.response.status_code == 405:
-                raise GenieACSMethodNotAllowedError("API error: 405") from e
             raise GenieACSError(f"API error: {e.response.status_code}") from e
         except httpx.RequestError as e:
             logger.error(f"GenieACS request error: {e}")

@@ -1,0 +1,30 @@
+  { <cr>||<K> }:
+
+  In port 0/2/1, the total of ONTs that are found: 2
+   ----------------------------------------------------------------------------
+   Number              : 1
+   F/S/P               : 0/2/1
+   Ont SN              : 485754437D4733C3 (HWTC-7D4733C3)
+   Password            : 0x00000000000000000000
+   Loid                :
+   Checkcode           :
+   VendorID            : HWTC
+   Ont Version         : 168D.A
+   Ont SoftwareVersion : V5R020C00S115
+   Ont EquipmentID     : EG8145V5
+   Ont autofind time   : 2024-03-15 10:23:45+01:00
+   ----------------------------------------------------------------------------
+   Number              : 2
+   F/S/P               : 0/2/1
+   Ont SN              : 48575443AABBCCDD (HWTC-AABBCCDD)
+   Password            : 0x00000000000000000000
+   Loid                :
+   Checkcode           :
+   VendorID            : HWTC
+   Ont Version         : 168D.A
+   Ont SoftwareVersion : V5R020C00S120
+   Ont EquipmentID     : EG8145X6
+   Ont MAC             : AA-BB-CC-DD-EE-FF
+   Ont Equipment SN    : HWTC123456789
+   Ont autofind time   : 2024-03-15 11:45:30+01:00
+   ----------------------------------------------------------------------------

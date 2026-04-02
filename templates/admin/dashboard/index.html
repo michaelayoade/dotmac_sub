@@ -14,9 +14,12 @@
 {% set dev_online = monitoring_summary.devices_online if monitoring_summary else 0 %}
 {% set dev_total = monitoring_summary.devices_total if monitoring_summary else 0 %}
 {% set dev_offline = monitoring_summary.devices_offline if monitoring_summary else 0 %}
-{% set ont_on = onu_summary.online if onu_summary else 0 %}
-{% set ont_total = onu_summary.total if onu_summary else 0 %}
-{% set ont_low_signal = onu_summary.low_signal if onu_summary else 0 %}
+{% set ont_on = ont_service_summary.online if ont_service_summary else 0 %}
+{% set ont_total = ont_service_summary.total if ont_service_summary else 0 %}
+{% set ont_low_signal = ont_service_summary.low_signal if ont_service_summary else 0 %}
+{% set ont_olt_on = ont_olt_link_summary.online if ont_olt_link_summary else 0 %}
+{% set ont_olt_off = ont_olt_link_summary.offline if ont_olt_link_summary else 0 %}
+{% set ont_olt_unknown = ont_olt_link_summary.unknown if ont_olt_link_summary else 0 %}
 {% set pon_up = pon_interface_summary.up if pon_interface_summary else 0 %}
 {% set pon_down = pon_interface_summary.down if pon_interface_summary else 0 %}
 {% set pon_unknown = pon_interface_summary.unknown if pon_interface_summary else 0 %}
@@ -99,11 +102,13 @@
             progress=dev_pct
         ) }}
         {{ kpi_tile(
-            "ONTs",
+            "ONT Service",
             "%d / %d" | format(ont_on, ont_total),
             "/admin/network/onts",
             "violet",
-            "%d low signal" % ont_low_signal if ont_low_signal else "Signal stable",
+            "%d low signal · PON %d/%d/%d" | format(ont_low_signal, ont_olt_on, ont_olt_off, ont_olt_unknown)
+                if ont_total else
+            "Service status with raw PON overlay",
             progress=ont_pct
         ) }}
         {% if show_financials %}

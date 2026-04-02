@@ -69,3 +69,6 @@ uploads/
 mypy_errors.txt
 wifi_credentials.csv
 scripts/export_wifi_credentials.py
+
+# OLT CLI capture samples (auto-generated)
+data/olt_samples/

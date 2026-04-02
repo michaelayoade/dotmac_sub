@@ -1,4 +1,9 @@
-"""OLT SSH connection helpers with model-specific transport policies."""
+"""OLT SSH connection helpers with model-specific transport policies.
+
+This module provides SSH connectivity and CLI parsing for Huawei OLTs.
+Parsing is done via TextFSM templates (see parsers/ subdirectory) with
+fallback to legacy regex parsing for robustness.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +21,29 @@ logger = logging.getLogger(__name__)
 from app.models.network import OLTDevice
 from app.services.credential_crypto import decrypt_credential
 from app.services.network.olt_command_gen import build_service_port_command
+from app.services.network.olt_validators import (
+    ValidationError,
+    validate_ip_address,
+    validate_ont_id,
+    validate_subnet_mask,
+    validate_vlan_id,
+)
+
+# TextFSM-based parsers (preferred)
+try:
+    from app.services.network.parsers import parse_autofind as _textfsm_parse_autofind
+    from app.services.network.parsers import parse_key_value as _textfsm_parse_key_value
+    from app.services.network.parsers import (
+        parse_profile_table as _textfsm_parse_profile_table,
+    )
+    from app.services.network.parsers import (
+        parse_service_port_table as _textfsm_parse_service_port_table,
+    )
+
+    _TEXTFSM_AVAILABLE = True
+except ImportError:
+    _TEXTFSM_AVAILABLE = False
+    logger.warning("TextFSM parsers not available, using legacy regex parsing")
 
 
 @dataclass(frozen=True)
@@ -232,8 +260,11 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     return transport, channel, policy
 
 
-def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
-    """Parse the output of ``display ont autofind all``."""
+def _parse_huawei_autofind_legacy(output: str) -> list[AutofindEntry]:
+    """Legacy regex parser for ``display ont autofind all`` output.
+
+    Used as fallback when TextFSM parsing fails.
+    """
     entries: list[AutofindEntry] = []
     blocks = re.split(r"-{10,}", output)
     current: dict[str, str] = {}
@@ -266,6 +297,39 @@ def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
         )
         current = {}
     return entries
+
+
+def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
+    """Parse the output of ``display ont autofind all``.
+
+    Uses TextFSM template for robust parsing with fallback to legacy regex.
+    """
+    if _TEXTFSM_AVAILABLE:
+        try:
+            result = _textfsm_parse_autofind(output)
+            if result.success and result.data:
+                # Convert from parser dataclass to local dataclass
+                return [
+                    AutofindEntry(
+                        fsp=e.fsp,
+                        serial_number=e.serial_number,
+                        serial_hex=e.serial_hex,
+                        vendor_id=e.vendor_id,
+                        model=e.model,
+                        software_version=e.software_version,
+                        mac=e.mac,
+                        equipment_sn=e.equipment_sn,
+                        autofind_time=e.autofind_time,
+                    )
+                    for e in result.data
+                ]
+            if result.warnings:
+                logger.debug("TextFSM autofind warnings: %s", result.warnings)
+        except Exception as e:
+            logger.debug("TextFSM autofind parse failed, using legacy: %s", e)
+
+    # Fallback to legacy regex parsing
+    return _parse_huawei_autofind_legacy(output)
 
 
 def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
@@ -435,8 +499,11 @@ class ServicePortEntry:
     state: str  # "up" or "down"
 
 
-def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
-    """Parse Huawei ``display service-port`` output into structured entries."""
+def _parse_service_port_table_legacy(output: str) -> list[ServicePortEntry]:
+    """Legacy regex parser for ``display service-port`` output.
+
+    Used as fallback when TextFSM parsing fails.
+    """
     entries: list[ServicePortEntry] = []
     for line in output.splitlines():
         line = line.strip()
@@ -490,6 +557,39 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
             )
         )
     return entries
+
+
+def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
+    """Parse Huawei ``display service-port`` output into structured entries.
+
+    Uses TextFSM template for robust parsing with fallback to legacy regex.
+    """
+    if "gpon" not in output.lower():
+        return []
+    if _TEXTFSM_AVAILABLE:
+        try:
+            result = _textfsm_parse_service_port_table(output)
+            if result.success and result.data:
+                # Convert from parser dataclass to local dataclass
+                return [
+                    ServicePortEntry(
+                        index=e.index,
+                        vlan_id=e.vlan_id,
+                        ont_id=e.ont_id,
+                        gem_index=e.gem_index,
+                        flow_type=e.flow_type,
+                        flow_para=e.flow_para,
+                        state=e.state,
+                    )
+                    for e in result.data
+                ]
+            if result.warnings:
+                logger.debug("TextFSM service-port warnings: %s", result.warnings)
+        except Exception as e:
+            logger.debug("TextFSM service-port parse failed, using legacy: %s", e)
+
+    # Fallback to legacy regex parsing
+    return _parse_service_port_table_legacy(output)
 
 
 _HUAWEI_ERROR_PATTERNS = (
@@ -977,6 +1077,24 @@ def configure_ont_iphost(
     if not ok:
         return False, err
 
+    # SECURITY: Validate numeric parameters before CLI interpolation
+    try:
+        validate_ont_id(ont_id)
+        validate_vlan_id(vlan_id)
+    except ValidationError as e:
+        return False, e.message
+
+    # Validate IP addresses for static mode before CLI interpolation
+    if ip_mode != "dhcp":
+        if not ip_address or not subnet or not gateway:
+            return False, "Static IP mode requires ip_address, subnet, and gateway"
+        try:
+            ip_address = validate_ip_address(ip_address, "ip_address")
+            subnet = validate_subnet_mask(subnet, "subnet_mask")
+            gateway = validate_ip_address(gateway, "gateway")
+        except ValidationError as e:
+            return False, e.message
+
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
     port_num = parts[2]
@@ -1000,8 +1118,7 @@ def configure_ont_iphost(
         if ip_mode == "dhcp":
             cmd = f"ont ipconfig {port_num} {ont_id} ip-index 0 dhcp vlan {vlan_id}"
         else:
-            if not ip_address or not subnet or not gateway:
-                return False, "Static IP mode requires ip_address, subnet, and gateway"
+            # ip_address, subnet, gateway already validated above
             cmd = (
                 f"ont ipconfig {port_num} {ont_id} "
                 f"ip-index 0 static ip-address {ip_address} "
@@ -1274,10 +1391,13 @@ class OltProfileEntry:
     extra: dict[str, str] = field(default_factory=dict)
 
 
-def _parse_profile_table(
+def _parse_profile_table_legacy(
     output: str, id_col: int = 0, name_col: int = 1
 ) -> list[OltProfileEntry]:
-    """Parse Huawei profile display output into structured entries."""
+    """Legacy regex parser for Huawei profile display output.
+
+    Used as fallback when TextFSM parsing fails.
+    """
     entries: list[OltProfileEntry] = []
     for line in output.splitlines():
         line = line.strip()
@@ -1293,6 +1413,36 @@ def _parse_profile_table(
         name = parts[name_col] if len(parts) > name_col else ""
         entries.append(OltProfileEntry(profile_id=pid, name=name))
     return entries
+
+
+def _parse_profile_table(
+    output: str, id_col: int = 0, name_col: int = 1
+) -> list[OltProfileEntry]:
+    """Parse Huawei profile display output into structured entries.
+
+    Uses TextFSM template for robust parsing with fallback to legacy regex.
+    """
+    if _TEXTFSM_AVAILABLE:
+        try:
+            result = _textfsm_parse_profile_table(output)
+            if result.success and result.data:
+                # Convert from parser dataclass to local dataclass
+                return [
+                    OltProfileEntry(
+                        profile_id=e.profile_id,
+                        name=e.name,
+                        type=e.type,
+                        binding_count=e.binding_count,
+                    )
+                    for e in result.data
+                ]
+            if result.warnings:
+                logger.debug("TextFSM profile warnings: %s", result.warnings)
+        except Exception as e:
+            logger.debug("TextFSM profile parse failed, using legacy: %s", e)
+
+    # Fallback to legacy regex parsing
+    return _parse_profile_table_legacy(output, id_col, name_col)
 
 
 def get_line_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]:
@@ -1370,8 +1520,11 @@ class Tr069ServerProfile:
 _TR069_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,64}$")
 
 
-def _parse_tr069_profile_detail(output: str) -> dict[str, str]:
-    """Parse ``display ont tr069-server-profile profile-id N`` key-value output."""
+def _parse_tr069_profile_detail_legacy(output: str) -> dict[str, str]:
+    """Legacy parser for TR-069 profile detail key-value output.
+
+    Used as fallback when TextFSM parsing fails.
+    """
     result: dict[str, str] = {}
     for line in output.splitlines():
         if ":" not in line:
@@ -1379,6 +1532,21 @@ def _parse_tr069_profile_detail(output: str) -> dict[str, str]:
         key, _, value = line.partition(":")
         result[key.strip().lower()] = value.strip()
     return result
+
+
+def _parse_tr069_profile_detail(output: str) -> dict[str, str]:
+    """Parse ``display ont tr069-server-profile profile-id N`` key-value output.
+
+    Uses TextFSM key-value parser with fallback to legacy regex.
+    """
+    if _TEXTFSM_AVAILABLE:
+        try:
+            return _textfsm_parse_key_value(output)
+        except Exception as e:
+            logger.debug("TextFSM key-value parse failed, using legacy: %s", e)
+
+    # Fallback to legacy regex parsing
+    return _parse_tr069_profile_detail_legacy(output)
 
 
 def get_tr069_server_profiles(

@@ -1,4 +1,5 @@
 import pytest
+from datetime import UTC, datetime, timedelta
 
 from app.services.network.olt_polling import (
     _build_reading_targets,
@@ -256,6 +257,46 @@ def test_build_reading_targets_skips_ambiguous_fsp_only_matches(db_session) -> N
     )
 
     assert targets == []
+
+
+def test_mark_stale_onts_offline_updates_effective_status_snapshot(db_session) -> None:
+    from app.models.network import (
+        OLTDevice,
+        OntStatusSource,
+        OntUnit,
+        OnuOnlineStatus,
+        PollStatus,
+    )
+    from app.tasks.olt_polling import _mark_stale_onts_offline
+
+    now = datetime.now(UTC)
+    olt = OLTDevice(
+        name="Reachable OLT",
+        is_active=True,
+        last_poll_at=now,
+        last_poll_status=PollStatus.success,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-STALE-1",
+        olt_device_id=olt.id,
+        is_active=True,
+        online_status=OnuOnlineStatus.online,
+        effective_status=OnuOnlineStatus.online,
+        signal_updated_at=now - timedelta(minutes=30),
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    marked = _mark_stale_onts_offline(db_session, stale_threshold_minutes=10)
+
+    db_session.refresh(ont)
+    assert marked == 1
+    assert ont.online_status == OnuOnlineStatus.offline
+    assert ont.effective_status == OnuOnlineStatus.offline
+    assert ont.effective_status_source == OntStatusSource.olt
+    assert ont.status_resolved_at is not None
 
 
 def test_fsp_hint_from_huawei_packed_index_decodes_frame_slot_port() -> None:

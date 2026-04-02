@@ -1,0 +1,70 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - generic [ref=e10]:
+      - link "DotMac Subs" [ref=e12] [cursor=pointer]:
+        - /url: /
+        - img [ref=e14]
+        - generic [ref=e16]: DotMac Subs
+      - generic [ref=e17]:
+        - generic [ref=e18]:
+          - heading "Subscription Management Platform" [level=1] [ref=e19]:
+            - text: Subscription Management
+            - text: Platform
+          - paragraph [ref=e20]: Complete subscription lifecycle management with automated billing, network provisioning, and analytics.
+        - generic [ref=e21]:
+          - generic [ref=e22]:
+            - img [ref=e24]
+            - generic [ref=e26]: Subscription & plan management
+          - generic [ref=e27]:
+            - img [ref=e29]
+            - generic [ref=e31]: Automated billing & invoicing
+          - generic [ref=e32]:
+            - img [ref=e34]
+            - generic [ref=e36]: Network device provisioning
+      - generic [ref=e37]: © 2026 DotMac Subscription Platform
+    - generic [ref=e39]:
+      - generic [ref=e40]:
+        - generic [ref=e41]:
+          - img [ref=e43]
+          - heading "Welcome back" [level=1] [ref=e45]
+          - paragraph [ref=e46]: Sign in to access your dashboard
+        - generic [ref=e47]:
+          - generic [ref=e48]:
+            - generic [ref=e49]: Email or Username
+            - generic [ref=e50]:
+              - textbox "Email or Username" [ref=e51]:
+                - /placeholder: you@example.com
+              - img [ref=e53]
+          - generic [ref=e55]:
+            - generic [ref=e56]:
+              - generic [ref=e57]: Password
+              - link "Forgot password?" [ref=e58] [cursor=pointer]:
+                - /url: /auth/forgot-password
+            - generic [ref=e59]:
+              - textbox "Password" [ref=e60]:
+                - /placeholder: Enter your password
+              - img [ref=e62]
+              - button [ref=e64]:
+                - img [ref=e65]
+          - generic [ref=e68]:
+            - checkbox "Remember me for 30 days" [ref=e69]
+            - generic [ref=e70]: Remember me for 30 days
+          - button "Sign in" [ref=e71]:
+            - generic [ref=e72]: Sign in
+            - img [ref=e73]
+        - generic [ref=e75]:
+          - paragraph [ref=e76]: Access other portals
+          - generic [ref=e77]:
+            - link "Customer" [ref=e78] [cursor=pointer]:
+              - /url: /portal
+              - img [ref=e80]
+              - generic [ref=e82]: Customer
+            - link "Reseller" [ref=e83] [cursor=pointer]:
+              - /url: /reseller
+              - img [ref=e85]
+              - generic [ref=e87]: Reseller
+      - link "Back to home" [ref=e89] [cursor=pointer]:
+        - /url: /
+        - img [ref=e90]
+        - text: Back to home
+  - status

@@ -1,0 +1,23 @@
+Value FSP (\d+/\d+/\d+)
+Value SERIAL_HEX ([A-Fa-f0-9]+)
+Value SERIAL_DISPLAY (\S+)
+Value VENDOR_ID (\S+)
+Value ONT_VERSION (\S+)
+Value SOFTWARE_VERSION (\S+)
+Value EQUIPMENT_ID (\S+)
+Value MAC ([A-Fa-f0-9\-:]+)
+Value EQUIPMENT_SN (\S+)
+Value AUTOFIND_TIME (.+)
+
+Start
+  ^-{5,} -> Continue
+  ^\s*F/S/P\s*:\s*${FSP}\s*$$ -> Continue
+  ^\s*Ont SN\s*:\s*${SERIAL_HEX}\s*\(${SERIAL_DISPLAY}\)\s*$$ -> Continue
+  ^\s*Ont SN\s*:\s*${SERIAL_HEX}\s*$$ -> Continue
+  ^\s*VendorID\s*:\s*${VENDOR_ID}\s*$$ -> Continue
+  ^\s*Ont Version\s*:\s*${ONT_VERSION}\s*$$ -> Continue
+  ^\s*Ont SoftwareVersion\s*:\s*${SOFTWARE_VERSION}\s*$$ -> Continue
+  ^\s*Ont EquipmentID\s*:\s*${EQUIPMENT_ID}\s*$$ -> Continue
+  ^\s*Ont MAC\s*:\s*${MAC}\s*$$ -> Continue
+  ^\s*Ont Equipment SN\s*:\s*${EQUIPMENT_SN}\s*$$ -> Continue
+  ^\s*Ont autofind time\s*:\s*${AUTOFIND_TIME}\s*$$ -> Record

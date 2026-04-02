@@ -32,6 +32,12 @@ from app.services.common import (
 )
 from app.services.credential_crypto import encrypt_credential
 from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
+from app.services.network.ont_status import (
+    apply_status_snapshot,
+    ont_has_acs_management,
+    resolve_acs_online_window_minutes_for_model,
+    resolve_ont_status_snapshot,
+)
 from app.services.response import ListResponseMixin
 
 _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
@@ -45,6 +51,91 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
     for token in ("-", " ", ":", ".", "_", "/"):
         expr = func.replace(expr, token, "")
     return expr
+
+
+def sync_ont_acs_server(
+    db: Session,
+    ont,  # type: ignore[no-untyped-def]
+    acs_server_id,  # type: ignore[no-untyped-def]
+) -> None:
+    """Keep an ONT and its linked TR-069 rows aligned to one ACS server."""
+    if getattr(ont, "tr069_acs_server_id", None) != acs_server_id:
+        ont.tr069_acs_server_id = acs_server_id
+    if not acs_server_id:
+        return
+    linked_devices = (
+        db.query(Tr069CpeDevice)
+        .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .all()
+    )
+    for linked_device in linked_devices:
+        if linked_device.acs_server_id != acs_server_id:
+            linked_device.acs_server_id = acs_server_id
+
+
+def refresh_ont_status_snapshot(
+    db: Session,
+    ont,  # type: ignore[no-untyped-def]
+) -> None:
+    """Recompute ACS/effective status from the ONT's current active TR-069 links."""
+    acs_last_inform_at = (
+        db.query(func.max(Tr069CpeDevice.last_inform_at))
+        .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .scalar()
+    )
+    snapshot = resolve_ont_status_snapshot(
+        olt_status=getattr(ont, "online_status", None),
+        acs_last_inform_at=acs_last_inform_at,
+        managed=ont_has_acs_management(ont, acs_last_inform_at=acs_last_inform_at),
+        online_window_minutes=resolve_acs_online_window_minutes_for_model(ont),
+    )
+    apply_status_snapshot(ont, snapshot)
+
+
+def link_tr069_device_to_ont(
+    db: Session,
+    device: Tr069CpeDevice,
+    ont,  # type: ignore[no-untyped-def]
+    *,
+    acs_server_id=None,  # type: ignore[no-untyped-def]
+) -> None:
+    """Enforce a single active TR-069 link per ONT and align ACS assignment."""
+    if getattr(ont, "id", None) is None:
+        raise ValueError("ONT must be persisted before linking TR-069 devices")
+    previous_ont_id = getattr(device, "ont_unit_id", None)
+
+    other_links = (
+        db.query(Tr069CpeDevice)
+        .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+        .filter(Tr069CpeDevice.id != device.id)
+        .filter(Tr069CpeDevice.is_active.is_(True))
+        .all()
+    )
+    for other in other_links:
+        other.ont_unit_id = None
+    if other_links:
+        db.flush()
+
+    device.ont_unit_id = ont.id
+    target_acs_server_id = (
+        acs_server_id
+        or getattr(ont, "tr069_acs_server_id", None)
+        or device.acs_server_id
+    )
+    if target_acs_server_id and device.acs_server_id != target_acs_server_id:
+        device.acs_server_id = target_acs_server_id
+    sync_ont_acs_server(db, ont, target_acs_server_id)
+    db.flush()
+    refresh_ont_status_snapshot(db, ont)
+
+    if previous_ont_id and previous_ont_id != ont.id:
+        from app.models.network import OntUnit
+
+        previous_ont = db.get(OntUnit, previous_ont_id)
+        if previous_ont:
+            refresh_ont_status_snapshot(db, previous_ont)
 
 
 class AcsServers(ListResponseMixin):
@@ -182,6 +273,17 @@ class CpeDevices(ListResponseMixin):
     def create(db: Session, payload: Tr069CpeDeviceCreate):
         device = Tr069CpeDevice(**payload.model_dump())
         db.add(device)
+        if device.ont_unit_id:
+            from app.models.network import OntUnit
+
+            ont = db.get(OntUnit, device.ont_unit_id)
+            if ont:
+                link_tr069_device_to_ont(
+                    db,
+                    device,
+                    ont,
+                    acs_server_id=device.acs_server_id,
+                )
         db.commit()
         db.refresh(device)
         return device
@@ -226,8 +328,21 @@ class CpeDevices(ListResponseMixin):
         device = db.get(Tr069CpeDevice, device_id)
         if not device:
             raise HTTPException(status_code=404, detail="TR-069 CPE device not found")
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        update_data = payload.model_dump(exclude_unset=True)
+        target_ont_id = update_data.get("ont_unit_id", device.ont_unit_id)
+        for key, value in update_data.items():
             setattr(device, key, value)
+        if target_ont_id:
+            from app.models.network import OntUnit
+
+            ont = db.get(OntUnit, target_ont_id)
+            if ont:
+                link_tr069_device_to_ont(
+                    db,
+                    device,
+                    ont,
+                    acs_server_id=device.acs_server_id,
+                )
         db.commit()
         db.refresh(device)
         return device
@@ -265,13 +380,19 @@ class CpeDevices(ListResponseMixin):
         now = datetime.now(UTC)
 
         for device_data in devices:
+            # Extract GenieACS device ID (the authoritative identifier)
+            genieacs_device_id = str(device_data.get("_id") or "").strip()
+            if not genieacs_device_id:
+                logger.warning("Skipping GenieACS device without _id")
+                continue
+
             oui, product_class, serial_number = CpeDevices._extract_identity(
                 client, device_data
             )
             if not serial_number:
                 logger.warning(
                     "Skipping GenieACS device without serial number: %s",
-                    device_data.get("_id"),
+                    genieacs_device_id,
                 )
                 continue
 
@@ -290,13 +411,21 @@ class CpeDevices(ListResponseMixin):
 
             normalized_serial = normalize_tr069_serial(serial_number)
 
-            # Look for existing device by exact serial number and ACS server first.
+            # Primary lookup: by GenieACS device ID (stable, authoritative)
             existing = (
                 db.query(Tr069CpeDevice)
                 .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
-                .filter(Tr069CpeDevice.serial_number == serial_number)
+                .filter(Tr069CpeDevice.genieacs_device_id == genieacs_device_id)
                 .first()
             )
+            # Fallback: by exact serial number
+            if not existing:
+                existing = (
+                    db.query(Tr069CpeDevice)
+                    .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
+                    .filter(Tr069CpeDevice.serial_number == serial_number)
+                    .first()
+                )
             # Fallback: match using normalized serials to tolerate vendor formatting differences.
             if not existing and normalized_serial:
                 existing = (
@@ -329,6 +458,7 @@ class CpeDevices(ListResponseMixin):
                     pass
 
             if existing:
+                existing.genieacs_device_id = genieacs_device_id
                 existing.oui = oui
                 existing.product_class = product_class
                 existing.connection_request_url = connection_url
@@ -338,6 +468,7 @@ class CpeDevices(ListResponseMixin):
             else:
                 new_device = Tr069CpeDevice(
                     acs_server_id=server.id,
+                    genieacs_device_id=genieacs_device_id,
                     serial_number=serial_number,
                     oui=oui,
                     product_class=product_class,
@@ -354,6 +485,7 @@ class CpeDevices(ListResponseMixin):
         auto_linked = 0
         explicit_links = 0
         serial_updated = 0
+        status_snapshot_updated = 0
         try:
             from app.models.network import OntUnit
 
@@ -402,27 +534,49 @@ class CpeDevices(ListResponseMixin):
                     except (ValueError, UnicodeDecodeError):
                         pass
 
+                if not ont and cpe_dev.ont_unit_id:
+                    ont = db.get(OntUnit, cpe_dev.ont_unit_id)
+
                 if ont:
-                    if cpe_dev.ont_unit_id != ont.id:
-                        cpe_dev.ont_unit_id = ont.id
+                    previous_ont_id = cpe_dev.ont_unit_id
+                    previous_acs_id = ont.tr069_acs_server_id
+                    link_tr069_device_to_ont(
+                        db,
+                        cpe_dev,
+                        ont,
+                        acs_server_id=server.id,
+                    )
+                    if previous_ont_id != ont.id:
                         explicit_links += 1
-                    if not ont.tr069_acs_server_id:
-                        ont.tr069_acs_server_id = server.id
+                    if previous_acs_id != server.id:
                         auto_linked += 1
                     # Update synthetic serials with real GenieACS serial
                     current = str(ont.serial_number or "")
                     if current.startswith("HW-") and cpe_serial != current:
                         ont.serial_number = cpe_serial[:120]
                         serial_updated += 1
+                    apply_status_snapshot(
+                        ont,
+                        resolve_ont_status_snapshot(
+                            olt_status=getattr(ont, "online_status", None),
+                            acs_last_inform_at=cpe_dev.last_inform_at,
+                            managed=True,
+                            online_window_minutes=(
+                                resolve_acs_online_window_minutes_for_model(ont)
+                            ),
+                        ),
+                    )
+                    status_snapshot_updated += 1
 
-            if auto_linked or explicit_links or serial_updated:
+            if auto_linked or explicit_links or serial_updated or status_snapshot_updated:
                 db.commit()
                 logger.info(
-                    "Auto-link: %d ONTs linked to ACS %s, %d explicit TR-069 links, %d serials updated",
+                    "Auto-link: %d ONTs linked to ACS %s, %d explicit TR-069 links, %d serials updated, %d status snapshots refreshed",
                     auto_linked,
                     server.name,
                     explicit_links,
                     serial_updated,
+                    status_snapshot_updated,
                 )
         except Exception as e:
             logger.warning("Auto-link ONTs after sync failed: %s", e)
@@ -760,6 +914,22 @@ def receive_inform(
 
     now = datetime.now(UTC)
     device.last_inform_at = now
+    if device.ont_unit_id:
+        from app.models.network import OntUnit
+
+        ont = db.get(OntUnit, device.ont_unit_id)
+        if ont:
+            apply_status_snapshot(
+                ont,
+                resolve_ont_status_snapshot(
+                    olt_status=getattr(ont, "online_status", None),
+                    acs_last_inform_at=now,
+                    managed=True,
+                    online_window_minutes=resolve_acs_online_window_minutes_for_model(
+                        ont
+                    ),
+                ),
+            )
 
     event_map = {
         "boot": Tr069Event.boot,
@@ -850,7 +1020,7 @@ def _build_acs_provision_script(
         "",
         "// Set ManagementServer parameters",
         f'declare(root + ".ManagementServer.URL", {{value: now}}, {{value: {js_string(cwmp_url)}}});',
-        f'declare(root + ".ManagementServer.PeriodicInformEnable", {{value: now}}, {{value: "true"}});',
+        'declare(root + ".ManagementServer.PeriodicInformEnable", {value: now}, {value: "true"});',
         f'declare(root + ".ManagementServer.PeriodicInformInterval", {{value: now}}, {{value: "{periodic_inform_interval}"}});',
     ]
 

@@ -4,40 +4,22 @@
 
 {# ── WiFi Configuration ────────────────────────────────────────────── #}
 {% call card("WiFi Configuration", color="indigo") %}
-<div x-data="{ expanded: false }" class="space-y-3">
-    <button @click="expanded = !expanded"
-            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50/50 px-3.5 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800/50 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/30 transition-colors">
+<div x-data="{ expanded: false, loaded: false }" class="space-y-3">
+    <button @click="expanded = !expanded; if (!loaded) { loaded = true; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/wifi-controls', {target: '#wifi-controls-content', swap: 'innerHTML'}) }"
+            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50/50 px-3.5 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800/50 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/30 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1">
         <span class="inline-flex items-center gap-2">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
             WiFi Controls
         </span>
         <svg class="h-4 w-4 transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
     </button>
-    <div x-show="expanded" x-transition.duration.200ms x-cloak class="space-y-3 pt-1">
-        {# Set SSID #}
-        <form hx-post="/admin/network/onts/{{ ont.id }}/wifi-ssid"
-              hx-swap="none"
-              class="space-y-1.5">
-            {% include "components/forms/csrf_input.html" %}
-            <label for="wifi-ssid-input" class="block text-xs font-medium text-slate-600 dark:text-slate-400">SSID</label>
-            <div class="flex gap-2">
-                <input type="text" id="wifi-ssid-input" name="ssid" required maxlength="32" placeholder="Network name"
-                    class="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors">Set</button>
+    <div x-show="expanded" x-transition.duration.200ms x-cloak>
+        <div id="wifi-controls-content">
+            <div class="flex items-center justify-center py-4">
+                <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-2 text-xs text-slate-400">Loading WiFi settings...</span>
             </div>
-        </form>
-        {# Set Password #}
-        <form hx-post="/admin/network/onts/{{ ont.id }}/wifi-password"
-              hx-swap="none"
-              class="space-y-1.5">
-            {% include "components/forms/csrf_input.html" %}
-            <label for="wifi-pw-input" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Password</label>
-            <div class="flex gap-2">
-                <input type="password" id="wifi-pw-input" name="password" required minlength="8" maxlength="63" placeholder="Min 8 characters"
-                    class="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors">Set</button>
-            </div>
-        </form>
+        </div>
     </div>
 </div>
 {% endcall %}
@@ -46,7 +28,7 @@
 {% call card("PPPoE Credentials", color="blue") %}
 <div x-data="{ expanded: false, pppoeMessage: '', pppoeType: 'info' }" class="space-y-3">
     <button @click="expanded = !expanded"
-            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/50 px-3.5 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30 transition-colors">
+            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/50 px-3.5 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
         <span class="inline-flex items-center gap-2">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
             Push PPPoE Credentials
@@ -80,7 +62,7 @@
                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
             <button type="submit" hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
-                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors">
+                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>
                 Push to Device
             </button>
@@ -91,32 +73,13 @@
 
 {# ── LAN Port Control ──────────────────────────────────────────────── #}
 {% call card("LAN Ports", color="blue") %}
-<div class="space-y-2.5">
-    <p class="text-xs text-slate-500 dark:text-slate-400">Toggle individual LAN ports on the ONT via TR-069.</p>
-    <div class="grid grid-cols-2 gap-2">
-        {% for port_num in [1, 2, 3, 4] %}
-        <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
-            <span class="text-xs font-medium text-slate-700 dark:text-slate-300">Port {{ port_num }}</span>
-            <div class="flex gap-1">
-                <form class="inline">
-                    {% include "components/forms/csrf_input.html" %}
-                    <button hx-post="/admin/network/onts/{{ ont.id }}/lan-port?port={{ port_num }}&enabled=true"
-                            hx-swap="none"
-                            hx-confirm="Enable LAN port {{ port_num }}?"
-                            class="rounded px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 transition-colors"
-                            title="Enable port {{ port_num }}">On</button>
-                </form>
-                <form class="inline">
-                    {% include "components/forms/csrf_input.html" %}
-                    <button hx-post="/admin/network/onts/{{ ont.id }}/lan-port?port={{ port_num }}&enabled=false"
-                            hx-swap="none"
-                            hx-confirm="Disable LAN port {{ port_num }}?"
-                            class="rounded px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 transition-colors"
-                            title="Disable port {{ port_num }}">Off</button>
-                </form>
-            </div>
-        </div>
-        {% endfor %}
+<div id="lan-ports-controls"
+     hx-get="/admin/network/onts/{{ ont.id }}/lan-ports-status"
+     hx-trigger="revealed"
+     hx-swap="innerHTML">
+    <div class="flex items-center justify-center py-4">
+        <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+        <span class="ml-2 text-xs text-slate-400">Loading port status...</span>
     </div>
 </div>
 {% endcall %}
@@ -125,7 +88,7 @@
 {% call card("Diagnostics", color="blue") %}
 <div x-data="{ expanded: false }" class="space-y-3">
     <button @click="expanded = !expanded"
-            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700/50 transition-colors">
+            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-slate-200 bg-white px-3.5 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700/50 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
         <span class="inline-flex items-center gap-2">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
             Run Diagnostics
@@ -145,7 +108,7 @@
                 <input type="number" name="count" value="4" min="1" max="20"
                     class="w-14 rounded-lg border border-slate-300 px-2 py-1.5 text-sm text-center tabular-nums shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                     title="Ping count">
-                <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 transition-colors">Ping</button>
+                <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">Ping</button>
             </div>
         </form>
         {# Traceroute #}
@@ -157,7 +120,7 @@
             <div class="flex gap-2">
                 <input type="text" id="diag-trace-host" name="host" required placeholder="8.8.8.8" maxlength="253"
                     class="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 transition-colors">Trace</button>
+                <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">Trace</button>
             </div>
         </form>
         <p class="text-xs text-slate-400 dark:text-slate-500">Results appear on the next TR-069 inform cycle (typically 60&#8211;300s).</p>
@@ -173,7 +136,7 @@
           hx-swap="none">
         {% include "components/forms/csrf_input.html" %}
         <button type="submit"
-                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all">
+                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-blue-500 to-indigo-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-blue-600 hover:to-indigo-700 hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
             Send Connection Request
         </button>
@@ -189,7 +152,7 @@
           hx-swap="none">
         {% include "components/forms/csrf_input.html" %}
         <button type="submit" hx-confirm="Enable IPv6 dual-stack on this ONT? This will configure DHCPv6-PD via TR-069."
-                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-cyan-700 hover:-translate-y-0.5 transition-all">
+                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-cyan-700 hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-1">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
             Enable IPv6
         </button>

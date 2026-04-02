@@ -1196,7 +1196,7 @@ class AlertEvents(ListResponseMixin):
 
 
 def get_onu_status_summary(db: Session) -> dict[str, int]:
-    """Aggregate ONT signal and online status for monitoring dashboard.
+    """Aggregate ONT signal and effective service status for monitoring dashboard.
 
     Returns:
         Dictionary with total, online, offline, low_signal counts.
@@ -1208,13 +1208,13 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
     total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
     online = (
         db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.online_status == OnuOnlineStatus.online)
+        .filter(OntUnit.effective_status == OnuOnlineStatus.online)
         .scalar()
         or 0
     )
     offline = (
         db.query(sa_func.count(OntUnit.id))
-        .filter(OntUnit.online_status == OnuOnlineStatus.offline)
+        .filter(OntUnit.effective_status == OnuOnlineStatus.offline)
         .scalar()
         or 0
     )
@@ -1238,6 +1238,40 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
         "online": online,
         "offline": offline,
         "low_signal": low_signal,
+    }
+
+
+def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
+    """Aggregate raw OLT link status for monitoring dashboards."""
+    from sqlalchemy import func as sa_func
+
+    from app.models.network import OntUnit, OnuOnlineStatus
+
+    total = db.query(sa_func.count(OntUnit.id)).scalar() or 0
+    online = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(OntUnit.online_status == OnuOnlineStatus.online)
+        .scalar()
+        or 0
+    )
+    offline = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(OntUnit.online_status == OnuOnlineStatus.offline)
+        .scalar()
+        or 0
+    )
+    unknown = (
+        db.query(sa_func.count(OntUnit.id))
+        .filter(OntUnit.online_status == OnuOnlineStatus.unknown)
+        .scalar()
+        or 0
+    )
+
+    return {
+        "total": total,
+        "online": online,
+        "offline": offline,
+        "unknown": unknown,
     }
 
 

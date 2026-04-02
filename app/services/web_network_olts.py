@@ -41,6 +41,7 @@ from app.models.network_monitoring import (
 from app.models.ont_autofind import OltAutofindCandidate
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services import network as network_service
+from app.services import tr069 as tr069_service
 from app.services.audit_helpers import (
     diff_dicts,
     log_audit_event,
@@ -53,6 +54,10 @@ from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_polling_parsers import (
     _decode_huawei_packed_fsp,
     _split_onu_index,
+)
+from app.services.network.ont_status import (
+    apply_status_snapshot,
+    resolve_ont_status_for_model,
 )
 from app.services.web_network_ont_autofind import _find_ont_by_serial
 
@@ -532,6 +537,15 @@ def update_olt(
         sync_monitoring_device(db, olt, payload_values)
         new_acs_id = str(olt.tr069_acs_server_id) if olt.tr069_acs_server_id else None
         if old_acs_id != new_acs_id and new_acs_id:
+            onts = (
+                db.query(OntUnit)
+                .filter(OntUnit.olt_device_id == olt.id)
+                .filter(OntUnit.is_active.is_(True))
+                .all()
+            )
+            for ont in onts:
+                tr069_service.sync_ont_acs_server(db, ont, olt.tr069_acs_server_id)
+            db.commit()
             _queue_acs_propagation(db, olt)
         return olt, None
     except IntegrityError as exc:
@@ -1617,7 +1631,7 @@ def _sync_onts_from_olt_snmp_impl(
             ont.pon_type = PonType.gpon
             ont.gpon_channel = GponChannel.gpon
             ont.online_status = status
-            ont.tr069_acs_server_id = olt.tr069_acs_server_id
+            tr069_service.sync_ont_acs_server(db, ont, olt.tr069_acs_server_id)
 
         ont.olt_rx_signal_dbm = olt_rx
         ont.onu_rx_signal_dbm = onu_rx
@@ -1628,6 +1642,15 @@ def _sync_onts_from_olt_snmp_impl(
             ont.offline_reason = None
         elif status == OnuOnlineStatus.offline:
             ont.offline_reason = offline_reason
+        else:
+            ont.offline_reason = None
+        apply_status_snapshot(
+            ont,
+            resolve_ont_status_for_model(
+                ont,
+                now=now,
+            ),
+        )
 
     try:
         db.flush()
@@ -2292,8 +2315,8 @@ def handle_rebind_tr069_profiles(
 def olt_device_events_context(db: Session, olt_id: str) -> dict:
     """Build context for the OLT device events tab.
 
-    Queries ONT-related events (online/offline/signal/discovered) from the
-    EventStore where the payload contains this OLT's ID.
+    Queries ONT-related physical-link events from the EventStore where the
+    payload contains this OLT's ID.
 
     Args:
         db: Database session.

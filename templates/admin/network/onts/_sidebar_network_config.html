@@ -1,0 +1,101 @@
+{# Network Config Cards — WiFi, PPPoE, LAN Ports, IPv6 #}
+{# Included within a collapsible sidebar accordion section #}
+{% from "components/ui/macros.html" import card %}
+
+{# ── WiFi Configuration ────────────────────────────────────────────── #}
+{% call card("WiFi Configuration", color="indigo") %}
+<div x-data="{ expanded: false, loaded: false }" class="space-y-3">
+    <button @click="expanded = !expanded; if (!loaded) { loaded = true; htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/wifi-controls', {target: '#wifi-controls-content', swap: 'innerHTML'}) }"
+            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-indigo-200 bg-indigo-50/50 px-3.5 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-800/50 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/30 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1">
+        <span class="inline-flex items-center gap-2">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+            WiFi Controls
+        </span>
+        <svg class="h-4 w-4 transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div x-show="expanded" x-transition.duration.200ms x-cloak>
+        <div id="wifi-controls-content">
+            <div class="flex items-center justify-center py-4">
+                <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                <span class="ml-2 text-xs text-slate-400">Loading WiFi settings...</span>
+            </div>
+        </div>
+    </div>
+</div>
+{% endcall %}
+
+{# ── PPPoE Credentials ─────────────────────────────────────────────── #}
+{% call card("PPPoE Credentials", color="blue") %}
+<div x-data="{ expanded: false, pppoeMessage: '', pppoeType: 'info' }" class="space-y-3">
+    <button @click="expanded = !expanded"
+            class="w-full inline-flex items-center justify-between gap-2 rounded-lg border border-blue-200 bg-blue-50/50 px-3.5 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300 dark:hover:bg-blue-900/30 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
+        <span class="inline-flex items-center gap-2">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"/></svg>
+            Push PPPoE Credentials
+        </span>
+        <svg class="h-4 w-4 transition-transform" :class="expanded && 'rotate-180'" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+    </button>
+    <div x-show="expanded" x-transition.duration.200ms x-cloak>
+        <form hx-post="/admin/network/onts/{{ ont.id }}/pppoe-credentials"
+              hx-swap="none"
+              hx-on::before-request="pppoeMessage = 'Pushing PPPoE credentials to device...'; pppoeType = 'info'"
+              hx-on::after-request="try { const data = JSON.parse(event.detail.xhr.responseText || '{}'); pppoeMessage = data.message || (event.detail.successful ? 'PPPoE credentials pushed.' : 'PPPoE push failed.'); pppoeType = data.success ? 'success' : 'error'; } catch (e) { pppoeMessage = event.detail.successful ? 'PPPoE credentials pushed.' : 'PPPoE push failed.'; pppoeType = event.detail.successful ? 'success' : 'error'; }"
+              class="space-y-2 pt-1">
+            {% include "components/forms/csrf_input.html" %}
+            <div x-show="pppoeMessage" x-cloak
+                 class="rounded-lg border px-3 py-2 text-xs"
+                 :class="{
+                    'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300': pppoeType === 'info',
+                    'border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300': pppoeType === 'success',
+                    'border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800/50 dark:bg-rose-900/20 dark:text-rose-300': pppoeType === 'error'
+                 }">
+                <span x-text="pppoeMessage"></span>
+            </div>
+            <div>
+                <label for="pppoe-user" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Username</label>
+                <input type="text" id="pppoe-user" name="username" maxlength="64" required placeholder="PPPoE username" value="{{ ont.pppoe_username or '' }}"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label for="pppoe-pw" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Password</label>
+                <input type="password" id="pppoe-pw" name="password" maxlength="64" required placeholder="PPPoE password"
+                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <button type="submit" hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
+                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>
+                Push to Device
+            </button>
+        </form>
+    </div>
+</div>
+{% endcall %}
+
+{# ── LAN Port Control ──────────────────────────────────────────────── #}
+{% call card("LAN Ports", color="blue") %}
+<div id="lan-ports-controls"
+     hx-get="/admin/network/onts/{{ ont.id }}/lan-ports-status"
+     hx-trigger="revealed"
+     hx-swap="innerHTML">
+    <div class="flex items-center justify-center py-4">
+        <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+        <span class="ml-2 text-xs text-slate-400">Loading port status...</span>
+    </div>
+</div>
+{% endcall %}
+
+{# ── IPv6 Dual-Stack ────────────────────────────────────────────────── #}
+{% call card("IPv6 Dual-Stack", color="teal") %}
+<div class="space-y-2.5">
+    <p class="text-xs text-slate-500 dark:text-slate-400">Enable DHCPv6 prefix delegation on the ONT WAN interface via TR-069. The subscriber will receive a /64 prefix for their LAN.</p>
+    <form hx-post="/admin/network/onts/{{ ont.id }}/enable-ipv6"
+          hx-swap="none">
+        {% include "components/forms/csrf_input.html" %}
+        <button type="submit" hx-confirm="Enable IPv6 dual-stack on this ONT? This will configure DHCPv6-PD via TR-069."
+                class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-cyan-700 hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-1">
+            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
+            Enable IPv6
+        </button>
+    </form>
+</div>
+{% endcall %}

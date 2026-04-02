@@ -349,3 +349,85 @@ def test_send_password_reset_email_uses_branding_logo(db_session, monkeypatch):
     assert "https://selfcare.dotmac.ng/branding/assets/logo-main.png" in captured["body_html"]
     assert "We received a request to reset your password for Dotmac Selfcare." in captured["body_text"]
     assert captured["activity"] == "auth_password_reset"
+
+
+def test_send_password_reset_email_prefers_selfcare_domain_setting(
+    db_session, monkeypatch
+):
+    """Customer-facing reset links should use configured selfcare domain."""
+    captured: dict[str, str] = {}
+
+    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    monkeypatch.delenv("APP_URL", raising=False)
+
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="selfcare_domain",
+            value_text="selfcare.dotmac.io",
+            value_type=SettingValueType.string,
+        )
+    )
+    db_session.commit()
+
+    result = email_service.send_password_reset_email(
+        db_session,
+        "user@example.com",
+        "reset-456",
+        person_name="Jane Doe",
+    )
+
+    assert result is True
+    assert "https://selfcare.dotmac.io/auth/reset-password?token=reset-456" in captured["body_html"]
+    assert "https://selfcare.dotmac.io/auth/reset-password?token=reset-456" in captured["body_text"]
+
+
+def test_send_user_invite_email_prefers_selfcare_domain_for_admin_login(
+    db_session, monkeypatch
+):
+    """Admin invites should use the public selfcare host when configured."""
+    captured: dict[str, str] = {}
+
+    def fake_send_email(db, to_email, subject, body_html, body_text, activity, **kwargs):
+        captured["body_html"] = body_html
+        captured["body_text"] = body_text
+        return True
+
+    monkeypatch.setattr(email_service, "send_email", fake_send_email)
+    monkeypatch.setenv("APP_URL", "http://localhost:8000")
+
+    db_session.add_all(
+        [
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="selfcare_domain",
+                value_text="selfcare.dotmac.io",
+                value_type=SettingValueType.string,
+            ),
+            DomainSetting(
+                domain=SettingDomain.auth,
+                key="admin_domain",
+                value_text="oss.dotmac.io",
+                value_type=SettingValueType.string,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    result = email_service.send_user_invite_email(
+        db_session,
+        "invitee@example.com",
+        "token-123",
+        person_name="John Doe",
+        next_login_path="/auth/login?next=/admin/dashboard",
+    )
+
+    assert result is True
+    assert "https://selfcare.dotmac.io/auth/reset-password?token=token-123" in captured["body_html"]
+    assert "next_login=%2Fauth%2Flogin%3Fnext%3D%2Fadmin%2Fdashboard" in captured["body_html"]
+    assert "https://selfcare.dotmac.io/auth/reset-password?token=token-123" in captured["body_text"]

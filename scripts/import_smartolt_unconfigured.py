@@ -399,7 +399,6 @@ def _build_plan(
     if active_assignment and subscriber and subscription and pon_port:
         same_assignment = (
             str(active_assignment.subscriber_id or "") == str(subscriber.id)
-            and str(active_assignment.subscription_id or "") == str(subscription.id)
             and str(active_assignment.pon_port_id) == str(pon_port.id)
         )
         if not same_assignment:

@@ -1,0 +1,425 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Sidebar logo Dotmac Selfcare" [ref=e5] [cursor=pointer]:
+          - /url: /admin/dashboard
+          - img "Sidebar logo" [ref=e8]
+          - generic [ref=e9]: Dotmac Selfcare
+        - button "Toggle sidebar collapse" [ref=e10]:
+          - img [ref=e11]
+      - navigation [ref=e13]:
+        - generic [ref=e14]:
+          - link "Dashboard" [ref=e15] [cursor=pointer]:
+            - /url: /admin/dashboard
+            - img [ref=e16]
+            - generic [ref=e18]: Dashboard
+          - paragraph [ref=e19]: Core
+          - link "Customers" [ref=e20] [cursor=pointer]:
+            - /url: /admin/customers
+            - img [ref=e21]
+            - generic [ref=e23]: Customers
+          - link "Support" [ref=e24] [cursor=pointer]:
+            - /url: /admin/support/tickets
+            - img [ref=e25]
+            - generic [ref=e27]: Support
+          - paragraph [ref=e28]: Operations
+          - link "Billing" [ref=e29] [cursor=pointer]:
+            - /url: /admin/billing
+            - img [ref=e30]
+            - generic [ref=e32]: Billing
+          - link "Catalog" [ref=e33] [cursor=pointer]:
+            - /url: /admin/catalog/offers
+            - img [ref=e34]
+            - generic [ref=e36]: Catalog
+          - link "Network" [ref=e37] [cursor=pointer]:
+            - /url: /admin/network
+            - img [ref=e38]
+            - generic [ref=e40]: Network
+          - link "VPN" [ref=e41] [cursor=pointer]:
+            - /url: /admin/network/vpn
+            - img [ref=e42]
+            - generic [ref=e44]: VPN
+          - paragraph [ref=e45]: Insights
+          - link "Reports" [ref=e46] [cursor=pointer]:
+            - /url: /admin/reports
+            - img [ref=e47]
+            - generic [ref=e49]: Reports
+          - link "GIS / Map" [ref=e50] [cursor=pointer]:
+            - /url: /admin/gis
+            - img [ref=e51]
+            - generic [ref=e54]: GIS / Map
+          - link "Integrations" [ref=e55] [cursor=pointer]:
+            - /url: /admin/integrations/connectors
+            - img [ref=e56]
+            - generic [ref=e58]: Integrations
+          - link "Notifications" [ref=e59] [cursor=pointer]:
+            - /url: /admin/notifications/templates
+            - img [ref=e60]
+            - generic [ref=e62]: Notifications
+          - link "Provisioning" [ref=e63] [cursor=pointer]:
+            - /url: /admin/provisioning
+            - img [ref=e64]
+            - generic [ref=e66]: Provisioning
+          - link "System" [ref=e67] [cursor=pointer]:
+            - /url: /admin/settings
+            - img [ref=e68]
+            - generic [ref=e71]: System
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - generic [ref=e75]: PA
+          - generic [ref=e76]:
+            - paragraph [ref=e77]: Platform Admin
+            - paragraph [ref=e78]: admin@dotmac.ng
+        - generic [ref=e79]:
+          - generic [ref=e80]:
+            - paragraph [ref=e81]: Tenant
+            - paragraph [ref=e82]: Dotmac Selfcare
+          - generic [ref=e83]:
+            - paragraph [ref=e84]: Unread
+            - paragraph [ref=e85]: "20391"
+    - generic [ref=e86]:
+      - banner [ref=e87]:
+        - link "Dashboard" [ref=e89] [cursor=pointer]:
+          - /url: /admin/dashboard
+        - generic [ref=e90]:
+          - generic [ref=e93]:
+            - 'searchbox "Operational lookup: name, phone, account, PPPoE, ONT, IP, MAC..." [ref=e94]'
+            - img [ref=e95]
+            - generic: Cmd+K
+          - button "Toggle dark mode" [ref=e97]:
+            - img [ref=e98]
+          - button "View notifications" [ref=e101]:
+            - img [ref=e102]
+            - generic "20391 unread notifications" [ref=e104]
+          - button "Open user menu" [ref=e108]:
+            - generic [ref=e109]: PA
+            - img [ref=e110]
+      - main [ref=e112]:
+        - generic [ref=e114]:
+          - generic [ref=e115]:
+            - navigation [ref=e116]:
+              - link "Network" [ref=e117] [cursor=pointer]:
+                - /url: /admin/network
+              - img [ref=e118]
+              - link "ONTs" [ref=e120] [cursor=pointer]:
+                - /url: /admin/network/onts
+              - img [ref=e121]
+              - generic [ref=e123]: HWTC03217F84
+            - generic [ref=e125]:
+              - generic [ref=e126]:
+                - generic [ref=e127]:
+                  - generic [ref=e128]:
+                    - img [ref=e130]
+                    - generic [ref=e132]:
+                      - heading "HWTC03217F84" [level=1] [ref=e133]
+                      - paragraph [ref=e134]: Huawei ONU-type-eth-4-pots-2-catv-0
+                  - generic [ref=e136]: Active
+                - generic [ref=e138]:
+                  - link "Karsana Huawei OLT" [ref=e139] [cursor=pointer]:
+                    - /url: /admin/network/olts/37666ffa-47cf-41a1-9218-ca3d5d05e60c
+                    - img [ref=e140]
+                    - text: Karsana Huawei OLT
+                  - generic [ref=e142]:
+                    - img [ref=e143]
+                    - text: pon-0/1/4
+                  - link "Le Charles" [ref=e145] [cursor=pointer]:
+                    - /url: /admin/customers/person/286967dd-ae07-4cbe-942d-3a5e5705a990
+                    - img [ref=e146]
+                    - text: Le Charles
+                  - generic [ref=e148]:
+                    - img [ref=e149]
+                    - text: Unlimited Lite
+              - generic [ref=e151]:
+                - button "Configure" [ref=e152]:
+                  - img [ref=e153]
+                  - text: Configure
+                - generic [ref=e156]:
+                  - button "Mode" [ref=e157]:
+                    - img [ref=e158]
+                    - text: Mode
+                  - link "Edit" [ref=e160] [cursor=pointer]:
+                    - /url: /admin/network/onts/565b579e-c51b-44ee-b7a8-0e823b9e04ee/edit
+                    - img [ref=e161]
+                    - text: Edit
+          - generic [ref=e163]:
+            - generic [ref=e164]:
+              - generic [ref=e165]:
+                - img [ref=e167]
+                - generic [ref=e169]:
+                  - paragraph [ref=e170]: Runtime
+                  - paragraph [ref=e171]: Offline
+              - paragraph [ref=e172]: Unknown
+            - generic [ref=e174]:
+              - img [ref=e176]
+              - generic [ref=e178]:
+                - paragraph [ref=e179]: Assignment
+                - paragraph [ref=e180]: Assigned
+            - generic [ref=e181]:
+              - generic [ref=e182]:
+                - img [ref=e184]
+                - generic [ref=e186]:
+                  - paragraph [ref=e187]: Subscriber
+                  - paragraph [ref=e188]: Le Charles
+              - paragraph [ref=e189]: Blocked
+            - generic [ref=e190]:
+              - generic [ref=e191]:
+                - img [ref=e193]
+                - generic [ref=e195]:
+                  - paragraph [ref=e196]: Topology
+                  - paragraph [ref=e197]: Karsana Huawei OLT
+              - paragraph [ref=e198]: pon-0/1/4
+            - generic [ref=e200]:
+              - img [ref=e202]
+              - generic [ref=e204]:
+                - paragraph [ref=e205]: Profile
+                - paragraph [ref=e206]: None
+          - generic [ref=e207]:
+            - generic [ref=e208]:
+              - generic [ref=e209]:
+                - img [ref=e211]
+                - heading "Optical Link" [level=2] [ref=e213]
+              - generic [ref=e214]: Updated 21:34
+            - generic [ref=e216]:
+              - generic [ref=e217]:
+                - img [ref=e219]
+                - generic [ref=e221]: OLT
+              - generic [ref=e222]:
+                - generic [ref=e223]:
+                  - generic [ref=e224]:
+                    - img [ref=e225]
+                    - generic [ref=e227]: OLT Rx
+                  - paragraph [ref=e228]: —
+                - generic [ref=e229]:
+                  - generic [ref=e230]:
+                    - generic [ref=e231]: ONU Rx
+                    - img [ref=e232]
+                  - paragraph [ref=e234]: —
+              - generic [ref=e235]:
+                - img [ref=e237]
+                - generic [ref=e239]: ONT
+            - generic [ref=e240]:
+              - generic [ref=e243]: OLT Receive Quality
+              - generic [ref=e246]: ONU Receive Quality
+          - tablist "ONT detail tabs" [ref=e248]:
+            - tab "Overview" [selected] [ref=e249]:
+              - img [ref=e250]
+              - generic [ref=e252]: Overview
+            - tab "Network" [ref=e253]:
+              - img [ref=e254]
+              - generic [ref=e256]: Network
+            - tab "History" [ref=e257]:
+              - img [ref=e258]
+              - generic [ref=e260]: History
+            - tab "TR-069" [ref=e261]:
+              - img [ref=e262]
+              - generic [ref=e264]: TR-069
+            - tab "Charts" [ref=e265]:
+              - img [ref=e266]
+              - generic [ref=e268]: Charts
+            - tab "Ports" [ref=e269]:
+              - img [ref=e270]
+              - generic [ref=e272]: Ports
+            - tab "Config" [ref=e273]:
+              - img [ref=e274]
+              - generic [ref=e277]: Config
+          - generic [ref=e279]:
+            - generic [ref=e280]:
+              - generic [ref=e281]:
+                - heading "Device Information" [level=2] [ref=e284]
+                - generic [ref=e286]:
+                  - generic [ref=e287]:
+                    - generic [ref=e288]:
+                      - term [ref=e289]: Serial Number
+                      - definition [ref=e290]: HWTC03217F84
+                    - generic [ref=e291]:
+                      - term [ref=e292]: Vendor
+                      - definition [ref=e293]: Huawei
+                    - generic [ref=e294]:
+                      - term [ref=e295]: Model
+                      - definition [ref=e296]: ONU-type-eth-4-pots-2-catv-0
+                    - generic [ref=e297]:
+                      - term [ref=e298]: Firmware
+                      - definition [ref=e299]: "-"
+                  - group [ref=e300]:
+                    - generic "See more" [ref=e301] [cursor=pointer]:
+                      - generic [ref=e302]: See more
+                      - img [ref=e303]
+              - generic [ref=e305]:
+                - heading "Customer Information" [level=2] [ref=e308]
+                - generic [ref=e310]:
+                  - generic [ref=e311]:
+                    - term [ref=e312]: Subscriber
+                    - definition [ref=e313]:
+                      - link "Le Charles" [ref=e314] [cursor=pointer]:
+                        - /url: /admin/customers/person/286967dd-ae07-4cbe-942d-3a5e5705a990
+                  - generic [ref=e315]:
+                    - term [ref=e316]: Status
+                    - definition [ref=e317]:
+                      - generic [ref=e318]: Blocked
+                  - generic [ref=e319]:
+                    - term [ref=e320]: Service Plan
+                    - definition [ref=e321]: Unlimited Lite
+                  - generic [ref=e322]:
+                    - term [ref=e323]: Subscription Status
+                    - definition [ref=e324]: Active
+              - generic [ref=e325]:
+                - paragraph [ref=e326]: Signal Thresholds
+                - generic [ref=e327]:
+                  - generic [ref=e328]: "Good: ≥ -25.0 dBm"
+                  - generic [ref=e330]: "Warning: -28.0 to -25.0 dBm"
+                  - generic [ref=e332]: "Critical: < -28.0 dBm"
+            - generic [ref=e334]:
+              - generic [ref=e335]:
+                - heading "Network Path" [level=2] [ref=e338]
+                - generic [ref=e340]:
+                  - generic [ref=e341]:
+                    - img [ref=e343]
+                    - generic [ref=e345]:
+                      - paragraph [ref=e346]: OLT
+                      - link "Karsana Huawei OLT" [ref=e347] [cursor=pointer]:
+                        - /url: /admin/network/olts/37666ffa-47cf-41a1-9218-ca3d5d05e60c
+                  - generic [ref=e349]:
+                    - paragraph [ref=e350]: PON Port
+                    - paragraph [ref=e351]: pon-0/1/4
+                  - generic [ref=e353]:
+                    - paragraph [ref=e354]: ONT
+                    - paragraph [ref=e355]: HWTC03217F84
+              - generic [ref=e356]:
+                - heading "Observed Runtime" [level=2] [ref=e359]
+                - generic [ref=e361]:
+                  - generic [ref=e362]:
+                    - paragraph [ref=e363]: MAC Address
+                    - paragraph [ref=e364]: —
+                  - generic [ref=e365]:
+                    - paragraph [ref=e366]: WAN IP
+                    - paragraph [ref=e367]: —
+                  - generic [ref=e368]:
+                    - paragraph [ref=e369]: PPPoE User
+                    - paragraph [ref=e370]: "100010260"
+                  - generic [ref=e371]:
+                    - paragraph [ref=e372]: PPPoE Status
+                    - paragraph [ref=e373]: —
+                  - generic [ref=e374]:
+                    - paragraph [ref=e375]: WAN Mode
+                    - paragraph [ref=e376]: —
+                  - generic [ref=e377]:
+                    - paragraph [ref=e378]: LAN Mode
+                    - paragraph [ref=e379]: —
+                  - generic [ref=e380]:
+                    - paragraph [ref=e381]: WiFi Clients
+                    - paragraph [ref=e382]: —
+                  - generic [ref=e383]:
+                    - paragraph [ref=e384]: LAN Hosts
+                    - paragraph [ref=e385]: —
+                  - generic [ref=e386]:
+                    - paragraph [ref=e387]: Runtime Updated
+                    - paragraph [ref=e388]: —
+              - generic [ref=e389]:
+                - heading "Actions" [level=2] [ref=e392]
+                - generic [ref=e394]:
+                  - link "Edit Device" [ref=e395] [cursor=pointer]:
+                    - /url: /admin/network/onts/565b579e-c51b-44ee-b7a8-0e823b9e04ee/edit
+                    - img [ref=e396]
+                    - text: Edit Device
+                  - button "Return to Inventory" [ref=e398]:
+                    - img [ref=e399]
+                    - text: Return to Inventory
+              - generic [ref=e401]:
+                - heading "Remote Actions" [level=2] [ref=e404]
+                - generic [ref=e406]:
+                  - button "Get Status" [ref=e407]:
+                    - img [ref=e408]
+                    - text: Get Status
+                  - button "Reboot" [ref=e410]:
+                    - img [ref=e411]
+                    - text: Reboot
+                  - button "View Config" [ref=e413]:
+                    - img [ref=e414]
+                    - text: View Config
+                  - button "Factory Reset" [ref=e417]:
+                    - img [ref=e418]
+                    - text: Factory Reset
+              - generic [ref=e420]:
+                - heading "WiFi Configuration" [level=2] [ref=e423]
+                - button "WiFi Controls" [ref=e426]:
+                  - generic [ref=e427]:
+                    - img [ref=e428]
+                    - text: WiFi Controls
+                  - img [ref=e430]
+              - generic [ref=e432]:
+                - heading "PPPoE Credentials" [level=2] [ref=e435]
+                - button "Push PPPoE Credentials" [ref=e438]:
+                  - generic [ref=e439]:
+                    - img [ref=e440]
+                    - text: Push PPPoE Credentials
+                  - img [ref=e442]
+              - generic [ref=e444]:
+                - heading "LAN Ports" [level=2] [ref=e447]
+                - generic [ref=e449]:
+                  - paragraph [ref=e450]: Toggle individual LAN ports on the ONT via TR-069.
+                  - generic [ref=e451]:
+                    - generic [ref=e452]:
+                      - generic [ref=e453]: Port 1
+                      - generic [ref=e454]:
+                        - button "On" [ref=e456]
+                        - button "Off" [ref=e458]
+                    - generic [ref=e459]:
+                      - generic [ref=e460]: Port 2
+                      - generic [ref=e461]:
+                        - button "On" [ref=e463]
+                        - button "Off" [ref=e465]
+                    - generic [ref=e466]:
+                      - generic [ref=e467]: Port 3
+                      - generic [ref=e468]:
+                        - button "On" [ref=e470]
+                        - button "Off" [ref=e472]
+                    - generic [ref=e473]:
+                      - generic [ref=e474]: Port 4
+                      - generic [ref=e475]:
+                        - button "On" [ref=e477]
+                        - button "Off" [ref=e479]
+              - generic [ref=e480]:
+                - heading "Diagnostics" [level=2] [ref=e483]
+                - button "Run Diagnostics" [ref=e486]:
+                  - generic [ref=e487]:
+                    - img [ref=e488]
+                    - text: Run Diagnostics
+                  - img [ref=e490]
+              - generic [ref=e492]:
+                - heading "TR-069 Connection" [level=2] [ref=e495]
+                - generic [ref=e497]:
+                  - paragraph [ref=e498]: Trigger an immediate TR-069 inform from the ONT.
+                  - button "Send Connection Request" [ref=e500]:
+                    - img [ref=e501]
+                    - text: Send Connection Request
+              - generic [ref=e503]:
+                - heading "IPv6 Dual-Stack" [level=2] [ref=e506]
+                - generic [ref=e508]:
+                  - paragraph [ref=e509]: Enable DHCPv6 prefix delegation on the ONT WAN interface via TR-069. The subscriber will receive a /64 prefix for their LAN.
+                  - button "Enable IPv6" [ref=e511]:
+                    - img [ref=e512]
+                    - text: Enable IPv6
+              - generic [ref=e514]:
+                - heading "Manual Profile" [level=2] [ref=e517]
+                - generic [ref=e519]:
+                  - paragraph [ref=e520]: No profile applied
+                  - paragraph [ref=e521]: Profile templates are optional. Applying one updates the ONT immediately; it does not start a coordinated workflow.
+                  - generic [ref=e522]:
+                    - combobox [ref=e523]:
+                      - option "Select profile..." [selected]
+                      - option "Garki PPPoE mgmt201 internet203"
+                      - option "Karu Residential PPPoE"
+                    - button "Apply" [ref=e524]:
+                      - img [ref=e525]
+                      - text: Apply
+              - generic [ref=e527]:
+                - heading "Firmware" [level=2] [ref=e530]
+                - generic [ref=e532]:
+                  - generic [ref=e533]:
+                    - generic [ref=e534]:
+                      - paragraph [ref=e535]: Current Version
+                      - paragraph [ref=e536]: Unknown
+                    - generic [ref=e537]: Huawei
+                  - paragraph [ref=e538]: No firmware images available for Huawei.
+  - status

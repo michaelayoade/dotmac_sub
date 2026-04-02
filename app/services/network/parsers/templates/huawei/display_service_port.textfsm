@@ -1,0 +1,17 @@
+Value INDEX (\d+)
+Value VLAN_ID (\d+)
+Value VLAN_ATTR (\S+)
+Value PORT_TYPE (\S+)
+Value FSP (\d+/\d+\s*/?\d+|\d+/\d+/\d+)
+Value ONT_ID (\d+)
+Value GEM_INDEX (\d+)
+Value FLOW_TYPE (\S+)
+Value FLOW_PARA (\S+)
+Value RX (\S+)
+Value TX (\S+)
+Value STATE (\S+)
+Value TAG_TRANSFORM (\S*)
+
+Start
+  ^\s*${INDEX}\s+${VLAN_ID}\s+${VLAN_ATTR}\s+${PORT_TYPE}\s+${FSP}\s+${ONT_ID}\s+${GEM_INDEX}\s+${FLOW_TYPE}\s+${FLOW_PARA}\s+${RX}\s+${TX}\s+${STATE}\s*$$ -> Record
+  ^\s*${INDEX}\s+${VLAN_ID}\s+${VLAN_ATTR}\s+${PORT_TYPE}\s+${FSP}\s+${ONT_ID}\s+${GEM_INDEX}\s+${FLOW_TYPE}\s+${FLOW_PARA}\s+${RX}\s+${TX}\s+${STATE}\s+${TAG_TRANSFORM}\s*$$ -> Record

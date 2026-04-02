@@ -1,0 +1,1870 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - link "Sidebar logo Dotmac Selfcare" [ref=e5] [cursor=pointer]:
+          - /url: /admin/dashboard
+          - img "Sidebar logo" [ref=e8]
+          - generic [ref=e9]: Dotmac Selfcare
+        - button "Toggle sidebar collapse" [ref=e10]:
+          - img [ref=e11]
+      - navigation [ref=e13]:
+        - generic [ref=e14]:
+          - link "Dashboard" [ref=e15] [cursor=pointer]:
+            - /url: /admin/dashboard
+            - img [ref=e16]
+            - generic [ref=e18]: Dashboard
+          - paragraph [ref=e19]: Core
+          - link "Customers" [ref=e20] [cursor=pointer]:
+            - /url: /admin/customers
+            - img [ref=e21]
+            - generic [ref=e23]: Customers
+          - link "Support" [ref=e24] [cursor=pointer]:
+            - /url: /admin/support/tickets
+            - img [ref=e25]
+            - generic [ref=e27]: Support
+          - paragraph [ref=e28]: Operations
+          - link "Billing" [ref=e29] [cursor=pointer]:
+            - /url: /admin/billing
+            - img [ref=e30]
+            - generic [ref=e32]: Billing
+          - link "Catalog" [ref=e33] [cursor=pointer]:
+            - /url: /admin/catalog/offers
+            - img [ref=e34]
+            - generic [ref=e36]: Catalog
+          - link "Network" [ref=e37] [cursor=pointer]:
+            - /url: /admin/network
+            - img [ref=e38]
+            - generic [ref=e40]: Network
+          - link "VPN" [ref=e41] [cursor=pointer]:
+            - /url: /admin/network/vpn
+            - img [ref=e42]
+            - generic [ref=e44]: VPN
+          - paragraph [ref=e45]: Insights
+          - link "Reports" [ref=e46] [cursor=pointer]:
+            - /url: /admin/reports
+            - img [ref=e47]
+            - generic [ref=e49]: Reports
+          - link "GIS / Map" [ref=e50] [cursor=pointer]:
+            - /url: /admin/gis
+            - img [ref=e51]
+            - generic [ref=e54]: GIS / Map
+          - link "Integrations" [ref=e55] [cursor=pointer]:
+            - /url: /admin/integrations/connectors
+            - img [ref=e56]
+            - generic [ref=e58]: Integrations
+          - link "Notifications" [ref=e59] [cursor=pointer]:
+            - /url: /admin/notifications/templates
+            - img [ref=e60]
+            - generic [ref=e62]: Notifications
+          - link "Provisioning" [ref=e63] [cursor=pointer]:
+            - /url: /admin/provisioning
+            - img [ref=e64]
+            - generic [ref=e66]: Provisioning
+          - link "System" [ref=e67] [cursor=pointer]:
+            - /url: /admin/settings
+            - img [ref=e68]
+            - generic [ref=e71]: System
+      - generic [ref=e73]:
+        - generic [ref=e74]:
+          - generic [ref=e75]: PA
+          - generic [ref=e76]:
+            - paragraph [ref=e77]: Platform Admin
+            - paragraph [ref=e78]: admin@dotmac.ng
+        - generic [ref=e79]:
+          - generic [ref=e80]:
+            - paragraph [ref=e81]: Tenant
+            - paragraph [ref=e82]: Dotmac Selfcare
+          - generic [ref=e83]:
+            - paragraph [ref=e84]: Unread
+            - paragraph [ref=e85]: "20391"
+    - generic [ref=e86]:
+      - banner [ref=e87]:
+        - link "Dashboard" [ref=e89] [cursor=pointer]:
+          - /url: /admin/dashboard
+        - generic [ref=e90]:
+          - generic [ref=e93]:
+            - 'searchbox "Operational lookup: name, phone, account, PPPoE, ONT, IP, MAC..." [ref=e94]'
+            - img [ref=e95]
+            - generic: Cmd+K
+          - button "Toggle dark mode" [ref=e97]:
+            - img [ref=e98]
+          - button "View notifications" [ref=e101]:
+            - img [ref=e102]
+            - generic "20391 unread notifications" [ref=e104]
+          - button "Open user menu" [ref=e108]:
+            - generic [ref=e109]: PA
+            - img [ref=e110]
+      - main [ref=e112]:
+        - generic [ref=e114]:
+          - link "Back to Network" [ref=e116] [cursor=pointer]:
+            - /url: /admin/network
+            - img [ref=e117]
+            - text: Back to Network
+          - generic [ref=e120]:
+            - generic [ref=e121]:
+              - img [ref=e123]
+              - generic [ref=e125]:
+                - navigation [ref=e126]:
+                  - link "Network" [ref=e127] [cursor=pointer]:
+                    - /url: /admin/network
+                  - img [ref=e128]
+                  - generic [ref=e130]: ONT Fleet
+                - heading "ONT Fleet" [level=1] [ref=e131]
+                - paragraph [ref=e132]: Inventory, diagnostics, and manual operations for optical network terminals
+            - generic [ref=e134]:
+              - group "View mode" [ref=e135]:
+                - button "List view" [pressed] [ref=e136]:
+                  - img [ref=e137]
+                - button "Diagnostics view" [ref=e139]:
+                  - img [ref=e140]
+              - link "Import From TR-069" [ref=e142] [cursor=pointer]:
+                - /url: /admin/network/tr069?only_unlinked=true
+                - img [ref=e143]
+                - text: Import From TR-069
+              - link "Add ONT" [ref=e145] [cursor=pointer]:
+                - /url: /admin/network/onts/new
+                - img [ref=e147]
+                - text: Add ONT
+          - generic [ref=e149]:
+            - generic [ref=e152]:
+              - generic [ref=e153]:
+                - paragraph [ref=e154]: Total ONTs
+                - paragraph [ref=e155]: "743"
+              - img [ref=e157]
+            - generic [ref=e161]:
+              - generic [ref=e162]:
+                - paragraph [ref=e163]: Online
+                - paragraph [ref=e164]: "285"
+              - img [ref=e166]
+            - generic [ref=e170]:
+              - generic [ref=e171]:
+                - paragraph [ref=e172]: Offline
+                - paragraph [ref=e173]: "448"
+              - img [ref=e175]
+            - generic [ref=e179]:
+              - generic [ref=e180]:
+                - paragraph [ref=e181]: Low Signal
+                - paragraph [ref=e182]: "122"
+              - img [ref=e184]
+            - generic [ref=e188]:
+              - generic [ref=e189]:
+                - paragraph [ref=e190]: CPE Inventory
+                - paragraph [ref=e191]: "722"
+              - img [ref=e193]
+          - generic [ref=e195]:
+            - link "448 Offline" [ref=e196] [cursor=pointer]:
+              - /url: /admin/network/onts?view=list&online_status=offline
+              - text: 448 Offline
+            - link "122 Low Signal" [ref=e198] [cursor=pointer]:
+              - /url: /admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc
+              - text: 122 Low Signal
+          - generic [ref=e201]:
+            - generic [ref=e202]:
+              - generic [ref=e203]:
+                - generic:
+                  - img
+                - textbox "Search serial, MAC, OLT, PON, firmware..." [ref=e204]
+              - combobox [ref=e205]:
+                - option "All OLTs" [selected]
+                - option "Allen Huawei OLT"
+                - option "BOI Huawei OLT"
+                - option "Garki Huawei OLT"
+                - option "Gudu Huawei OLT"
+                - option "Gwarimpa Huawei OLT"
+                - option "Jabi Huawei OLT"
+                - option "Karsana Huawei OLT"
+                - option "SPDC Huawei OLT"
+              - combobox [ref=e206]:
+                - option "All Status"
+                - option "Online" [selected]
+                - option "Offline"
+              - combobox [ref=e207]:
+                - option "All Signal" [selected]
+                - option "Good"
+                - option "Warning"
+                - option "Critical"
+              - button "More" [ref=e208]:
+                - img [ref=e209]
+                - generic [ref=e211]: More
+              - link "Clear" [ref=e212] [cursor=pointer]:
+                - /url: /admin/network/onts?view=list
+                - img [ref=e213]
+                - text: Clear
+            - generic [ref=e215]:
+              - combobox [ref=e216]:
+                - option "All Zones" [selected]
+                - option "Zone 1"
+                - option "Zone 10"
+                - option "Zone 11"
+                - option "Zone 12"
+                - option "Zone 13"
+                - option "Zone 14"
+                - option "Zone 15"
+                - option "Zone 16"
+                - option "Zone 17"
+                - option "Zone 18"
+                - option "Zone 19"
+                - option "Zone 2"
+                - option "Zone 20"
+                - option "Zone 21"
+                - option "Zone 22"
+                - option "Zone 23"
+                - option "Zone 24"
+                - option "Zone 25"
+                - option "Zone 26"
+                - option "Zone 27"
+                - option "Zone 28"
+                - option "Zone 29"
+                - option "Zone 3"
+                - option "Zone 30"
+                - option "Zone 31"
+                - option "Zone 32"
+                - option "Zone 4"
+                - option "Zone 5"
+                - option "Zone 6"
+                - option "Zone 7"
+                - option "Zone 8"
+                - option "Zone 9"
+              - combobox [ref=e217]:
+                - option "All Vendors" [selected]
+                - option "Huawei"
+              - combobox [ref=e218]:
+                - option "All Records" [selected]
+                - option "Active Only"
+                - option "Inactive Only"
+              - combobox [ref=e219]:
+                - 'option "Sort: Serial" [selected]'
+                - 'option "Sort: Signal"'
+                - 'option "Sort: Last Seen"'
+                - 'option "Sort: Vendor"'
+                - 'option "Sort: Created"'
+              - combobox [ref=e220]:
+                - option "Ascending" [selected]
+                - option "Descending"
+          - generic [ref=e222]:
+            - generic [ref=e224]:
+              - img [ref=e226]
+              - generic [ref=e228]:
+                - heading "ONT Inventory" [level=2] [ref=e229]
+                - paragraph [ref=e230]: Showing 50 of 285 ONTs in the current operational queue
+            - generic [ref=e231]:
+              - table [ref=e233]:
+                - rowgroup [ref=e234]:
+                  - row "Select all ONTs Serial Number OLT / PON Subscriber / Customer Online Signal Last Seen Status Actions" [ref=e235]:
+                    - columnheader "Select all ONTs" [ref=e236]:
+                      - checkbox "Select all ONTs" [ref=e237]
+                    - columnheader "Serial Number" [ref=e238]
+                    - columnheader "OLT / PON" [ref=e239]
+                    - columnheader "Subscriber / Customer" [ref=e240]
+                    - columnheader "Online" [ref=e241]
+                    - columnheader "Signal" [ref=e242]
+                    - columnheader "Last Seen" [ref=e243]
+                    - columnheader "Status" [ref=e244]
+                    - columnheader "Actions" [ref=e245]
+                - rowgroup [ref=e246]:
+                  - 'row "Select ONT HWTC08D90492 HWTC08D90492 Gudu Huawei OLT 6 Fatima Ahmed Online -27.0 dBm Apr 01, 21:34 Active status: active" [ref=e247]':
+                    - cell "Select ONT HWTC08D90492" [ref=e248]:
+                      - checkbox "Select ONT HWTC08D90492" [ref=e249]
+                    - cell "HWTC08D90492" [ref=e250]:
+                      - generic [ref=e251]:
+                        - img [ref=e253]
+                        - link "HWTC08D90492" [ref=e255] [cursor=pointer]:
+                          - /url: /admin/network/onts/f95f8cc4-8422-4732-ab09-98c5172e7816
+                    - cell "Gudu Huawei OLT 6" [ref=e256]:
+                      - link "Gudu Huawei OLT" [ref=e257] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e258]: "6"
+                    - cell "Fatima Ahmed" [ref=e259]:
+                      - link "Fatima Ahmed" [ref=e260] [cursor=pointer]:
+                        - /url: /admin/customers/person/003a763a-a4fb-49f0-b178-bfaf0cb5a43f
+                    - cell "Online" [ref=e261]:
+                      - generic [ref=e262]: Online
+                    - cell "-27.0 dBm" [ref=e264]:
+                      - generic [ref=e265]: "-27.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e266]
+                    - 'cell "Active status: active" [ref=e267]':
+                      - 'status "Active status: active" [ref=e268]':
+                        - img [ref=e269]
+                        - text: Active
+                    - cell [ref=e271]:
+                      - generic [ref=e272]:
+                        - link "View details" [ref=e273] [cursor=pointer]:
+                          - /url: /admin/network/onts/f95f8cc4-8422-4732-ab09-98c5172e7816
+                          - img [ref=e274]
+                        - link "Edit ONT" [ref=e277] [cursor=pointer]:
+                          - /url: /admin/network/onts/f95f8cc4-8422-4732-ab09-98c5172e7816/edit
+                          - img [ref=e278]
+                  - 'row "Select ONT HWTC0A991E84 HWTC0A991E84 Gudu Huawei OLT 1 Aghedo Emmanuel Online -27.0 dBm Apr 01, 21:34 Active status: active" [ref=e280]':
+                    - cell "Select ONT HWTC0A991E84" [ref=e281]:
+                      - checkbox "Select ONT HWTC0A991E84" [ref=e282]
+                    - cell "HWTC0A991E84" [ref=e283]:
+                      - generic [ref=e284]:
+                        - img [ref=e286]
+                        - link "HWTC0A991E84" [ref=e288] [cursor=pointer]:
+                          - /url: /admin/network/onts/af7b6634-850a-4c3f-886d-00cbaa0ca757
+                    - cell "Gudu Huawei OLT 1" [ref=e289]:
+                      - link "Gudu Huawei OLT" [ref=e290] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e291]: "1"
+                    - cell "Aghedo Emmanuel" [ref=e292]:
+                      - link "Aghedo Emmanuel" [ref=e293] [cursor=pointer]:
+                        - /url: /admin/customers/person/ed51c8d6-7e70-44f9-abef-2a05f17d2da8
+                    - cell "Online" [ref=e294]:
+                      - generic [ref=e295]: Online
+                    - cell "-27.0 dBm" [ref=e297]:
+                      - generic [ref=e298]: "-27.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e299]
+                    - 'cell "Active status: active" [ref=e300]':
+                      - 'status "Active status: active" [ref=e301]':
+                        - img [ref=e302]
+                        - text: Active
+                    - cell [ref=e304]:
+                      - generic [ref=e305]:
+                        - link "View details" [ref=e306] [cursor=pointer]:
+                          - /url: /admin/network/onts/af7b6634-850a-4c3f-886d-00cbaa0ca757
+                          - img [ref=e307]
+                        - link "Edit ONT" [ref=e310] [cursor=pointer]:
+                          - /url: /admin/network/onts/af7b6634-850a-4c3f-886d-00cbaa0ca757/edit
+                          - img [ref=e311]
+                  - 'row "Select ONT HWTC11415484 HWTC11415484 Karsana Huawei OLT 1 Ndanusa Ahmed Umarundanusa Online -31.0 dBm Apr 01, 21:34 Active status: active" [ref=e313]':
+                    - cell "Select ONT HWTC11415484" [ref=e314]:
+                      - checkbox "Select ONT HWTC11415484" [ref=e315]
+                    - cell "HWTC11415484" [ref=e316]:
+                      - generic [ref=e317]:
+                        - img [ref=e319]
+                        - link "HWTC11415484" [ref=e321] [cursor=pointer]:
+                          - /url: /admin/network/onts/4b125168-5b5e-4110-ac3a-fa276c0d91b9
+                    - cell "Karsana Huawei OLT 1" [ref=e322]:
+                      - link "Karsana Huawei OLT" [ref=e323] [cursor=pointer]:
+                        - /url: /admin/network/olts/37666ffa-47cf-41a1-9218-ca3d5d05e60c
+                      - paragraph [ref=e324]: "1"
+                    - cell "Ndanusa Ahmed Umarundanusa" [ref=e325]:
+                      - link "Ndanusa Ahmed Umarundanusa" [ref=e326] [cursor=pointer]:
+                        - /url: /admin/customers/person/07909830-ebb1-40f3-b3e7-e2e71636e5ef
+                    - cell "Online" [ref=e327]:
+                      - generic [ref=e328]: Online
+                    - cell "-31.0 dBm" [ref=e330]:
+                      - generic [ref=e331]: "-31.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e332]
+                    - 'cell "Active status: active" [ref=e333]':
+                      - 'status "Active status: active" [ref=e334]':
+                        - img [ref=e335]
+                        - text: Active
+                    - cell [ref=e337]:
+                      - generic [ref=e338]:
+                        - link "View details" [ref=e339] [cursor=pointer]:
+                          - /url: /admin/network/onts/4b125168-5b5e-4110-ac3a-fa276c0d91b9
+                          - img [ref=e340]
+                        - link "Edit ONT" [ref=e343] [cursor=pointer]:
+                          - /url: /admin/network/onts/4b125168-5b5e-4110-ac3a-fa276c0d91b9/edit
+                          - img [ref=e344]
+                  - 'row "Select ONT HWTC11F53E84 HWTC11F53E84 Gudu Huawei OLT 13 Atika Sani Omolori Online -26.8 dBm Apr 01, 21:34 Active status: active" [ref=e346]':
+                    - cell "Select ONT HWTC11F53E84" [ref=e347]:
+                      - checkbox "Select ONT HWTC11F53E84" [ref=e348]
+                    - cell "HWTC11F53E84" [ref=e349]:
+                      - generic [ref=e350]:
+                        - img [ref=e352]
+                        - link "HWTC11F53E84" [ref=e354] [cursor=pointer]:
+                          - /url: /admin/network/onts/1401acad-83aa-41d3-9f2d-5b65a733833f
+                    - cell "Gudu Huawei OLT 13" [ref=e355]:
+                      - link "Gudu Huawei OLT" [ref=e356] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e357]: "13"
+                    - cell "Atika Sani Omolori" [ref=e358]:
+                      - link "Atika Sani Omolori" [ref=e359] [cursor=pointer]:
+                        - /url: /admin/customers/person/d9153e35-340c-4fa6-8f2d-a7e29c621a46
+                    - cell "Online" [ref=e360]:
+                      - generic [ref=e361]: Online
+                    - cell "-26.8 dBm" [ref=e363]:
+                      - generic [ref=e364]: "-26.8 dBm"
+                    - cell "Apr 01, 21:34" [ref=e365]
+                    - 'cell "Active status: active" [ref=e366]':
+                      - 'status "Active status: active" [ref=e367]':
+                        - img [ref=e368]
+                        - text: Active
+                    - cell [ref=e370]:
+                      - generic [ref=e371]:
+                        - link "View details" [ref=e372] [cursor=pointer]:
+                          - /url: /admin/network/onts/1401acad-83aa-41d3-9f2d-5b65a733833f
+                          - img [ref=e373]
+                        - link "Edit ONT" [ref=e376] [cursor=pointer]:
+                          - /url: /admin/network/onts/1401acad-83aa-41d3-9f2d-5b65a733833f/edit
+                          - img [ref=e377]
+                  - 'row "Select ONT HWTC12DD469B HWTC12DD469B Garki Huawei OLT 11 RappNet Fabino Online -26.8 dBm Apr 01, 21:35 Active status: active" [ref=e379]':
+                    - cell "Select ONT HWTC12DD469B" [ref=e380]:
+                      - checkbox "Select ONT HWTC12DD469B" [ref=e381]
+                    - cell "HWTC12DD469B" [ref=e382]:
+                      - generic [ref=e383]:
+                        - img [ref=e385]
+                        - link "HWTC12DD469B" [ref=e387] [cursor=pointer]:
+                          - /url: /admin/network/onts/828e7023-9f64-4ab0-b5c2-178ce9379fae
+                    - cell "Garki Huawei OLT 11" [ref=e388]:
+                      - link "Garki Huawei OLT" [ref=e389] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e390]: "11"
+                    - cell "RappNet Fabino" [ref=e391]:
+                      - link "RappNet Fabino" [ref=e392] [cursor=pointer]:
+                        - /url: /admin/customers/person/ae14be1c-2bfe-4395-86a8-ed3e6e8807bc
+                    - cell "Online" [ref=e393]:
+                      - generic [ref=e394]: Online
+                    - cell "-26.8 dBm" [ref=e396]:
+                      - generic [ref=e397]: "-26.8 dBm"
+                    - cell "Apr 01, 21:35" [ref=e398]
+                    - 'cell "Active status: active" [ref=e399]':
+                      - 'status "Active status: active" [ref=e400]':
+                        - img [ref=e401]
+                        - text: Active
+                    - cell [ref=e403]:
+                      - generic [ref=e404]:
+                        - link "View details" [ref=e405] [cursor=pointer]:
+                          - /url: /admin/network/onts/828e7023-9f64-4ab0-b5c2-178ce9379fae
+                          - img [ref=e406]
+                        - link "Edit ONT" [ref=e409] [cursor=pointer]:
+                          - /url: /admin/network/onts/828e7023-9f64-4ab0-b5c2-178ce9379fae/edit
+                          - img [ref=e410]
+                  - 'row "Select ONT HWTC1A67239B HWTC1A67239B Jabi Huawei OLT 1 Capitol Accommodations (Door Division) Online -21.3 dBm Apr 01, 21:32 Active status: active" [ref=e412]':
+                    - cell "Select ONT HWTC1A67239B" [ref=e413]:
+                      - checkbox "Select ONT HWTC1A67239B" [ref=e414]
+                    - cell "HWTC1A67239B" [ref=e415]:
+                      - generic [ref=e416]:
+                        - img [ref=e418]
+                        - link "HWTC1A67239B" [ref=e420] [cursor=pointer]:
+                          - /url: /admin/network/onts/632875a1-c6d9-4a59-8148-33f114e47f66
+                    - cell "Jabi Huawei OLT 1" [ref=e421]:
+                      - link "Jabi Huawei OLT" [ref=e422] [cursor=pointer]:
+                        - /url: /admin/network/olts/b747cfbe-1ca7-4c7e-9444-9dc811cdd4c2
+                      - paragraph [ref=e423]: "1"
+                    - cell "Capitol Accommodations (Door Division)" [ref=e424]:
+                      - link "Capitol Accommodations (Door Division)" [ref=e425] [cursor=pointer]:
+                        - /url: /admin/customers/business/562a63ef-6011-4d52-a5ce-437c2387ef5e
+                    - cell "Online" [ref=e426]:
+                      - generic [ref=e427]: Online
+                    - cell "-21.3 dBm" [ref=e429]:
+                      - generic [ref=e430]: "-21.3 dBm"
+                    - cell "Apr 01, 21:32" [ref=e431]
+                    - 'cell "Active status: active" [ref=e432]':
+                      - 'status "Active status: active" [ref=e433]':
+                        - img [ref=e434]
+                        - text: Active
+                    - cell [ref=e436]:
+                      - generic [ref=e437]:
+                        - link "View details" [ref=e438] [cursor=pointer]:
+                          - /url: /admin/network/onts/632875a1-c6d9-4a59-8148-33f114e47f66
+                          - img [ref=e439]
+                        - link "Edit ONT" [ref=e442] [cursor=pointer]:
+                          - /url: /admin/network/onts/632875a1-c6d9-4a59-8148-33f114e47f66/edit
+                          - img [ref=e443]
+                  - 'row "Select ONT HWTC1D1423A3 HWTC1D1423A3 Jabi Huawei OLT 1 Online -24.7 dBm Apr 01, 21:32 Active status: active" [ref=e445]':
+                    - cell "Select ONT HWTC1D1423A3" [ref=e446]:
+                      - checkbox "Select ONT HWTC1D1423A3" [ref=e447]
+                    - cell "HWTC1D1423A3" [ref=e448]:
+                      - generic [ref=e449]:
+                        - img [ref=e451]
+                        - link "HWTC1D1423A3" [ref=e453] [cursor=pointer]:
+                          - /url: /admin/network/onts/7e4456d3-fe5d-4275-8ec1-16652690e457
+                    - cell "Jabi Huawei OLT 1" [ref=e454]:
+                      - link "Jabi Huawei OLT" [ref=e455] [cursor=pointer]:
+                        - /url: /admin/network/olts/b747cfbe-1ca7-4c7e-9444-9dc811cdd4c2
+                      - paragraph [ref=e456]: "1"
+                    - cell [ref=e457]
+                    - cell "Online" [ref=e458]:
+                      - generic [ref=e459]: Online
+                    - cell "-24.7 dBm" [ref=e461]:
+                      - generic [ref=e462]: "-24.7 dBm"
+                    - cell "Apr 01, 21:32" [ref=e463]
+                    - 'cell "Active status: active" [ref=e464]':
+                      - 'status "Active status: active" [ref=e465]':
+                        - img [ref=e466]
+                        - text: Active
+                    - cell [ref=e468]:
+                      - generic [ref=e469]:
+                        - link "View details" [ref=e470] [cursor=pointer]:
+                          - /url: /admin/network/onts/7e4456d3-fe5d-4275-8ec1-16652690e457
+                          - img [ref=e471]
+                        - link "Edit ONT" [ref=e474] [cursor=pointer]:
+                          - /url: /admin/network/onts/7e4456d3-fe5d-4275-8ec1-16652690e457/edit
+                          - img [ref=e475]
+                  - 'row "Select ONT HWTC1D24F0A3 HWTC1D24F0A3 Gudu Huawei OLT 14 Obet-Obet Nigeria Limited Online -31.5 dBm Apr 01, 21:34 Active status: active" [ref=e477]':
+                    - cell "Select ONT HWTC1D24F0A3" [ref=e478]:
+                      - checkbox "Select ONT HWTC1D24F0A3" [ref=e479]
+                    - cell "HWTC1D24F0A3" [ref=e480]:
+                      - generic [ref=e481]:
+                        - img [ref=e483]
+                        - link "HWTC1D24F0A3" [ref=e485] [cursor=pointer]:
+                          - /url: /admin/network/onts/5522b40a-f2f3-4560-95c3-baa9e0c7a021
+                    - cell "Gudu Huawei OLT 14" [ref=e486]:
+                      - link "Gudu Huawei OLT" [ref=e487] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e488]: "14"
+                    - cell "Obet-Obet Nigeria Limited" [ref=e489]:
+                      - link "Obet-Obet Nigeria Limited" [ref=e490] [cursor=pointer]:
+                        - /url: /admin/customers/business/15222416-7154-4970-8fc1-13b24b63cd9e
+                    - cell "Online" [ref=e491]:
+                      - generic [ref=e492]: Online
+                    - cell "-31.5 dBm" [ref=e494]:
+                      - generic [ref=e495]: "-31.5 dBm"
+                    - cell "Apr 01, 21:34" [ref=e496]
+                    - 'cell "Active status: active" [ref=e497]':
+                      - 'status "Active status: active" [ref=e498]':
+                        - img [ref=e499]
+                        - text: Active
+                    - cell [ref=e501]:
+                      - generic [ref=e502]:
+                        - link "View details" [ref=e503] [cursor=pointer]:
+                          - /url: /admin/network/onts/5522b40a-f2f3-4560-95c3-baa9e0c7a021
+                          - img [ref=e504]
+                        - link "Edit ONT" [ref=e507] [cursor=pointer]:
+                          - /url: /admin/network/onts/5522b40a-f2f3-4560-95c3-baa9e0c7a021/edit
+                          - img [ref=e508]
+                  - 'row "Select ONT HWTC1D2506A3 HWTC1D2506A3 Garki Huawei OLT 13 CKK Capital Limited Online -24.9 dBm Apr 01, 21:35 Active status: active" [ref=e510]':
+                    - cell "Select ONT HWTC1D2506A3" [ref=e511]:
+                      - checkbox "Select ONT HWTC1D2506A3" [ref=e512]
+                    - cell "HWTC1D2506A3" [ref=e513]:
+                      - generic [ref=e514]:
+                        - img [ref=e516]
+                        - link "HWTC1D2506A3" [ref=e518] [cursor=pointer]:
+                          - /url: /admin/network/onts/77c6c65d-45b2-448e-a5cf-0ad0045e6288
+                    - cell "Garki Huawei OLT 13" [ref=e519]:
+                      - link "Garki Huawei OLT" [ref=e520] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e521]: "13"
+                    - cell "CKK Capital Limited" [ref=e522]:
+                      - link "CKK Capital Limited" [ref=e523] [cursor=pointer]:
+                        - /url: /admin/customers/business/05732095-cbc8-4e06-83df-293546044cdf
+                    - cell "Online" [ref=e524]:
+                      - generic [ref=e525]: Online
+                    - cell "-24.9 dBm" [ref=e527]:
+                      - generic [ref=e528]: "-24.9 dBm"
+                    - cell "Apr 01, 21:35" [ref=e529]
+                    - 'cell "Active status: active" [ref=e530]':
+                      - 'status "Active status: active" [ref=e531]':
+                        - img [ref=e532]
+                        - text: Active
+                    - cell [ref=e534]:
+                      - generic [ref=e535]:
+                        - link "View details" [ref=e536] [cursor=pointer]:
+                          - /url: /admin/network/onts/77c6c65d-45b2-448e-a5cf-0ad0045e6288
+                          - img [ref=e537]
+                        - link "Edit ONT" [ref=e540] [cursor=pointer]:
+                          - /url: /admin/network/onts/77c6c65d-45b2-448e-a5cf-0ad0045e6288/edit
+                          - img [ref=e541]
+                  - 'row "Select ONT HWTC2034F684 HWTC2034F684 Gudu Huawei OLT 1 Emmanuel Obetta Online -24.0 dBm Apr 01, 21:34 Active status: active" [ref=e543]':
+                    - cell "Select ONT HWTC2034F684" [ref=e544]:
+                      - checkbox "Select ONT HWTC2034F684" [ref=e545]
+                    - cell "HWTC2034F684" [ref=e546]:
+                      - generic [ref=e547]:
+                        - img [ref=e549]
+                        - link "HWTC2034F684" [ref=e551] [cursor=pointer]:
+                          - /url: /admin/network/onts/c02157e8-7c2b-4d83-bf20-3c370384d462
+                    - cell "Gudu Huawei OLT 1" [ref=e552]:
+                      - link "Gudu Huawei OLT" [ref=e553] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e554]: "1"
+                    - cell "Emmanuel Obetta" [ref=e555]:
+                      - link "Emmanuel Obetta" [ref=e556] [cursor=pointer]:
+                        - /url: /admin/customers/person/39e0504d-3c6f-4803-9fc6-6d2bab798100
+                    - cell "Online" [ref=e557]:
+                      - generic [ref=e558]: Online
+                    - cell "-24.0 dBm" [ref=e560]:
+                      - generic [ref=e561]: "-24.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e562]
+                    - 'cell "Active status: active" [ref=e563]':
+                      - 'status "Active status: active" [ref=e564]':
+                        - img [ref=e565]
+                        - text: Active
+                    - cell [ref=e567]:
+                      - generic [ref=e568]:
+                        - link "View details" [ref=e569] [cursor=pointer]:
+                          - /url: /admin/network/onts/c02157e8-7c2b-4d83-bf20-3c370384d462
+                          - img [ref=e570]
+                        - link "Edit ONT" [ref=e573] [cursor=pointer]:
+                          - /url: /admin/network/onts/c02157e8-7c2b-4d83-bf20-3c370384d462/edit
+                          - img [ref=e574]
+                  - 'row "Select ONT HWTC21C35084 HWTC21C35084 BOI Huawei OLT 2 Rexnet Solution Online -17.6 dBm Apr 01, 21:33 Active status: active" [ref=e576]':
+                    - cell "Select ONT HWTC21C35084" [ref=e577]:
+                      - checkbox "Select ONT HWTC21C35084" [ref=e578]
+                    - cell "HWTC21C35084" [ref=e579]:
+                      - generic [ref=e580]:
+                        - img [ref=e582]
+                        - link "HWTC21C35084" [ref=e584] [cursor=pointer]:
+                          - /url: /admin/network/onts/672f04a8-30c1-4236-bed3-87d7b8ee70ea
+                    - cell "BOI Huawei OLT 2" [ref=e585]:
+                      - link "BOI Huawei OLT" [ref=e586] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e587]: "2"
+                    - cell "Rexnet Solution" [ref=e588]:
+                      - link "Rexnet Solution" [ref=e589] [cursor=pointer]:
+                        - /url: /admin/customers/business/3157eaff-7b76-452e-b91a-1d79807e2fc6
+                    - cell "Online" [ref=e590]:
+                      - generic [ref=e591]: Online
+                    - cell "-17.6 dBm" [ref=e593]:
+                      - generic [ref=e594]: "-17.6 dBm"
+                    - cell "Apr 01, 21:33" [ref=e595]
+                    - 'cell "Active status: active" [ref=e596]':
+                      - 'status "Active status: active" [ref=e597]':
+                        - img [ref=e598]
+                        - text: Active
+                    - cell [ref=e600]:
+                      - generic [ref=e601]:
+                        - link "View details" [ref=e602] [cursor=pointer]:
+                          - /url: /admin/network/onts/672f04a8-30c1-4236-bed3-87d7b8ee70ea
+                          - img [ref=e603]
+                        - link "Edit ONT" [ref=e606] [cursor=pointer]:
+                          - /url: /admin/network/onts/672f04a8-30c1-4236-bed3-87d7b8ee70ea/edit
+                          - img [ref=e607]
+                  - 'row "Select ONT HWTC2550E784 HWTC2550E784 Karsana Huawei OLT 2 Yahaya Bello Online -23.9 dBm Apr 01, 21:34 Active status: active" [ref=e609]':
+                    - cell "Select ONT HWTC2550E784" [ref=e610]:
+                      - checkbox "Select ONT HWTC2550E784" [ref=e611]
+                    - cell "HWTC2550E784" [ref=e612]:
+                      - generic [ref=e613]:
+                        - img [ref=e615]
+                        - link "HWTC2550E784" [ref=e617] [cursor=pointer]:
+                          - /url: /admin/network/onts/55b72ee0-0501-4428-a6b4-7d8dace93043
+                    - cell "Karsana Huawei OLT 2" [ref=e618]:
+                      - link "Karsana Huawei OLT" [ref=e619] [cursor=pointer]:
+                        - /url: /admin/network/olts/37666ffa-47cf-41a1-9218-ca3d5d05e60c
+                      - paragraph [ref=e620]: "2"
+                    - cell "Yahaya Bello" [ref=e621]:
+                      - link "Yahaya Bello" [ref=e622] [cursor=pointer]:
+                        - /url: /admin/customers/person/349be476-d23e-4581-ad40-8ab0f74e1b05
+                    - cell "Online" [ref=e623]:
+                      - generic [ref=e624]: Online
+                    - cell "-23.9 dBm" [ref=e626]:
+                      - generic [ref=e627]: "-23.9 dBm"
+                    - cell "Apr 01, 21:34" [ref=e628]
+                    - 'cell "Active status: active" [ref=e629]':
+                      - 'status "Active status: active" [ref=e630]':
+                        - img [ref=e631]
+                        - text: Active
+                    - cell [ref=e633]:
+                      - generic [ref=e634]:
+                        - link "View details" [ref=e635] [cursor=pointer]:
+                          - /url: /admin/network/onts/55b72ee0-0501-4428-a6b4-7d8dace93043
+                          - img [ref=e636]
+                        - link "Edit ONT" [ref=e639] [cursor=pointer]:
+                          - /url: /admin/network/onts/55b72ee0-0501-4428-a6b4-7d8dace93043/edit
+                          - img [ref=e640]
+                  - 'row "Select ONT HWTC29AFD160 HWTC29AFD160 BOI Huawei OLT 14 Adamu Ahmed Rufa''i Online -26.4 dBm Apr 01, 21:33 Active status: active" [ref=e642]':
+                    - cell "Select ONT HWTC29AFD160" [ref=e643]:
+                      - checkbox "Select ONT HWTC29AFD160" [ref=e644]
+                    - cell "HWTC29AFD160" [ref=e645]:
+                      - generic [ref=e646]:
+                        - img [ref=e648]
+                        - link "HWTC29AFD160" [ref=e650] [cursor=pointer]:
+                          - /url: /admin/network/onts/59db4c53-72f8-4385-98d1-1603c41c0cf7
+                    - cell "BOI Huawei OLT 14" [ref=e651]:
+                      - link "BOI Huawei OLT" [ref=e652] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e653]: "14"
+                    - cell "Adamu Ahmed Rufa'i" [ref=e654]:
+                      - link "Adamu Ahmed Rufa'i" [ref=e655] [cursor=pointer]:
+                        - /url: /admin/customers/person/3aaddb75-d38d-4f5d-a0ca-9d16345c5ee9
+                    - cell "Online" [ref=e656]:
+                      - generic [ref=e657]: Online
+                    - cell "-26.4 dBm" [ref=e659]:
+                      - generic [ref=e660]: "-26.4 dBm"
+                    - cell "Apr 01, 21:33" [ref=e661]
+                    - 'cell "Active status: active" [ref=e662]':
+                      - 'status "Active status: active" [ref=e663]':
+                        - img [ref=e664]
+                        - text: Active
+                    - cell [ref=e666]:
+                      - generic [ref=e667]:
+                        - link "View details" [ref=e668] [cursor=pointer]:
+                          - /url: /admin/network/onts/59db4c53-72f8-4385-98d1-1603c41c0cf7
+                          - img [ref=e669]
+                        - link "Edit ONT" [ref=e672] [cursor=pointer]:
+                          - /url: /admin/network/onts/59db4c53-72f8-4385-98d1-1603c41c0cf7/edit
+                          - img [ref=e673]
+                  - 'row "Select ONT HWTC29AFD170 HWTC29AFD170 Gudu Huawei OLT 8 Bureau of public Enterprise Online -27.0 dBm Apr 01, 21:34 Active status: active" [ref=e675]':
+                    - cell "Select ONT HWTC29AFD170" [ref=e676]:
+                      - checkbox "Select ONT HWTC29AFD170" [ref=e677]
+                    - cell "HWTC29AFD170" [ref=e678]:
+                      - generic [ref=e679]:
+                        - img [ref=e681]
+                        - link "HWTC29AFD170" [ref=e683] [cursor=pointer]:
+                          - /url: /admin/network/onts/b86816ae-0b07-4b09-8b69-e2aa894d9995
+                    - cell "Gudu Huawei OLT 8" [ref=e684]:
+                      - link "Gudu Huawei OLT" [ref=e685] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e686]: "8"
+                    - cell "Bureau of public Enterprise" [ref=e687]:
+                      - link "Bureau of public Enterprise" [ref=e688] [cursor=pointer]:
+                        - /url: /admin/customers/business/8a9da137-ef17-43bb-aa0e-d7349622684c
+                    - cell "Online" [ref=e689]:
+                      - generic [ref=e690]: Online
+                    - cell "-27.0 dBm" [ref=e692]:
+                      - generic [ref=e693]: "-27.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e694]
+                    - 'cell "Active status: active" [ref=e695]':
+                      - 'status "Active status: active" [ref=e696]':
+                        - img [ref=e697]
+                        - text: Active
+                    - cell [ref=e699]:
+                      - generic [ref=e700]:
+                        - link "View details" [ref=e701] [cursor=pointer]:
+                          - /url: /admin/network/onts/b86816ae-0b07-4b09-8b69-e2aa894d9995
+                          - img [ref=e702]
+                        - link "Edit ONT" [ref=e705] [cursor=pointer]:
+                          - /url: /admin/network/onts/b86816ae-0b07-4b09-8b69-e2aa894d9995/edit
+                          - img [ref=e706]
+                  - 'row "Select ONT HWTC29AFD178 HWTC29AFD178 Gudu Huawei OLT 0 Mohammed Ahmed Musa (Hyson) Online -33.0 dBm Apr 01, 21:34 Active status: active" [ref=e708]':
+                    - cell "Select ONT HWTC29AFD178" [ref=e709]:
+                      - checkbox "Select ONT HWTC29AFD178" [ref=e710]
+                    - cell "HWTC29AFD178" [ref=e711]:
+                      - generic [ref=e712]:
+                        - img [ref=e714]
+                        - link "HWTC29AFD178" [ref=e716] [cursor=pointer]:
+                          - /url: /admin/network/onts/045c2010-3bf4-4415-a938-12884cbf3e53
+                    - cell "Gudu Huawei OLT 0" [ref=e717]:
+                      - link "Gudu Huawei OLT" [ref=e718] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e719]: "0"
+                    - cell "Mohammed Ahmed Musa (Hyson)" [ref=e720]:
+                      - link "Mohammed Ahmed Musa (Hyson)" [ref=e721] [cursor=pointer]:
+                        - /url: /admin/customers/person/8726c413-ca59-44a4-a775-81a52a6c00b0
+                    - cell "Online" [ref=e722]:
+                      - generic [ref=e723]: Online
+                    - cell "-33.0 dBm" [ref=e725]:
+                      - generic [ref=e726]: "-33.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e727]
+                    - 'cell "Active status: active" [ref=e728]':
+                      - 'status "Active status: active" [ref=e729]':
+                        - img [ref=e730]
+                        - text: Active
+                    - cell [ref=e732]:
+                      - generic [ref=e733]:
+                        - link "View details" [ref=e734] [cursor=pointer]:
+                          - /url: /admin/network/onts/045c2010-3bf4-4415-a938-12884cbf3e53
+                          - img [ref=e735]
+                        - link "Edit ONT" [ref=e738] [cursor=pointer]:
+                          - /url: /admin/network/onts/045c2010-3bf4-4415-a938-12884cbf3e53/edit
+                          - img [ref=e739]
+                  - 'row "Select ONT HWTC29AFD180 HWTC29AFD180 BOI Huawei OLT 14 Ahmed Laido Online -30.0 dBm Apr 01, 21:33 Active status: active" [ref=e741]':
+                    - cell "Select ONT HWTC29AFD180" [ref=e742]:
+                      - checkbox "Select ONT HWTC29AFD180" [ref=e743]
+                    - cell "HWTC29AFD180" [ref=e744]:
+                      - generic [ref=e745]:
+                        - img [ref=e747]
+                        - link "HWTC29AFD180" [ref=e749] [cursor=pointer]:
+                          - /url: /admin/network/onts/58925c8a-e7d9-47df-99b8-3d3bd7144968
+                    - cell "BOI Huawei OLT 14" [ref=e750]:
+                      - link "BOI Huawei OLT" [ref=e751] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e752]: "14"
+                    - cell "Ahmed Laido" [ref=e753]:
+                      - link "Ahmed Laido" [ref=e754] [cursor=pointer]:
+                        - /url: /admin/customers/person/cb87050e-067d-4379-a2ff-45162e8b6b71
+                    - cell "Online" [ref=e755]:
+                      - generic [ref=e756]: Online
+                    - cell "-30.0 dBm" [ref=e758]:
+                      - generic [ref=e759]: "-30.0 dBm"
+                    - cell "Apr 01, 21:33" [ref=e760]
+                    - 'cell "Active status: active" [ref=e761]':
+                      - 'status "Active status: active" [ref=e762]':
+                        - img [ref=e763]
+                        - text: Active
+                    - cell [ref=e765]:
+                      - generic [ref=e766]:
+                        - link "View details" [ref=e767] [cursor=pointer]:
+                          - /url: /admin/network/onts/58925c8a-e7d9-47df-99b8-3d3bd7144968
+                          - img [ref=e768]
+                        - link "Edit ONT" [ref=e771] [cursor=pointer]:
+                          - /url: /admin/network/onts/58925c8a-e7d9-47df-99b8-3d3bd7144968/edit
+                          - img [ref=e772]
+                  - 'row "Select ONT HWTC29AFD188 HWTC29AFD188 Gudu Huawei OLT 6 Pius ukaegbu Online -26.8 dBm Apr 01, 21:34 Active status: active" [ref=e774]':
+                    - cell "Select ONT HWTC29AFD188" [ref=e775]:
+                      - checkbox "Select ONT HWTC29AFD188" [ref=e776]
+                    - cell "HWTC29AFD188" [ref=e777]:
+                      - generic [ref=e778]:
+                        - img [ref=e780]
+                        - link "HWTC29AFD188" [ref=e782] [cursor=pointer]:
+                          - /url: /admin/network/onts/5f92c800-b369-4063-a57d-dfe5e5b5e6f3
+                    - cell "Gudu Huawei OLT 6" [ref=e783]:
+                      - link "Gudu Huawei OLT" [ref=e784] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e785]: "6"
+                    - cell "Pius ukaegbu" [ref=e786]:
+                      - link "Pius ukaegbu" [ref=e787] [cursor=pointer]:
+                        - /url: /admin/customers/person/6d78c263-9f1d-468a-86d3-d9aae062b559
+                    - cell "Online" [ref=e788]:
+                      - generic [ref=e789]: Online
+                    - cell "-26.8 dBm" [ref=e791]:
+                      - generic [ref=e792]: "-26.8 dBm"
+                    - cell "Apr 01, 21:34" [ref=e793]
+                    - 'cell "Active status: active" [ref=e794]':
+                      - 'status "Active status: active" [ref=e795]':
+                        - img [ref=e796]
+                        - text: Active
+                    - cell [ref=e798]:
+                      - generic [ref=e799]:
+                        - link "View details" [ref=e800] [cursor=pointer]:
+                          - /url: /admin/network/onts/5f92c800-b369-4063-a57d-dfe5e5b5e6f3
+                          - img [ref=e801]
+                        - link "Edit ONT" [ref=e804] [cursor=pointer]:
+                          - /url: /admin/network/onts/5f92c800-b369-4063-a57d-dfe5e5b5e6f3/edit
+                          - img [ref=e805]
+                  - 'row "Select ONT HWTC29AFD1A0 HWTC29AFD1A0 Gudu Huawei OLT 2 Maryam Saad Yahaya( 2dotcom) Online -21.5 dBm Apr 01, 21:34 Active status: active" [ref=e807]':
+                    - cell "Select ONT HWTC29AFD1A0" [ref=e808]:
+                      - checkbox "Select ONT HWTC29AFD1A0" [ref=e809]
+                    - cell "HWTC29AFD1A0" [ref=e810]:
+                      - generic [ref=e811]:
+                        - img [ref=e813]
+                        - link "HWTC29AFD1A0" [ref=e815] [cursor=pointer]:
+                          - /url: /admin/network/onts/838b30c2-43fd-482a-bcb7-b93291127461
+                    - cell "Gudu Huawei OLT 2" [ref=e816]:
+                      - link "Gudu Huawei OLT" [ref=e817] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e818]: "2"
+                    - cell "Maryam Saad Yahaya( 2dotcom)" [ref=e819]:
+                      - link "Maryam Saad Yahaya( 2dotcom)" [ref=e820] [cursor=pointer]:
+                        - /url: /admin/customers/person/812b4613-19ef-4ada-acfd-976e75ca0146
+                    - cell "Online" [ref=e821]:
+                      - generic [ref=e822]: Online
+                    - cell "-21.5 dBm" [ref=e824]:
+                      - generic [ref=e825]: "-21.5 dBm"
+                    - cell "Apr 01, 21:34" [ref=e826]
+                    - 'cell "Active status: active" [ref=e827]':
+                      - 'status "Active status: active" [ref=e828]':
+                        - img [ref=e829]
+                        - text: Active
+                    - cell [ref=e831]:
+                      - generic [ref=e832]:
+                        - link "View details" [ref=e833] [cursor=pointer]:
+                          - /url: /admin/network/onts/838b30c2-43fd-482a-bcb7-b93291127461
+                          - img [ref=e834]
+                        - link "Edit ONT" [ref=e837] [cursor=pointer]:
+                          - /url: /admin/network/onts/838b30c2-43fd-482a-bcb7-b93291127461/edit
+                          - img [ref=e838]
+                  - 'row "Select ONT HWTC29AFD1B0 HWTC29AFD1B0 BOI Huawei OLT 15 Ibrahim Tijani (Guest House) Online -25.4 dBm Apr 01, 21:33 Active status: active" [ref=e840]':
+                    - cell "Select ONT HWTC29AFD1B0" [ref=e841]:
+                      - checkbox "Select ONT HWTC29AFD1B0" [ref=e842]
+                    - cell "HWTC29AFD1B0" [ref=e843]:
+                      - generic [ref=e844]:
+                        - img [ref=e846]
+                        - link "HWTC29AFD1B0" [ref=e848] [cursor=pointer]:
+                          - /url: /admin/network/onts/9273486f-4825-4067-8d8a-ae2b163839c8
+                    - cell "BOI Huawei OLT 15" [ref=e849]:
+                      - link "BOI Huawei OLT" [ref=e850] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e851]: "15"
+                    - cell "Ibrahim Tijani (Guest House)" [ref=e852]:
+                      - link "Ibrahim Tijani (Guest House)" [ref=e853] [cursor=pointer]:
+                        - /url: /admin/customers/business/19d19b80-d832-4000-af39-295372c7b74d
+                    - cell "Online" [ref=e854]:
+                      - generic [ref=e855]: Online
+                    - cell "-25.4 dBm" [ref=e857]:
+                      - generic [ref=e858]: "-25.4 dBm"
+                    - cell "Apr 01, 21:33" [ref=e859]
+                    - 'cell "Active status: active" [ref=e860]':
+                      - 'status "Active status: active" [ref=e861]':
+                        - img [ref=e862]
+                        - text: Active
+                    - cell [ref=e864]:
+                      - generic [ref=e865]:
+                        - link "View details" [ref=e866] [cursor=pointer]:
+                          - /url: /admin/network/onts/9273486f-4825-4067-8d8a-ae2b163839c8
+                          - img [ref=e867]
+                        - link "Edit ONT" [ref=e870] [cursor=pointer]:
+                          - /url: /admin/network/onts/9273486f-4825-4067-8d8a-ae2b163839c8/edit
+                          - img [ref=e871]
+                  - 'row "Select ONT HWTC29AFD1D8 HWTC29AFD1D8 Gudu Huawei OLT 0 The Shoe Shop Online -31.0 dBm Apr 01, 21:34 Active status: active" [ref=e873]':
+                    - cell "Select ONT HWTC29AFD1D8" [ref=e874]:
+                      - checkbox "Select ONT HWTC29AFD1D8" [ref=e875]
+                    - cell "HWTC29AFD1D8" [ref=e876]:
+                      - generic [ref=e877]:
+                        - img [ref=e879]
+                        - link "HWTC29AFD1D8" [ref=e881] [cursor=pointer]:
+                          - /url: /admin/network/onts/b5c1e5df-ddfa-4ad1-a997-8e4b58e86982
+                    - cell "Gudu Huawei OLT 0" [ref=e882]:
+                      - link "Gudu Huawei OLT" [ref=e883] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e884]: "0"
+                    - cell "The Shoe Shop" [ref=e885]:
+                      - link "The Shoe Shop" [ref=e886] [cursor=pointer]:
+                        - /url: /admin/customers/business/27a8d102-4f3a-48bf-90bf-9f68191c5553
+                    - cell "Online" [ref=e887]:
+                      - generic [ref=e888]: Online
+                    - cell "-31.0 dBm" [ref=e890]:
+                      - generic [ref=e891]: "-31.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e892]
+                    - 'cell "Active status: active" [ref=e893]':
+                      - 'status "Active status: active" [ref=e894]':
+                        - img [ref=e895]
+                        - text: Active
+                    - cell [ref=e897]:
+                      - generic [ref=e898]:
+                        - link "View details" [ref=e899] [cursor=pointer]:
+                          - /url: /admin/network/onts/b5c1e5df-ddfa-4ad1-a997-8e4b58e86982
+                          - img [ref=e900]
+                        - link "Edit ONT" [ref=e903] [cursor=pointer]:
+                          - /url: /admin/network/onts/b5c1e5df-ddfa-4ad1-a997-8e4b58e86982/edit
+                          - img [ref=e904]
+                  - 'row "Select ONT HWTC29AFD1E0 HWTC29AFD1E0 BOI Huawei OLT 5 JDP Gateway Divine Mercy Online -29.6 dBm Apr 01, 21:33 Active status: active" [ref=e906]':
+                    - cell "Select ONT HWTC29AFD1E0" [ref=e907]:
+                      - checkbox "Select ONT HWTC29AFD1E0" [ref=e908]
+                    - cell "HWTC29AFD1E0" [ref=e909]:
+                      - generic [ref=e910]:
+                        - img [ref=e912]
+                        - link "HWTC29AFD1E0" [ref=e914] [cursor=pointer]:
+                          - /url: /admin/network/onts/14ae715a-af24-4ef8-a801-f6f2099a9791
+                    - cell "BOI Huawei OLT 5" [ref=e915]:
+                      - link "BOI Huawei OLT" [ref=e916] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e917]: "5"
+                    - cell "JDP Gateway Divine Mercy" [ref=e918]:
+                      - link "JDP Gateway Divine Mercy" [ref=e919] [cursor=pointer]:
+                        - /url: /admin/customers/business/2cf2cdb5-f547-400e-b01b-661813896c81
+                    - cell "Online" [ref=e920]:
+                      - generic [ref=e921]: Online
+                    - cell "-29.6 dBm" [ref=e923]:
+                      - generic [ref=e924]: "-29.6 dBm"
+                    - cell "Apr 01, 21:33" [ref=e925]
+                    - 'cell "Active status: active" [ref=e926]':
+                      - 'status "Active status: active" [ref=e927]':
+                        - img [ref=e928]
+                        - text: Active
+                    - cell [ref=e930]:
+                      - generic [ref=e931]:
+                        - link "View details" [ref=e932] [cursor=pointer]:
+                          - /url: /admin/network/onts/14ae715a-af24-4ef8-a801-f6f2099a9791
+                          - img [ref=e933]
+                        - link "Edit ONT" [ref=e936] [cursor=pointer]:
+                          - /url: /admin/network/onts/14ae715a-af24-4ef8-a801-f6f2099a9791/edit
+                          - img [ref=e937]
+                  - 'row "Select ONT HWTC29AFD210 HWTC29AFD210 Gudu Huawei OLT 0 Abdulsalam Nurudeen Online -33.0 dBm Apr 01, 21:34 Active status: active" [ref=e939]':
+                    - cell "Select ONT HWTC29AFD210" [ref=e940]:
+                      - checkbox "Select ONT HWTC29AFD210" [ref=e941]
+                    - cell "HWTC29AFD210" [ref=e942]:
+                      - generic [ref=e943]:
+                        - img [ref=e945]
+                        - link "HWTC29AFD210" [ref=e947] [cursor=pointer]:
+                          - /url: /admin/network/onts/0dd59f37-9f05-4993-960d-0257b535c1dc
+                    - cell "Gudu Huawei OLT 0" [ref=e948]:
+                      - link "Gudu Huawei OLT" [ref=e949] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e950]: "0"
+                    - cell "Abdulsalam Nurudeen" [ref=e951]:
+                      - link "Abdulsalam Nurudeen" [ref=e952] [cursor=pointer]:
+                        - /url: /admin/customers/person/1ce8a97e-1855-4bba-8d99-ed4378121068
+                    - cell "Online" [ref=e953]:
+                      - generic [ref=e954]: Online
+                    - cell "-33.0 dBm" [ref=e956]:
+                      - generic [ref=e957]: "-33.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e958]
+                    - 'cell "Active status: active" [ref=e959]':
+                      - 'status "Active status: active" [ref=e960]':
+                        - img [ref=e961]
+                        - text: Active
+                    - cell [ref=e963]:
+                      - generic [ref=e964]:
+                        - link "View details" [ref=e965] [cursor=pointer]:
+                          - /url: /admin/network/onts/0dd59f37-9f05-4993-960d-0257b535c1dc
+                          - img [ref=e966]
+                        - link "Edit ONT" [ref=e969] [cursor=pointer]:
+                          - /url: /admin/network/onts/0dd59f37-9f05-4993-960d-0257b535c1dc/edit
+                          - img [ref=e970]
+                  - 'row "Select ONT HWTC29AFD230 HWTC29AFD230 Gudu Huawei OLT 0 Iloduba ogochukwu Online -31.0 dBm Apr 01, 21:34 Active status: active" [ref=e972]':
+                    - cell "Select ONT HWTC29AFD230" [ref=e973]:
+                      - checkbox "Select ONT HWTC29AFD230" [ref=e974]
+                    - cell "HWTC29AFD230" [ref=e975]:
+                      - generic [ref=e976]:
+                        - img [ref=e978]
+                        - link "HWTC29AFD230" [ref=e980] [cursor=pointer]:
+                          - /url: /admin/network/onts/54e91654-132c-4c7b-8e4f-edb22dbccd14
+                    - cell "Gudu Huawei OLT 0" [ref=e981]:
+                      - link "Gudu Huawei OLT" [ref=e982] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e983]: "0"
+                    - cell "Iloduba ogochukwu" [ref=e984]:
+                      - link "Iloduba ogochukwu" [ref=e985] [cursor=pointer]:
+                        - /url: /admin/customers/person/4f9a2a89-56a2-464e-8ee3-248f4dea4c68
+                    - cell "Online" [ref=e986]:
+                      - generic [ref=e987]: Online
+                    - cell "-31.0 dBm" [ref=e989]:
+                      - generic [ref=e990]: "-31.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e991]
+                    - 'cell "Active status: active" [ref=e992]':
+                      - 'status "Active status: active" [ref=e993]':
+                        - img [ref=e994]
+                        - text: Active
+                    - cell [ref=e996]:
+                      - generic [ref=e997]:
+                        - link "View details" [ref=e998] [cursor=pointer]:
+                          - /url: /admin/network/onts/54e91654-132c-4c7b-8e4f-edb22dbccd14
+                          - img [ref=e999]
+                        - link "Edit ONT" [ref=e1002] [cursor=pointer]:
+                          - /url: /admin/network/onts/54e91654-132c-4c7b-8e4f-edb22dbccd14/edit
+                          - img [ref=e1003]
+                  - 'row "Select ONT HWTC29AFD270 HWTC29AFD270 Gudu Huawei OLT 2 Shehu Shehu Mansur Online -21.2 dBm Apr 01, 21:34 Active status: active" [ref=e1005]':
+                    - cell "Select ONT HWTC29AFD270" [ref=e1006]:
+                      - checkbox "Select ONT HWTC29AFD270" [ref=e1007]
+                    - cell "HWTC29AFD270" [ref=e1008]:
+                      - generic [ref=e1009]:
+                        - img [ref=e1011]
+                        - link "HWTC29AFD270" [ref=e1013] [cursor=pointer]:
+                          - /url: /admin/network/onts/73ba03b1-532b-468d-b9f1-f33fa8e4dbc4
+                    - cell "Gudu Huawei OLT 2" [ref=e1014]:
+                      - link "Gudu Huawei OLT" [ref=e1015] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1016]: "2"
+                    - cell "Shehu Shehu Mansur" [ref=e1017]:
+                      - link "Shehu Shehu Mansur" [ref=e1018] [cursor=pointer]:
+                        - /url: /admin/customers/person/04bccf73-0476-4893-80a1-c66a3dbbb17b
+                    - cell "Online" [ref=e1019]:
+                      - generic [ref=e1020]: Online
+                    - cell "-21.2 dBm" [ref=e1022]:
+                      - generic [ref=e1023]: "-21.2 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1024]
+                    - 'cell "Active status: active" [ref=e1025]':
+                      - 'status "Active status: active" [ref=e1026]':
+                        - img [ref=e1027]
+                        - text: Active
+                    - cell [ref=e1029]:
+                      - generic [ref=e1030]:
+                        - link "View details" [ref=e1031] [cursor=pointer]:
+                          - /url: /admin/network/onts/73ba03b1-532b-468d-b9f1-f33fa8e4dbc4
+                          - img [ref=e1032]
+                        - link "Edit ONT" [ref=e1035] [cursor=pointer]:
+                          - /url: /admin/network/onts/73ba03b1-532b-468d-b9f1-f33fa8e4dbc4/edit
+                          - img [ref=e1036]
+                  - 'row "Select ONT HWTC29AFD278 HWTC29AFD278 Garki Huawei OLT 7 Bibi Christopher Online -18.3 dBm Apr 01, 21:35 Active status: active" [ref=e1038]':
+                    - cell "Select ONT HWTC29AFD278" [ref=e1039]:
+                      - checkbox "Select ONT HWTC29AFD278" [ref=e1040]
+                    - cell "HWTC29AFD278" [ref=e1041]:
+                      - generic [ref=e1042]:
+                        - img [ref=e1044]
+                        - link "HWTC29AFD278" [ref=e1046] [cursor=pointer]:
+                          - /url: /admin/network/onts/19ac4913-d7f6-4695-9a61-ff931911f251
+                    - cell "Garki Huawei OLT 7" [ref=e1047]:
+                      - link "Garki Huawei OLT" [ref=e1048] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e1049]: "7"
+                    - cell "Bibi Christopher" [ref=e1050]:
+                      - link "Bibi Christopher" [ref=e1051] [cursor=pointer]:
+                        - /url: /admin/customers/person/a261c6f4-c690-4fac-81b7-1668f15c6af4
+                    - cell "Online" [ref=e1052]:
+                      - generic [ref=e1053]: Online
+                    - cell "-18.3 dBm" [ref=e1055]:
+                      - generic [ref=e1056]: "-18.3 dBm"
+                    - cell "Apr 01, 21:35" [ref=e1057]
+                    - 'cell "Active status: active" [ref=e1058]':
+                      - 'status "Active status: active" [ref=e1059]':
+                        - img [ref=e1060]
+                        - text: Active
+                    - cell [ref=e1062]:
+                      - generic [ref=e1063]:
+                        - link "View details" [ref=e1064] [cursor=pointer]:
+                          - /url: /admin/network/onts/19ac4913-d7f6-4695-9a61-ff931911f251
+                          - img [ref=e1065]
+                        - link "Edit ONT" [ref=e1068] [cursor=pointer]:
+                          - /url: /admin/network/onts/19ac4913-d7f6-4695-9a61-ff931911f251/edit
+                          - img [ref=e1069]
+                  - 'row "Select ONT HWTC29AFD280 HWTC29AFD280 Gudu Huawei OLT 5 Opara Chinomso Online -16.1 dBm Apr 01, 21:34 Active status: active" [ref=e1071]':
+                    - cell "Select ONT HWTC29AFD280" [ref=e1072]:
+                      - checkbox "Select ONT HWTC29AFD280" [ref=e1073]
+                    - cell "HWTC29AFD280" [ref=e1074]:
+                      - generic [ref=e1075]:
+                        - img [ref=e1077]
+                        - link "HWTC29AFD280" [ref=e1079] [cursor=pointer]:
+                          - /url: /admin/network/onts/c78d1464-1ac7-482c-a75d-ba2bce0c7b42
+                    - cell "Gudu Huawei OLT 5" [ref=e1080]:
+                      - link "Gudu Huawei OLT" [ref=e1081] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1082]: "5"
+                    - cell "Opara Chinomso" [ref=e1083]:
+                      - link "Opara Chinomso" [ref=e1084] [cursor=pointer]:
+                        - /url: /admin/customers/person/904a5121-d853-4336-b50e-ac009e1da7f8
+                    - cell "Online" [ref=e1085]:
+                      - generic [ref=e1086]: Online
+                    - cell "-16.1 dBm" [ref=e1088]:
+                      - generic [ref=e1089]: "-16.1 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1090]
+                    - 'cell "Active status: active" [ref=e1091]':
+                      - 'status "Active status: active" [ref=e1092]':
+                        - img [ref=e1093]
+                        - text: Active
+                    - cell [ref=e1095]:
+                      - generic [ref=e1096]:
+                        - link "View details" [ref=e1097] [cursor=pointer]:
+                          - /url: /admin/network/onts/c78d1464-1ac7-482c-a75d-ba2bce0c7b42
+                          - img [ref=e1098]
+                        - link "Edit ONT" [ref=e1101] [cursor=pointer]:
+                          - /url: /admin/network/onts/c78d1464-1ac7-482c-a75d-ba2bce0c7b42/edit
+                          - img [ref=e1102]
+                  - 'row "Select ONT HWTC29AFD288 HWTC29AFD288 Gudu Huawei OLT 0 Premier Chukwuneke Online -29.2 dBm Apr 01, 21:34 Active status: active" [ref=e1104]':
+                    - cell "Select ONT HWTC29AFD288" [ref=e1105]:
+                      - checkbox "Select ONT HWTC29AFD288" [ref=e1106]
+                    - cell "HWTC29AFD288" [ref=e1107]:
+                      - generic [ref=e1108]:
+                        - img [ref=e1110]
+                        - link "HWTC29AFD288" [ref=e1112] [cursor=pointer]:
+                          - /url: /admin/network/onts/9958c799-c2ed-4ea0-b329-41c7f774deb9
+                    - cell "Gudu Huawei OLT 0" [ref=e1113]:
+                      - link "Gudu Huawei OLT" [ref=e1114] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1115]: "0"
+                    - cell "Premier Chukwuneke" [ref=e1116]:
+                      - link "Premier Chukwuneke" [ref=e1117] [cursor=pointer]:
+                        - /url: /admin/customers/person/c4fbd0e0-8eea-432a-98ef-5db693a951c4
+                    - cell "Online" [ref=e1118]:
+                      - generic [ref=e1119]: Online
+                    - cell "-29.2 dBm" [ref=e1121]:
+                      - generic [ref=e1122]: "-29.2 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1123]
+                    - 'cell "Active status: active" [ref=e1124]':
+                      - 'status "Active status: active" [ref=e1125]':
+                        - img [ref=e1126]
+                        - text: Active
+                    - cell [ref=e1128]:
+                      - generic [ref=e1129]:
+                        - link "View details" [ref=e1130] [cursor=pointer]:
+                          - /url: /admin/network/onts/9958c799-c2ed-4ea0-b329-41c7f774deb9
+                          - img [ref=e1131]
+                        - link "Edit ONT" [ref=e1134] [cursor=pointer]:
+                          - /url: /admin/network/onts/9958c799-c2ed-4ea0-b329-41c7f774deb9/edit
+                          - img [ref=e1135]
+                  - 'row "Select ONT HWTC29AFD298 HWTC29AFD298 Gudu Huawei OLT 0 Chijioke Obumneme Online -31.0 dBm Apr 01, 21:34 Active status: active" [ref=e1137]':
+                    - cell "Select ONT HWTC29AFD298" [ref=e1138]:
+                      - checkbox "Select ONT HWTC29AFD298" [ref=e1139]
+                    - cell "HWTC29AFD298" [ref=e1140]:
+                      - generic [ref=e1141]:
+                        - img [ref=e1143]
+                        - link "HWTC29AFD298" [ref=e1145] [cursor=pointer]:
+                          - /url: /admin/network/onts/6c8d730a-3459-4fe4-a2eb-30a479d428e1
+                    - cell "Gudu Huawei OLT 0" [ref=e1146]:
+                      - link "Gudu Huawei OLT" [ref=e1147] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1148]: "0"
+                    - cell "Chijioke Obumneme" [ref=e1149]:
+                      - link "Chijioke Obumneme" [ref=e1150] [cursor=pointer]:
+                        - /url: /admin/customers/person/f992bb5a-3b0c-440d-bf89-ec131ae45152
+                    - cell "Online" [ref=e1151]:
+                      - generic [ref=e1152]: Online
+                    - cell "-31.0 dBm" [ref=e1154]:
+                      - generic [ref=e1155]: "-31.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1156]
+                    - 'cell "Active status: active" [ref=e1157]':
+                      - 'status "Active status: active" [ref=e1158]':
+                        - img [ref=e1159]
+                        - text: Active
+                    - cell [ref=e1161]:
+                      - generic [ref=e1162]:
+                        - link "View details" [ref=e1163] [cursor=pointer]:
+                          - /url: /admin/network/onts/6c8d730a-3459-4fe4-a2eb-30a479d428e1
+                          - img [ref=e1164]
+                        - link "Edit ONT" [ref=e1167] [cursor=pointer]:
+                          - /url: /admin/network/onts/6c8d730a-3459-4fe4-a2eb-30a479d428e1/edit
+                          - img [ref=e1168]
+                  - 'row "Select ONT HWTC29AFD2B0 HWTC29AFD2B0 Gudu Huawei OLT 5 Muhammad Ahmad Sani Ahmad Sani Online -22.1 dBm Apr 01, 21:34 Active status: active" [ref=e1170]':
+                    - cell "Select ONT HWTC29AFD2B0" [ref=e1171]:
+                      - checkbox "Select ONT HWTC29AFD2B0" [ref=e1172]
+                    - cell "HWTC29AFD2B0" [ref=e1173]:
+                      - generic [ref=e1174]:
+                        - img [ref=e1176]
+                        - link "HWTC29AFD2B0" [ref=e1178] [cursor=pointer]:
+                          - /url: /admin/network/onts/35923b2b-82f4-4e93-9700-060dae39b5dd
+                    - cell "Gudu Huawei OLT 5" [ref=e1179]:
+                      - link "Gudu Huawei OLT" [ref=e1180] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1181]: "5"
+                    - cell "Muhammad Ahmad Sani Ahmad Sani" [ref=e1182]:
+                      - link "Muhammad Ahmad Sani Ahmad Sani" [ref=e1183] [cursor=pointer]:
+                        - /url: /admin/customers/person/5315dd03-0912-4afd-97cb-9e21d372792c
+                    - cell "Online" [ref=e1184]:
+                      - generic [ref=e1185]: Online
+                    - cell "-22.1 dBm" [ref=e1187]:
+                      - generic [ref=e1188]: "-22.1 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1189]
+                    - 'cell "Active status: active" [ref=e1190]':
+                      - 'status "Active status: active" [ref=e1191]':
+                        - img [ref=e1192]
+                        - text: Active
+                    - cell [ref=e1194]:
+                      - generic [ref=e1195]:
+                        - link "View details" [ref=e1196] [cursor=pointer]:
+                          - /url: /admin/network/onts/35923b2b-82f4-4e93-9700-060dae39b5dd
+                          - img [ref=e1197]
+                        - link "Edit ONT" [ref=e1200] [cursor=pointer]:
+                          - /url: /admin/network/onts/35923b2b-82f4-4e93-9700-060dae39b5dd/edit
+                          - img [ref=e1201]
+                  - 'row "Select ONT HWTC29AFD2C8 HWTC29AFD2C8 BOI Huawei OLT 5 National Pension Commission (Commissioner Technical) Online -27.2 dBm Apr 01, 21:33 Active status: active" [ref=e1203]':
+                    - cell "Select ONT HWTC29AFD2C8" [ref=e1204]:
+                      - checkbox "Select ONT HWTC29AFD2C8" [ref=e1205]
+                    - cell "HWTC29AFD2C8" [ref=e1206]:
+                      - generic [ref=e1207]:
+                        - img [ref=e1209]
+                        - link "HWTC29AFD2C8" [ref=e1211] [cursor=pointer]:
+                          - /url: /admin/network/onts/7e8eae7b-cfa4-4b53-a5e0-dd18f56965b9
+                    - cell "BOI Huawei OLT 5" [ref=e1212]:
+                      - link "BOI Huawei OLT" [ref=e1213] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1214]: "5"
+                    - cell "National Pension Commission (Commissioner Technical)" [ref=e1215]:
+                      - link "National Pension Commission (Commissioner Technical)" [ref=e1216] [cursor=pointer]:
+                        - /url: /admin/customers/business/6bab61cc-7269-4418-8fc8-02c493847b1c
+                    - cell "Online" [ref=e1217]:
+                      - generic [ref=e1218]: Online
+                    - cell "-27.2 dBm" [ref=e1220]:
+                      - generic [ref=e1221]: "-27.2 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1222]
+                    - 'cell "Active status: active" [ref=e1223]':
+                      - 'status "Active status: active" [ref=e1224]':
+                        - img [ref=e1225]
+                        - text: Active
+                    - cell [ref=e1227]:
+                      - generic [ref=e1228]:
+                        - link "View details" [ref=e1229] [cursor=pointer]:
+                          - /url: /admin/network/onts/7e8eae7b-cfa4-4b53-a5e0-dd18f56965b9
+                          - img [ref=e1230]
+                        - link "Edit ONT" [ref=e1233] [cursor=pointer]:
+                          - /url: /admin/network/onts/7e8eae7b-cfa4-4b53-a5e0-dd18f56965b9/edit
+                          - img [ref=e1234]
+                  - 'row "Select ONT HWTC29AFD2F8 HWTC29AFD2F8 Garki Huawei OLT 7 Abubakar Marwa Online -17.0 dBm Apr 01, 21:35 Active status: active" [ref=e1236]':
+                    - cell "Select ONT HWTC29AFD2F8" [ref=e1237]:
+                      - checkbox "Select ONT HWTC29AFD2F8" [ref=e1238]
+                    - cell "HWTC29AFD2F8" [ref=e1239]:
+                      - generic [ref=e1240]:
+                        - img [ref=e1242]
+                        - link "HWTC29AFD2F8" [ref=e1244] [cursor=pointer]:
+                          - /url: /admin/network/onts/a261e215-1143-43d1-8ac8-f8ac3fca34fa
+                    - cell "Garki Huawei OLT 7" [ref=e1245]:
+                      - link "Garki Huawei OLT" [ref=e1246] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e1247]: "7"
+                    - cell "Abubakar Marwa" [ref=e1248]:
+                      - link "Abubakar Marwa" [ref=e1249] [cursor=pointer]:
+                        - /url: /admin/customers/person/5fb4da74-b892-4a01-9300-7926c6790652
+                    - cell "Online" [ref=e1250]:
+                      - generic [ref=e1251]: Online
+                    - cell "-17.0 dBm" [ref=e1253]:
+                      - generic [ref=e1254]: "-17.0 dBm"
+                    - cell "Apr 01, 21:35" [ref=e1255]
+                    - 'cell "Active status: active" [ref=e1256]':
+                      - 'status "Active status: active" [ref=e1257]':
+                        - img [ref=e1258]
+                        - text: Active
+                    - cell [ref=e1260]:
+                      - generic [ref=e1261]:
+                        - link "View details" [ref=e1262] [cursor=pointer]:
+                          - /url: /admin/network/onts/a261e215-1143-43d1-8ac8-f8ac3fca34fa
+                          - img [ref=e1263]
+                        - link "Edit ONT" [ref=e1266] [cursor=pointer]:
+                          - /url: /admin/network/onts/a261e215-1143-43d1-8ac8-f8ac3fca34fa/edit
+                          - img [ref=e1267]
+                  - 'row "Select ONT HWTC29AFD308 HWTC29AFD308 BOI Huawei OLT 5 Buhari Bala Online -23.9 dBm Apr 01, 21:33 Active status: active" [ref=e1269]':
+                    - cell "Select ONT HWTC29AFD308" [ref=e1270]:
+                      - checkbox "Select ONT HWTC29AFD308" [ref=e1271]
+                    - cell "HWTC29AFD308" [ref=e1272]:
+                      - generic [ref=e1273]:
+                        - img [ref=e1275]
+                        - link "HWTC29AFD308" [ref=e1277] [cursor=pointer]:
+                          - /url: /admin/network/onts/f8bd8c80-8dd4-4c0d-a532-2ddc2c791ebb
+                    - cell "BOI Huawei OLT 5" [ref=e1278]:
+                      - link "BOI Huawei OLT" [ref=e1279] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1280]: "5"
+                    - cell "Buhari Bala" [ref=e1281]:
+                      - link "Buhari Bala" [ref=e1282] [cursor=pointer]:
+                        - /url: /admin/customers/person/e5f08687-e49a-40dc-a779-313a5d3c7108
+                    - cell "Online" [ref=e1283]:
+                      - generic [ref=e1284]: Online
+                    - cell "-23.9 dBm" [ref=e1286]:
+                      - generic [ref=e1287]: "-23.9 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1288]
+                    - 'cell "Active status: active" [ref=e1289]':
+                      - 'status "Active status: active" [ref=e1290]':
+                        - img [ref=e1291]
+                        - text: Active
+                    - cell [ref=e1293]:
+                      - generic [ref=e1294]:
+                        - link "View details" [ref=e1295] [cursor=pointer]:
+                          - /url: /admin/network/onts/f8bd8c80-8dd4-4c0d-a532-2ddc2c791ebb
+                          - img [ref=e1296]
+                        - link "Edit ONT" [ref=e1299] [cursor=pointer]:
+                          - /url: /admin/network/onts/f8bd8c80-8dd4-4c0d-a532-2ddc2c791ebb/edit
+                          - img [ref=e1300]
+                  - 'row "Select ONT HWTC29AFD350 HWTC29AFD350 Garki Huawei OLT 11 SMART OKPI Online -28.2 dBm Apr 01, 21:35 Active status: active" [ref=e1302]':
+                    - cell "Select ONT HWTC29AFD350" [ref=e1303]:
+                      - checkbox "Select ONT HWTC29AFD350" [ref=e1304]
+                    - cell "HWTC29AFD350" [ref=e1305]:
+                      - generic [ref=e1306]:
+                        - img [ref=e1308]
+                        - link "HWTC29AFD350" [ref=e1310] [cursor=pointer]:
+                          - /url: /admin/network/onts/34471375-dc59-4d3c-94ee-500775b26a2f
+                    - cell "Garki Huawei OLT 11" [ref=e1311]:
+                      - link "Garki Huawei OLT" [ref=e1312] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e1313]: "11"
+                    - cell "SMART OKPI" [ref=e1314]:
+                      - link "SMART OKPI" [ref=e1315] [cursor=pointer]:
+                        - /url: /admin/customers/person/61ffced2-788c-4188-8985-667ed1e1266f
+                    - cell "Online" [ref=e1316]:
+                      - generic [ref=e1317]: Online
+                    - cell "-28.2 dBm" [ref=e1319]:
+                      - generic [ref=e1320]: "-28.2 dBm"
+                    - cell "Apr 01, 21:35" [ref=e1321]
+                    - 'cell "Active status: active" [ref=e1322]':
+                      - 'status "Active status: active" [ref=e1323]':
+                        - img [ref=e1324]
+                        - text: Active
+                    - cell [ref=e1326]:
+                      - generic [ref=e1327]:
+                        - link "View details" [ref=e1328] [cursor=pointer]:
+                          - /url: /admin/network/onts/34471375-dc59-4d3c-94ee-500775b26a2f
+                          - img [ref=e1329]
+                        - link "Edit ONT" [ref=e1332] [cursor=pointer]:
+                          - /url: /admin/network/onts/34471375-dc59-4d3c-94ee-500775b26a2f/edit
+                          - img [ref=e1333]
+                  - 'row "Select ONT HWTC29AFD368 HWTC29AFD368 BOI Huawei OLT 14 Mario Omue Online -24.2 dBm Apr 01, 21:33 Active status: active" [ref=e1335]':
+                    - cell "Select ONT HWTC29AFD368" [ref=e1336]:
+                      - checkbox "Select ONT HWTC29AFD368" [ref=e1337]
+                    - cell "HWTC29AFD368" [ref=e1338]:
+                      - generic [ref=e1339]:
+                        - img [ref=e1341]
+                        - link "HWTC29AFD368" [ref=e1343] [cursor=pointer]:
+                          - /url: /admin/network/onts/988d52df-249c-4e1a-88c7-b0f2fd373c84
+                    - cell "BOI Huawei OLT 14" [ref=e1344]:
+                      - link "BOI Huawei OLT" [ref=e1345] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1346]: "14"
+                    - cell "Mario Omue" [ref=e1347]:
+                      - link "Mario Omue" [ref=e1348] [cursor=pointer]:
+                        - /url: /admin/customers/person/61f39106-a9d7-4318-b80c-3b2c28b4e187
+                    - cell "Online" [ref=e1349]:
+                      - generic [ref=e1350]: Online
+                    - cell "-24.2 dBm" [ref=e1352]:
+                      - generic [ref=e1353]: "-24.2 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1354]
+                    - 'cell "Active status: active" [ref=e1355]':
+                      - 'status "Active status: active" [ref=e1356]':
+                        - img [ref=e1357]
+                        - text: Active
+                    - cell [ref=e1359]:
+                      - generic [ref=e1360]:
+                        - link "View details" [ref=e1361] [cursor=pointer]:
+                          - /url: /admin/network/onts/988d52df-249c-4e1a-88c7-b0f2fd373c84
+                          - img [ref=e1362]
+                        - link "Edit ONT" [ref=e1365] [cursor=pointer]:
+                          - /url: /admin/network/onts/988d52df-249c-4e1a-88c7-b0f2fd373c84/edit
+                          - img [ref=e1366]
+                  - 'row "Select ONT HWTC29AFD380 HWTC29AFD380 Karsana Huawei OLT 15 Mrs Deola Popoola Online -23.9 dBm Apr 01, 21:34 Active status: active" [ref=e1368]':
+                    - cell "Select ONT HWTC29AFD380" [ref=e1369]:
+                      - checkbox "Select ONT HWTC29AFD380" [ref=e1370]
+                    - cell "HWTC29AFD380" [ref=e1371]:
+                      - generic [ref=e1372]:
+                        - img [ref=e1374]
+                        - link "HWTC29AFD380" [ref=e1376] [cursor=pointer]:
+                          - /url: /admin/network/onts/8d454144-1269-4d53-b04c-41bc25ff7fda
+                    - cell "Karsana Huawei OLT 15" [ref=e1377]:
+                      - link "Karsana Huawei OLT" [ref=e1378] [cursor=pointer]:
+                        - /url: /admin/network/olts/37666ffa-47cf-41a1-9218-ca3d5d05e60c
+                      - paragraph [ref=e1379]: "15"
+                    - cell "Mrs Deola Popoola" [ref=e1380]:
+                      - link "Mrs Deola Popoola" [ref=e1381] [cursor=pointer]:
+                        - /url: /admin/customers/person/eb4ebc41-c0dd-4e9e-bdb0-37d473513cd5
+                    - cell "Online" [ref=e1382]:
+                      - generic [ref=e1383]: Online
+                    - cell "-23.9 dBm" [ref=e1385]:
+                      - generic [ref=e1386]: "-23.9 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1387]
+                    - 'cell "Active status: active" [ref=e1388]':
+                      - 'status "Active status: active" [ref=e1389]':
+                        - img [ref=e1390]
+                        - text: Active
+                    - cell [ref=e1392]:
+                      - generic [ref=e1393]:
+                        - link "View details" [ref=e1394] [cursor=pointer]:
+                          - /url: /admin/network/onts/8d454144-1269-4d53-b04c-41bc25ff7fda
+                          - img [ref=e1395]
+                        - link "Edit ONT" [ref=e1398] [cursor=pointer]:
+                          - /url: /admin/network/onts/8d454144-1269-4d53-b04c-41bc25ff7fda/edit
+                          - img [ref=e1399]
+                  - 'row "Select ONT HWTC29AFD3A0 HWTC29AFD3A0 BOI Huawei OLT 14 Jack Ogunewe Online -29.2 dBm Apr 01, 21:33 Active status: active" [ref=e1401]':
+                    - cell "Select ONT HWTC29AFD3A0" [ref=e1402]:
+                      - checkbox "Select ONT HWTC29AFD3A0" [ref=e1403]
+                    - cell "HWTC29AFD3A0" [ref=e1404]:
+                      - generic [ref=e1405]:
+                        - img [ref=e1407]
+                        - link "HWTC29AFD3A0" [ref=e1409] [cursor=pointer]:
+                          - /url: /admin/network/onts/515c8f7a-1a3e-466e-b4dc-95e6daaa8e00
+                    - cell "BOI Huawei OLT 14" [ref=e1410]:
+                      - link "BOI Huawei OLT" [ref=e1411] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1412]: "14"
+                    - cell "Jack Ogunewe" [ref=e1413]:
+                      - link "Jack Ogunewe" [ref=e1414] [cursor=pointer]:
+                        - /url: /admin/customers/person/5f226be0-0446-45d7-9583-5b8050e7fadd
+                    - cell "Online" [ref=e1415]:
+                      - generic [ref=e1416]: Online
+                    - cell "-29.2 dBm" [ref=e1418]:
+                      - generic [ref=e1419]: "-29.2 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1420]
+                    - 'cell "Active status: active" [ref=e1421]':
+                      - 'status "Active status: active" [ref=e1422]':
+                        - img [ref=e1423]
+                        - text: Active
+                    - cell [ref=e1425]:
+                      - generic [ref=e1426]:
+                        - link "View details" [ref=e1427] [cursor=pointer]:
+                          - /url: /admin/network/onts/515c8f7a-1a3e-466e-b4dc-95e6daaa8e00
+                          - img [ref=e1428]
+                        - link "Edit ONT" [ref=e1431] [cursor=pointer]:
+                          - /url: /admin/network/onts/515c8f7a-1a3e-466e-b4dc-95e6daaa8e00/edit
+                          - img [ref=e1432]
+                  - 'row "Select ONT HWTC29AFD3E8 HWTC29AFD3E8 BOI Huawei OLT 14 Mrs Chinwe Onwuka Online -24.1 dBm Apr 01, 21:33 Active status: active" [ref=e1434]':
+                    - cell "Select ONT HWTC29AFD3E8" [ref=e1435]:
+                      - checkbox "Select ONT HWTC29AFD3E8" [ref=e1436]
+                    - cell "HWTC29AFD3E8" [ref=e1437]:
+                      - generic [ref=e1438]:
+                        - img [ref=e1440]
+                        - link "HWTC29AFD3E8" [ref=e1442] [cursor=pointer]:
+                          - /url: /admin/network/onts/6d08f748-4872-45c1-b52a-0ce13e0294d3
+                    - cell "BOI Huawei OLT 14" [ref=e1443]:
+                      - link "BOI Huawei OLT" [ref=e1444] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1445]: "14"
+                    - cell "Mrs Chinwe Onwuka" [ref=e1446]:
+                      - link "Mrs Chinwe Onwuka" [ref=e1447] [cursor=pointer]:
+                        - /url: /admin/customers/person/3d011f10-b27d-41c2-959d-35a72f687af3
+                    - cell "Online" [ref=e1448]:
+                      - generic [ref=e1449]: Online
+                    - cell "-24.1 dBm" [ref=e1451]:
+                      - generic [ref=e1452]: "-24.1 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1453]
+                    - 'cell "Active status: active" [ref=e1454]':
+                      - 'status "Active status: active" [ref=e1455]':
+                        - img [ref=e1456]
+                        - text: Active
+                    - cell [ref=e1458]:
+                      - generic [ref=e1459]:
+                        - link "View details" [ref=e1460] [cursor=pointer]:
+                          - /url: /admin/network/onts/6d08f748-4872-45c1-b52a-0ce13e0294d3
+                          - img [ref=e1461]
+                        - link "Edit ONT" [ref=e1464] [cursor=pointer]:
+                          - /url: /admin/network/onts/6d08f748-4872-45c1-b52a-0ce13e0294d3/edit
+                          - img [ref=e1465]
+                  - 'row "Select ONT HWTC29AFD400 HWTC29AFD400 Garki Huawei OLT 11 National Information Technology Development Agency Online -23.8 dBm Apr 01, 21:35 Active status: active" [ref=e1467]':
+                    - cell "Select ONT HWTC29AFD400" [ref=e1468]:
+                      - checkbox "Select ONT HWTC29AFD400" [ref=e1469]
+                    - cell "HWTC29AFD400" [ref=e1470]:
+                      - generic [ref=e1471]:
+                        - img [ref=e1473]
+                        - link "HWTC29AFD400" [ref=e1475] [cursor=pointer]:
+                          - /url: /admin/network/onts/c6180645-7ead-4a6b-862d-7ce2831fea7b
+                    - cell "Garki Huawei OLT 11" [ref=e1476]:
+                      - link "Garki Huawei OLT" [ref=e1477] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e1478]: "11"
+                    - cell "National Information Technology Development Agency" [ref=e1479]:
+                      - link "National Information Technology Development Agency" [ref=e1480] [cursor=pointer]:
+                        - /url: /admin/customers/business/73cc4ba0-5355-44e8-821e-92ecbbb784d5
+                    - cell "Online" [ref=e1481]:
+                      - generic [ref=e1482]: Online
+                    - cell "-23.8 dBm" [ref=e1484]:
+                      - generic [ref=e1485]: "-23.8 dBm"
+                    - cell "Apr 01, 21:35" [ref=e1486]
+                    - 'cell "Active status: active" [ref=e1487]':
+                      - 'status "Active status: active" [ref=e1488]':
+                        - img [ref=e1489]
+                        - text: Active
+                    - cell [ref=e1491]:
+                      - generic [ref=e1492]:
+                        - link "View details" [ref=e1493] [cursor=pointer]:
+                          - /url: /admin/network/onts/c6180645-7ead-4a6b-862d-7ce2831fea7b
+                          - img [ref=e1494]
+                        - link "Edit ONT" [ref=e1497] [cursor=pointer]:
+                          - /url: /admin/network/onts/c6180645-7ead-4a6b-862d-7ce2831fea7b/edit
+                          - img [ref=e1498]
+                  - 'row "Select ONT HWTC29AFD450 HWTC29AFD450 Gudu Huawei OLT 1 Tertsea Gbiseh Online -22.7 dBm Apr 01, 21:34 Active status: active" [ref=e1500]':
+                    - cell "Select ONT HWTC29AFD450" [ref=e1501]:
+                      - checkbox "Select ONT HWTC29AFD450" [ref=e1502]
+                    - cell "HWTC29AFD450" [ref=e1503]:
+                      - generic [ref=e1504]:
+                        - img [ref=e1506]
+                        - link "HWTC29AFD450" [ref=e1508] [cursor=pointer]:
+                          - /url: /admin/network/onts/e6ac0995-e7d4-4609-93c4-69784155b670
+                    - cell "Gudu Huawei OLT 1" [ref=e1509]:
+                      - link "Gudu Huawei OLT" [ref=e1510] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1511]: "1"
+                    - cell "Tertsea Gbiseh" [ref=e1512]:
+                      - link "Tertsea Gbiseh" [ref=e1513] [cursor=pointer]:
+                        - /url: /admin/customers/person/abc8b064-5e07-4f45-9021-40a70f090dce
+                    - cell "Online" [ref=e1514]:
+                      - generic [ref=e1515]: Online
+                    - cell "-22.7 dBm" [ref=e1517]:
+                      - generic [ref=e1518]: "-22.7 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1519]
+                    - 'cell "Active status: active" [ref=e1520]':
+                      - 'status "Active status: active" [ref=e1521]':
+                        - img [ref=e1522]
+                        - text: Active
+                    - cell [ref=e1524]:
+                      - generic [ref=e1525]:
+                        - link "View details" [ref=e1526] [cursor=pointer]:
+                          - /url: /admin/network/onts/e6ac0995-e7d4-4609-93c4-69784155b670
+                          - img [ref=e1527]
+                        - link "Edit ONT" [ref=e1530] [cursor=pointer]:
+                          - /url: /admin/network/onts/e6ac0995-e7d4-4609-93c4-69784155b670/edit
+                          - img [ref=e1531]
+                  - 'row "Select ONT HWTC29AFD460 HWTC29AFD460 Gudu Huawei OLT 7 Aminayanasam Omineokuma Online -29.6 dBm Apr 01, 21:34 Active status: active" [ref=e1533]':
+                    - cell "Select ONT HWTC29AFD460" [ref=e1534]:
+                      - checkbox "Select ONT HWTC29AFD460" [ref=e1535]
+                    - cell "HWTC29AFD460" [ref=e1536]:
+                      - generic [ref=e1537]:
+                        - img [ref=e1539]
+                        - link "HWTC29AFD460" [ref=e1541] [cursor=pointer]:
+                          - /url: /admin/network/onts/042f0e33-c5ed-4b44-8793-9611349bc81a
+                    - cell "Gudu Huawei OLT 7" [ref=e1542]:
+                      - link "Gudu Huawei OLT" [ref=e1543] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1544]: "7"
+                    - cell "Aminayanasam Omineokuma" [ref=e1545]:
+                      - link "Aminayanasam Omineokuma" [ref=e1546] [cursor=pointer]:
+                        - /url: /admin/customers/person/eb295b6f-8568-4c88-9e6e-8759860d18f8
+                    - cell "Online" [ref=e1547]:
+                      - generic [ref=e1548]: Online
+                    - cell "-29.6 dBm" [ref=e1550]:
+                      - generic [ref=e1551]: "-29.6 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1552]
+                    - 'cell "Active status: active" [ref=e1553]':
+                      - 'status "Active status: active" [ref=e1554]':
+                        - img [ref=e1555]
+                        - text: Active
+                    - cell [ref=e1557]:
+                      - generic [ref=e1558]:
+                        - link "View details" [ref=e1559] [cursor=pointer]:
+                          - /url: /admin/network/onts/042f0e33-c5ed-4b44-8793-9611349bc81a
+                          - img [ref=e1560]
+                        - link "Edit ONT" [ref=e1563] [cursor=pointer]:
+                          - /url: /admin/network/onts/042f0e33-c5ed-4b44-8793-9611349bc81a/edit
+                          - img [ref=e1564]
+                  - 'row "Select ONT HWTC35461C84 HWTC35461C84 BOI Huawei OLT 7 Englama Malah Online -31.5 dBm Apr 01, 21:33 Active status: active" [ref=e1566]':
+                    - cell "Select ONT HWTC35461C84" [ref=e1567]:
+                      - checkbox "Select ONT HWTC35461C84" [ref=e1568]
+                    - cell "HWTC35461C84" [ref=e1569]:
+                      - generic [ref=e1570]:
+                        - img [ref=e1572]
+                        - link "HWTC35461C84" [ref=e1574] [cursor=pointer]:
+                          - /url: /admin/network/onts/03b2a81a-f117-47c7-ab2b-a504f6c81166
+                    - cell "BOI Huawei OLT 7" [ref=e1575]:
+                      - link "BOI Huawei OLT" [ref=e1576] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1577]: "7"
+                    - cell "Englama Malah" [ref=e1578]:
+                      - link "Englama Malah" [ref=e1579] [cursor=pointer]:
+                        - /url: /admin/customers/person/744ded11-7bdc-4176-9586-5e8837e9822f
+                    - cell "Online" [ref=e1580]:
+                      - generic [ref=e1581]: Online
+                    - cell "-31.5 dBm" [ref=e1583]:
+                      - generic [ref=e1584]: "-31.5 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1585]
+                    - 'cell "Active status: active" [ref=e1586]':
+                      - 'status "Active status: active" [ref=e1587]':
+                        - img [ref=e1588]
+                        - text: Active
+                    - cell [ref=e1590]:
+                      - generic [ref=e1591]:
+                        - link "View details" [ref=e1592] [cursor=pointer]:
+                          - /url: /admin/network/onts/03b2a81a-f117-47c7-ab2b-a504f6c81166
+                          - img [ref=e1593]
+                        - link "Edit ONT" [ref=e1596] [cursor=pointer]:
+                          - /url: /admin/network/onts/03b2a81a-f117-47c7-ab2b-a504f6c81166/edit
+                          - img [ref=e1597]
+                  - 'row "Select ONT HWTC3A282B9A HWTC3A282B9A Gudu Huawei OLT 0 Abimbola samuel Reuben Online -11.9 dBm Apr 01, 21:34 Active status: active" [ref=e1599]':
+                    - cell "Select ONT HWTC3A282B9A" [ref=e1600]:
+                      - checkbox "Select ONT HWTC3A282B9A" [ref=e1601]
+                    - cell "HWTC3A282B9A" [ref=e1602]:
+                      - generic [ref=e1603]:
+                        - img [ref=e1605]
+                        - link "HWTC3A282B9A" [ref=e1607] [cursor=pointer]:
+                          - /url: /admin/network/onts/46c2a5c2-508f-4043-8f93-28b4e041d61b
+                    - cell "Gudu Huawei OLT 0" [ref=e1608]:
+                      - link "Gudu Huawei OLT" [ref=e1609] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1610]: "0"
+                    - cell "Abimbola samuel Reuben" [ref=e1611]:
+                      - link "Abimbola samuel Reuben" [ref=e1612] [cursor=pointer]:
+                        - /url: /admin/customers/person/ac1b5421-4312-49e4-90a8-aa0309cb599e
+                    - cell "Online" [ref=e1613]:
+                      - generic [ref=e1614]: Online
+                    - cell "-11.9 dBm" [ref=e1616]:
+                      - generic [ref=e1617]: "-11.9 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1618]
+                    - 'cell "Active status: active" [ref=e1619]':
+                      - 'status "Active status: active" [ref=e1620]':
+                        - img [ref=e1621]
+                        - text: Active
+                    - cell [ref=e1623]:
+                      - generic [ref=e1624]:
+                        - link "View details" [ref=e1625] [cursor=pointer]:
+                          - /url: /admin/network/onts/46c2a5c2-508f-4043-8f93-28b4e041d61b
+                          - img [ref=e1626]
+                        - link "Edit ONT" [ref=e1629] [cursor=pointer]:
+                          - /url: /admin/network/onts/46c2a5c2-508f-4043-8f93-28b4e041d61b/edit
+                          - img [ref=e1630]
+                  - 'row "Select ONT HWTC3D24B484 HWTC3D24B484 BOI Huawei OLT 7 Aderoju Shitta Online -33.0 dBm Apr 01, 21:33 Active status: active" [ref=e1632]':
+                    - cell "Select ONT HWTC3D24B484" [ref=e1633]:
+                      - checkbox "Select ONT HWTC3D24B484" [ref=e1634]
+                    - cell "HWTC3D24B484" [ref=e1635]:
+                      - generic [ref=e1636]:
+                        - img [ref=e1638]
+                        - link "HWTC3D24B484" [ref=e1640] [cursor=pointer]:
+                          - /url: /admin/network/onts/40d4f2b9-05bc-4bbd-8d57-c2a0802e67be
+                    - cell "BOI Huawei OLT 7" [ref=e1641]:
+                      - link "BOI Huawei OLT" [ref=e1642] [cursor=pointer]:
+                        - /url: /admin/network/olts/c1e3f7d2-b3fb-4adf-bec7-2ed1dba12cc7
+                      - paragraph [ref=e1643]: "7"
+                    - cell "Aderoju Shitta" [ref=e1644]:
+                      - link "Aderoju Shitta" [ref=e1645] [cursor=pointer]:
+                        - /url: /admin/customers/person/17d8ad29-d193-4643-9a24-09e28cc63b83
+                    - cell "Online" [ref=e1646]:
+                      - generic [ref=e1647]: Online
+                    - cell "-33.0 dBm" [ref=e1649]:
+                      - generic [ref=e1650]: "-33.0 dBm"
+                    - cell "Apr 01, 21:33" [ref=e1651]
+                    - 'cell "Active status: active" [ref=e1652]':
+                      - 'status "Active status: active" [ref=e1653]':
+                        - img [ref=e1654]
+                        - text: Active
+                    - cell [ref=e1656]:
+                      - generic [ref=e1657]:
+                        - link "View details" [ref=e1658] [cursor=pointer]:
+                          - /url: /admin/network/onts/40d4f2b9-05bc-4bbd-8d57-c2a0802e67be
+                          - img [ref=e1659]
+                        - link "Edit ONT" [ref=e1662] [cursor=pointer]:
+                          - /url: /admin/network/onts/40d4f2b9-05bc-4bbd-8d57-c2a0802e67be/edit
+                          - img [ref=e1663]
+                  - 'row "Select ONT HWTC3DD7E384 HWTC3DD7E384 Gudu Huawei OLT 6 Bello Jamila Shehu Online -24.6 dBm Apr 01, 21:34 Active status: active" [ref=e1665]':
+                    - cell "Select ONT HWTC3DD7E384" [ref=e1666]:
+                      - checkbox "Select ONT HWTC3DD7E384" [ref=e1667]
+                    - cell "HWTC3DD7E384" [ref=e1668]:
+                      - generic [ref=e1669]:
+                        - img [ref=e1671]
+                        - link "HWTC3DD7E384" [ref=e1673] [cursor=pointer]:
+                          - /url: /admin/network/onts/1506c8ec-fb86-488e-8ae9-ac55304650c7
+                    - cell "Gudu Huawei OLT 6" [ref=e1674]:
+                      - link "Gudu Huawei OLT" [ref=e1675] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1676]: "6"
+                    - cell "Bello Jamila Shehu" [ref=e1677]:
+                      - link "Bello Jamila Shehu" [ref=e1678] [cursor=pointer]:
+                        - /url: /admin/customers/person/a5602f44-b0ef-4b11-b2c4-1e0ebd0fbcb6
+                    - cell "Online" [ref=e1679]:
+                      - generic [ref=e1680]: Online
+                    - cell "-24.6 dBm" [ref=e1682]:
+                      - generic [ref=e1683]: "-24.6 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1684]
+                    - 'cell "Active status: active" [ref=e1685]':
+                      - 'status "Active status: active" [ref=e1686]':
+                        - img [ref=e1687]
+                        - text: Active
+                    - cell [ref=e1689]:
+                      - generic [ref=e1690]:
+                        - link "View details" [ref=e1691] [cursor=pointer]:
+                          - /url: /admin/network/onts/1506c8ec-fb86-488e-8ae9-ac55304650c7
+                          - img [ref=e1692]
+                        - link "Edit ONT" [ref=e1695] [cursor=pointer]:
+                          - /url: /admin/network/onts/1506c8ec-fb86-488e-8ae9-ac55304650c7/edit
+                          - img [ref=e1696]
+                  - 'row "Select ONT HWTC462B8784 HWTC462B8784 Gudu Huawei OLT 3 Greg Okonmah Online -27.4 dBm Apr 01, 21:34 Active status: active" [ref=e1698]':
+                    - cell "Select ONT HWTC462B8784" [ref=e1699]:
+                      - checkbox "Select ONT HWTC462B8784" [ref=e1700]
+                    - cell "HWTC462B8784" [ref=e1701]:
+                      - generic [ref=e1702]:
+                        - img [ref=e1704]
+                        - link "HWTC462B8784" [ref=e1706] [cursor=pointer]:
+                          - /url: /admin/network/onts/41b67812-a62f-4fa1-adc8-7170109a9342
+                    - cell "Gudu Huawei OLT 3" [ref=e1707]:
+                      - link "Gudu Huawei OLT" [ref=e1708] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1709]: "3"
+                    - cell "Greg Okonmah" [ref=e1710]:
+                      - link "Greg Okonmah" [ref=e1711] [cursor=pointer]:
+                        - /url: /admin/customers/person/94b802ad-9989-4092-aa7f-95a935886903
+                    - cell "Online" [ref=e1712]:
+                      - generic [ref=e1713]: Online
+                    - cell "-27.4 dBm" [ref=e1715]:
+                      - generic [ref=e1716]: "-27.4 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1717]
+                    - 'cell "Active status: active" [ref=e1718]':
+                      - 'status "Active status: active" [ref=e1719]':
+                        - img [ref=e1720]
+                        - text: Active
+                    - cell [ref=e1722]:
+                      - generic [ref=e1723]:
+                        - link "View details" [ref=e1724] [cursor=pointer]:
+                          - /url: /admin/network/onts/41b67812-a62f-4fa1-adc8-7170109a9342
+                          - img [ref=e1725]
+                        - link "Edit ONT" [ref=e1728] [cursor=pointer]:
+                          - /url: /admin/network/onts/41b67812-a62f-4fa1-adc8-7170109a9342/edit
+                          - img [ref=e1729]
+                  - 'row "Select ONT HWTC4B52F184 HWTC4B52F184 Jabi Huawei OLT 3 Danba Online -19.5 dBm Apr 01, 21:32 Active status: active" [ref=e1731]':
+                    - cell "Select ONT HWTC4B52F184" [ref=e1732]:
+                      - checkbox "Select ONT HWTC4B52F184" [ref=e1733]
+                    - cell "HWTC4B52F184" [ref=e1734]:
+                      - generic [ref=e1735]:
+                        - img [ref=e1737]
+                        - link "HWTC4B52F184" [ref=e1739] [cursor=pointer]:
+                          - /url: /admin/network/onts/9dee1bc4-14da-41cd-bfb3-c4104928fa88
+                    - cell "Jabi Huawei OLT 3" [ref=e1740]:
+                      - link "Jabi Huawei OLT" [ref=e1741] [cursor=pointer]:
+                        - /url: /admin/network/olts/b747cfbe-1ca7-4c7e-9444-9dc811cdd4c2
+                      - paragraph [ref=e1742]: "3"
+                    - cell "Danba" [ref=e1743]:
+                      - link "Danba" [ref=e1744] [cursor=pointer]:
+                        - /url: /admin/customers/person/5c0694d9-6354-41be-98a7-f0017510becf
+                    - cell "Online" [ref=e1745]:
+                      - generic [ref=e1746]: Online
+                    - cell "-19.5 dBm" [ref=e1748]:
+                      - generic [ref=e1749]: "-19.5 dBm"
+                    - cell "Apr 01, 21:32" [ref=e1750]
+                    - 'cell "Active status: active" [ref=e1751]':
+                      - 'status "Active status: active" [ref=e1752]':
+                        - img [ref=e1753]
+                        - text: Active
+                    - cell [ref=e1755]:
+                      - generic [ref=e1756]:
+                        - link "View details" [ref=e1757] [cursor=pointer]:
+                          - /url: /admin/network/onts/9dee1bc4-14da-41cd-bfb3-c4104928fa88
+                          - img [ref=e1758]
+                        - link "Edit ONT" [ref=e1761] [cursor=pointer]:
+                          - /url: /admin/network/onts/9dee1bc4-14da-41cd-bfb3-c4104928fa88/edit
+                          - img [ref=e1762]
+                  - 'row "Select ONT HWTC57694C84 HWTC57694C84 Gudu Huawei OLT 6 Obiageli Nnodu Online -27.0 dBm Apr 01, 21:34 Active status: active" [ref=e1764]':
+                    - cell "Select ONT HWTC57694C84" [ref=e1765]:
+                      - checkbox "Select ONT HWTC57694C84" [ref=e1766]
+                    - cell "HWTC57694C84" [ref=e1767]:
+                      - generic [ref=e1768]:
+                        - img [ref=e1770]
+                        - link "HWTC57694C84" [ref=e1772] [cursor=pointer]:
+                          - /url: /admin/network/onts/4c68a396-204b-48ae-82cc-a11d6a4318e6
+                    - cell "Gudu Huawei OLT 6" [ref=e1773]:
+                      - link "Gudu Huawei OLT" [ref=e1774] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1775]: "6"
+                    - cell "Obiageli Nnodu" [ref=e1776]:
+                      - link "Obiageli Nnodu" [ref=e1777] [cursor=pointer]:
+                        - /url: /admin/customers/person/ffb49379-a288-4bb7-8ff8-dfd48dfed958
+                    - cell "Online" [ref=e1778]:
+                      - generic [ref=e1779]: Online
+                    - cell "-27.0 dBm" [ref=e1781]:
+                      - generic [ref=e1782]: "-27.0 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1783]
+                    - 'cell "Active status: active" [ref=e1784]':
+                      - 'status "Active status: active" [ref=e1785]':
+                        - img [ref=e1786]
+                        - text: Active
+                    - cell [ref=e1788]:
+                      - generic [ref=e1789]:
+                        - link "View details" [ref=e1790] [cursor=pointer]:
+                          - /url: /admin/network/onts/4c68a396-204b-48ae-82cc-a11d6a4318e6
+                          - img [ref=e1791]
+                        - link "Edit ONT" [ref=e1794] [cursor=pointer]:
+                          - /url: /admin/network/onts/4c68a396-204b-48ae-82cc-a11d6a4318e6/edit
+                          - img [ref=e1795]
+                  - 'row "Select ONT HWTC5A3EAD84 HWTC5A3EAD84 Garki Huawei OLT 10 Simi Williams & Company Ltd Online -26.2 dBm Apr 01, 21:35 Active status: active" [ref=e1797]':
+                    - cell "Select ONT HWTC5A3EAD84" [ref=e1798]:
+                      - checkbox "Select ONT HWTC5A3EAD84" [ref=e1799]
+                    - cell "HWTC5A3EAD84" [ref=e1800]:
+                      - generic [ref=e1801]:
+                        - img [ref=e1803]
+                        - link "HWTC5A3EAD84" [ref=e1805] [cursor=pointer]:
+                          - /url: /admin/network/onts/4d84379c-1df5-45ec-abe5-581ec16c9fed
+                    - cell "Garki Huawei OLT 10" [ref=e1806]:
+                      - link "Garki Huawei OLT" [ref=e1807] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e1808]: "10"
+                    - cell "Simi Williams & Company Ltd" [ref=e1809]:
+                      - link "Simi Williams & Company Ltd" [ref=e1810] [cursor=pointer]:
+                        - /url: /admin/customers/business/3de2b517-34fb-43c1-ae43-8ba6c48d3e5b
+                    - cell "Online" [ref=e1811]:
+                      - generic [ref=e1812]: Online
+                    - cell "-26.2 dBm" [ref=e1814]:
+                      - generic [ref=e1815]: "-26.2 dBm"
+                    - cell "Apr 01, 21:35" [ref=e1816]
+                    - 'cell "Active status: active" [ref=e1817]':
+                      - 'status "Active status: active" [ref=e1818]':
+                        - img [ref=e1819]
+                        - text: Active
+                    - cell [ref=e1821]:
+                      - generic [ref=e1822]:
+                        - link "View details" [ref=e1823] [cursor=pointer]:
+                          - /url: /admin/network/onts/4d84379c-1df5-45ec-abe5-581ec16c9fed
+                          - img [ref=e1824]
+                        - link "Edit ONT" [ref=e1827] [cursor=pointer]:
+                          - /url: /admin/network/onts/4d84379c-1df5-45ec-abe5-581ec16c9fed/edit
+                          - img [ref=e1828]
+                  - 'row "Select ONT HWTC5BBC2784 HWTC5BBC2784 Garki Huawei OLT 7 spar(Ceddi Plaza) Central Area Online -24.3 dBm Apr 01, 21:35 Active status: active" [ref=e1830]':
+                    - cell "Select ONT HWTC5BBC2784" [ref=e1831]:
+                      - checkbox "Select ONT HWTC5BBC2784" [ref=e1832]
+                    - cell "HWTC5BBC2784" [ref=e1833]:
+                      - generic [ref=e1834]:
+                        - img [ref=e1836]
+                        - link "HWTC5BBC2784" [ref=e1838] [cursor=pointer]:
+                          - /url: /admin/network/onts/33e385ef-d34c-4122-a55e-a7edf84afb56
+                    - cell "Garki Huawei OLT 7" [ref=e1839]:
+                      - link "Garki Huawei OLT" [ref=e1840] [cursor=pointer]:
+                        - /url: /admin/network/olts/86bf78e7-92ea-488f-804f-db5844b5e2e6
+                      - paragraph [ref=e1841]: "7"
+                    - cell "spar(Ceddi Plaza) Central Area" [ref=e1842]:
+                      - link "spar(Ceddi Plaza) Central Area" [ref=e1843] [cursor=pointer]:
+                        - /url: /admin/customers/business/bed778c1-5cb7-4810-9dba-502d52441212
+                    - cell "Online" [ref=e1844]:
+                      - generic [ref=e1845]: Online
+                    - cell "-24.3 dBm" [ref=e1847]:
+                      - generic [ref=e1848]: "-24.3 dBm"
+                    - cell "Apr 01, 21:35" [ref=e1849]
+                    - 'cell "Active status: active" [ref=e1850]':
+                      - 'status "Active status: active" [ref=e1851]':
+                        - img [ref=e1852]
+                        - text: Active
+                    - cell [ref=e1854]:
+                      - generic [ref=e1855]:
+                        - link "View details" [ref=e1856] [cursor=pointer]:
+                          - /url: /admin/network/onts/33e385ef-d34c-4122-a55e-a7edf84afb56
+                          - img [ref=e1857]
+                        - link "Edit ONT" [ref=e1860] [cursor=pointer]:
+                          - /url: /admin/network/onts/33e385ef-d34c-4122-a55e-a7edf84afb56/edit
+                          - img [ref=e1861]
+                  - 'row "Select ONT HWTC5BEFE984 HWTC5BEFE984 Gudu Huawei OLT 3 Ikenze Tony Kalu Online -30.4 dBm Apr 01, 21:34 Active status: active" [ref=e1863]':
+                    - cell "Select ONT HWTC5BEFE984" [ref=e1864]:
+                      - checkbox "Select ONT HWTC5BEFE984" [ref=e1865]
+                    - cell "HWTC5BEFE984" [ref=e1866]:
+                      - generic [ref=e1867]:
+                        - img [ref=e1869]
+                        - link "HWTC5BEFE984" [ref=e1871] [cursor=pointer]:
+                          - /url: /admin/network/onts/86dca9b2-6d0d-4e3d-ba94-3b0080259568
+                    - cell "Gudu Huawei OLT 3" [ref=e1872]:
+                      - link "Gudu Huawei OLT" [ref=e1873] [cursor=pointer]:
+                        - /url: /admin/network/olts/bd2dbc50-90db-4f03-8670-8dc708053f06
+                      - paragraph [ref=e1874]: "3"
+                    - cell "Ikenze Tony Kalu" [ref=e1875]:
+                      - link "Ikenze Tony Kalu" [ref=e1876] [cursor=pointer]:
+                        - /url: /admin/customers/person/b68fc7dd-3303-4e34-b37b-a92a5b215db7
+                    - cell "Online" [ref=e1877]:
+                      - generic [ref=e1878]: Online
+                    - cell "-30.4 dBm" [ref=e1880]:
+                      - generic [ref=e1881]: "-30.4 dBm"
+                    - cell "Apr 01, 21:34" [ref=e1882]
+                    - 'cell "Active status: active" [ref=e1883]':
+                      - 'status "Active status: active" [ref=e1884]':
+                        - img [ref=e1885]
+                        - text: Active
+                    - cell [ref=e1887]:
+                      - generic [ref=e1888]:
+                        - link "View details" [ref=e1889] [cursor=pointer]:
+                          - /url: /admin/network/onts/86dca9b2-6d0d-4e3d-ba94-3b0080259568
+                          - img [ref=e1890]
+                        - link "Edit ONT" [ref=e1893] [cursor=pointer]:
+                          - /url: /admin/network/onts/86dca9b2-6d0d-4e3d-ba94-3b0080259568/edit
+                          - img [ref=e1894]
+              - generic [ref=e1896]:
+                - paragraph [ref=e1897]: Page 1 of 6
+                - link "Next" [ref=e1899] [cursor=pointer]:
+                  - /url: /admin/network/onts?view=list&page=2&search=&olt_id=&pon_port_id=&pon_hint=&zone_id=&online_status=online&signal_quality=&vendor=&status=all&order_by=serial_number&order_dir=asc
+                  - text: Next
+                  - img [ref=e1900]
+  - status

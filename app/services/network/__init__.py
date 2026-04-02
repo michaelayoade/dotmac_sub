@@ -82,6 +82,12 @@ from app.services.network.ont_read import (
     OntReadFacade,
     ont_read,
 )
+from app.services.network.ont_status import (
+    apply_status_snapshot,
+    resolve_acs_status,
+    resolve_ont_status_for_model,
+    resolve_ont_status_snapshot,
+)
 from app.services.network.ont_tr069 import (
     OntTR069,
     ont_tr069,
@@ -200,6 +206,10 @@ __all__ = [
     # ONT read facade
     "OntReadFacade",
     "ont_read",
+    "resolve_acs_status",
+    "resolve_ont_status_snapshot",
+    "resolve_ont_status_for_model",
+    "apply_status_snapshot",
     # ONT write service
     "OntWriteService",
     "ont_write",

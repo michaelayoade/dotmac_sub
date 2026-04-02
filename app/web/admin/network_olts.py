@@ -1215,7 +1215,7 @@ def olt_device_events(
     olt_id: str,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    """HTMX partial: ONT device events (online/offline/signal) for this OLT."""
+    """HTMX partial: ONT physical-link events (PON online/offline/signal)."""
     data = web_network_olts_service.olt_device_events_context(db, olt_id)
     context = _base_context(request, db, active_page="olts")
     context.update(data)

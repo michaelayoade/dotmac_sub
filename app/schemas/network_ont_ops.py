@@ -70,6 +70,10 @@ class OntEnrichedRead(BaseModel):
     model: str | None = None
     firmware_version: str | None = None
     online_status: str | None = None
+    acs_status: str | None = None
+    effective_status: str | None = None
+    effective_status_source: str | None = None
+    acs_last_inform_at: datetime | None = None
     name: str | None = None
 
     # Signal

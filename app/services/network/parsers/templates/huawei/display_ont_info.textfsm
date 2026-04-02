@@ -1,0 +1,12 @@
+Value FSP (\d+/\d+/\d+)
+Value ONT_ID (\d+)
+Value SERIAL_NUMBER (\S+)
+Value CONTROL_FLAG (\S+)
+Value RUN_STATE (\S+)
+Value CONFIG_STATE (\S+)
+Value MATCH_STATE (\S+)
+Value DESCRIPTION (.*)
+
+Start
+  ^\s*${FSP}\s+${ONT_ID}\s+${SERIAL_NUMBER}\s+${CONTROL_FLAG}\s+${RUN_STATE}\s+${CONFIG_STATE}\s+${MATCH_STATE}\s*$$ -> Record
+  ^\s*${FSP}\s+${ONT_ID}\s+${SERIAL_NUMBER}\s+${CONTROL_FLAG}\s+${RUN_STATE}\s+${CONFIG_STATE}\s+${MATCH_STATE}\s+${DESCRIPTION}\s*$$ -> Record

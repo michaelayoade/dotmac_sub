@@ -21,6 +21,7 @@ from app.models.network import (
     OltConfigBackup,
     OltConfigBackupType,
     OLTDevice,
+    OnuOnlineStatus,
     OntAssignment,
     OntUnit,
     PonPort,
@@ -1216,6 +1217,33 @@ def test_network_map_context_includes_network_device_markers(db_session):
     assert context["stats"]["network_devices_online"] == 1
 
 
+def test_network_map_context_uses_effective_ont_status(db_session):
+    ont = OntUnit(
+        serial_number="ONT-MAP-1",
+        name="Map ONT",
+        is_active=True,
+        use_gps=True,
+        gps_latitude=9.07,
+        gps_longitude=7.51,
+        online_status=OnuOnlineStatus.offline,
+        effective_status=OnuOnlineStatus.online,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    context = network_map_service.build_network_map_context(db_session)
+    ont_features = [
+        item
+        for item in context["map_data"]["features"]
+        if item.get("properties", {}).get("type") == "ont"
+    ]
+
+    assert len(ont_features) == 1
+    assert ont_features[0]["properties"]["status"] == "online"
+    assert context["stats"]["onts_online"] == 1
+    assert context["stats"]["onts_offline"] == 0
+
+
 def test_speedtest_form_parse_and_validate():
     values = web_network_speedtests_service.parse_speedtest_form(
         {
@@ -2152,6 +2180,10 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
     assert refreshed.observed_wifi_clients == 5
     assert refreshed.observed_lan_hosts == 12
     assert refreshed.observed_lan_mode == "router"
+    assert refreshed.tr069_last_snapshot_at is not None
+    assert isinstance(refreshed.tr069_last_snapshot, dict)
+    assert refreshed.tr069_last_snapshot["wan"]["WAN IP"] == "100.64.10.5"
+    assert refreshed.tr069_last_snapshot["raw_device"] == {}
 
 
 def test_ont_tr069_prefers_device_mac_over_first_lan_port(db_session, monkeypatch):
@@ -2202,6 +2234,47 @@ def test_ont_tr069_prefers_device_mac_over_first_lan_port(db_session, monkeypatc
     refreshed = db_session.get(OntUnit, ont.id)
     assert refreshed is not None
     assert refreshed.mac_address == "E0:37:68:80:50:11"
+
+
+def test_ont_tr069_uses_cached_snapshot_when_live_fetch_fails(db_session, monkeypatch):
+    olt = OLTDevice(name="OLT-TR069-CACHE", mgmt_ip="198.51.100.133")
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-TR069-CACHE-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        tr069_last_snapshot={
+            "system": {"Model": "EG8145V5", "Serial": "HWTC7D4806C3"},
+            "wan": {"WAN IP": "172.16.1.10", "Status": "Connected"},
+            "lan": {"DHCP Enabled": "true", "Connected Hosts": "4"},
+            "wireless": {"SSID": "DotMac", "Connected Clients": "2"},
+            "ethernet_ports": [{"index": 1, "Status": "Up"}],
+            "lan_hosts": [{"HostName": "phone", "IPAddress": "192.168.1.10"}],
+            "fetched_at": "2026-04-02T15:15:00+00:00",
+            "raw_device": {"Device": {"DeviceInfo": {"ModelName": {"_value": "EG8145V5"}}}},
+        },
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(ont_tr069_module, "resolve_genieacs", lambda _db, _ont: None)
+
+    summary = OntTR069.get_device_summary(
+        db_session,
+        str(ont.id),
+        persist_observed_runtime=True,
+    )
+
+    assert summary.available is True
+    assert summary.source == "cache"
+    assert summary.wan["WAN IP"] == "172.16.1.10"
+    assert summary.wireless["SSID"] == "DotMac"
+    assert summary.raw_device == {
+        "Device": {"DeviceInfo": {"ModelName": {"_value": "EG8145V5"}}}
+    }
+    assert "cached TR-069 snapshot" in (summary.error or "")
 
 
 def test_build_cpe_identity_context_prefers_active_ont_mac(db_session, subscriber):

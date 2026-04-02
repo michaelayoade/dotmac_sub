@@ -223,9 +223,9 @@ async def audit_middleware(request: Request, call_next):
 # ---------------------------------------------------------------------------
 # Domain-based portal routing
 # ---------------------------------------------------------------------------
-# Reads selfcare_domain from settings to redirect / → /portal/ and block
-# admin paths when accessed via the selfcare domain.  Changes in the admin
-# UI (System → Config → Customer Portal) take effect within 30 s (cache TTL).
+# Reads selfcare_domain from settings to redirect / → /portal/ on the
+# selfcare host. Changes in the admin UI (System → Config → Customer Portal)
+# take effect within 30 s (cache TTL).
 class DomainRoutingCache(TypedDict):
     ts: float
     selfcare: str
@@ -268,7 +268,7 @@ def _load_domain_routing(db: Session) -> dict[str, str]:
 
 @app.middleware("http")
 async def domain_routing_middleware(request: Request, call_next):
-    """Enforce portal-only access on the selfcare domain."""
+    """Apply lightweight host-aware routing for the selfcare domain."""
     host = (request.headers.get("host") or "").split(":")[0].lower()
     if not host:
         return await call_next(request)
@@ -285,19 +285,11 @@ async def domain_routing_middleware(request: Request, call_next):
 
     path = request.url.path
 
-    # Allow portal, API, static, uploads, health, ws
-    allowed_prefixes = ("/portal", "/api/", "/static/", "/uploads/", "/health", "/ws")
-    if any(path.startswith(p) for p in allowed_prefixes):
+    # Keep the selfcare host convenient by redirecting only the bare root
+    # to the configured portal landing page. All other paths stay reachable.
+    if path not in {"", "/"}:
         return await call_next(request)
 
-    # Block admin/reseller/vendor/auth
-    blocked_prefixes = ("/admin", "/reseller", "/vendor", "/auth")
-    if any(path.startswith(p) for p in blocked_prefixes):
-        from starlette.responses import Response as StarletteResponse
-
-        return StarletteResponse(status_code=404)
-
-    # Root or unknown → redirect to portal
     redirect_target = str(routing.get("redirect", "/portal/"))
     from starlette.responses import RedirectResponse as StarletteRedirect
 

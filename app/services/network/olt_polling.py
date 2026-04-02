@@ -7,6 +7,7 @@ online status, and distance estimates. Updates OntUnit records in bulk.
 from __future__ import annotations
 
 import logging
+import shutil
 from datetime import UTC, datetime
 
 from sqlalchemy import select, update
@@ -76,6 +77,10 @@ from app.services.network.olt_polling_parsers import (
 )
 from app.services.network.olt_polling_parsers import (
     _split_onu_index as _split_onu_index,  # noqa: F401 — re-export
+)
+from app.services.network.ont_status import (
+    resolve_acs_online_window_minutes_for_model,
+    resolve_ont_status_snapshot,
 )
 
 logger = logging.getLogger(__name__)
@@ -700,6 +705,25 @@ def poll_olt_ont_signals(
 
             # Mark telemetry freshness only when at least one field was observed.
             if update_values:
+                resolved_status = resolve_ont_status_snapshot(
+                    olt_status=update_values.get("online_status", prev_status),
+                    acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),
+                    managed=bool(
+                        getattr(ont, "tr069_acs_server_id", None)
+                        or getattr(ont, "acs_last_inform_at", None)
+                    ),
+                    now=now,
+                    online_window_minutes=resolve_acs_online_window_minutes_for_model(
+                        ont
+                    ),
+                )
+                update_values["acs_status"] = resolved_status.acs_status
+                update_values["acs_last_inform_at"] = resolved_status.acs_last_inform_at
+                update_values["effective_status"] = resolved_status.effective_status
+                update_values["effective_status_source"] = (
+                    resolved_status.effective_status_source
+                )
+                update_values["status_resolved_at"] = resolved_status.status_resolved_at
                 update_values["signal_updated_at"] = now
             else:
                 continue
@@ -1056,9 +1080,14 @@ def _ping_host(host: str, count: int = 3, timeout: int = 5) -> bool:
     """
     import subprocess
 
+    ping_binary = shutil.which("ping")
+    if not ping_binary:
+        logger.warning("ping executable not found while probing host %s", host)
+        return False
+
     try:
         result = subprocess.run(
-            ["ping", "-c", str(count), "-W", str(timeout), host],
+            [ping_binary, "-c", str(count), "-W", str(timeout), host],
             capture_output=True,
             timeout=timeout * count + 5,
         )

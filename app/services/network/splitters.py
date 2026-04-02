@@ -258,12 +258,14 @@ class SplitterPortAssignments(CRUDManager[SplitterPortAssignment]):
         db: Session,
         splitter_port_id: str | None,
         subscriber_id: str | None,
+        subscription_id: str | None,
         is_active: bool | None,
         order_by: str,
         order_dir: str,
         limit: int,
         offset: int,
     ) -> dict[str, object]:
+        del subscription_id  # Reserved for compatibility; assignments are not subscription-scoped.
         query = db.query(SplitterPortAssignment)
         query = apply_optional_equals(
             query,

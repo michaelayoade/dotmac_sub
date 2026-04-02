@@ -557,11 +557,14 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
         now = datetime.now(UTC)
         stale_cutoff = now - timedelta(hours=1)
 
-        # Find ONTs with stale or missing runtime data
-        # Prioritize ONTs that have never been updated or are oldest
+        # Find ONTs that have TR-069 links and need runtime refresh
+        # Only process ONTs with genieacs_device_id (real TR-069 devices)
         stmt = (
             select(OntUnit)
+            .join(Tr069CpeDevice, Tr069CpeDevice.ont_unit_id == OntUnit.id)
             .where(OntUnit.is_active.is_(True))
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .where(Tr069CpeDevice.genieacs_device_id.isnot(None))
             .where(
                 (OntUnit.observed_runtime_updated_at.is_(None))
                 | (OntUnit.observed_runtime_updated_at < stale_cutoff)

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+from app.models.network import OnuOfflineReason, OnuOnlineStatus, OntUnit
 from app.services import web_network_olts as service
 
 
@@ -311,3 +312,56 @@ def test_sync_impl_leaves_unresolved_topology_unassigned(
     assert discovered_onts[0].name == "ONU unresolved:99.7"
     assert assignments == []
     assert pon_ports == []
+
+
+def test_sync_impl_clears_stale_offline_reason_when_status_becomes_unknown(
+    db_session, monkeypatch
+) -> None:
+    ont = OntUnit(
+        serial_number="ONT-UNKNOWN-1",
+        olt_device_id=None,
+        external_id="zte:99.7",
+        online_status=OnuOnlineStatus.offline,
+        offline_reason=OnuOfflineReason.los,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    fake_olt = SimpleNamespace(
+        id=ont.olt_device_id,
+        mgmt_ip="10.0.0.2",
+        hostname="olt2.local",
+        name="OLT 2",
+        vendor="ZTE",
+        model="C300",
+        tr069_acs_server_id=None,
+        snmp_ro_community="enc",
+    )
+    fake_linked = SimpleNamespace(
+        mgmt_ip="10.0.0.2",
+        hostname="olt2.local",
+        snmp_enabled=True,
+        snmp_community="enc",
+        snmp_version="v2c",
+        snmp_port=None,
+        vendor="ZTE",
+    )
+
+    monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: fake_olt)
+    monkeypatch.setattr(
+        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.99.7 = STRING: unknown"],
+    )
+    monkeypatch.setattr(service, "_parse_walk_composite", lambda _lines: {"99.7": "unknown"})
+    monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
+
+    ok, _msg, _stats = service._sync_onts_from_olt_snmp_impl(db_session, "olt-2")
+
+    db_session.refresh(ont)
+    assert ok is True
+    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.offline_reason is None

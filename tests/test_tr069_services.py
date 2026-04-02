@@ -6,7 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from app.models.tr069 import Tr069Event, Tr069JobStatus
+from app.models.network import OLTDevice, OntUnit
+from app.models.tr069 import Tr069CpeDevice, Tr069Event, Tr069JobStatus
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
     Tr069AcsServerUpdate,
@@ -18,6 +19,7 @@ from app.schemas.tr069 import (
     Tr069SessionCreate,
 )
 from app.services import tr069 as tr069_service
+from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_tr069 as web_network_tr069_service
 from app.services.genieacs import GenieACSError
 
@@ -176,6 +178,177 @@ def test_create_tr069_job(db_session, acs_server):
     )
     assert job.device_id == device.id
     assert job.name == "Get Software Version"
+
+
+def test_create_ont_from_tr069_device_clears_previous_active_link(db_session):
+    old_server = tr069_service.acs_servers.create(
+        db_session,
+        _acs_server_payload(name="Old ACS", base_url="https://old-acs.example.com"),
+    )
+    new_server = tr069_service.acs_servers.create(
+        db_session,
+        _acs_server_payload(name="New ACS", base_url="https://new-acs.example.com"),
+    )
+    ont = OntUnit(
+        serial_number="HWTC12345678",
+        tr069_acs_server_id=old_server.id,
+        is_active=True,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    stale_link = Tr069CpeDevice(
+        acs_server_id=old_server.id,
+        ont_unit_id=ont.id,
+        serial_number="HWTC12345678",
+        genieacs_device_id="OLD-DEVICE",
+        is_active=True,
+    )
+    candidate = Tr069CpeDevice(
+        acs_server_id=new_server.id,
+        serial_number="HWTC12345678",
+        genieacs_device_id="NEW-DEVICE",
+        is_active=True,
+    )
+    db_session.add_all([stale_link, candidate])
+    db_session.commit()
+
+    resolved, created = web_network_tr069_service.create_ont_from_tr069_device(
+        db_session,
+        tr069_device_id=str(candidate.id),
+    )
+
+    db_session.refresh(ont)
+    db_session.refresh(stale_link)
+    db_session.refresh(candidate)
+
+    assert created is False
+    assert resolved.id == ont.id
+    assert ont.tr069_acs_server_id == new_server.id
+    assert stale_link.ont_unit_id is None
+    assert candidate.ont_unit_id == ont.id
+
+
+def test_link_tr069_device_to_ont_refreshes_previous_ont_snapshot(db_session, acs_server):
+    old_ont = OntUnit(
+        serial_number="ONT-OLD-SNAPSHOT",
+        is_active=True,
+        tr069_acs_server_id=acs_server.id,
+    )
+    new_ont = OntUnit(
+        serial_number="ONT-NEW-SNAPSHOT",
+        is_active=True,
+        tr069_acs_server_id=acs_server.id,
+    )
+    db_session.add_all([old_ont, new_ont])
+    db_session.flush()
+
+    device = Tr069CpeDevice(
+        acs_server_id=acs_server.id,
+        ont_unit_id=old_ont.id,
+        serial_number="TR069-MOVE-001",
+        genieacs_device_id="MOVE-DEVICE-001",
+        last_inform_at=datetime.now(UTC),
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    tr069_service.refresh_ont_status_snapshot(db_session, old_ont)
+    db_session.commit()
+    db_session.refresh(old_ont)
+    assert old_ont.acs_last_inform_at is not None
+
+    tr069_service.link_tr069_device_to_ont(db_session, device, new_ont)
+    db_session.commit()
+    db_session.refresh(device)
+    db_session.refresh(old_ont)
+    db_session.refresh(new_ont)
+
+    assert device.ont_unit_id == new_ont.id
+    assert old_ont.acs_last_inform_at is None
+    assert old_ont.acs_status.value == "unknown"
+    assert new_ont.acs_last_inform_at is not None
+    assert new_ont.acs_status.value == "online"
+
+
+def test_update_olt_reassigns_linked_tr069_devices_to_new_acs(db_session):
+    old_server = tr069_service.acs_servers.create(
+        db_session,
+        _acs_server_payload(name="Old ACS", base_url="https://old-olt-acs.example.com"),
+    )
+    new_server = tr069_service.acs_servers.create(
+        db_session,
+        _acs_server_payload(name="New ACS", base_url="https://new-olt-acs.example.com"),
+    )
+    olt = OLTDevice(
+        name="OLT-ACS-Move",
+        mgmt_ip="198.51.100.90",
+        tr069_acs_server_id=old_server.id,
+        is_active=True,
+    )
+    db_session.add(olt)
+    db_session.commit()
+
+    ont = OntUnit(
+        serial_number="ONT-ACS-MOVE-1",
+        olt_device_id=olt.id,
+        tr069_acs_server_id=old_server.id,
+        is_active=True,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    linked = Tr069CpeDevice(
+        acs_server_id=old_server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        genieacs_device_id="ACS-MOVE-DEVICE",
+        is_active=True,
+    )
+    db_session.add(linked)
+    db_session.commit()
+
+    values = {
+        "name": olt.name,
+        "hostname": None,
+        "mgmt_ip": olt.mgmt_ip,
+        "vendor": None,
+        "model": None,
+        "serial_number": None,
+        "ssh_username": None,
+        "ssh_password": None,
+        "ssh_port": 22,
+        "snmp_enabled": False,
+        "snmp_port": 161,
+        "snmp_version": "v2c",
+        "snmp_community": None,
+        "snmp_rw_community": None,
+        "netconf_enabled": False,
+        "netconf_port": 830,
+        "tr069_acs_server_id": str(new_server.id),
+        "notes": None,
+        "is_active": True,
+    }
+
+    with patch.object(
+        web_network_olts_service, "_queue_acs_propagation", return_value=None
+    ), patch.object(
+        web_network_olts_service, "sync_monitoring_device", return_value=None
+    ):
+        updated, error = web_network_olts_service.update_olt(
+            db_session,
+            str(olt.id),
+            values,
+        )
+
+    assert error is None
+    assert updated is not None
+
+    db_session.refresh(ont)
+    db_session.refresh(linked)
+    assert ont.tr069_acs_server_id == new_server.id
+    assert linked.acs_server_id == new_server.id
 
 
 def test_tr069_job_status_transitions(db_session, acs_server):

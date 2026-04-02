@@ -3,6 +3,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
+from decimal import Decimal
 from typing import Any, cast
 from zoneinfo import ZoneInfo
 
@@ -117,6 +118,9 @@ class DisplayObject(_DisplayProxyBase):
     def __repr__(self) -> str:
         return repr(self._value)
 
+    def __format__(self, format_spec: str) -> str:
+        return format(self._value, format_spec)
+
     def __html__(self) -> str:
         html = getattr(self._value, "__html__", None)
         if callable(html):
@@ -127,12 +131,17 @@ class DisplayObject(_DisplayProxyBase):
 def localize_for_display(value: Any) -> Any:
     if isinstance(value, datetime):
         return localize_datetime(value)
-    if value is None or isinstance(value, (str, bytes, int, float, bool, date)):
+    if value is None or isinstance(
+        value, (str, bytes, int, float, bool, Decimal, date)
+    ):
         return value
     if isinstance(value, _DisplayProxyBase):
         return value
     if isinstance(value, Mapping):
-        return DisplayMapping(value)
+        return {
+            key: localize_for_display(item)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [localize_for_display(item) for item in value]
     if isinstance(value, tuple):

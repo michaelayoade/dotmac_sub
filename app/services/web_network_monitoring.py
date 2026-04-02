@@ -43,17 +43,19 @@ def monitoring_page_data(
     data["bandwidth"] = _get_bandwidth_summary()
     data["nas_throughput"] = _get_nas_throughput_summary(db)
 
-    # ONU status summary and PON outage detection (Sprint 2)
+    # ONT status summaries and PON outage detection (Sprint 2)
     from app.services.network_monitoring import (
         get_onu_status_summary,
+        get_onu_olt_status_summary,
         get_pon_outage_summary,
     )
 
-    data["onu_summary"] = get_onu_status_summary(db)
+    data["ont_service_summary"] = get_onu_status_summary(db)
+    data["ont_olt_link_summary"] = get_onu_olt_status_summary(db)
     data["pon_outages"] = get_pon_outage_summary(db)
 
-    # ONU status trend chart (Phase 4 — 24h time-series)
-    data["onu_trend"] = _get_onu_status_trend(hours=24)
+    # ONT status trend chart (Phase 4 — 24h time-series)
+    data["ont_service_trend"] = _get_onu_status_trend(hours=24)
 
     # ONU authorization trend (Phase 6D — new registrations per day, 30 days)
     data["onu_auth_trend"] = _get_onu_auth_trend(db, days=30)
@@ -188,10 +190,10 @@ def _vm_range_query(
 
 
 def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
-    """Query ONU status time-series from VictoriaMetrics.
+    """Query ONT service and OLT-link status time-series from VictoriaMetrics.
 
-    Returns dict with timestamps and series data for online, offline,
-    and low-signal ONT counts over the given time period.
+    Returns dict with timestamps plus effective service status, raw OLT link
+    status, and low-signal ONT counts over the given time period.
     """
     now = datetime.now(UTC)
     start = now - timedelta(hours=hours)
@@ -202,6 +204,12 @@ def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
     )
     offline_results = _vm_range_query(
         'onu_status_total{status="offline"}', start, now, step
+    )
+    olt_online_results = _vm_range_query(
+        'onu_olt_status_total{status="online"}', start, now, step
+    )
+    olt_offline_results = _vm_range_query(
+        'onu_olt_status_total{status="offline"}', start, now, step
     )
     low_signal_results = _vm_range_query("sum(onu_signal_low)", start, now, step)
 
@@ -223,16 +231,28 @@ def _get_onu_status_trend(hours: int = 24) -> dict[str, Any]:
 
     online = _extract_series(online_results)
     offline = _extract_series(offline_results)
+    olt_online = _extract_series(olt_online_results)
+    olt_offline = _extract_series(olt_offline_results)
     low_signal = _extract_series(low_signal_results)
 
-    has_data = bool(online["values"] or offline["values"] or low_signal["values"])
+    has_data = bool(
+        online["values"]
+        or offline["values"]
+        or olt_online["values"]
+        or olt_offline["values"]
+        or low_signal["values"]
+    )
 
     return {
         "timestamps": online["timestamps"]
         or offline["timestamps"]
+        or olt_online["timestamps"]
+        or olt_offline["timestamps"]
         or low_signal["timestamps"],
         "online": online["values"],
         "offline": offline["values"],
+        "olt_online": olt_online["values"],
+        "olt_offline": olt_offline["values"],
         "low_signal": low_signal["values"],
         "has_data": has_data,
     }

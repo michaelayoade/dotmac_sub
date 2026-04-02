@@ -46,7 +46,6 @@ def _push_signal_metrics(db: Session) -> int:
             OntUnit.ont_temperature_c,
             OntUnit.ont_voltage_v,
             OntUnit.ont_bias_current_ma,
-            OntUnit.online_status,
             OLTDevice.name.label("olt_name"),
             PonPort.name.label("pon_port_name"),
         )
@@ -101,11 +100,11 @@ def _push_signal_metrics(db: Session) -> int:
         if row.ont_bias_current_ma is not None:
             lines.append(f"ont_bias_current_ma{{{labels}}} {row.ont_bias_current_ma} {now_ms}")
 
-    # Aggregate status counts
+    # Aggregate effective service status counts for dashboards.
     status_counts = db.execute(
-        select(OntUnit.online_status, func.count())
+        select(OntUnit.effective_status, func.count())
         .where(OntUnit.is_active.is_(True))
-        .group_by(OntUnit.online_status)
+        .group_by(OntUnit.effective_status)
     ).all()
 
     for status_val, count in status_counts:
@@ -113,6 +112,19 @@ def _push_signal_metrics(db: Session) -> int:
             status_val.value if hasattr(status_val, "value") else str(status_val)
         )
         lines.append(f'onu_status_total{{status="{status_str}"}} {count} {now_ms}')
+
+    # Expose raw OLT link counts separately so physical state remains visible.
+    olt_status_counts = db.execute(
+        select(OntUnit.online_status, func.count())
+        .where(OntUnit.is_active.is_(True))
+        .group_by(OntUnit.online_status)
+    ).all()
+
+    for status_val, count in olt_status_counts:
+        status_str = (
+            status_val.value if hasattr(status_val, "value") else str(status_val)
+        )
+        lines.append(f'onu_olt_status_total{{status="{status_str}"}} {count} {now_ms}')
 
     # Signal quality counts
     warn_thresh, crit_thresh = get_signal_thresholds(db)

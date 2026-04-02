@@ -1,0 +1,10 @@
+  { <cr>||<K> }:
+
+  -----------------------------------------------------------------------------
+    Profile-name          : DotMac-ACS
+    URL                   : http://acs.dotmac.ng:7547
+    User name             : dotmac_cpe
+    Inform interval       : 300
+    Binding times         : 42
+    Description           : Primary ACS for DotMac network
+  -----------------------------------------------------------------------------

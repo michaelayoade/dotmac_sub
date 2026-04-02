@@ -18,15 +18,23 @@
     <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Current WAN Status</h4>
     <div class="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {# Connection Status - Highlight #}
-        {% set conn_status = wan_info.get('Connection Status') or wan_info.get('ConnectionStatus') %}
+        {% set conn_status = wan_info.get('Status') or wan_info.get('Connection Status') or wan_info.get('ConnectionStatus') %}
         {% if conn_status %}
         <div class="rounded-lg px-3 py-2 {{ 'bg-emerald-50 border border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800' if 'connected' in conn_status|lower else 'bg-slate-50 border border-slate-200 dark:bg-slate-800/60 dark:border-slate-700' }}">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Connection Status</dt>
             <dd class="mt-0.5 text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if 'connected' in conn_status|lower else 'text-slate-900 dark:text-white' }}">{{ conn_status }}</dd>
         </div>
         {% endif %}
+        {# Connection Type #}
+        {% set conn_type = wan_info.get('Connection Type') %}
+        {% if conn_type %}
+        <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
+            <dt class="text-xs text-slate-500 dark:text-slate-400">Connection Type</dt>
+            <dd class="mt-0.5 text-sm font-medium text-slate-900 dark:text-white">{{ conn_type }}</dd>
+        </div>
+        {% endif %}
         {# WAN IP #}
-        {% set wan_ip = wan_info.get('External IP') or wan_info.get('ExternalIPAddress') or wan_info.get('IP Address') %}
+        {% set wan_ip = wan_info.get('WAN IP') or wan_info.get('External IP') or wan_info.get('ExternalIPAddress') %}
         {% if wan_ip %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">WAN IP Address</dt>
@@ -34,7 +42,7 @@
         </div>
         {% endif %}
         {# PPPoE User #}
-        {% set pppoe_user = wan_info.get('PPPoE Username') or wan_info.get('Username') %}
+        {% set pppoe_user = wan_info.get('Username') or wan_info.get('PPPoE Username') %}
         {% if pppoe_user %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">PPPoE Username</dt>
@@ -42,7 +50,7 @@
         </div>
         {% endif %}
         {# Gateway #}
-        {% set gateway = wan_info.get('Default Gateway') or wan_info.get('DefaultGateway') %}
+        {% set gateway = wan_info.get('Gateway') or wan_info.get('Default Gateway') or wan_info.get('DefaultGateway') %}
         {% if gateway %}
         <div class="rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-800/60">
             <dt class="text-xs text-slate-500 dark:text-slate-400">Default Gateway</dt>

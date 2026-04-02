@@ -23,12 +23,10 @@ class TestSignalClassification:
         assert _classify_signal(-30.0) == "critical"
 
     def test_boundary_good(self):
-        # Exactly -25 is not > -25, so it should be warning
-        assert _classify_signal(-25.0) == "warning"
+        assert _classify_signal(-25.0) == "good"
 
     def test_boundary_warning(self):
-        # Exactly -28 is not > -28, so it should be critical
-        assert _classify_signal(-28.0) == "critical"
+        assert _classify_signal(-28.0) == "warning"
 
 
 class TestGetCapabilities:

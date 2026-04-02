@@ -55,17 +55,48 @@
 {# ── Macros ── #}
 {% macro nav_link(label, href, icon_svg, page_id, badge=None) %}
 {% set is_active = active_item == page_id %}
-<a href="{{ href }}" title="{{ label }}"
-   {% if is_active %}aria-current="page"{% endif %}
-   :data-tooltip="sidebarCollapsed ? '{{ label }}' : ''"
-   :class="sidebarCollapsed ? 'justify-center !pl-0 !pr-0 !border-l-0 rounded-xl' : ''"
-   class="{{ cls_link }} {{ cls_active if is_active else cls_inactive }}">
-    {{ icon_svg }}
-    <span x-show="!sidebarCollapsed" class="flex-1 truncate">{{ label }}</span>
-    {% if badge %}
-    <span x-show="!sidebarCollapsed" class="min-w-[20px] rounded-full bg-red-100 px-1.5 py-0.5 text-center text-[10px] font-bold leading-none tabular-nums text-red-700 dark:bg-red-900/30 dark:text-red-400">{{ badge }}</span>
-    {% endif %}
-</a>
+<div x-data="{
+        showTip: false,
+        tipTop: 0,
+        tipLeft: 0,
+        showTooltip() {
+            if (!sidebarCollapsed) return;
+            const rect = this.$refs.trigger.getBoundingClientRect();
+            this.tipLeft = rect.right + 12;
+            this.tipTop = rect.top + (rect.height / 2);
+            this.showTip = true;
+        },
+        hideTooltip() {
+            this.showTip = false;
+        }
+     }"
+     @mouseenter="showTooltip()"
+     @mouseleave="hideTooltip()"
+     @focusin="showTooltip()"
+     @focusout="hideTooltip()"
+     :class="sidebarCollapsed ? 'mx-auto w-fit' : ''"
+     class="relative">
+    <a href="{{ href }}"
+       x-ref="trigger"
+       {% if is_active %}aria-current="page"{% endif %}
+       :aria-label="sidebarCollapsed ? '{{ label }}' : null"
+       :class="sidebarCollapsed ? 'justify-center !pl-0 !pr-0 !border-l-0 rounded-xl' : ''"
+       class="{{ cls_link }} {{ cls_active if is_active else cls_inactive }}">
+        {{ icon_svg }}
+        <span x-show="!sidebarCollapsed" class="flex-1 truncate">{{ label }}</span>
+        {% if badge %}
+        <span x-show="!sidebarCollapsed" class="min-w-[20px] rounded-full bg-red-100 px-1.5 py-0.5 text-center text-[10px] font-bold leading-none tabular-nums text-red-700 dark:bg-red-900/30 dark:text-red-400">{{ badge }}</span>
+        {% endif %}
+    </a>
+    <template x-teleport="body">
+        <div x-show="sidebarCollapsed && showTip"
+             x-cloak
+             :style="`left:${tipLeft}px; top:${tipTop}px; transform: translateY(-50%);`"
+             class="pointer-events-none fixed z-[100] whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900">
+            {{ label }}
+        </div>
+    </template>
+</div>
 {% endmacro %}
 
 {% macro section_label(label) %}

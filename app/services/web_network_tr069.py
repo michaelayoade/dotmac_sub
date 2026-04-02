@@ -494,12 +494,14 @@ def create_ont_from_tr069_device(
         .first()
     )
     if existing:
-        if not existing.tr069_acs_server_id:
-            existing.tr069_acs_server_id = device.acs_server_id
-        if device.ont_unit_id != existing.id:
-            device.ont_unit_id = existing.id
-            db.commit()
-            db.refresh(existing)
+        tr069_service.link_tr069_device_to_ont(
+            db,
+            device,
+            existing,
+            acs_server_id=device.acs_server_id,
+        )
+        db.commit()
+        db.refresh(existing)
         return existing, False
 
     payload = OntUnitCreate(
@@ -513,8 +515,12 @@ def create_ont_from_tr069_device(
         notes=f"Imported from TR-069 device {device.id}",
     )
     ont = network_service.ont_units.create(db=db, payload=payload)
-    ont.tr069_acs_server_id = device.acs_server_id
-    device.ont_unit_id = ont.id
+    tr069_service.link_tr069_device_to_ont(
+        db,
+        device,
+        ont,
+        acs_server_id=device.acs_server_id,
+    )
     db.commit()
     db.refresh(ont)
     return ont, True

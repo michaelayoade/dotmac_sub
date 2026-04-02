@@ -1,0 +1,22 @@
+{# Profile Apply Form — Lazy-loaded with available profiles #}
+{% if available_profile_templates %}
+<form hx-post="/admin/network/onts/{{ ont_id }}/apply-profile"
+      hx-swap="none"
+      class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
+    {% include "components/forms/csrf_input.html" %}
+    <select name="profile_id" required
+        class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        <option value="">Select profile...</option>
+        {% for p in available_profile_templates %}
+        <option value="{{ p.id }}" {% if current_profile_id and current_profile_id == p.id|string %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+    </select>
+    <button type="submit" hx-confirm="Apply this profile template to the ONT now?"
+        class="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-blue-700">
+        <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+        Apply
+    </button>
+</form>
+{% else %}
+<p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No profile templates available.</p>
+{% endif %}

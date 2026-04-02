@@ -219,10 +219,10 @@ def _build_equipment_snapshot(db: Session, subscriber_id) -> dict[str, object]:
                 continue
             status_value = (
                 (
-                    ont.online_status.value
-                    if getattr(ont, "online_status", None) is not None
-                    and hasattr(ont.online_status, "value")
-                    else str(getattr(ont, "online_status", "") or "")
+                    ont.effective_status.value
+                    if getattr(ont, "effective_status", None) is not None
+                    and hasattr(ont.effective_status, "value")
+                    else str(getattr(ont, "effective_status", "") or "")
                 )
                 .strip()
                 .lower()

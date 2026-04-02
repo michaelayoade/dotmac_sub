@@ -175,19 +175,27 @@ def ont_form_dependencies(
 # ---------------------------------------------------------------------------
 
 
-def get_active_firmware_images(db: Session) -> list:
-    """Return active ONT firmware images for the bulk upgrade dropdown."""
+def get_active_firmware_images(
+    db: Session,
+    *,
+    vendor_contains: str | None = None,
+    limit: int | None = None,
+) -> list:
+    """Return active ONT firmware images for ONT UI workflows."""
     from sqlalchemy import select
 
     from app.models.network import OntFirmwareImage
 
-    return list(
-        db.scalars(
-            select(OntFirmwareImage)
-            .where(OntFirmwareImage.is_active.is_(True))
-            .order_by(OntFirmwareImage.vendor, OntFirmwareImage.version.desc())
-        ).all()
+    stmt = (
+        select(OntFirmwareImage)
+        .where(OntFirmwareImage.is_active.is_(True))
+        .order_by(OntFirmwareImage.vendor, OntFirmwareImage.version.desc())
     )
+    if vendor_contains:
+        stmt = stmt.where(OntFirmwareImage.vendor.ilike(f"%{vendor_contains}%"))
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return list(db.scalars(stmt).all())
 
 
 # ---------------------------------------------------------------------------

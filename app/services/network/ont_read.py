@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OntAssignment, OntUnit
 from app.services.network.ont_action_common import get_ont_strict_or_error
+from app.services.network.ont_status import resolve_ont_status_for_model
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +24,9 @@ def _classify_signal(dbm: float | None) -> str | None:
     """Classify OLT RX signal into good/warning/critical."""
     if dbm is None:
         return None
-    if dbm > _SIGNAL_GOOD:
+    if dbm >= _SIGNAL_GOOD:
         return "good"
-    if dbm > _SIGNAL_WARNING:
+    if dbm >= _SIGNAL_WARNING:
         return "warning"
     return "critical"
 
@@ -55,13 +56,20 @@ class OntReadFacade:
             raise HTTPException(status_code=404, detail="ONT not found.")
 
         # Base fields from DB
+        status_snapshot = resolve_ont_status_for_model(ont)
         result: dict[str, Any] = {
             "id": ont.id,
             "serial_number": ont.serial_number,
             "vendor": ont.vendor,
             "model": ont.model,
             "firmware_version": ont.firmware_version,
-            "online_status": ont.online_status.value if ont.online_status else None,
+            "online_status": (
+                status_snapshot.olt_status.value if status_snapshot.olt_status else None
+            ),
+            "acs_status": status_snapshot.acs_status.value,
+            "effective_status": status_snapshot.effective_status.value,
+            "effective_status_source": status_snapshot.effective_status_source.value,
+            "acs_last_inform_at": status_snapshot.acs_last_inform_at,
             "name": ont.name,
             # Signal
             "olt_rx_signal_dbm": ont.olt_rx_signal_dbm,

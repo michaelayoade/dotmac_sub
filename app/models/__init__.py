@@ -220,6 +220,8 @@ from app.models.network import (  # noqa: F401
     OntProfileWanService,
     OntProvisioningProfile,
     OntProvisioningStatus,
+    OntAcsStatus,
+    OntStatusSource,
     OntUnit,
     OnuCapability,
     OnuMode,

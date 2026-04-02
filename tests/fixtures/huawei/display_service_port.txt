@@ -1,0 +1,12 @@
+  { <cr>||<K> }:
+
+  Index   Vlan ID  Vlan Attr  Port type F/S/P  VPI  VCI    Flow type  Flow para Rx    Tx    State
+          SVLAN    SVLAN           CVLAN
+  ----------------------------------------------------------------------------
+  27      201      common     gpon 0/2  /1     0    2      vlan       201       86    86    up
+  28      201      common     gpon 0/2  /1     1    2      vlan       201       86    86    up
+  29      203      common     gpon 0/2  /1     0    3      vlan       203       -     -     up
+  30      203      common     gpon 0/2  /1     1    3      vlan       203       -     -     down
+  31      100      common     gpon 0/2  /2     0    2      vlan       100       50    50    up
+  ----------------------------------------------------------------------------
+  Total: 5

@@ -195,6 +195,19 @@ class OnuOfflineReason(enum.Enum):
     unknown = "unknown"
 
 
+class OntAcsStatus(enum.Enum):
+    online = "online"
+    stale = "stale"
+    unmanaged = "unmanaged"
+    unknown = "unknown"
+
+
+class OntStatusSource(enum.Enum):
+    olt = "olt"
+    acs = "acs"
+    derived = "derived"
+
+
 class VlanPurpose(enum.Enum):
     internet = "internet"
     management = "management"
@@ -946,6 +959,23 @@ class OntUnit(Base):
     offline_reason: Mapped[OnuOfflineReason | None] = mapped_column(
         Enum(OnuOfflineReason, name="onuofflinereason", create_constraint=False),
     )
+    acs_status: Mapped[OntAcsStatus] = mapped_column(
+        Enum(OntAcsStatus, name="ontacsstatus", create_constraint=False),
+        default=OntAcsStatus.unknown,
+        server_default="unknown",
+    )
+    acs_last_inform_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    effective_status: Mapped[OnuOnlineStatus] = mapped_column(
+        Enum(OnuOnlineStatus, name="onteffectivestatus", create_constraint=False),
+        default=OnuOnlineStatus.unknown,
+        server_default="unknown",
+    )
+    effective_status_source: Mapped[OntStatusSource] = mapped_column(
+        Enum(OntStatusSource, name="ontstatussource", create_constraint=False),
+        default=OntStatusSource.derived,
+        server_default="derived",
+    )
+    status_resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Flap protection: count consecutive offline polls before emitting event
     consecutive_offline_polls: Mapped[int] = mapped_column(
         Integer, default=0, server_default="0"
@@ -1014,6 +1044,10 @@ class OntUnit(Base):
     observed_wifi_clients: Mapped[int | None] = mapped_column(Integer)
     observed_lan_hosts: Mapped[int | None] = mapped_column(Integer)
     observed_runtime_updated_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    tr069_last_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    tr069_last_snapshot_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
     wan_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)

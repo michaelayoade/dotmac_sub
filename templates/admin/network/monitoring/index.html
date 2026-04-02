@@ -176,11 +176,11 @@
 
     {# Charts + Active Alarms #}
     <div class="grid gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 90ms;">
-        {% if onu_trend and onu_trend.has_data %}
+        {% if ont_service_trend and ont_service_trend.has_data %}
         {% call card("ONU Status Trend (24h)", color="blue") %}
             <div class="mb-3 flex items-center justify-between">
-                <p class="text-sm text-slate-600 dark:text-slate-400">Trend view for online, offline, and low-signal ONTs.</p>
-                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Use for confirmation, not first alerting</span>
+                <p class="text-sm text-slate-600 dark:text-slate-400">Service status with raw PON link overlay and low-signal counts.</p>
+                <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Solid lines = effective status · dashed = raw OLT</span>
             </div>
             <div class="relative" style="height: 280px;">
                 <canvas id="onuStatusTrendChart"></canvas>
@@ -733,9 +733,9 @@
 {{ animation_styles() }}
 
 {# Chart.js Scripts #}
-{% if device_status_chart or (onu_trend and onu_trend.has_data) or (onu_auth_trend and onu_auth_trend.has_data) %}
+{% if device_status_chart or (ont_service_trend and ont_service_trend.has_data) or (onu_auth_trend and onu_auth_trend.has_data) %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
-{% if onu_trend and onu_trend.has_data %}
+{% if ont_service_trend and ont_service_trend.has_data %}
 <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
 {% endif %}
 <script>
@@ -783,18 +783,20 @@ document.addEventListener('DOMContentLoaded', function() {
     })();
     {% endif %}
 
-    {% if onu_trend and onu_trend.has_data %}
+    {% if ont_service_trend and ont_service_trend.has_data %}
     // ONU Status Trend Line Chart (24h)
     (function() {
-        const timestamps = {{ onu_trend.timestamps | tojson | safe }};
-        const onlineVals = {{ onu_trend.online | tojson | safe }};
-        const offlineVals = {{ onu_trend.offline | tojson | safe }};
-        const lowSignalVals = {{ onu_trend.low_signal | tojson | safe }};
+        const timestamps = {{ ont_service_trend.timestamps | tojson | safe }};
+        const onlineVals = {{ ont_service_trend.online | tojson | safe }};
+        const offlineVals = {{ ont_service_trend.offline | tojson | safe }};
+        const oltOnlineVals = {{ ont_service_trend.olt_online | tojson | safe }};
+        const oltOfflineVals = {{ ont_service_trend.olt_offline | tojson | safe }};
+        const lowSignalVals = {{ ont_service_trend.low_signal | tojson | safe }};
 
         const datasets = [];
         if (onlineVals.length) {
             datasets.push({
-                label: 'Online',
+                label: 'Service Online',
                 data: timestamps.map(function(t, i) { return { x: t, y: onlineVals[i] }; }),
                 borderColor: '#10b981',
                 backgroundColor: 'rgba(16,185,129,0.08)',
@@ -806,7 +808,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
         if (offlineVals.length) {
             datasets.push({
-                label: 'Offline',
+                label: 'Service Offline',
                 data: timestamps.map(function(t, i) { return { x: t, y: offlineVals[i] }; }),
                 borderColor: '#f43f5e',
                 backgroundColor: 'rgba(244,63,94,0.08)',
@@ -814,6 +816,30 @@ document.addEventListener('DOMContentLoaded', function() {
                 pointRadius: 0,
                 tension: 0.3,
                 fill: true,
+            });
+        }
+        if (oltOnlineVals.length) {
+            datasets.push({
+                label: 'PON Online',
+                data: timestamps.map(function(t, i) { return { x: t, y: oltOnlineVals[i] }; }),
+                borderColor: '#0f766e',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.3,
+                fill: false,
+                borderDash: [7, 5],
+            });
+        }
+        if (oltOfflineVals.length) {
+            datasets.push({
+                label: 'PON Offline',
+                data: timestamps.map(function(t, i) { return { x: t, y: oltOfflineVals[i] }; }),
+                borderColor: '#be123c',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.3,
+                fill: false,
+                borderDash: [7, 5],
             });
         }
         if (lowSignalVals.length) {

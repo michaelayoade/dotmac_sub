@@ -28,9 +28,18 @@ from app.models.network_monitoring import (
     DeviceStatus,
     NetworkDevice,
 )
+from app.models.network_operation import (
+    NetworkOperation,
+    NetworkOperationStatus,
+    NetworkOperationTargetType,
+    NetworkOperationType,
+)
 from app.models.subscriber import SubscriberCategory
+from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
+from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
+from app.services.network.ont_status import resolve_ont_status_for_model
 from app.services.web_network_core_devices_inventory import (
     _network_device_is_olt_candidate,
     resolve_olt_device_for_network_device,
@@ -112,6 +121,135 @@ def _normalize_ont_port_display(board: object, port: object) -> str | None:
         if decoded:
             return decoded
     return f"{board_text}/{port_text}"
+
+
+def _display_ont_serial(value: object) -> str:
+    """Return a user-facing ONT serial, decoding Huawei hex form when possible."""
+    serial = str(value or "").strip()
+    if not serial:
+        return ""
+    decoded = decode_huawei_hex_serial(serial)
+    return decoded or serial
+
+
+def _recent_acs_inform_by_ont_id(
+    db: Session, ont_ids: Sequence[object]
+) -> dict[str, datetime]:
+    """Return the most recent ACS inform timestamp for each ONT."""
+    if not ont_ids:
+        return {}
+    rows = db.execute(
+        select(
+            Tr069CpeDevice.ont_unit_id,
+            func.max(Tr069CpeDevice.last_inform_at).label("last_inform_at"),
+        )
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .where(Tr069CpeDevice.ont_unit_id.in_(ont_ids))
+        .group_by(Tr069CpeDevice.ont_unit_id)
+    ).all()
+    return {
+        str(ont_id): last_inform_at
+        for ont_id, last_inform_at in rows
+        if ont_id is not None and last_inform_at is not None
+    }
+
+
+def _connection_request_state_by_ont_id(
+    db: Session, ont_ids: Sequence[object]
+) -> dict[str, dict[str, Any]]:
+    """Return connection-request availability and latest tracked result per ONT."""
+    if not ont_ids:
+        return {}
+
+    link_rows = db.execute(
+        select(
+            Tr069CpeDevice.ont_unit_id,
+            Tr069CpeDevice.connection_request_url,
+            Tr069CpeDevice.updated_at,
+        )
+        .where(Tr069CpeDevice.is_active.is_(True))
+        .where(Tr069CpeDevice.ont_unit_id.in_(ont_ids))
+        .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
+    ).all()
+
+    state_by_ont_id: dict[str, dict[str, Any]] = {}
+    for ont_id, connection_request_url, updated_at in link_rows:
+        if ont_id is None:
+            continue
+        ont_key = str(ont_id)
+        if ont_key in state_by_ont_id:
+            continue
+        has_url = bool(str(connection_request_url or "").strip())
+        state_by_ont_id[ont_key] = {
+            "connection_request_status": "ready" if has_url else "unavailable",
+            "connection_request_display": "Ready" if has_url else "Unavailable",
+            "connection_request_class": CONNECTION_REQUEST_STATUS_CLASSES[
+                "ready" if has_url else "unavailable"
+            ],
+            "connection_request_url": str(connection_request_url or "").strip() or None,
+            "connection_request_checked_at": updated_at,
+            "connection_request_message": (
+                "Connection request URL is available for on-demand TR-069 wakeup."
+                if has_url
+                else "No ConnectionRequestURL has been reported by the device yet."
+            ),
+        }
+
+    op_rows = db.scalars(
+        select(NetworkOperation)
+        .where(NetworkOperation.target_type == NetworkOperationTargetType.ont)
+        .where(NetworkOperation.target_id.in_(ont_ids))
+        .where(
+            NetworkOperation.operation_type == NetworkOperationType.ont_send_conn_request
+        )
+        .order_by(NetworkOperation.created_at.desc())
+    ).all()
+
+    for op in op_rows:
+        ont_key = str(op.target_id)
+        state = state_by_ont_id.setdefault(
+            ont_key,
+            {
+                "connection_request_status": "unavailable",
+                "connection_request_display": "Unavailable",
+                "connection_request_class": CONNECTION_REQUEST_STATUS_CLASSES[
+                    "unavailable"
+                ],
+                "connection_request_url": None,
+                "connection_request_checked_at": None,
+                "connection_request_message": (
+                    "No ConnectionRequestURL has been reported by the device yet."
+                ),
+            },
+        )
+        if state.get("connection_request_last_attempt_at") is not None:
+            continue
+
+        status = op.status.value if op.status else "pending"
+        mapped_status = {
+            NetworkOperationStatus.succeeded.value: "successful",
+            NetworkOperationStatus.failed.value: "failed",
+            NetworkOperationStatus.running.value: "in_progress",
+            NetworkOperationStatus.pending.value: "in_progress",
+            NetworkOperationStatus.waiting.value: "in_progress",
+            NetworkOperationStatus.canceled.value: "ready",
+        }.get(status, "ready")
+
+        state["connection_request_status"] = mapped_status
+        state["connection_request_display"] = CONNECTION_REQUEST_STATUS_DISPLAY[
+            mapped_status
+        ]
+        state["connection_request_class"] = CONNECTION_REQUEST_STATUS_CLASSES[
+            mapped_status
+        ]
+        state["connection_request_last_attempt_at"] = op.created_at
+        state["connection_request_message"] = (
+            op.error
+            or state.get("connection_request_message")
+            or "Connection request attempted."
+        )
+
+    return state_by_ont_id
 
 
 def _pon_port_display_text(pon_port: object | None) -> str | None:
@@ -1218,6 +1356,29 @@ ONLINE_STATUS_CLASSES: dict[str, str] = {
     "unknown": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
 }
 
+ACS_STATUS_CLASSES: dict[str, str] = {
+    "online": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    "stale": "bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200",
+    "unmanaged": "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
+    "unknown": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+}
+
+CONNECTION_REQUEST_STATUS_CLASSES: dict[str, str] = {
+    "successful": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
+    "ready": "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200",
+    "in_progress": "bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-200",
+    "failed": "bg-rose-100 text-rose-800 dark:bg-rose-900/60 dark:text-rose-200",
+    "unavailable": "bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300",
+}
+
+CONNECTION_REQUEST_STATUS_DISPLAY: dict[str, str] = {
+    "successful": "Successful",
+    "ready": "Ready",
+    "in_progress": "In Progress",
+    "failed": "Failed",
+    "unavailable": "Unavailable",
+}
+
 SUBSCRIBER_STATUS_CLASSES: dict[str, str] = {
     "active": "bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200",
     "new": "bg-sky-100 text-sky-800 dark:bg-sky-900 dark:text-sky-200",
@@ -1322,10 +1483,27 @@ def onts_list_page_data(
     # Signal threshold classification for displayed ONTs
     warn, crit = get_signal_thresholds(db)
     signal_data: dict[str, dict[str, str]] = {}
-    for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
+    displayed_onts = list(onts) + [item for item in diagnostics_onts if item not in onts]
+    acs_last_inform_by_ont_id = _recent_acs_inform_by_ont_id(
+        db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
+    )
+    connection_request_by_ont_id = _connection_request_state_by_ont_id(
+        db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
+    )
+    now = datetime.now(UTC)
+    for ont in displayed_onts:
         quality = _classify_ont_signal(ont, warn, crit)
-        ont_status_enum = getattr(ont, "online_status", None)
-        status_val = ont_status_enum.value if ont_status_enum else "unknown"
+        acs_last_inform_at = acs_last_inform_by_ont_id.get(str(ont.id)) or getattr(
+            ont, "acs_last_inform_at", None
+        )
+        connection_request_info = connection_request_by_ont_id.get(str(ont.id), {})
+        status_snapshot = resolve_ont_status_for_model(
+            ont, acs_last_inform_at=acs_last_inform_at, now=now
+        )
+        status_val = status_snapshot.effective_status.value
+        status_source = status_snapshot.effective_status_source.value
+        olt_status_val = status_snapshot.olt_status.value
+        acs_status_val = status_snapshot.acs_status.value
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
         signal_data[str(ont.id)] = {
@@ -1339,8 +1517,30 @@ def onts_list_page_data(
             "status_display": status_val.replace("_", " ").title()
             if status_val
             else "Unknown",
+            "status_source": status_source,
+            "olt_status": olt_status_val,
+            "olt_status_display": olt_status_val.replace("_", " ").title(),
+            "olt_status_class": ONLINE_STATUS_CLASSES.get(
+                olt_status_val, ONLINE_STATUS_CLASSES["unknown"]
+            ),
+            "acs_status": acs_status_val,
+            "acs_status_display": acs_status_val.replace("_", " ").title(),
+            "acs_status_class": ACS_STATUS_CLASSES.get(
+                acs_status_val, ACS_STATUS_CLASSES["unknown"]
+            ),
+            "acs_last_inform_at": acs_last_inform_at,
+            "connection_request_status": connection_request_info.get(
+                "connection_request_status", "unavailable"
+            ),
+            "connection_request_display": connection_request_info.get(
+                "connection_request_display", "Unavailable"
+            ),
+            "connection_request_class": connection_request_info.get(
+                "connection_request_class",
+                CONNECTION_REQUEST_STATUS_CLASSES["unavailable"],
+            ),
             "reason_display": OFFLINE_REASON_DISPLAY.get(reason_val, "")
-            if reason_val
+            if reason_val and status_val == "offline"
             else "",
         }
 
@@ -1430,7 +1630,7 @@ def onts_list_page_data(
     for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
         serial_value = str(getattr(ont, "serial_number", "") or "").strip()
         if serial_value:
-            serial_display_by_ont_id[str(ont.id)] = serial_value
+            serial_display_by_ont_id[str(ont.id)] = _display_ont_serial(serial_value)
             continue
         mac_value = str(getattr(ont, "mac_address", "") or "").strip()
         if mac_value:
@@ -1571,8 +1771,19 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     onu_rx = getattr(ont, "onu_rx_signal_dbm", None)
     olt_quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
     onu_quality = classify_signal(onu_rx, warn_threshold=warn, crit_threshold=crit)
-    ont_status = getattr(ont, "online_status", None)
-    status_val = ont_status.value if ont_status else "unknown"
+    acs_last_inform_at = _recent_acs_inform_by_ont_id(db, [ont.id]).get(str(ont.id)) or getattr(
+        ont, "acs_last_inform_at", None
+    )
+    connection_request_info = _connection_request_state_by_ont_id(db, [ont.id]).get(
+        str(ont.id), {}
+    )
+    status_snapshot = resolve_ont_status_for_model(
+        ont, acs_last_inform_at=acs_last_inform_at
+    )
+    status_val = status_snapshot.effective_status.value
+    status_source = status_snapshot.effective_status_source.value
+    olt_status_val = status_snapshot.olt_status.value
+    acs_status_val = status_snapshot.acs_status.value
     reason = getattr(ont, "offline_reason", None)
     reason_val = reason.value if reason else None
 
@@ -1593,14 +1804,43 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "online_status_class": ONLINE_STATUS_CLASSES.get(
             status_val, ONLINE_STATUS_CLASSES["unknown"]
         ),
+        "online_status_source": status_source,
+        "olt_status": olt_status_val,
+        "olt_status_class": ONLINE_STATUS_CLASSES.get(
+            olt_status_val, ONLINE_STATUS_CLASSES["unknown"]
+        ),
+        "acs_status": acs_status_val,
+        "acs_status_class": ACS_STATUS_CLASSES.get(
+            acs_status_val, ACS_STATUS_CLASSES["unknown"]
+        ),
         "last_seen_at": getattr(ont, "last_seen_at", None),
+        "acs_last_inform_at": acs_last_inform_at,
+        "connection_request_status": connection_request_info.get(
+            "connection_request_status", "unavailable"
+        ),
+        "connection_request_display": connection_request_info.get(
+            "connection_request_display", "Unavailable"
+        ),
+        "connection_request_class": connection_request_info.get(
+            "connection_request_class",
+            CONNECTION_REQUEST_STATUS_CLASSES["unavailable"],
+        ),
+        "connection_request_url": connection_request_info.get("connection_request_url"),
+        "connection_request_last_attempt_at": connection_request_info.get(
+            "connection_request_last_attempt_at"
+        ),
+        "connection_request_message": connection_request_info.get(
+            "connection_request_message"
+        ),
         "offline_reason": reason_val,
         "offline_reason_display": OFFLINE_REASON_DISPLAY.get(reason_val, "")
-        if reason_val
+        if reason_val and status_val == "offline"
         else "",
         "warn_threshold": warn,
         "crit_threshold": crit,
     }
+
+    display_serial_number = _display_ont_serial(getattr(ont, "serial_number", None))
 
     # Build network path info (OLT → PON Port → Splitter → ONT)
     network_path: dict[str, object] = {}
@@ -1726,27 +1966,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
                 for f in drift.drifted_fields
             ]
 
-    # Available templates for the manual "Apply Profile" action
-    from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
-
-    available_profile_templates = ont_provisioning_profiles.list(
-        db, is_active=True, limit=50
-    )
-
-    # Available firmware images matching this ONT's vendor
-    from app.models.network import OntFirmwareImage
-
-    ont_vendor = str(getattr(ont, "vendor", "") or "").strip()
-    firmware_stmt = (
-        select(OntFirmwareImage)
-        .where(OntFirmwareImage.is_active.is_(True))
-        .order_by(OntFirmwareImage.vendor, OntFirmwareImage.version.desc())
-    )
-    if ont_vendor:
-        firmware_stmt = firmware_stmt.where(
-            OntFirmwareImage.vendor.ilike(f"%{ont_vendor}%")
-        )
-    available_firmware = list(db.scalars(firmware_stmt.limit(20)).all())
+    # Note: available_profile_templates and available_firmware are now lazy-loaded
+    # via HTMX endpoints to reduce initial page load time
 
     # Vendor capabilities for feature badges
     from app.services.network.ont_read import OntReadFacade
@@ -1755,6 +1976,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     return {
         "ont": ont,
+        "display_serial_number": display_serial_number,
         "assignment": assignment,
         "past_assignments": past_assignments,
         "signal_info": signal_info,
@@ -1762,8 +1984,6 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "subscriber_info": subscriber_info,
         "provisioning_runs": provisioning_runs,
         "profile_state": profile_state,
-        "available_profile_templates": available_profile_templates,
-        "available_firmware": available_firmware,
         "capabilities": capabilities,
         "inventory_ready": (
             not bool(assignment)

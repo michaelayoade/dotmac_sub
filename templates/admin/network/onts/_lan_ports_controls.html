@@ -1,0 +1,89 @@
+{# LAN Port Controls — Lazy-loaded content showing current status with toggle buttons #}
+<div class="space-y-2.5">
+    <p class="text-xs text-slate-500 dark:text-slate-400">Toggle individual LAN ports on the ONT via TR-069.</p>
+    {% if ethernet_ports %}
+    <div class="grid grid-cols-2 gap-2">
+        {% for port in ethernet_ports %}
+        {% set port_num = port.get('port', loop.index) %}
+        {% set admin_enabled = port.get('admin_enabled', port.get('Enable', 'true')) %}
+        {% set is_enabled = admin_enabled == true or admin_enabled == 'true' or admin_enabled == '1' or admin_enabled == 1 %}
+        {% set status = port.get('Status', port.get('status', 'Unknown')) %}
+        {% set is_up = status == 'Up' or status == 'up' %}
+        <div class="flex items-center justify-between rounded-lg border {{ 'border-emerald-200 bg-emerald-50/50 dark:border-emerald-800/40 dark:bg-emerald-900/10' if is_enabled and is_up else 'border-slate-200 bg-slate-50/80 dark:border-slate-700 dark:bg-slate-800/60' }} px-3 py-2">
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-slate-700 dark:text-slate-300">Port {{ port_num }}</span>
+                {% if is_enabled %}
+                    {% if is_up %}
+                    <span class="inline-flex items-center gap-1 rounded-full bg-emerald-100 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-400">
+                        <span class="h-1 w-1 rounded-full bg-emerald-500"></span>Up
+                    </span>
+                    {% else %}
+                    <span class="inline-flex items-center rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-400">Down</span>
+                    {% endif %}
+                {% else %}
+                <span class="inline-flex items-center rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">Off</span>
+                {% endif %}
+            </div>
+            <div class="flex gap-1">
+                {% if is_enabled %}
+                <form class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
+                            hx-target="#lan-ports-controls"
+                            hx-swap="innerHTML"
+                            hx-confirm="Disable LAN port {{ port_num }}?"
+                            class="rounded px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-1"
+                            title="Disable port {{ port_num }}">Disable</button>
+                </form>
+                {% else %}
+                <form class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
+                            hx-target="#lan-ports-controls"
+                            hx-swap="innerHTML"
+                            hx-confirm="Enable LAN port {{ port_num }}?"
+                            class="rounded px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                            title="Enable port {{ port_num }}">Enable</button>
+                </form>
+                {% endif %}
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% elif no_tr069 %}
+    <div class="rounded-lg border border-slate-200 bg-slate-50 px-3 py-4 text-center dark:border-slate-700 dark:bg-slate-800/50">
+        <p class="text-xs text-slate-500 dark:text-slate-400">TR-069 not available for this device.</p>
+    </div>
+    {% else %}
+    <div class="grid grid-cols-2 gap-2">
+        {% for port_num in [1, 2, 3, 4] %}
+        <div class="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50/80 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+            <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-slate-700 dark:text-slate-300">Port {{ port_num }}</span>
+                <span class="inline-flex items-center rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-500 dark:bg-slate-700 dark:text-slate-400">?</span>
+            </div>
+            <div class="flex gap-1">
+                <form class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
+                            hx-target="#lan-ports-controls"
+                            hx-swap="innerHTML"
+                            hx-confirm="Enable LAN port {{ port_num }}?"
+                            class="rounded px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
+                            title="Enable port {{ port_num }}">On</button>
+                </form>
+                <form class="inline">
+                    {% include "components/forms/csrf_input.html" %}
+                    <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
+                            hx-target="#lan-ports-controls"
+                            hx-swap="innerHTML"
+                            hx-confirm="Disable LAN port {{ port_num }}?"
+                            class="rounded px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-1"
+                            title="Disable port {{ port_num }}">Off</button>
+                </form>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+</div>

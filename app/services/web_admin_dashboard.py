@@ -478,12 +478,14 @@ def dashboard(request: Request, db: Session):
         "devices_total": net_stats.get("total_count", 0),
     }
 
-    # --- ONU status summary ---
+    # --- ONT status summary ---
     try:
-        onu_summary = network_monitoring_service.get_onu_status_summary(db)
+        ont_service_summary = network_monitoring_service.get_onu_status_summary(db)
+        ont_olt_link_summary = network_monitoring_service.get_onu_olt_status_summary(db)
     except Exception:
-        logger.debug("Failed to load ONU summary for dashboard", exc_info=True)
-        onu_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
+        logger.debug("Failed to load ONT summary for dashboard", exc_info=True)
+        ont_service_summary = {"online": 0, "offline": 0, "low_signal": 0, "total": 0}
+        ont_olt_link_summary = {"online": 0, "offline": 0, "unknown": 0, "total": 0}
 
     # --- PON interface status summary ---
     try:
@@ -610,7 +612,8 @@ def dashboard(request: Request, db: Session):
             "show_network": show_network,
             "show_subscribers": show_subscribers,
             "monitoring_summary": monitoring_summary,
-            "onu_summary": onu_summary,
+            "ont_service_summary": ont_service_summary,
+            "ont_olt_link_summary": ont_olt_link_summary,
             "pon_interface_summary": pon_interface_summary,
             "vpn_tunnels": vpn_tunnels,
         },
