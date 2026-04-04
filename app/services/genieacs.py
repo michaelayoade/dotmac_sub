@@ -200,7 +200,8 @@ class GenieACSClient:
             connection_request: Whether to trigger connection request
 
         Returns:
-            Task result
+            Task result dict, may include 'connectionRequestError' if device
+            was unreachable when connection_request=True
         """
         encoded_id = quote(device_id, safe="")
         params = {"connection_request": str(connection_request).lower()}
@@ -211,7 +212,28 @@ class GenieACSClient:
             params=params,
             json_data=task,
         )
-        return response.json() if response.text else {}
+        result = response.json() if response.text else {}
+
+        # GenieACS returns 202 even when device is offline, with error in reason phrase
+        # e.g., "HTTP/1.1 202 Device is offline" or "202 Connection request error: ..."
+        # Capture this in the result for callers to handle
+        if response.status_code == 202 and hasattr(response, "reason_phrase"):
+            reason = response.reason_phrase or ""
+            # Check for error indicators in the reason phrase
+            error_indicators = [
+                "offline",
+                "error",
+                "EHOSTUNREACH",
+                "ECONNREFUSED",
+                "timeout",
+                "unreachable",
+            ]
+            if any(ind.lower() in reason.lower() for ind in error_indicators):
+                # Only set if not already present from JSON body
+                if "connectionRequestError" not in result:
+                    result["connectionRequestError"] = reason
+
+        return result
 
     def get_parameter_values(
         self,

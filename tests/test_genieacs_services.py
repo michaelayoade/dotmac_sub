@@ -22,12 +22,13 @@ def client():
 @pytest.fixture
 def mock_response():
     """Create a mock HTTP response."""
-    def _create(status_code=200, json_data=None, text="", headers=None):
+    def _create(status_code=200, json_data=None, text="", headers=None, reason_phrase=""):
         response = MagicMock(spec=httpx.Response)
         response.status_code = status_code
         response.text = text if text else (json.dumps(json_data) if json_data else "")
         response.json.return_value = json_data or {}
         response.headers = headers or {}
+        response.reason_phrase = reason_phrase
         response.raise_for_status.return_value = None
         return response
     return _create
@@ -260,6 +261,80 @@ class TestTaskOperations:
 
             call_args = mock_client.return_value.__enter__.return_value.request.call_args
             assert call_args.kwargs["params"]["connection_request"] == "false"
+
+    def test_create_task_captures_connection_request_error_from_reason_phrase(
+        self, client, mock_response
+    ):
+        """Test create_task captures device offline error from HTTP reason phrase."""
+        task_result = {"_id": "task123"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
+                status_code=202,
+                json_data=task_result,
+                text=json.dumps(task_result),
+                reason_phrase="Device is offline",
+            )
+
+            result = client.create_task("device1", {"name": "reboot"})
+
+            assert result["_id"] == "task123"
+            assert result["connectionRequestError"] == "Device is offline"
+
+    def test_create_task_captures_connection_request_error_ehostunreach(
+        self, client, mock_response
+    ):
+        """Test create_task captures EHOSTUNREACH error from HTTP reason phrase."""
+        task_result = {"_id": "task123"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
+                status_code=202,
+                json_data=task_result,
+                text=json.dumps(task_result),
+                reason_phrase="Connection request error: connect EHOSTUNREACH 10.0.0.1:7547",
+            )
+
+            result = client.create_task("device1", {"name": "reboot"})
+
+            assert result["connectionRequestError"] == (
+                "Connection request error: connect EHOSTUNREACH 10.0.0.1:7547"
+            )
+
+    def test_create_task_preserves_existing_connection_request_error(
+        self, client, mock_response
+    ):
+        """Test create_task doesn't overwrite connectionRequestError from JSON body."""
+        task_result = {"_id": "task123", "connectionRequestError": "From JSON body"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
+                status_code=202,
+                json_data=task_result,
+                text=json.dumps(task_result),
+                reason_phrase="Device is offline",
+            )
+
+            result = client.create_task("device1", {"name": "reboot"})
+
+            # Should keep the JSON body error, not overwrite with reason phrase
+            assert result["connectionRequestError"] == "From JSON body"
+
+    def test_create_task_no_error_on_success(self, client, mock_response):
+        """Test create_task doesn't add connectionRequestError on clean success."""
+        task_result = {"_id": "task123"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
+                status_code=202,
+                json_data=task_result,
+                text=json.dumps(task_result),
+                reason_phrase="Accepted",
+            )
+
+            result = client.create_task("device1", {"name": "reboot"})
+
+            assert "connectionRequestError" not in result
 
     def test_get_parameter_values(self, client, mock_response):
         """Test get_parameter_values creates correct task."""

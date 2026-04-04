@@ -5,6 +5,7 @@ from fastapi import HTTPException
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.models.network import CPEDevice
 from app.models.tr069 import (
     Tr069AcsServer,
     Tr069CpeDevice,
@@ -32,6 +33,7 @@ from app.services.common import (
 )
 from app.services.credential_crypto import encrypt_credential
 from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
+from app.services.network import cpe as cpe_service
 from app.services.network.ont_status import (
     apply_status_snapshot,
     ont_has_acs_management,
@@ -51,6 +53,28 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
     for token in ("-", " ", ":", ".", "_", "/"):
         expr = func.replace(expr, token, "")
     return expr
+
+
+def _validate_target_cpe_device(
+    db: Session,
+    *,
+    cpe_device_id,
+) -> CPEDevice | None:
+    if not cpe_device_id:
+        return None
+    cpe = db.get(CPEDevice, cpe_device_id)
+    if cpe is None:
+        raise HTTPException(status_code=404, detail="CPE device not found")
+    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
+    if (
+        inventory_subscriber_id is not None
+        and getattr(cpe, "subscriber_id", None) == inventory_subscriber_id
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot link TR-069 device to parked inventory CPE",
+        )
+    return cpe
 
 
 def sync_ont_acs_server(
@@ -271,7 +295,12 @@ class CpeDevices(ListResponseMixin):
 
     @staticmethod
     def create(db: Session, payload: Tr069CpeDeviceCreate):
-        device = Tr069CpeDevice(**payload.model_dump())
+        payload_data = payload.model_dump()
+        _validate_target_cpe_device(
+            db,
+            cpe_device_id=payload_data.get("cpe_device_id"),
+        )
+        device = Tr069CpeDevice(**payload_data)
         db.add(device)
         if device.ont_unit_id:
             from app.models.network import OntUnit
@@ -329,6 +358,8 @@ class CpeDevices(ListResponseMixin):
         if not device:
             raise HTTPException(status_code=404, detail="TR-069 CPE device not found")
         update_data = payload.model_dump(exclude_unset=True)
+        target_cpe_id = update_data.get("cpe_device_id", device.cpe_device_id)
+        _validate_target_cpe_device(db, cpe_device_id=target_cpe_id)
         target_ont_id = update_data.get("ont_unit_id", device.ont_unit_id)
         for key, value in update_data.items():
             setattr(device, key, value)
@@ -825,8 +856,35 @@ class Jobs(ListResponseMixin):
             # Execute task via GenieACS
             result = client.create_task(genieacs_device_id, task)
 
-            job.status = Tr069JobStatus.succeeded
-            logger.info(f"Job {job_id} executed successfully: {result}")
+            # Check for error indicators in the response
+            # GenieACS returns HTTP 202 even when device is offline or unreachable,
+            # with error details in the response body
+            connection_request_error = None
+            if isinstance(result, dict):
+                # Check for connection request error in response
+                cr_error = result.get("connectionRequestError")
+                if cr_error:
+                    connection_request_error = cr_error
+                # Check for fault in response
+                fault = result.get("fault")
+                if fault:
+                    fault_msg = fault.get("detail", {}).get("faultString") or str(fault)
+                    job.status = Tr069JobStatus.failed
+                    job.error = f"Task fault: {fault_msg}"
+                    logger.error(f"Job {job_id} failed with fault: {fault_msg}")
+                else:
+                    job.status = Tr069JobStatus.succeeded
+                    if connection_request_error:
+                        # Task was queued but device couldn't be notified immediately
+                        logger.warning(
+                            f"Job {job_id} task queued but connection request failed: "
+                            f"{connection_request_error}"
+                        )
+                    else:
+                        logger.info(f"Job {job_id} executed successfully: {result}")
+            else:
+                job.status = Tr069JobStatus.succeeded
+                logger.info(f"Job {job_id} executed successfully: {result}")
 
         except GenieACSError as e:
             job.status = Tr069JobStatus.failed
