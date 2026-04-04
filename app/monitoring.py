@@ -104,8 +104,6 @@ def _setup_sentry(
             ],
             # Don't send PII by default
             send_default_pii=False,
-            # Attach request data for context
-            request_bodies="medium",
         )
         logger.info(
             f"GlitchTip error tracking enabled: app={app_name}, server={server}, "

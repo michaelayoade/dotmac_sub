@@ -19,6 +19,9 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      # Monitoring
+      SERVER_NAME: ${SERVER_NAME:-dotmac-sub-prod}
+      GLITCHTIP_DSN: ${GLITCHTIP_DSN:-http://1f5a78dd8b9942bbaa2f1c0fc0a7840c@160.119.127.195:8080/1}
     env_file:
     - .env
     depends_on:
@@ -267,13 +270,14 @@ services:
     - python
     - -m
     - app.poller
-  mailhog:
-    image: mailhog/mailhog:latest
-    container_name: dotmac_sub_mailhog
-    restart: unless-stopped
-    ports:
-    - 1025:1025
-    - 8025:8025
+  # Local SMTP sink disabled.
+  # mailhog:
+  #   image: mailhog/mailhog:latest
+  #   container_name: dotmac_sub_mailhog
+  #   restart: unless-stopped
+  #   ports:
+  #   - 1025:1025
+  #   - 8025:8025
   openbao:
     image: quay.io/openbao/openbao:latest
     container_name: dotmac_sub_openbao
