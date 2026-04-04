@@ -1,4 +1,5 @@
 import logging
+import os
 import secrets
 from contextlib import asynccontextmanager
 from threading import Lock
@@ -68,6 +69,7 @@ from app.db import SessionLocal
 from app.errors import register_error_handlers
 from app.logging import configure_logging
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
 from app.services.object_storage import ensure_storage_bucket
@@ -176,6 +178,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="dotmac_sm API", lifespan=lifespan)
 configure_logging()
+setup_monitoring(
+    app_name="dotmac-sub",
+    server=os.getenv("SERVER_NAME", "default"),
+)
 setup_otel(app)
 app.add_middleware(ObservabilityMiddleware)
 register_error_handlers(app)
