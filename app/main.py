@@ -343,17 +343,40 @@ async def csrf_middleware(request: Request, call_next):
     if method in ("POST", "PUT", "DELETE", "PATCH"):
         from fastapi.responses import HTMLResponse
 
-        def _csrf_forbidden(message: str) -> HTMLResponse:
+        def _csrf_forbidden(reason: str) -> HTMLResponse:
             logger.warning(
                 "CSRF validation failed for %s %s: %s",
                 method,
                 path,
-                message,
+                reason,
             )
-            return HTMLResponse(
-                content=f"<h1>403 Forbidden</h1><p>{message}</p>",
-                status_code=403,
-            )
+            # Generate a request ID for tracking
+            import uuid
+
+            request_id = str(uuid.uuid4())[:8]
+            try:
+                from jinja2 import Environment, FileSystemLoader
+
+                env = Environment(
+                    loader=FileSystemLoader("templates"), autoescape=True
+                )
+                template = env.get_template("errors/csrf.html")
+                content = template.render(request_id=request_id)
+                return HTMLResponse(content=content, status_code=403)
+            except Exception:
+                # Fallback to simple HTML if template rendering fails
+                return HTMLResponse(
+                    content=f"""<!DOCTYPE html>
+<html><head><title>Session Expired</title></head>
+<body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#f8fafc">
+<div style="text-align:center;max-width:400px;padding:20px">
+<h1 style="color:#1e293b">Session Expired</h1>
+<p style="color:#64748b">Your session has expired or the security token is invalid. Please refresh the page and try again.</p>
+<p style="color:#94a3b8;font-size:12px">Reference: {request_id}</p>
+<button onclick="location.reload()" style="margin-top:16px;padding:12px 24px;background:#2563eb;color:white;border:none;border-radius:8px;cursor:pointer;font-weight:600">Refresh Page</button>
+</div></body></html>""",
+                    status_code=403,
+                )
 
         if not cookie_token:
             # No CSRF cookie - reject request

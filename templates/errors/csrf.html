@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Session Expired - Security Error{% endblock %}
+
+{% block body %}
+<div class="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col items-center justify-center px-4">
+    <div class="max-w-lg text-center">
+        <div class="mx-auto flex h-16 w-16 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-900/30">
+            <svg class="h-8 w-8 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+        </div>
+        <h1 class="mt-4 text-2xl font-bold text-slate-900 dark:text-white">Session Expired</h1>
+        <p class="mt-3 text-slate-600 dark:text-slate-400">
+            Your session has expired or the security token is invalid. This can happen if:
+        </p>
+        <ul class="mt-4 text-left text-sm text-slate-500 dark:text-slate-400 space-y-2 max-w-sm mx-auto">
+            <li class="flex items-start gap-2">
+                <svg class="h-5 w-5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                <span>You left the page open for too long</span>
+            </li>
+            <li class="flex items-start gap-2">
+                <svg class="h-5 w-5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+                <span>You opened the form in multiple tabs</span>
+            </li>
+            <li class="flex items-start gap-2">
+                <svg class="h-5 w-5 text-slate-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4"/></svg>
+                <span>Your browser cleared cookies</span>
+            </li>
+        </ul>
+        {% if request_id %}
+        <p class="mt-4 text-xs text-slate-500 dark:text-slate-400">Reference: {{ request_id }}</p>
+        {% endif %}
+        <div class="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <button onclick="window.location.reload()" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg bg-primary-600 px-6 py-3 text-sm font-semibold text-white shadow-sm hover:bg-primary-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                Refresh page
+            </button>
+            <button onclick="history.back()" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18"/></svg>
+                Go back
+            </button>
+        </div>
+    </div>
+</div>
+{% endblock %}

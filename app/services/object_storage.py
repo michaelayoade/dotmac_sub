@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
@@ -12,6 +13,12 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Retry configuration for transient failures (DNS, network timeouts)
+DEFAULT_RETRY_ATTEMPTS = 3
+DEFAULT_RETRY_BASE_DELAY = 1.0  # seconds
+DEFAULT_RETRY_MAX_DELAY = 10.0  # seconds
+DEFAULT_RETRY_EXPONENTIAL_BASE = 2.0
+
 
 class ObjectStorageError(Exception):
     """Generic object storage failure."""
@@ -19,6 +26,113 @@ class ObjectStorageError(Exception):
 
 class ObjectNotFoundError(ObjectStorageError):
     """Raised when object is missing."""
+
+
+class ObjectStorageConnectionError(ObjectStorageError):
+    """Raised when storage connection fails (DNS, network, timeout)."""
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Check if an exception is likely transient (worth retrying)."""
+    import socket
+
+    # DNS resolution failures
+    if isinstance(exc, socket.gaierror):
+        return True
+    # Connection timeouts and refused connections
+    if isinstance(exc, (socket.timeout, ConnectionRefusedError, ConnectionResetError)):
+        return True
+    # OSError with network-related errno
+    if isinstance(exc, OSError) and exc.errno in (
+        101,  # Network is unreachable
+        110,  # Connection timed out
+        111,  # Connection refused
+        113,  # No route to host
+    ):
+        return True
+    # Check wrapped exceptions in boto3/botocore
+    exc_str = str(exc).lower()
+    transient_patterns = (
+        "timeout",
+        "timed out",
+        "connection reset",
+        "connection refused",
+        "name or service not known",
+        "temporary failure in name resolution",
+        "network is unreachable",
+        "no route to host",
+    )
+    if any(pattern in exc_str for pattern in transient_patterns):
+        return True
+    return False
+
+
+def _retry_with_backoff(
+    operation: str,
+    func,
+    max_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay: float = DEFAULT_RETRY_BASE_DELAY,
+    max_delay: float = DEFAULT_RETRY_MAX_DELAY,
+    exponential_base: float = DEFAULT_RETRY_EXPONENTIAL_BASE,
+):
+    """
+    Execute a function with exponential backoff retry for transient errors.
+
+    Args:
+        operation: Human-readable operation name for logging
+        func: Callable to execute
+        max_attempts: Maximum number of attempts (default: 3)
+        base_delay: Initial delay between retries in seconds (default: 1.0)
+        max_delay: Maximum delay between retries in seconds (default: 10.0)
+        exponential_base: Base for exponential backoff (default: 2.0)
+
+    Returns:
+        Result of the function call
+
+    Raises:
+        ObjectStorageConnectionError: If all retries fail due to transient errors
+        Exception: If a non-transient error occurs
+    """
+    last_exception: Exception | None = None
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return func()
+        except Exception as exc:
+            last_exception = exc
+
+            if not _is_transient_error(exc):
+                # Non-transient error, don't retry
+                raise
+
+            if attempt == max_attempts:
+                # Final attempt failed
+                logger.error(
+                    "Storage %s failed after %d attempts: %s",
+                    operation,
+                    max_attempts,
+                    exc,
+                )
+                raise ObjectStorageConnectionError(
+                    f"Storage {operation} failed after {max_attempts} attempts"
+                ) from exc
+
+            # Calculate delay with exponential backoff
+            delay = min(base_delay * (exponential_base ** (attempt - 1)), max_delay)
+            logger.warning(
+                "Storage %s attempt %d/%d failed (%s), retrying in %.1fs",
+                operation,
+                attempt,
+                max_attempts,
+                type(exc).__name__,
+                delay,
+            )
+            time.sleep(delay)
+
+    # Should not reach here, but satisfy type checker
+    if last_exception:
+        raise last_exception
+    raise ObjectStorageError(f"Storage {operation} failed unexpectedly")
 
 
 @dataclass
@@ -163,6 +277,28 @@ def get_s3_storage() -> S3StorageService:
     )
 
 
-def ensure_storage_bucket() -> None:
-    """Startup hook helper to guarantee bucket availability."""
-    get_s3_storage().ensure_bucket()
+def ensure_storage_bucket(
+    max_attempts: int = DEFAULT_RETRY_ATTEMPTS,
+    base_delay: float = DEFAULT_RETRY_BASE_DELAY,
+) -> None:
+    """
+    Startup hook helper to guarantee bucket availability with retry logic.
+
+    Retries transient failures (DNS resolution, network timeouts) with
+    exponential backoff. This handles the common case where the app starts
+    before the network stack or storage service is fully available.
+
+    Args:
+        max_attempts: Maximum retry attempts (default: 3)
+        base_delay: Initial delay between retries in seconds (default: 1.0)
+    """
+
+    def _ensure() -> None:
+        get_s3_storage().ensure_bucket()
+
+    _retry_with_backoff(
+        operation="bucket initialization",
+        func=_ensure,
+        max_attempts=max_attempts,
+        base_delay=base_delay,
+    )

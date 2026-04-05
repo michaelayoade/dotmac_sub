@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from app.services.object_storage import S3StorageService
+import socket
+from unittest.mock import MagicMock, patch
+
+import pytest
+
+from app.services.object_storage import (
+    ObjectStorageConnectionError,
+    S3StorageService,
+    _is_transient_error,
+    _retry_with_backoff,
+)
 
 
 class _ClientError(Exception):
@@ -98,3 +108,124 @@ def test_upload_download_stream_exists_delete():
 
     service.delete("k/1.txt")
     assert service.exists("k/1.txt") is False
+
+
+class TestTransientErrorDetection:
+    """Tests for _is_transient_error function."""
+
+    def test_dns_resolution_failure_is_transient(self):
+        exc = socket.gaierror(8, "Name or service not known")
+        assert _is_transient_error(exc) is True
+
+    def test_socket_timeout_is_transient(self):
+        exc = socket.timeout("timed out")
+        assert _is_transient_error(exc) is True
+
+    def test_connection_refused_is_transient(self):
+        exc = ConnectionRefusedError("Connection refused")
+        assert _is_transient_error(exc) is True
+
+    def test_connection_reset_is_transient(self):
+        exc = ConnectionResetError("Connection reset by peer")
+        assert _is_transient_error(exc) is True
+
+    def test_network_unreachable_oserror_is_transient(self):
+        exc = OSError(101, "Network is unreachable")
+        assert _is_transient_error(exc) is True
+
+    def test_timeout_in_message_is_transient(self):
+        exc = Exception("Connection timed out while connecting")
+        assert _is_transient_error(exc) is True
+
+    def test_temporary_dns_failure_in_message_is_transient(self):
+        exc = Exception("Temporary failure in name resolution")
+        assert _is_transient_error(exc) is True
+
+    def test_value_error_is_not_transient(self):
+        exc = ValueError("Invalid bucket name")
+        assert _is_transient_error(exc) is False
+
+    def test_permission_error_is_not_transient(self):
+        exc = PermissionError("Access denied")
+        assert _is_transient_error(exc) is False
+
+    def test_generic_exception_is_not_transient(self):
+        exc = Exception("Some other error")
+        assert _is_transient_error(exc) is False
+
+
+class TestRetryWithBackoff:
+    """Tests for _retry_with_backoff function."""
+
+    def test_success_on_first_attempt(self):
+        func = MagicMock(return_value="success")
+        result = _retry_with_backoff("test op", func, max_attempts=3)
+        assert result == "success"
+        assert func.call_count == 1
+
+    @patch("app.services.object_storage.time.sleep")
+    def test_retry_on_transient_error_then_success(self, mock_sleep):
+        func = MagicMock(
+            side_effect=[socket.gaierror(8, "DNS failed"), "success"]
+        )
+        result = _retry_with_backoff(
+            "test op", func, max_attempts=3, base_delay=1.0
+        )
+        assert result == "success"
+        assert func.call_count == 2
+        mock_sleep.assert_called_once_with(1.0)
+
+    @patch("app.services.object_storage.time.sleep")
+    def test_exponential_backoff_delays(self, mock_sleep):
+        func = MagicMock(
+            side_effect=[
+                socket.gaierror(8, "DNS failed"),
+                socket.timeout("timeout"),
+                "success",
+            ]
+        )
+        result = _retry_with_backoff(
+            "test op", func, max_attempts=3, base_delay=1.0, exponential_base=2.0
+        )
+        assert result == "success"
+        assert func.call_count == 3
+        # First retry: 1.0 * 2^0 = 1.0
+        # Second retry: 1.0 * 2^1 = 2.0
+        assert mock_sleep.call_count == 2
+        mock_sleep.assert_any_call(1.0)
+        mock_sleep.assert_any_call(2.0)
+
+    @patch("app.services.object_storage.time.sleep")
+    def test_max_delay_cap(self, mock_sleep):
+        func = MagicMock(
+            side_effect=[
+                socket.gaierror(8, "DNS failed"),
+                socket.gaierror(8, "DNS failed"),
+                "success",
+            ]
+        )
+        result = _retry_with_backoff(
+            "test op",
+            func,
+            max_attempts=3,
+            base_delay=10.0,
+            max_delay=5.0,
+            exponential_base=2.0,
+        )
+        assert result == "success"
+        # Both delays should be capped at max_delay=5.0
+        mock_sleep.assert_any_call(5.0)
+
+    @patch("app.services.object_storage.time.sleep")
+    def test_raises_connection_error_after_max_attempts(self, mock_sleep):
+        func = MagicMock(side_effect=socket.gaierror(8, "DNS failed"))
+        with pytest.raises(ObjectStorageConnectionError) as exc_info:
+            _retry_with_backoff("bucket init", func, max_attempts=3, base_delay=0.1)
+        assert "bucket init failed after 3 attempts" in str(exc_info.value)
+        assert func.call_count == 3
+
+    def test_non_transient_error_not_retried(self):
+        func = MagicMock(side_effect=ValueError("Invalid parameter"))
+        with pytest.raises(ValueError, match="Invalid parameter"):
+            _retry_with_backoff("test op", func, max_attempts=3)
+        assert func.call_count == 1
