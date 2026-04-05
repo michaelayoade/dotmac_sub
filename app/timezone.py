@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import uuid
 import warnings
 from collections.abc import Callable, Mapping
 from datetime import UTC, date, datetime
@@ -132,7 +133,7 @@ def localize_for_display(value: Any) -> Any:
     if isinstance(value, datetime):
         return localize_datetime(value)
     if value is None or isinstance(
-        value, (str, bytes, int, float, bool, Decimal, date)
+        value, (str, bytes, int, float, bool, Decimal, date, uuid.UUID)
     ):
         return value
     if isinstance(value, _DisplayProxyBase):

@@ -36,21 +36,26 @@ def _is_transient_error(exc: Exception) -> bool:
     """Check if an exception is likely transient (worth retrying)."""
     import socket
 
-    # DNS resolution failures
-    if isinstance(exc, socket.gaierror):
-        return True
-    # Connection timeouts and refused connections
-    if isinstance(exc, (socket.timeout, ConnectionRefusedError, ConnectionResetError)):
-        return True
-    # OSError with network-related errno
-    if isinstance(exc, OSError) and exc.errno in (
-        101,  # Network is unreachable
-        110,  # Connection timed out
-        111,  # Connection refused
-        113,  # No route to host
-    ):
-        return True
-    # Check wrapped exceptions in boto3/botocore
+    # Check the full exception chain (exc -> __cause__ -> __cause__.__cause__ etc)
+    current: BaseException | None = exc
+    while current is not None:
+        # DNS resolution failures
+        if isinstance(current, socket.gaierror):
+            return True
+        # Connection timeouts and refused connections
+        if isinstance(current, (socket.timeout, ConnectionRefusedError, ConnectionResetError)):
+            return True
+        # OSError with network-related errno
+        if isinstance(current, OSError) and current.errno in (
+            101,  # Network is unreachable
+            110,  # Connection timed out
+            111,  # Connection refused
+            113,  # No route to host
+        ):
+            return True
+        current = current.__cause__
+
+    # Check error message for transient patterns (covers wrapped exceptions)
     exc_str = str(exc).lower()
     transient_patterns = (
         "timeout",
@@ -61,6 +66,9 @@ def _is_transient_error(exc: Exception) -> bool:
         "temporary failure in name resolution",
         "network is unreachable",
         "no route to host",
+        "endpoint connection error",
+        "could not connect to the endpoint",
+        "failed to resolve",
     )
     if any(pattern in exc_str for pattern in transient_patterns):
         return True

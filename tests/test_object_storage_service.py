@@ -118,7 +118,7 @@ class TestTransientErrorDetection:
         assert _is_transient_error(exc) is True
 
     def test_socket_timeout_is_transient(self):
-        exc = socket.timeout("timed out")
+        exc = TimeoutError("timed out")
         assert _is_transient_error(exc) is True
 
     def test_connection_refused_is_transient(self):
@@ -153,6 +153,20 @@ class TestTransientErrorDetection:
         exc = Exception("Some other error")
         assert _is_transient_error(exc) is False
 
+    def test_wrapped_dns_error_in_chain_is_transient(self):
+        """Test that DNS errors wrapped in exception chains are detected."""
+        # Simulates: ObjectStorageError <- EndpointConnectionError <- gaierror
+        inner = socket.gaierror(8, "Name or service not known")
+        middle = Exception("Could not connect")
+        middle.__cause__ = inner
+        outer = Exception("Unable to check storage bucket")
+        outer.__cause__ = middle
+        assert _is_transient_error(outer) is True
+
+    def test_endpoint_connection_error_message_is_transient(self):
+        exc = Exception("Could not connect to the endpoint URL")
+        assert _is_transient_error(exc) is True
+
 
 class TestRetryWithBackoff:
     """Tests for _retry_with_backoff function."""
@@ -180,7 +194,7 @@ class TestRetryWithBackoff:
         func = MagicMock(
             side_effect=[
                 socket.gaierror(8, "DNS failed"),
-                socket.timeout("timeout"),
+                TimeoutError("timeout"),
                 "success",
             ]
         )
