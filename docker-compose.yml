@@ -156,11 +156,10 @@ services:
     container_name: dotmac_sub_nominatim
     restart: unless-stopped
     environment:
-      NOMINATIM_PBF_URL: https://download.geofabrik.de/africa/nigeria-latest.osm.pbf
-      NOMINATIM_IMPORT_STYLE: extratags
-      NOMINATIM_IMPORT: '1'
+      PBF_URL: https://download.geofabrik.de/africa/nigeria-latest.osm.pbf
+      IMPORT_STYLE: extratags
     ports:
-    - 8080:8080
+    - 8088:8080
     volumes:
     - nominatim_data:/var/lib/postgresql/14/main
     - nominatim_flatnode:/var/lib/nominatim/flatnode
