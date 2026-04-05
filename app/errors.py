@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from urllib.parse import parse_qs, quote, unquote_plus, urlparse
+from pathlib import Path
 
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -15,6 +16,7 @@ from app.web.auth.dependencies import AuthenticationRequired
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
+_TEMPLATES_ROOT = Path("templates")
 
 _FRIENDLY_DEFAULT_BAD_REQUEST = "Some required information is missing or invalid. Please check the form and try again."
 _REDIRECT_ERROR_TOKEN_TO_STATUS = {
@@ -117,9 +119,14 @@ def _friendly_redirect_error_message(error_value: str, status_code: int) -> str:
 
 
 def _template_response(request: Request, status_code: int, message: str):
+    template_name = f"errors/{status_code}.html"
+    if request.url.path.startswith("/admin"):
+        admin_template = _TEMPLATES_ROOT / "admin" / "errors" / f"{status_code}.html"
+        if admin_template.exists():
+            template_name = f"admin/errors/{status_code}.html"
     return templates.TemplateResponse(
         request,
-        f"errors/{status_code}.html",
+        template_name,
         {
             "request": request,
             "message": message,

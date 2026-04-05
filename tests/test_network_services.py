@@ -9,7 +9,11 @@ from app.schemas.network import (
     FiberSpliceClosureCreate,
     IpPoolCreate,
     OLTDeviceCreate,
+    OltCardCreate,
+    OltCardPortCreate,
+    OltShelfCreate,
     PonPortCreate,
+    PonPortUpdate,
     SplitterCreate,
     SplitterPortCreate,
 )
@@ -1850,7 +1854,7 @@ class TestPonPortsCRUD:
         assert exc_info.value.status_code == 404
 
     def test_update_pon_port(self, db_session):
-        """Test updating PON port."""
+        """Linked PON ports keep the canonical card-port number."""
         olt = network_service.olt_devices.create(
             db_session,
             OLTDeviceCreate(name="Update PON OLT", hostname="update-pon-olt.local"),
@@ -1870,7 +1874,343 @@ class TestPonPortsCRUD:
         updated = network_service.pon_ports.update(
             db_session, str(pon.id), PonPortUpdate(port_number=4)
         )
-        assert updated.port_number == 4
+        assert updated.port_number == 3
+
+    def test_create_pon_port_with_card_port_uses_canonical_port_number(self, db_session):
+        """Linked card ports should override caller-supplied metadata."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Canonical PON OLT", hostname="canonical-pon-olt.local"),
+        )
+        shelf = network_service.olt_shelves.create(
+            db_session,
+            OltShelfCreate(olt_id=olt.id, shelf_number=1),
+        )
+        card = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf.id, slot_number=1),
+        )
+        card_port = network_service.olt_card_ports.create(
+            db_session,
+            OltCardPortCreate(
+                card_id=card.id,
+                port_number=2,
+                name="1/1/2",
+            ),
+        )
+
+        pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(
+                olt_id=olt.id,
+                olt_card_port_id=card_port.id,
+                port_number=99,
+                name="manual-name",
+            ),
+        )
+
+        assert pon.olt_card_port_id == card_port.id
+        assert pon.port_number == 2
+        assert pon.name == "1/1/2"
+
+    def test_create_pon_port_reuses_existing_card_port_mapping(self, db_session):
+        """Creating the same physical PON port twice should reuse the linked row."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Reuse PON OLT", hostname="reuse-pon-olt.local"),
+        )
+        shelf = network_service.olt_shelves.create(
+            db_session,
+            OltShelfCreate(olt_id=olt.id, shelf_number=1),
+        )
+        card = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf.id, slot_number=1),
+        )
+
+        first = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(card_id=card.id, port_number=2, olt_id=olt.id),
+        )
+        second = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(
+                card_id=card.id,
+                port_number=2,
+                olt_id=olt.id,
+                name="custom-duplicate-name",
+            ),
+        )
+
+        assert second.id == first.id
+        assert second.name == "1/1/2"
+
+    def test_update_pon_port_rejects_card_port_from_other_olt(self, db_session):
+        """PON ports cannot be re-linked across OLT boundaries."""
+        olt_a = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Update PON OLT A", hostname="update-pon-a.local"),
+        )
+        olt_b = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Update PON OLT B", hostname="update-pon-b.local"),
+        )
+        shelf_a = network_service.olt_shelves.create(
+            db_session,
+            OltShelfCreate(olt_id=olt_a.id, shelf_number=1),
+        )
+        shelf_b = network_service.olt_shelves.create(
+            db_session,
+            OltShelfCreate(olt_id=olt_b.id, shelf_number=1),
+        )
+        card_a = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf_a.id, slot_number=1),
+        )
+        card_b = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf_b.id, slot_number=1),
+        )
+        card_port_b = network_service.olt_card_ports.create(
+            db_session,
+            OltCardPortCreate(
+                card_id=card_b.id,
+                port_number=4,
+                name="1/1/4",
+            ),
+        )
+        pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(card_id=card_a.id, port_number=1, olt_id=olt_a.id),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.pon_ports.update(
+                db_session,
+                str(pon.id),
+                PonPortUpdate(olt_card_port_id=card_port_b.id),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "OLT card port does not belong to the selected OLT"
+
+    def test_update_pon_port_with_card_port_keeps_canonical_name(self, db_session):
+        """Linked ports should not drift to arbitrary names."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Rename PON OLT", hostname="rename-pon-olt.local"),
+        )
+        shelf = network_service.olt_shelves.create(
+            db_session,
+            OltShelfCreate(olt_id=olt.id, shelf_number=1),
+        )
+        card = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf.id, slot_number=1),
+        )
+        pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(card_id=card.id, port_number=3, olt_id=olt.id),
+        )
+
+        updated = network_service.pon_ports.update(
+            db_session,
+            str(pon.id),
+            PonPortUpdate(name="manual-rename"),
+        )
+
+        assert updated.name == "1/1/3"
+
+    def test_update_linked_pon_port_rejects_duplicate_canonical_name(self, db_session):
+        """Linked updates should fail cleanly when the canonical name is already taken."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="Duplicate Linked PON OLT",
+                hostname="duplicate-linked-pon-olt.local",
+            ),
+        )
+        shelf = network_service.olt_shelves.create(
+            db_session,
+            OltShelfCreate(olt_id=olt.id, shelf_number=1),
+        )
+        card_a = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf.id, slot_number=1),
+        )
+        card_b = network_service.olt_cards.create(
+            db_session,
+            OltCardCreate(shelf_id=shelf.id, slot_number=2),
+        )
+        first = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="1/2/4"),
+        )
+        second = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/9/9"),
+        )
+        card_port_b = network_service.olt_card_ports.create(
+            db_session,
+            OltCardPortCreate(
+                card_id=card_b.id,
+                port_number=4,
+                name="1/2/4",
+            ),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.pon_ports.update(
+                db_session,
+                str(second.id),
+                PonPortUpdate(olt_card_port_id=card_port_b.id),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "A PON port already exists for this OLT and name"
+
+    def test_create_unlinked_pon_port_requires_canonical_name(self, db_session):
+        """Unlinked PON ports should not be created with placeholder pon-* names."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Manual PON OLT", hostname="manual-pon-olt.local"),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.pon_ports.create(
+                db_session,
+                PonPortCreate(olt_id=olt.id, port_number=1),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert (
+            exc_info.value.detail
+            == "Canonical frame/slot/port name is required when no OLT card or card port is linked"
+        )
+
+    def test_create_unlinked_pon_port_accepts_canonical_name(self, db_session):
+        """Unlinked manual PON ports must use canonical F/S/P names."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="Manual Canonical PON OLT",
+                hostname="manual-canonical-pon-olt.local",
+            ),
+        )
+
+        pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/0"),
+        )
+
+        assert pon.name == "0/2/0"
+        assert pon.port_number == 0
+
+    def test_update_unlinked_pon_port_requires_canonical_name(self, db_session):
+        """Unlinked PON ports should not drift to placeholder names on update."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="Manual Update PON OLT",
+                hostname="manual-update-pon-olt.local",
+            ),
+        )
+        pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/0"),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.pon_ports.update(
+                db_session,
+                str(pon.id),
+                PonPortUpdate(name="pon-0"),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert (
+            exc_info.value.detail
+            == "Canonical frame/slot/port name is required when no OLT card or card port is linked"
+        )
+
+    def test_update_unlinked_pon_port_recalculates_port_number_from_name(self, db_session):
+        """Canonical unlinked updates should keep port_number aligned with the name."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="Manual Update Canonical PON OLT",
+                hostname="manual-update-canonical-pon-olt.local",
+            ),
+        )
+        pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/0"),
+        )
+
+        updated = network_service.pon_ports.update(
+            db_session,
+            str(pon.id),
+            PonPortUpdate(name="0/2/3", port_number=99),
+        )
+
+        assert updated.name == "0/2/3"
+        assert updated.port_number == 3
+
+    def test_create_unlinked_pon_port_revives_soft_deleted_canonical_row(self, db_session):
+        """Recreating a soft-deleted canonical port should revive the existing row."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="Manual Revive PON OLT",
+                hostname="manual-revive-pon-olt.local",
+            ),
+        )
+        original = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/0"),
+        )
+        original.notes = "old-notes"
+        db_session.commit()
+
+        network_service.pon_ports.delete(db_session, str(original.id))
+
+        revived = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/0", notes="new-notes"),
+        )
+
+        assert revived.id == original.id
+        assert revived.is_active is True
+        assert revived.port_number == 0
+        assert revived.notes == "new-notes"
+
+    def test_update_unlinked_pon_port_rejects_duplicate_canonical_name(self, db_session):
+        """Unlinked updates should fail cleanly instead of hitting DB uniqueness errors."""
+        olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(
+                name="Manual Duplicate Update PON OLT",
+                hostname="manual-duplicate-update-pon-olt.local",
+            ),
+        )
+        first = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/0"),
+        )
+        second = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=olt.id, name="0/2/1"),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.pon_ports.update(
+                db_session,
+                str(second.id),
+                PonPortUpdate(name="0/2/0"),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "A PON port already exists for this OLT and name"
 
     def test_update_pon_port_not_found(self, db_session):
         """Test 404 for updating non-existent PON port."""

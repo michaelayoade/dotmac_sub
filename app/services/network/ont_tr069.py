@@ -584,7 +584,11 @@ class OntTR069:
 
     @staticmethod
     def _persist_observed_runtime(
-        db: Session, ont: OntUnit, summary: TR069Summary
+        db: Session,
+        ont: OntUnit,
+        summary: TR069Summary,
+        *,
+        commit: bool = True,
     ) -> None:
         """Persist useful runtime/observed fields back onto OntUnit."""
         if not summary.available:
@@ -709,12 +713,15 @@ class OntTR069:
         ont.tr069_last_snapshot_at = observed_at
 
         db.add(ont)
-        db.commit()
-        db.refresh(ont)
+        if commit:
+            db.commit()
+            db.refresh(ont)
+        else:
+            db.flush()
         if getattr(ont, "is_active", False):
             from app.services.network.cpe import ensure_cpe_for_ont
 
-            ensure_cpe_for_ont(db, ont)
+            ensure_cpe_for_ont(db, ont, commit=commit)
 
     @staticmethod
     def get_lan_hosts(db: Session, ont_id: str) -> list[dict[str, Any]]:

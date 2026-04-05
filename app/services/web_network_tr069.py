@@ -19,6 +19,7 @@ from app.schemas.tr069 import (
     Tr069JobCreate,
 )
 from app.services import network as network_service
+from app.services.network import cpe as cpe_service
 from app.services import tr069 as tr069_service
 from app.services.common import coerce_uuid
 from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
@@ -267,8 +268,14 @@ def tr069_dashboard_data(
     search: str | None = None,
     only_unlinked: bool = False,
 ) -> dict[str, object]:
+    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
+
     def _cpe_primary_label(cpe: CPEDevice) -> str:
-        if cpe.subscriber and getattr(cpe.subscriber, "full_name", None):
+        if (
+            cpe.subscriber
+            and getattr(cpe.subscriber, "full_name", None)
+            and getattr(cpe, "subscriber_id", None) != inventory_subscriber_id
+        ):
             return str(cpe.subscriber.full_name)
         if cpe.serial_number:
             return str(cpe.serial_number)
@@ -375,6 +382,9 @@ def tr069_dashboard_data(
         device.linked_cpe = (
             cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
         )
+        device.linked_cpe_display_label = (
+            _cpe_primary_label(device.linked_cpe) if device.linked_cpe else None
+        )
         device.display_serial_number = _display_serial_number(device.serial_number)
         normalized_serial = normalize_tr069_serial(
             device.display_serial_number or device.serial_number or ""
@@ -416,6 +426,12 @@ def tr069_dashboard_data(
         .limit(1000)
         .all()
     )
+    if inventory_subscriber_id is not None:
+        managed_cpes = [
+            cpe
+            for cpe in managed_cpes
+            if getattr(cpe, "subscriber_id", None) != inventory_subscriber_id
+        ]
     cpe_typeahead_map = {_cpe_search_label(cpe): str(cpe.id) for cpe in managed_cpes}
     cpe_display_by_id = {str(cpe.id): _cpe_primary_label(cpe) for cpe in managed_cpes}
     cpe_search_by_id = {str(cpe.id): _cpe_search_label(cpe) for cpe in managed_cpes}

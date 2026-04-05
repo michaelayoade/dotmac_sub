@@ -135,9 +135,29 @@
     <!-- Main Content Area -->
     <div class="flex flex-1 flex-col overflow-hidden">
         <!-- Top Navigation -->
-        <header class="relative z-40 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/85 px-4 backdrop-blur-md pointer-events-auto dark:border-slate-700/80 dark:bg-slate-900/80">
+        <header x-data="{
+                    showTopbarTooltip: false,
+                    topbarTooltipLabel: '',
+                    topbarTooltipTop: 0,
+                    topbarTooltipLeft: 0,
+                    openTopbarTooltip(el, label) {
+                        const rect = el.getBoundingClientRect();
+                        this.topbarTooltipLabel = label;
+                        this.topbarTooltipLeft = rect.left + (rect.width / 2);
+                        this.topbarTooltipTop = rect.bottom + 10;
+                        this.showTopbarTooltip = true;
+                    },
+                    closeTopbarTooltip() {
+                        this.showTopbarTooltip = false;
+                    }
+                 }"
+                 class="relative z-40 flex h-16 items-center justify-between border-b border-slate-200/80 bg-white/85 px-4 backdrop-blur-md pointer-events-auto dark:border-slate-700/80 dark:bg-slate-900/80">
             <!-- Mobile menu button -->
             <button x-on:click="sidebarOpen = !sidebarOpen"
+                    @mouseenter="openTopbarTooltip($el, sidebarOpen ? 'Close navigation' : 'Open navigation')"
+                    @mouseleave="closeTopbarTooltip()"
+                    @focus="openTopbarTooltip($el, sidebarOpen ? 'Close navigation' : 'Open navigation')"
+                    @blur="closeTopbarTooltip()"
                     aria-label="Toggle navigation"
                     :aria-expanded="sidebarOpen.toString()"
                     class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 lg:hidden">
@@ -146,7 +166,6 @@
                 </svg>
             </button>
 
-            <!-- Breadcrumbs -->
             <div class="hidden md:flex items-center gap-2 text-sm">
                 {% set breadcrumb_labels = {
                     'dashboard': 'Dashboard',
@@ -228,6 +247,10 @@
                 {% block breadcrumbs %}
                 <button type="button"
                         onclick="if (window.history.length > 1) { window.history.back(); } else { window.location.href = '/admin/dashboard'; }"
+                        @mouseenter="openTopbarTooltip($el, 'Go back')"
+                        @mouseleave="closeTopbarTooltip()"
+                        @focus="openTopbarTooltip($el, 'Go back')"
+                        @blur="closeTopbarTooltip()"
                         class="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
@@ -244,35 +267,24 @@
                 {% endif %}
                 {% endblock %}
             </div>
+            <div x-show="showTopbarTooltip"
+                 x-cloak
+                 :style="`left:${topbarTooltipLeft}px; top:${topbarTooltipTop}px; transform: translateX(-50%);`"
+                 class="pointer-events-none fixed z-[2000] whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900"
+                 x-text="topbarTooltipLabel"></div>
 
             <!-- Right side actions -->
-            <div x-data="{
-                    showTopbarTooltip: false,
-                    topbarTooltipLabel: '',
-                    topbarTooltipTop: 0,
-                    topbarTooltipLeft: 0,
-                    openTopbarTooltip(el, label) {
-                        const rect = el.getBoundingClientRect();
-                        this.topbarTooltipLabel = label;
-                        this.topbarTooltipLeft = rect.left + (rect.width / 2);
-                        this.topbarTooltipTop = rect.bottom + 10;
-                        this.showTopbarTooltip = true;
-                    },
-                    closeTopbarTooltip() {
-                        this.showTopbarTooltip = false;
-                    }
-                 }"
-                 class="flex items-center gap-2 pointer-events-auto">
+            <div class="flex items-center gap-2 pointer-events-auto">
                 <!-- Global Search with Suggestions -->
                 <div x-data="{ ...globalSearch(), mobileOpen: false }"
                      x-on:click.away="close(); mobileOpen = false"
                      x-on:keydown.escape.window="close(); mobileOpen = false">
                     <!-- Mobile search toggle -->
                     <button x-on:click="mobileOpen = !mobileOpen; $nextTick(() => $refs.searchInput.focus())"
-                            @mouseenter="$root.openTopbarTooltip($el, 'Search')"
-                            @mouseleave="$root.closeTopbarTooltip()"
-                            @focus="$root.openTopbarTooltip($el, 'Search')"
-                            @blur="$root.closeTopbarTooltip()"
+                            @mouseenter="openTopbarTooltip($el, 'Search')"
+                            @mouseleave="closeTopbarTooltip()"
+                            @focus="openTopbarTooltip($el, 'Search')"
+                            @blur="closeTopbarTooltip()"
                             aria-label="Open search"
                             class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 sm:hidden">
                         <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -282,15 +294,15 @@
                     <div :class="mobileOpen ? 'absolute left-2 right-2 top-14 z-50 sm:static sm:left-auto sm:right-auto sm:top-auto' : 'hidden sm:block'">
                     <div class="relative"
                          x-ref="searchShell"
-                         @mouseenter="$root.openTopbarTooltip($refs.searchShell, 'Search')"
-                         @mouseleave="$root.closeTopbarTooltip()">
+                         @mouseenter="openTopbarTooltip($refs.searchShell, 'Search')"
+                         @mouseleave="closeTopbarTooltip()">
                         <input type="search"
                                x-ref="searchInput"
                                x-model="query"
                                x-on:input.debounce.300ms="search()"
                                x-on:focus="open = query.length >= 2"
-                               @focus="$root.openTopbarTooltip($refs.searchShell, 'Search')"
-                               @blur="$root.closeTopbarTooltip()"
+                               @focus="openTopbarTooltip($refs.searchShell, 'Search')"
+                               @blur="closeTopbarTooltip()"
                                x-on:keydown.down.prevent="navigateDown()"
                                x-on:keydown.up.prevent="navigateUp()"
                                x-on:keydown.enter.prevent="selectCurrent()"
@@ -406,10 +418,10 @@
 
                 <!-- Dark mode toggle -->
                 <button x-on:click="$store.darkMode.toggle()"
-                        @mouseenter="$root.openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
-                        @mouseleave="$root.closeTopbarTooltip()"
-                        @focus="$root.openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
-                        @blur="$root.closeTopbarTooltip()"
+                        @mouseenter="openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
+                        @mouseleave="closeTopbarTooltip()"
+                        @focus="openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
+                        @blur="closeTopbarTooltip()"
                         aria-label="Toggle dark mode"
                         :aria-pressed="$store.darkMode.on.toString()"
                         class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">
@@ -424,10 +436,10 @@
                 <!-- Notifications -->
                 <div x-data="{ open: false }" class="relative">
                     <button x-on:click="open = !open"
-                            @mouseenter="$root.openTopbarTooltip($el, 'Notifications')"
-                            @mouseleave="$root.closeTopbarTooltip()"
-                            @focus="$root.openTopbarTooltip($el, 'Notifications')"
-                            @blur="$root.closeTopbarTooltip()"
+                            @mouseenter="openTopbarTooltip($el, 'Notifications')"
+                            @mouseleave="closeTopbarTooltip()"
+                            @focus="openTopbarTooltip($el, 'Notifications')"
+                            @blur="closeTopbarTooltip()"
                             aria-label="View notifications"
                             :aria-expanded="open.toString()"
                             aria-controls="admin-notifications-menu"
@@ -462,10 +474,10 @@
                 <!-- User dropdown -->
                 <div x-data="{ open: false }" class="relative">
                     <button x-on:click="open = !open"
-                            @mouseenter="$root.openTopbarTooltip($el, 'User menu')"
-                            @mouseleave="$root.closeTopbarTooltip()"
-                            @focus="$root.openTopbarTooltip($el, 'User menu')"
-                            @blur="$root.closeTopbarTooltip()"
+                            @mouseenter="openTopbarTooltip($el, 'User menu')"
+                            @mouseleave="closeTopbarTooltip()"
+                            @focus="openTopbarTooltip($el, 'User menu')"
+                            @blur="closeTopbarTooltip()"
                             aria-label="Open user menu"
                             :aria-expanded="open.toString()"
                             aria-controls="admin-user-menu"
@@ -513,11 +525,6 @@
                         </a>
                     </div>
                 </div>
-                <div x-show="showTopbarTooltip"
-                     x-cloak
-                     :style="`left:${topbarTooltipLeft}px; top:${topbarTooltipTop}px; transform: translateX(-50%);`"
-                     class="pointer-events-none fixed z-[2000] whitespace-nowrap rounded-md bg-slate-900 px-2.5 py-1.5 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900"
-                     x-text="topbarTooltipLabel"></div>
             </div>
         </header>
 

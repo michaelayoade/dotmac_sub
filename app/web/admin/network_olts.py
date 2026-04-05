@@ -595,6 +595,55 @@ def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
 
 
 @router.post(
+    "/olts/{olt_id}/repair-pon-ports",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_repair_pon_ports(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    actor_name = current_user.get("name", "unknown") if current_user else "system"
+    ok, message, stats = web_network_olts_service.repair_pon_ports_for_olt_tracked(
+        db, olt_id, initiated_by=actor_name
+    )
+    status = "success" if ok else "error"
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="repair_pon_ports",
+        entity_type="olt",
+        entity_id=str(olt_id),
+        actor_id=actor_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "stats": stats,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/olts/{olt_id}/repair-pon-ports",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
+    message = quote_plus("Repair PON ports uses POST. Please click Repair PON Ports again.")
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
+        status_code=303,
+    )
+
+
+@router.post(
     "/olts/{olt_id}/autofind",
     dependencies=[Depends(require_permission("network:read"))],
 )

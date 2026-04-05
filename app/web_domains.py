@@ -40,6 +40,7 @@ from app.services import (
 from app.services import (
     network as network_service,
 )
+from app.services.network import cpe as cpe_service
 from app.services import (
     network_monitoring as monitoring_service,
 )
@@ -105,6 +106,13 @@ def network_home(request: Request, db: Session = Depends(get_db)):
         limit=25,
         offset=0,
     )
+    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
+    if inventory_subscriber_id is not None:
+        items = [
+            item
+            for item in items
+            if getattr(item, "subscriber_id", None) != inventory_subscriber_id
+        ]
     return _render(request, "Network Inventory", items)
 
 

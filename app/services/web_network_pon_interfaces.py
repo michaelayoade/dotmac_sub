@@ -327,24 +327,48 @@ def save_alias(
     port: PonPort | None = None
     if pon_port_id:
         port = db.get(PonPort, coerce_uuid(pon_port_id))
+        if port is not None and str(port.olt_id) != str(coerce_uuid(olt_id)):
+            raise HTTPException(
+                status_code=400,
+                detail="PON port does not belong to the selected OLT",
+            )
+        if port is not None and not bool(getattr(port, "is_active", True)):
+            raise HTTPException(
+                status_code=400,
+                detail="PON port is inactive",
+            )
+        if port is not None and str(getattr(port, "name", "") or "") != interface_name:
+            raise HTTPException(
+                status_code=400,
+                detail="PON port does not match the submitted interface name",
+            )
     if port is None:
         port = db.scalars(
             select(PonPort).where(
                 PonPort.olt_id == coerce_uuid(olt_id),
                 PonPort.name == interface_name,
+                PonPort.is_active.is_(True),
             )
         ).first()
     if port is None:
         olt = db.get(OLTDevice, coerce_uuid(olt_id))
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
-        port = PonPort(
+        from app.services import web_network_olts as web_network_olts_service
+
+        fsp_hint = _extract_pon_hint(interface_name)
+        board = None
+        port_number = None
+        if fsp_hint:
+            board, port_number = fsp_hint.rsplit("/", 1)
+        port = web_network_olts_service.ensure_canonical_pon_port(
+            db,
             olt_id=olt.id,
-            name=interface_name,
-            notes=merge_pon_port_notes(None, alias_text),
-            is_active=True,
+            fsp=fsp_hint or interface_name,
+            board=board,
+            port=port_number,
         )
-        db.add(port)
+        port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
     else:
         port.notes = merge_pon_port_notes(getattr(port, "notes", None), alias_text)
 

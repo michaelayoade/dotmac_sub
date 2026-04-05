@@ -22,6 +22,8 @@ from app.models.network import (
 
 
 class CPEDeviceBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     subscriber_id: UUID = Field(
         validation_alias="account_id", serialization_alias="account_id"
     )
@@ -41,6 +43,8 @@ class CPEDeviceCreate(CPEDeviceBase):
 
 
 class CPEDeviceUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )
@@ -559,6 +563,8 @@ class OntUnitRead(OntUnitBase):
 
 
 class OntAssignmentBase(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     ont_unit_id: UUID
     pon_port_id: UUID
     subscriber_id: UUID | None = Field(
@@ -575,6 +581,8 @@ class OntAssignmentCreate(OntAssignmentBase):
 
 
 class OntAssignmentUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     ont_unit_id: UUID | None = None
     pon_port_id: UUID | None = None
     subscriber_id: UUID | None = Field(

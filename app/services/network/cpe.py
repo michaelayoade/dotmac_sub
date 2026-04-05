@@ -2,13 +2,15 @@
 
 import logging
 from typing import cast
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
+from app.models.event_store import EventStatus, EventStore
 from app.models.network import (
     CPEDevice,
     DeviceStatus,
@@ -21,6 +23,8 @@ from app.models.network import (
     PortVlan,
     Vlan,
 )
+from app.models.subscriber import Subscriber, SubscriberStatus, UserType
+from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import (
     CPEDeviceCreate,
     CPEDeviceUpdate,
@@ -42,6 +46,9 @@ from app.services.query_builders import apply_active_state, apply_optional_equal
 from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
+
+_INVENTORY_SUBSCRIBER_EMAIL = "network-inventory@dotmac.local"
+_INVENTORY_SUBSCRIBER_NAME = "Network Inventory"
 
 
 def _normalize_cpe_device_type(
@@ -81,7 +88,12 @@ def _normalize_cpe_data(data: dict) -> dict:
     return normalized
 
 
-def _auto_register_tr069_device(db: Session, device: CPEDevice) -> None:
+def _auto_register_tr069_device(
+    db: Session,
+    device: CPEDevice,
+    *,
+    commit: bool = True,
+) -> None:
     if not device.serial_number:
         return
     from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
@@ -138,13 +150,160 @@ def _auto_register_tr069_device(db: Session, device: CPEDevice) -> None:
                 is_active=True,
             )
         )
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
+
+
+def _get_or_create_inventory_subscriber(db: Session) -> Subscriber:
+    subscriber = db.scalars(
+        select(Subscriber)
+        .where(Subscriber.email == _INVENTORY_SUBSCRIBER_EMAIL)
+        .limit(1)
+    ).first()
+    if subscriber is not None:
+        return subscriber
+
+    subscriber = Subscriber(
+        first_name="Network",
+        last_name="Inventory",
+        display_name=_INVENTORY_SUBSCRIBER_NAME,
+        email=_INVENTORY_SUBSCRIBER_EMAIL,
+        status=SubscriberStatus.active,
+        user_type=UserType.system_user,
+        is_active=True,
+        billing_enabled=False,
+    )
+    try:
+        with db.begin_nested():
+            db.add(subscriber)
+            db.flush()
+        return subscriber
+    except IntegrityError:
+        subscriber = db.scalars(
+            select(Subscriber)
+            .where(Subscriber.email == _INVENTORY_SUBSCRIBER_EMAIL)
+            .limit(1)
+        ).first()
+        if subscriber is not None:
+            return subscriber
+        raise
+
+
+def get_inventory_subscriber(db: Session) -> Subscriber | None:
+    return db.scalars(
+        select(Subscriber)
+        .where(Subscriber.email == _INVENTORY_SUBSCRIBER_EMAIL)
+        .limit(1)
+    ).first()
+
+
+def get_inventory_subscriber_id(db: Session) -> UUID | None:
+    subscriber = get_inventory_subscriber(db)
+    return subscriber.id if subscriber is not None else None
+
+
+def _record_ont_inventory_alert(
+    db: Session,
+    *,
+    ont: OntUnit,
+    serial_number: str,
+    reason: str,
+    candidate_count: int,
+) -> None:
+    payload = {
+        "code": "ambiguous_ont_cpe_serial",
+        "reason": reason,
+        "ont_id": str(ont.id),
+        "ont_serial_number": serial_number,
+        "candidate_count": candidate_count,
+    }
+    db.add(
+        EventStore(
+            event_id=uuid4(),
+            event_type="network.alert",
+            payload=payload,
+            status=EventStatus.completed,
+            actor="system",
+        )
+    )
+
+
+def _resolve_existing_cpe_for_ont(
+    db: Session,
+    *,
+    ont: OntUnit,
+    serial_number: str | None,
+    strict: bool = True,
+) -> CPEDevice | None:
+    if not serial_number:
+        return None
+
+    matches = list(
+        db.scalars(
+            select(CPEDevice)
+            .where(CPEDevice.serial_number == serial_number)
+            .order_by(CPEDevice.updated_at.desc(), CPEDevice.created_at.desc())
+        ).all()
+    )
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+
+    match_ids = [cpe.id for cpe in matches]
+    active_linked_cpe_ids = {
+        cpe_id
+        for cpe_id in db.scalars(
+            select(Tr069CpeDevice.cpe_device_id)
+            .where(Tr069CpeDevice.cpe_device_id.in_(match_ids))
+            .where(Tr069CpeDevice.is_active.is_(True))
+        ).all()
+        if cpe_id is not None
+    }
+    active_linked_matches = [cpe for cpe in matches if cpe.id in active_linked_cpe_ids]
+    if len(active_linked_matches) == 1:
+        return active_linked_matches[0]
+
+    linked_cpe_ids = {
+        cpe_id
+        for cpe_id in db.scalars(
+            select(Tr069CpeDevice.cpe_device_id)
+            .where(Tr069CpeDevice.cpe_device_id.in_(match_ids))
+        ).all()
+        if cpe_id is not None
+    }
+    linked_matches = [cpe for cpe in matches if cpe.id in linked_cpe_ids]
+    if len(linked_matches) == 1:
+        return linked_matches[0]
+
+    if strict:
+        raise HTTPException(
+            status_code=409,
+            detail="Multiple CPE devices share this ONT serial number",
+        )
+    _record_ont_inventory_alert(
+        db,
+        ont=ont,
+        serial_number=serial_number,
+        reason="multiple_cpe_devices_share_ont_serial",
+        candidate_count=len(matches),
+    )
+    logger.warning(
+        "Skipping ambiguous ONT CPE sync for serial %s: multiple CPE devices share it.",
+        serial_number,
+    )
+    return None
 
 
 def ensure_cpe_for_ont(
     db: Session,
     ont: OntUnit,
     assignment: OntAssignment | None = None,
+    *,
+    commit: bool = True,
+    strict_existing_match: bool = True,
 ) -> CPEDevice | None:
     """Create or update the CPE inventory row for a configured ONT."""
     if assignment is None:
@@ -157,14 +316,12 @@ def ensure_cpe_for_ont(
         ).first()
 
     serial_number = str(getattr(ont, "serial_number", "") or "").strip()[:120] or None
-    existing = None
-    if serial_number:
-        existing = db.scalars(
-            select(CPEDevice)
-            .where(CPEDevice.serial_number == serial_number)
-            .order_by(CPEDevice.updated_at.desc(), CPEDevice.created_at.desc())
-            .limit(1)
-        ).first()
+    existing = _resolve_existing_cpe_for_ont(
+        db,
+        ont=ont,
+        serial_number=serial_number,
+        strict=strict_existing_match,
+    )
 
     if existing is None and (
         assignment is None or getattr(assignment, "subscriber_id", None) is None
@@ -199,9 +356,12 @@ def ensure_cpe_for_ont(
             tr069_data_model=getattr(ont, "tr069_data_model", None),
         )
         db.add(device)
-        db.commit()
-        db.refresh(device)
-        _auto_register_tr069_device(db, device)
+        if commit:
+            db.commit()
+            db.refresh(device)
+        else:
+            db.flush()
+        _auto_register_tr069_device(db, device, commit=commit)
         return device
 
     if assignment and getattr(assignment, "subscriber_id", None) is not None:
@@ -209,6 +369,11 @@ def ensure_cpe_for_ont(
         existing.service_address_id = cast("UUID | None", assignment.service_address_id)
         if existing.installed_at is None and assignment.assigned_at is not None:
             existing.installed_at = assignment.assigned_at
+    else:
+        inventory_subscriber = _get_or_create_inventory_subscriber(db)
+        existing.subscriber_id = inventory_subscriber.id
+        existing.service_address_id = None
+        existing.installed_at = None
     if data.get("serial_number"):
         existing.serial_number = data["serial_number"]
     if data.get("vendor"):
@@ -225,9 +390,12 @@ def ensure_cpe_for_ont(
         if getattr(ont, "is_active", False)
         else DeviceStatus.inactive
     )
-    db.commit()
-    db.refresh(existing)
-    _auto_register_tr069_device(db, existing)
+    if commit:
+        db.commit()
+        db.refresh(existing)
+    else:
+        db.flush()
+    _auto_register_tr069_device(db, existing, commit=commit)
     return existing
 
 

@@ -2,11 +2,14 @@ import importlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.catalog import (
@@ -61,6 +64,11 @@ from app.schemas.network import (
     IPAssignmentCreate,
     IPv4AddressCreate,
     IPv6AddressCreate,
+    OLTDeviceCreate,
+    OntAssignmentCreate,
+    OntAssignmentUpdate,
+    OntUnitCreate,
+    PonPortCreate,
 )
 from app.schemas.network_monitoring import NetworkDeviceCreate
 from app.schemas.tr069 import Tr069CpeDeviceCreate, Tr069JobCreate
@@ -73,6 +81,7 @@ from app.services import network_topology as network_topology_service
 from app.services import snmp_discovery as snmp_discovery_service
 from app.services import tr069 as tr069_service
 from app.services import web_network_core_devices as web_network_core_devices_service
+from app.services import web_network_core_devices_inventory as core_devices_inventory_service
 from app.services import web_network_core_devices_forms as core_devices_forms
 from app.services import web_network_core_devices_views as core_devices_views
 from app.services import web_network_core_runtime as core_runtime
@@ -82,6 +91,7 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
+from app.web_domains import network_home
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.cpe_tr069 import CpeTR069
@@ -1025,6 +1035,162 @@ def test_build_cpe_list_data_filters_and_stats(db_session, subscriber):
     assert data["stats"]["mikrotik"] == 1
 
 
+def test_build_cpe_list_data_hides_system_owned_inventory_rows(db_session, subscriber):
+    network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="VISIBLE-CPE-001",
+            vendor="MikroTik",
+            model="hAP ax2",
+        ),
+    )
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="Inv OLT", hostname="inv-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/1"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="PARKED-ONT-001"),
+    )
+    assigned = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.update(
+        db_session,
+        str(assigned.id),
+        OntAssignmentUpdate(active=False),
+    )
+
+    parked_cpe = db_session.scalars(
+        select(CPEDevice).where(CPEDevice.serial_number == "PARKED-ONT-001").limit(1)
+    ).first()
+    assert parked_cpe is not None
+
+    data = web_network_cpes_service.build_cpe_list_data(db_session)
+    serials = {cpe.serial_number for cpe in data["cpes"]}
+    assert "VISIBLE-CPE-001" in serials
+    assert "PARKED-ONT-001" not in serials
+    assert all(sub.user_type.value != "system_user" for sub in data["subscribers"])
+
+
+def test_collect_devices_excludes_system_owned_inventory_cpes(db_session, subscriber):
+    network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="VISIBLE-CORE-CPE",
+            vendor="ZTE",
+            model="F660",
+        ),
+    )
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="Core Inv OLT", hostname="core-inv-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/2"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="PARKED-CORE-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+
+    devices = core_devices_inventory_service.collect_devices(db_session)
+    cpe_serials = {
+        device["serial_number"] for device in devices if device.get("type") == "cpe"
+    }
+    assert "VISIBLE-CORE-CPE" in cpe_serials
+    assert "PARKED-CORE-ONT" not in cpe_serials
+
+
+def test_web_network_home_excludes_system_owned_inventory_cpes(db_session, subscriber):
+    network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="VISIBLE-WEB-CPE",
+            vendor="Huawei",
+            model="EG8145X6",
+        ),
+    )
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="Web Inv OLT", hostname="web-inv-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/3"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="PARKED-WEB-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+
+    request = Request({"type": "http", "method": "GET", "path": "/web/network"})
+    with patch("app.web_domains.templates.TemplateResponse") as render:
+        network_home(request=request, db=db_session)
+
+    context = render.call_args.args[1]
+    serials = {item.serial_number for item in context["items"]}
+    assert "VISIBLE-WEB-CPE" in serials
+    assert "PARKED-WEB-ONT" not in serials
+
+
+def test_get_or_create_inventory_subscriber_recovers_from_integrity_race(
+    db_session, monkeypatch
+):
+    original_flush = db_session.flush
+    original_bind = db_session.get_bind()
+    state = {"raised": False}
+
+    def _racing_flush(*args, **kwargs):
+        if state["raised"]:
+            return original_flush(*args, **kwargs)
+        state["raised"] = True
+        with Session(bind=original_bind) as other_session:
+            existing = network_service.cpe.get_inventory_subscriber(other_session)
+            if existing is None:
+                network_service.cpe._get_or_create_inventory_subscriber(other_session)
+                other_session.commit()
+        raise IntegrityError("stmt", "params", "orig")
+
+    monkeypatch.setattr(db_session, "flush", _racing_flush)
+
+    subscriber = network_service.cpe._get_or_create_inventory_subscriber(db_session)
+
+    assert subscriber.email == "network-inventory@dotmac.local"
+    assert network_service.cpe.get_inventory_subscriber_id(db_session) == subscriber.id
+
+
 def test_tr069_dashboard_data_filters_and_stats(db_session, acs_server):
     device_seen = tr069_service.cpe_devices.create(
         db_session,
@@ -1180,6 +1346,177 @@ def test_tr069_dashboard_data_handles_joinedload_assignments_without_500(
     assert len(data["devices"]) == 1
     assert data["devices"][0].linked_ont is not None
     assert data["devices"][0].linked_pon_port_name == "PON 1/1/1"
+
+
+def test_tr069_dashboard_hides_system_owned_inventory_cpes_from_selector(
+    db_session, acs_server, subscriber
+):
+    visible_cpe = network_service.cpe_devices.create(
+        db_session,
+        CPEDeviceCreate(
+            account_id=subscriber.id,
+            serial_number="VISIBLE-TR069-CPE",
+            vendor="Huawei",
+            model="HG8145V5",
+        ),
+    )
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="TR069 Inv OLT", hostname="tr069-inv-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/4"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="PARKED-TR069-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+
+    data = web_network_tr069_service.tr069_dashboard_data(
+        db_session,
+        acs_server_id=str(acs_server.id),
+    )
+
+    labels = set(data["cpe_typeahead_labels"])
+    assert any("VISIBLE-TR069-CPE" in label for label in labels)
+    assert all("PARKED-TR069-ONT" not in label for label in labels)
+    assert str(visible_cpe.id) in data["cpe_display_by_id"]
+
+
+def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_name(
+    db_session, acs_server, subscriber
+):
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="TR069 Link OLT", hostname="tr069-link-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/6"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="LINKED-PARKED-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+
+    parked_cpe = db_session.scalars(
+        select(CPEDevice)
+        .where(CPEDevice.serial_number == "LINKED-PARKED-ONT")
+        .limit(1)
+    ).first()
+    assert parked_cpe is not None
+
+    linked_device = Tr069CpeDevice(
+        acs_server_id=acs_server.id,
+        serial_number="LINKED-PARKED-ONT",
+        cpe_device_id=parked_cpe.id,
+        is_active=True,
+    )
+    db_session.add(linked_device)
+    db_session.commit()
+
+    data = web_network_tr069_service.tr069_dashboard_data(
+        db_session,
+        acs_server_id=str(acs_server.id),
+    )
+
+    linked = next(
+        device
+        for device in data["configured_devices"]
+        if device.serial_number == "LINKED-PARKED-ONT"
+    )
+    assert linked.linked_cpe is not None
+    assert linked.linked_cpe_display_label == "LINKED-PARKED-ONT"
+    assert all("Network Inventory" not in label for label in data["cpe_typeahead_labels"])
+
+
+def test_link_tr069_device_to_cpe_rejects_missing_cpe(db_session, acs_server):
+    tr069_device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="TR069-LINK-MISSING",
+            is_active=True,
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="CPE device not found") as exc_info:
+        web_network_tr069_service.link_tr069_device_to_cpe(
+            db_session,
+            tr069_device_id=str(tr069_device.id),
+            cpe_device_id=str(uuid4()),
+        )
+    assert exc_info.value.status_code == 404
+
+
+def test_link_tr069_device_to_cpe_rejects_parked_inventory_cpe(
+    db_session, acs_server, subscriber
+):
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="TR069 Reject OLT", hostname="tr069-reject-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/7"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="REJECT-PARKED-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    parked_cpe = db_session.scalars(
+        select(CPEDevice)
+        .where(CPEDevice.serial_number == "REJECT-PARKED-ONT")
+        .limit(1)
+    ).first()
+    assert parked_cpe is not None
+
+    tr069_device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="TR069-LINK-PARKED",
+            is_active=True,
+        ),
+    )
+
+    with pytest.raises(
+        HTTPException, match="Cannot link TR-069 device to parked inventory CPE"
+    ) as exc_info:
+        web_network_tr069_service.link_tr069_device_to_cpe(
+            db_session,
+            tr069_device_id=str(tr069_device.id),
+            cpe_device_id=str(parked_cpe.id),
+        )
+    assert exc_info.value.status_code == 400
 
 
 def test_network_map_context_includes_network_device_markers(db_session):

@@ -3,11 +3,15 @@
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import select
 
-from app.models.network import OLTDevice, OntUnit
+from app.models.network import CPEDevice, OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice, Tr069Event, Tr069JobStatus
+from app.schemas.network import OLTDeviceCreate, OntAssignmentCreate, OntUnitCreate, PonPortCreate
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
     Tr069AcsServerUpdate,
@@ -18,6 +22,7 @@ from app.schemas.tr069 import (
     Tr069ParameterCreate,
     Tr069SessionCreate,
 )
+from app.services import network as network_service
 from app.services import tr069 as tr069_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_tr069 as web_network_tr069_service
@@ -112,6 +117,66 @@ def test_create_cpe_device(db_session, acs_server):
     assert device.serial_number == "CPE123456"
 
 
+def test_create_cpe_device_rejects_missing_link_target(db_session, acs_server):
+    with pytest.raises(HTTPException, match="CPE device not found") as exc_info:
+        tr069_service.cpe_devices.create(
+            db_session,
+            Tr069CpeDeviceCreate(
+                acs_server_id=acs_server.id,
+                serial_number="CPE-CREATE-LINK-MISSING",
+                cpe_device_id=uuid4(),
+            ),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_create_cpe_device_rejects_parked_inventory_cpe(
+    db_session, acs_server, subscriber
+):
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="TR069 Create OLT", hostname="tr069-create-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/9"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="CREATE-PARKED-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    parked_cpe = db_session.scalars(
+        select(CPEDevice)
+        .where(CPEDevice.serial_number == "CREATE-PARKED-ONT")
+        .limit(1)
+    ).first()
+    assert parked_cpe is not None
+
+    with pytest.raises(
+        HTTPException, match="Cannot link TR-069 device to parked inventory CPE"
+    ) as exc_info:
+        tr069_service.cpe_devices.create(
+            db_session,
+            Tr069CpeDeviceCreate(
+                acs_server_id=acs_server.id,
+                serial_number="CPE-CREATE-LINK-PARKED",
+                cpe_device_id=parked_cpe.id,
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+
+
 def test_list_cpe_devices_by_server(db_session, acs_server):
     """Test listing CPE devices by ACS server."""
     tr069_service.cpe_devices.create(
@@ -157,6 +222,76 @@ def test_update_cpe_device(db_session, acs_server):
         Tr069CpeDeviceUpdate(product_class="Gateway"),
     )
     assert updated.product_class == "Gateway"
+
+
+def test_update_cpe_device_rejects_missing_link_target(db_session, acs_server):
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="CPE-LINK-MISSING",
+        ),
+    )
+
+    with pytest.raises(HTTPException, match="CPE device not found") as exc_info:
+        tr069_service.cpe_devices.update(
+            db_session,
+            device.id,
+            Tr069CpeDeviceUpdate(cpe_device_id=uuid4()),
+        )
+
+    assert exc_info.value.status_code == 404
+
+
+def test_update_cpe_device_rejects_parked_inventory_cpe(
+    db_session, acs_server, subscriber
+):
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="TR069 Service OLT", hostname="tr069-service-olt.local"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/8"),
+    )
+    ont = network_service.ont_units.create(
+        db_session,
+        OntUnitCreate(serial_number="SERVICE-PARKED-ONT"),
+    )
+    assignment = network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+    network_service.ont_assignments.delete(db_session, str(assignment.id))
+    parked_cpe = db_session.scalars(
+        select(CPEDevice)
+        .where(CPEDevice.serial_number == "SERVICE-PARKED-ONT")
+        .limit(1)
+    ).first()
+    assert parked_cpe is not None
+
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="CPE-LINK-PARKED",
+        ),
+    )
+
+    with pytest.raises(
+        HTTPException, match="Cannot link TR-069 device to parked inventory CPE"
+    ) as exc_info:
+        tr069_service.cpe_devices.update(
+            db_session,
+            device.id,
+            Tr069CpeDeviceUpdate(cpe_device_id=parked_cpe.id),
+        )
+
+    assert exc_info.value.status_code == 400
 
 
 def test_create_tr069_job(db_session, acs_server):

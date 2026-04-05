@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.network import OLTDevice
 from app.models.network_monitoring import DeviceInterface, NetworkDevice
 from app.services import network as network_service
+from app.services.network import cpe as cpe_service
 
 if TYPE_CHECKING:
     from app.models.network import Port
@@ -186,7 +187,13 @@ def collect_devices(db: Session) -> list[dict]:
         limit=500,
         offset=0,
     )
+    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
     for cpe in cpes:
+        if (
+            inventory_subscriber_id is not None
+            and getattr(cpe, "subscriber_id", None) == inventory_subscriber_id
+        ):
+            continue
         devices.append(
             {
                 "id": str(cpe.id),

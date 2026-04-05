@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 
 OPERATION_DISPLAY: dict[str, str] = {
     "olt_ont_sync": "OLT ONT Discovery",
+    "olt_pon_repair": "PON Port Repair",
     "ont_authorize": "ONT Authorize",
     "ont_reboot": "ONT Reboot",
     "ont_factory_reset": "ONT Factory Reset",
@@ -32,6 +33,18 @@ OPERATION_DISPLAY: dict[str, str] = {
     "wifi_update": "Wi-Fi Configuration",
     "pppoe_push": "PPPoE Push",
 }
+
+
+def _operation_title(op: Any) -> str:
+    op_type_val = op.operation_type.value if op.operation_type else ""
+    payload = getattr(op, "output_payload", None) or {}
+    if (
+        op_type_val == "olt_ont_sync"
+        and isinstance(payload, dict)
+        and payload.get("mode") == "pon_port_repair"
+    ):
+        return "PON Port Repair"
+    return OPERATION_DISPLAY.get(op_type_val, op_type_val)
 
 STATUS_CLASSES: dict[str, str] = {
     "pending": "bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-200",
@@ -101,7 +114,7 @@ def build_operation_history(
 
         entry: dict[str, Any] = {
             "id": str(op.id),
-            "title": OPERATION_DISPLAY.get(op_type_val, op_type_val),
+            "title": _operation_title(op),
             "status": STATUS_DISPLAY.get(status_val, status_val),
             "status_value": status_val,
             "status_class": STATUS_CLASSES.get(status_val, STATUS_CLASSES["pending"]),

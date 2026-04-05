@@ -512,6 +512,13 @@
                             Sync ONTs From OLT (SNMP)
                         </button>
                     </form>
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/repair-pon-ports">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m14.836 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.164 15m14.255 0H15"/></svg>
+                            Repair PON Port Inventory
+                        </button>
+                    </form>
                 </div>
                 {% endcall %}
 

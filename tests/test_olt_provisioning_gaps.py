@@ -19,6 +19,9 @@ from typing import cast
 from starlette.routing import Route
 
 from app.models.network import (
+    OltCard,
+    OltCardPort,
+    OltShelf,
     OLTDevice,
     OntAssignment,
     OntProvisioningProfile,
@@ -974,6 +977,16 @@ class TestWebNetworkOltsMigration:
         db_session.commit()
         db_session.refresh(olt)
 
+        shelf = OltShelf(olt_id=olt.id, shelf_number=0)
+        db_session.add(shelf)
+        db_session.commit()
+        db_session.refresh(shelf)
+
+        card = OltCard(shelf_id=shelf.id, slot_number=2)
+        db_session.add(card)
+        db_session.commit()
+        db_session.refresh(card)
+
         candidate = OltAutofindCandidate(
             olt_id=olt.id,
             fsp="0/2/1",
@@ -1017,15 +1030,20 @@ class TestWebNetworkOltsMigration:
 
         ont = db_session.query(OntUnit).filter_by(serial_number="48575443ABCDEF02").one()
         assert ont.olt_device_id == olt.id
+        assert ont.pon_type.value == "gpon"
+        assert ont.gpon_channel.value == "gpon"
         assert ont.board == "0/2"
         assert ont.port == "1"
         assert ont.external_id == "7"
+        assert ont.online_status.value == "unknown"
         assert ont.vendor == "HWTC"
         assert ont.model == "EchoLife HG8010H"
         assert ont.firmware_version == "V3R019"
         assert ont.mac_address == "AA:BB:CC:DD:EE:FF"
+        assert ont.tr069_acs_server_id == olt.tr069_acs_server_id
 
         pon = db_session.query(PonPort).filter_by(olt_id=olt.id, name="0/2/1").one()
+        card_port = db_session.get(OltCardPort, pon.olt_card_port_id)
         assignment = (
             db_session.query(OntAssignment)
             .filter_by(ont_unit_id=ont.id, active=True)
@@ -1033,6 +1051,9 @@ class TestWebNetworkOltsMigration:
         )
         assert assignment.pon_port_id == pon.id
         assert assignment.assigned_at is not None
+        assert pon.port_number == 1
+        assert card_port is not None
+        assert card_port.port_number == 1
 
         refreshed_candidate = db_session.get(OltAutofindCandidate, candidate.id)
         assert refreshed_candidate is not None

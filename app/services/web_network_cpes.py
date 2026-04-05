@@ -10,10 +10,11 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription
 from app.models.network import CPEDevice, DeviceStatus, OntAssignment, OntUnit
-from app.models.subscriber import Address, Subscriber
+from app.models.subscriber import Address, Subscriber, UserType
 from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import CPEDeviceCreate, CPEDeviceUpdate
 from app.services import network as network_service
+from app.services.network import cpe as cpe_service
 from app.services.common import coerce_uuid, validate_enum
 from app.services.network._common import decode_huawei_hex_serial, normalize_mac_address
 
@@ -387,6 +388,13 @@ def build_cpe_list_data(
         limit=5000,
         offset=0,
     )
+    inventory_subscriber_id = cpe_service.get_inventory_subscriber_id(db)
+    if subscriber_filter is None and inventory_subscriber_id is not None:
+        devices = [
+            device
+            for device in devices
+            if getattr(device, "subscriber_id", None) != inventory_subscriber_id
+        ]
     search_q = str(search or "").strip().lower()
     status_q = str(status or "").strip().lower()
     vendor_q = str(vendor or "").strip().lower()
@@ -413,6 +421,7 @@ def build_cpe_list_data(
     vendors = sorted({str(d.vendor) for d in devices if d.vendor})
     subscribers = (
         db.query(Subscriber)
+        .filter(Subscriber.user_type != UserType.system_user)
         .order_by(Subscriber.first_name.asc(), Subscriber.last_name.asc())
         .limit(500)
         .all()

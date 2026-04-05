@@ -26,6 +26,7 @@ from app.services.network_operations import (
     run_tracked_action,
     tracked_operation,
 )
+from app.services.web_network_operations import build_operation_history
 from app.tasks.network_operations import cleanup_old_operations
 
 # ---------------------------------------------------------------------------
@@ -176,6 +177,31 @@ class TestNetworkOperationLifecycle:
         updated = network_operations.mark_canceled(db_session, str(op.id))
         assert updated.status == NetworkOperationStatus.canceled
         assert updated.completed_at is not None
+
+    def test_operation_history_labels_pon_repair_distinctly(self, db_session):
+        """PON repair runs should not appear as generic ONT discovery."""
+        target_id = _make_target_id()
+        op = network_operations.start(
+            db_session,
+            NetworkOperationType.olt_pon_repair,
+            NetworkOperationTargetType.olt,
+            target_id,
+        )
+        network_operations.mark_running(db_session, str(op.id))
+        network_operations.mark_succeeded(
+            db_session,
+            str(op.id),
+            output_payload={"mode": "pon_port_repair", "repaired": 3},
+        )
+
+        history = build_operation_history(
+            db_session,
+            NetworkOperationTargetType.olt.value,
+            target_id,
+        )
+
+        assert history[0]["title"] == "PON Port Repair"
+        assert history[0]["operation_type"] == NetworkOperationType.olt_pon_repair.value
 
     def test_get_nonexistent_raises_404(self, db_session):
         """Fetching a nonexistent operation raises 404."""

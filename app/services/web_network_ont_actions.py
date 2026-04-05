@@ -16,6 +16,7 @@ from app.models.network_operation import (
 from app.services import network as network_service
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 
@@ -380,6 +381,7 @@ def return_to_inventory(
     if active_assignment is not None:
         active_assignment.active = False
 
+    ont.is_active = False
     ont.provisioning_profile_id = None
     ont.provisioning_status = OntProvisioningStatus.unprovisioned
     ont.last_provisioned_at = None
@@ -397,6 +399,8 @@ def return_to_inventory(
     ont.mgmt_ip_address = None
     ont.mgmt_remote_access = False
     ont.voip_enabled = False
+    db.flush()
+    ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
 
     db.commit()
     db.refresh(ont)

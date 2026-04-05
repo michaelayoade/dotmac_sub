@@ -23,14 +23,64 @@ _WIFI_SSID_PATHS = {
 }
 
 _WIFI_PSK_PATHS = {
-    "Device": "WiFi.AccessPoint.1.Security.PreSharedKey.1.PreSharedKey",
-    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey",
+    "Device": [
+        "WiFi.AccessPoint.1.Security.KeyPassphrase",
+        "WiFi.AccessPoint.1.Security.PreSharedKey.1.PreSharedKey",
+    ],
+    "InternetGatewayDevice": [
+        "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.KeyPassphrase",
+        "LANDevice.1.WLANConfiguration.1.KeyPassphrase",
+        "LANDevice.1.WLANConfiguration.1.PreSharedKey.1.PreSharedKey",
+    ],
 }
 
 _LAN_PORT_PATHS = {
     "Device": "Ethernet.Interface.{port}.Enable",
     "InternetGatewayDevice": "LANDevice.1.LANEthernetInterfaceConfig.{port}.Enable",
 }
+
+
+def _request_runtime_refresh(client: object, device_id: str, root: str) -> None:
+    """Best-effort refresh so UI snapshots catch up after a config push."""
+    refresh = getattr(client, "refresh_object", None)
+    if not callable(refresh):
+        return
+    try:
+        refresh(device_id, f"{root}.", connection_request=True)
+    except Exception:
+        logger.debug(
+            "Runtime refresh request failed for device %s after WiFi update",
+            device_id,
+            exc_info=True,
+        )
+
+
+def _set_first_supported_path(
+    client: object,
+    device_id: str,
+    root: str,
+    candidate_paths: list[str],
+    value: str,
+) -> dict[str, object]:
+    """Try a list of candidate parameter paths until one succeeds."""
+    last_error: Exception | None = None
+    for candidate in candidate_paths:
+        params = build_tr069_params(root, {candidate: value})
+        try:
+            result = client.set_parameter_values(device_id, params)
+            _request_runtime_refresh(client, device_id, root)
+            return result
+        except GenieACSError as exc:
+            last_error = exc
+            logger.debug(
+                "TR-069 path %s rejected for device %s: %s",
+                f"{root}.{candidate}",
+                device_id,
+                exc,
+            )
+    if last_error is not None:
+        raise last_error
+    raise GenieACSError("No WiFi parameter paths configured.")
 
 
 def set_wifi_ssid(db: Session, cpe_id: str, ssid: str) -> ActionResult:
@@ -48,6 +98,7 @@ def set_wifi_ssid(db: Session, cpe_id: str, ssid: str) -> ActionResult:
     params = build_tr069_params(root, {_WIFI_SSID_PATHS[root]: ssid})
     try:
         result = client.set_parameter_values(device_id, params)
+        _request_runtime_refresh(client, device_id, root)
         logger.info("WiFi SSID set on CPE %s to '%s'", cpe.serial_number, ssid)
         return ActionResult(
             success=True,
@@ -73,9 +124,14 @@ def set_wifi_password(db: Session, cpe_id: str, password: str) -> ActionResult:
         return ActionResult(success=False, message="CPE device resolution failed.")
     cpe, client, device_id = resolved
     root = detect_data_model_root(db, cpe, client, device_id)
-    params = build_tr069_params(root, {_WIFI_PSK_PATHS[root]: password})
     try:
-        result = client.set_parameter_values(device_id, params)
+        result = _set_first_supported_path(
+            client,
+            device_id,
+            root,
+            _WIFI_PSK_PATHS[root],
+            password,
+        )
         logger.info("WiFi password set on CPE %s", cpe.serial_number)
         return ActionResult(
             success=True,

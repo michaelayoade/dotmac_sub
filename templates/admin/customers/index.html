@@ -16,13 +16,14 @@
     {{ ambient_background("amber", "orange") }}
 
     {# ── Page Header ── #}
-    <div class="relative">
+    <div class="relative z-30">
         {% call(content) page_header(
             title="Customers",
             subtitle="Manage your customer relationships",
             icon=icon_users(),
             color="amber",
-            color2="orange"
+            color2="orange",
+            allow_overflow=True
         ) %}
             {# Export Dropdown #}
             <div x-data="{ open: false }" class="relative">
@@ -33,7 +34,7 @@
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </button>
                 <div x-show="open" @click.away="open = false" x-transition x-cloak
-                     class="absolute right-0 mt-2 w-48 rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-800 z-20">
+                     class="absolute right-0 z-50 mt-2 w-48 rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-800">
                     <button @click="exportCustomers('csv'); open = false" class="flex w-full items-center gap-2 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
                         Export as CSV
@@ -51,13 +52,16 @@
     {# ── Stats Grid ── #}
     <section class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {{ stats_card("Total Customers", total_customers,
-            icon=icon_users(), color="amber", color2="orange", href="/admin/customers"
+            icon=icon_users(), color="amber", color2="orange", href="/admin/customers",
+            action_label="Open customer list →"
         ) }}
         {{ stats_card("Individuals", total_people,
-            icon=icon_user(), color="blue", color2="indigo", href="/admin/customers?customer_type=person"
+            icon=icon_user(), color="blue", color2="indigo", href="/admin/customers?customer_type=person",
+            action_label="Open individual customers →"
         ) }}
         {{ stats_card("Businesses", total_businesses,
-            icon=icon_building(), color="purple", color2="violet", href="/admin/customers?customer_type=business"
+            icon=icon_building(), color="purple", color2="violet", href="/admin/customers?customer_type=business",
+            action_label="Open business customers →"
         ) }}
 
         {# Composition Donut — custom inline #}

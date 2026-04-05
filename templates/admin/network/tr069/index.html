@@ -339,7 +339,7 @@
                                 </form>
                                 {% if device.linked_cpe %}
                                 <div class="mt-1 text-xs text-slate-600 dark:text-slate-400">
-                                    {{ (device.linked_cpe.subscriber.full_name if device.linked_cpe.subscriber else None) or device.linked_cpe.serial_number or device.linked_cpe.model or device.linked_cpe.mac_address or ('CPE ' ~ (device.linked_cpe.id|string)[:8]) }}
+                                    {{ device.linked_cpe_display_label or device.linked_cpe.serial_number or device.linked_cpe.model or device.linked_cpe.mac_address or ('CPE ' ~ (device.linked_cpe.id|string)[:8]) }}
                                     {% if device.linked_cpe.serial_number %} • {{ device.linked_cpe.serial_number }}{% endif %}
                                     {% if device.linked_cpe.model %} • {{ device.linked_cpe.model }}{% endif %}
                                     {% if device.linked_cpe.mac_address %} • {{ device.linked_cpe.mac_address }}{% endif %}

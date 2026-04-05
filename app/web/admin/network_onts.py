@@ -1085,10 +1085,12 @@ def ont_firmware_upgrade(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ont_set_wifi_ssid(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
+    request: Request,
+    ont_id: str,
+    ssid: str = Form(""),
+    db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Set WiFi SSID on ONT via GenieACS TR-069."""
-    ssid = request.query_params.get("ssid", "")
     result = web_network_ont_actions_service.set_wifi_ssid(db, ont_id, ssid)
     from app.web.admin import get_current_user
 

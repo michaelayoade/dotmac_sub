@@ -78,7 +78,49 @@ def _normalize_port_name(value: str | None) -> str:
     """Normalize interface/port names for loose matching."""
     if not value:
         return ""
-    return re.sub(r"[^a-z0-9]+", "", value.lower())
+    text = str(value).strip()
+    hint = _extract_pon_hint(text)
+    if hint:
+        return hint.lower()
+    return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def _dedupe_live_board_inventory(
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Collapse duplicate ENTITY-MIB rows that point to the same physical slot."""
+    deduped: list[dict[str, object]] = []
+    seen: dict[tuple[object, object], int] = {}
+
+    for item in items:
+        category = item.get("category")
+        slot_number = item.get("slot_number")
+        if category == "card" and slot_number is not None:
+            key = (category, slot_number)
+        else:
+            key = (
+                category,
+                str(item.get("card_type") or "").strip().lower()
+                or item.get("index"),
+            )
+
+        existing_idx = seen.get(key)
+        if existing_idx is None:
+            seen[key] = len(deduped)
+            deduped.append(dict(item))
+            continue
+
+        existing = deduped[existing_idx]
+        current_label = str(existing.get("card_type") or "")
+        candidate_label = str(item.get("card_type") or "")
+        if len(candidate_label) > len(current_label):
+            existing["card_type"] = item.get("card_type")
+        if existing.get("slot_number") is None and slot_number is not None:
+            existing["slot_number"] = slot_number
+        if existing.get("index") is None and item.get("index") is not None:
+            existing["index"] = item.get("index")
+
+    return deduped
 
 
 def _extract_range_display(*values: object) -> str | None:
@@ -1008,6 +1050,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
             "snmp_system": snmp_system,
         }
 
+    live_board_inventory = _dedupe_live_board_inventory(live_board_inventory)
     live_board_inventory.sort(
         key=lambda item: (
             0 if item.get("category") == "card" else 1,

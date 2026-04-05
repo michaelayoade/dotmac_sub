@@ -1,6 +1,19 @@
 from types import SimpleNamespace
+from uuid import uuid4
+import importlib
 
-from app.models.network import OnuOfflineReason, OnuOnlineStatus, OntUnit
+from sqlalchemy import select
+
+from app.models.network import (
+    OltCard,
+    OltCardPort,
+    OltShelf,
+    OnuOfflineReason,
+    OnuOnlineStatus,
+    OntAssignment,
+    OntUnit,
+    PonPort,
+)
 from app.services import web_network_olts as service
 
 
@@ -365,3 +378,453 @@ def test_sync_impl_clears_stale_offline_reason_when_status_becomes_unknown(
     assert ok is True
     assert ont.online_status == OnuOnlineStatus.unknown
     assert ont.offline_reason is None
+
+
+def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
+    db_session, monkeypatch
+) -> None:
+    fake_olt = SimpleNamespace(
+        id=uuid4(),
+        mgmt_ip="10.0.0.3",
+        hostname="olt3.local",
+        name="OLT 3",
+        vendor="Huawei",
+        model="MA5600",
+        tr069_acs_server_id=None,
+        snmp_ro_community="enc",
+    )
+
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        id=fake_olt.id,
+        name=fake_olt.name,
+        mgmt_ip=fake_olt.mgmt_ip,
+        hostname=fake_olt.hostname,
+        vendor=fake_olt.vendor,
+        model=fake_olt.model,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    shelf = OltShelf(olt_id=olt.id, shelf_number=0)
+    db_session.add(shelf)
+    db_session.flush()
+    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    db_session.add(card)
+    db_session.flush()
+
+    fake_linked = SimpleNamespace(
+        mgmt_ip="10.0.0.3",
+        hostname="olt3.local",
+        snmp_enabled=True,
+        snmp_community="enc",
+        snmp_version="v2c",
+        snmp_port=None,
+        vendor="Huawei",
+    )
+
+    monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
+    monkeypatch.setattr(
+        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"],
+    )
+    monkeypatch.setattr(
+        service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"}
+    )
+    monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
+
+    ok, _msg, stats = service._sync_onts_from_olt_snmp_impl(db_session, str(olt.id))
+
+    pon = db_session.scalars(
+        select(PonPort).where(PonPort.olt_id == olt.id)
+    ).first()
+
+    assert ok is True
+    assert stats["assignments_created"] == 1
+    assert pon is not None
+    assert pon.name == "0/4/0"
+    assert pon.port_number == 0
+    assert pon.olt_card_port_id is not None
+    card_port = db_session.get(OltCardPort, pon.olt_card_port_id)
+    assert card_port is not None
+    assert card_port.port_number == 0
+
+
+def test_sync_impl_repairs_existing_pon_port_metadata(
+    db_session, monkeypatch
+) -> None:
+    fake_olt = SimpleNamespace(
+        id=uuid4(),
+        mgmt_ip="10.0.0.4",
+        hostname="olt4.local",
+        name="OLT 4",
+        vendor="Huawei",
+        model="MA5600",
+        tr069_acs_server_id=None,
+        snmp_ro_community="enc",
+    )
+
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        id=fake_olt.id,
+        name=fake_olt.name,
+        mgmt_ip=fake_olt.mgmt_ip,
+        hostname=fake_olt.hostname,
+        vendor=fake_olt.vendor,
+        model=fake_olt.model,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    shelf = OltShelf(olt_id=olt.id, shelf_number=0)
+    db_session.add(shelf)
+    db_session.flush()
+    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    db_session.add(card)
+    db_session.flush()
+    legacy_port = PonPort(
+        olt_id=olt.id,
+        name="0/4/0",
+        port_number=None,
+        olt_card_port_id=None,
+        is_active=True,
+    )
+    db_session.add(legacy_port)
+    db_session.flush()
+
+    fake_linked = SimpleNamespace(
+        mgmt_ip="10.0.0.4",
+        hostname="olt4.local",
+        snmp_enabled=True,
+        snmp_community="enc",
+        snmp_version="v2c",
+        snmp_port=None,
+        vendor="Huawei",
+    )
+
+    monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
+    monkeypatch.setattr(
+        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"],
+    )
+    monkeypatch.setattr(
+        service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"}
+    )
+    monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
+
+    ok, _msg, _stats = service._sync_onts_from_olt_snmp_impl(db_session, str(olt.id))
+
+    repaired = db_session.get(PonPort, legacy_port.id)
+
+    assert ok is True
+    assert repaired is not None
+    assert repaired.port_number == 0
+    assert repaired.olt_card_port_id is not None
+
+
+def test_sync_impl_merges_duplicate_rows_for_same_card_port(
+    db_session, monkeypatch
+) -> None:
+    fake_olt = SimpleNamespace(
+        id=uuid4(),
+        mgmt_ip="10.0.0.5",
+        hostname="olt5.local",
+        name="OLT 5",
+        vendor="Huawei",
+        model="MA5600",
+        tr069_acs_server_id=None,
+        snmp_ro_community="enc",
+    )
+
+    from app.models.network import OLTDevice, OntAssignment
+
+    olt = OLTDevice(
+        id=fake_olt.id,
+        name=fake_olt.name,
+        mgmt_ip=fake_olt.mgmt_ip,
+        hostname=fake_olt.hostname,
+        vendor=fake_olt.vendor,
+        model=fake_olt.model,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    shelf = OltShelf(olt_id=olt.id, shelf_number=0)
+    db_session.add(shelf)
+    db_session.flush()
+    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    db_session.add(card)
+    db_session.flush()
+    card_port = OltCardPort(card_id=card.id, port_number=0, name="0/4/0", is_active=True)
+    db_session.add(card_port)
+    db_session.flush()
+    linked_port = PonPort(
+        olt_id=olt.id,
+        name="legacy-alt-name",
+        port_number=0,
+        olt_card_port_id=card_port.id,
+        is_active=True,
+    )
+    db_session.add(linked_port)
+    db_session.flush()
+    duplicate_name_port = PonPort(
+        olt_id=olt.id,
+        name="0/4/0",
+        port_number=0,
+        olt_card_port_id=None,
+        is_active=True,
+    )
+    db_session.add(duplicate_name_port)
+    db_session.flush()
+    ont = OntUnit(serial_number="ONT-DUPLICATE-1", is_active=True)
+    old_ont = OntUnit(serial_number="ONT-DUPLICATE-OLD", is_active=True)
+    db_session.add(ont)
+    db_session.add(old_ont)
+    db_session.flush()
+    active_assignment = OntAssignment(
+        ont_unit_id=ont.id,
+        pon_port_id=duplicate_name_port.id,
+        active=True,
+    )
+    historical_assignment = OntAssignment(
+        ont_unit_id=old_ont.id,
+        pon_port_id=duplicate_name_port.id,
+        active=False,
+    )
+    db_session.add(active_assignment)
+    db_session.add(historical_assignment)
+    db_session.flush()
+
+    fake_linked = SimpleNamespace(
+        mgmt_ip="10.0.0.5",
+        hostname="olt5.local",
+        snmp_enabled=True,
+        snmp_community="enc",
+        snmp_version="v2c",
+        snmp_port=None,
+        vendor="Huawei",
+    )
+
+    monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
+    monkeypatch.setattr(
+        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"],
+    )
+    monkeypatch.setattr(
+        service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"}
+    )
+    monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
+
+    ok, _msg, _stats = service._sync_onts_from_olt_snmp_impl(db_session, str(olt.id))
+
+    repaired = db_session.get(PonPort, linked_port.id)
+    duplicate = db_session.get(PonPort, duplicate_name_port.id)
+
+    assert ok is True
+    assert repaired is not None
+    assert repaired.name == "0/4/0"
+    assert repaired.olt_card_port_id == card_port.id
+    assert duplicate is not None
+    assert duplicate.is_active is False
+    db_session.refresh(active_assignment)
+    db_session.refresh(historical_assignment)
+    assert active_assignment.pon_port_id == repaired.id
+    assert historical_assignment.pon_port_id == duplicate.id
+
+
+def test_get_device_summary_runtime_persistence_does_not_commit_when_requested(
+    db_session, monkeypatch
+) -> None:
+    ont = OntUnit(serial_number="ONT-RUNTIME-1", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+
+    committed = {"count": 0}
+    original_commit = db_session.commit
+
+    def counting_commit():
+        committed["count"] += 1
+        return original_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+
+    fake_device = {
+        "Device": {},
+        "DeviceInfo": {"SerialNumber": {"_value": "REALSERIAL1234"}},
+    }
+
+    def fake_extract_parameter_value(device, path):
+        current = device
+        for part in path.split("."):
+            if not isinstance(current, dict):
+                return None
+            current = current.get(part)
+            if current is None:
+                return None
+        if isinstance(current, dict) and "_value" in current:
+            return current["_value"]
+        return current
+
+    monkeypatch.setattr(
+        ont_tr069_module,
+        "resolve_genieacs",
+        lambda _db, _ont: (
+            SimpleNamespace(
+                get_device=lambda _device_id: fake_device,
+                extract_parameter_value=fake_extract_parameter_value,
+            ),
+            "device-1",
+        ),
+    )
+
+    result = ont_tr069_module.OntTR069.get_device_summary(
+        db_session,
+        str(ont.id),
+        persist_observed_runtime=False,
+    )
+    ont_tr069_module.OntTR069._persist_observed_runtime(
+        db_session,
+        ont,
+        result,
+        commit=False,
+    )
+
+    assert committed["count"] == 0
+
+
+def test_repair_pon_ports_for_olt_repairs_assignment_derived_legacy_port(
+    db_session,
+) -> None:
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        id=uuid4(),
+        name="Repair OLT",
+        mgmt_ip="10.0.0.6",
+        hostname="olt6.local",
+        vendor="Huawei",
+        model="MA5600",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    shelf = OltShelf(olt_id=olt.id, shelf_number=0)
+    db_session.add(shelf)
+    db_session.flush()
+    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    db_session.add(card)
+    db_session.flush()
+    legacy_port = PonPort(
+        olt_id=olt.id,
+        name="pon-1",
+        port_number=1,
+        olt_card_port_id=None,
+        is_active=True,
+    )
+    db_session.add(legacy_port)
+    db_session.flush()
+    ont = OntUnit(serial_number="ONT-REPAIR-1", board="0/4", port="1", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(
+        ont_unit_id=ont.id,
+        pon_port_id=legacy_port.id,
+        active=True,
+    )
+    db_session.add(assignment)
+    db_session.commit()
+
+    ok, _msg, stats = service.repair_pon_ports_for_olt(db_session, str(olt.id))
+
+    repaired_ports = list(
+        db_session.scalars(select(PonPort).where(PonPort.olt_id == olt.id)).all()
+    )
+    active_ports = [port for port in repaired_ports if port.is_active]
+
+    assert ok is True
+    assert stats["merged"] == 1
+    assert stats["unresolved"] == 0
+    assert len(active_ports) == 1
+    assert active_ports[0].name == "0/4/1"
+    assert active_ports[0].olt_card_port_id is not None
+    db_session.refresh(assignment)
+    assert assignment.pon_port_id == active_ports[0].id
+
+
+def test_repair_pon_ports_for_olt_reports_unresolved_ports(db_session) -> None:
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        id=uuid4(),
+        name="Repair OLT Unresolved",
+        mgmt_ip="10.0.0.7",
+        hostname="olt7.local",
+        vendor="Huawei",
+        model="MA5600",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    unresolved_port = PonPort(
+        olt_id=olt.id,
+        name="mystery-port",
+        port_number=None,
+        olt_card_port_id=None,
+        is_active=True,
+    )
+    db_session.add(unresolved_port)
+    db_session.commit()
+
+    ok, _msg, stats = service.repair_pon_ports_for_olt(db_session, str(olt.id))
+
+    assert ok is True
+    assert stats["scanned"] == 1
+    assert stats["repaired"] == 0
+    assert stats["merged"] == 0
+    assert stats["unresolved"] == 1
+    assert stats["unresolved_ports"][0]["pon_port_id"] == str(unresolved_port.id)
+
+
+def test_repair_pon_ports_for_olt_skips_inactive_ports(db_session) -> None:
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        id=uuid4(),
+        name="Repair OLT Inactive",
+        mgmt_ip="10.0.0.8",
+        hostname="olt8.local",
+        vendor="Huawei",
+        model="MA5600",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    inactive_port = PonPort(
+        olt_id=olt.id,
+        name="0/4/1",
+        port_number=1,
+        olt_card_port_id=None,
+        is_active=False,
+    )
+    db_session.add(inactive_port)
+    db_session.commit()
+
+    ok, _msg, stats = service.repair_pon_ports_for_olt(db_session, str(olt.id))
+
+    db_session.refresh(inactive_port)
+    assert ok is True
+    assert stats["scanned"] == 1
+    assert stats["repaired"] == 0
+    assert stats["merged"] == 0
+    assert stats["unresolved"] == 0
+    assert inactive_port.is_active is False

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 
 from fastapi import HTTPException
@@ -42,6 +43,7 @@ from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.validators import network as network_validators
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
@@ -51,11 +53,121 @@ from app.services.query_builders import apply_active_state, apply_optional_equal
 
 logger = logging.getLogger(__name__)
 
+_CANONICAL_PON_NAME_RE = re.compile(r"^\d+/\d+/\d+$")
+
 
 _ONT_STATUS_LOADS = (
     joinedload(OntUnit.tr069_acs_server),
     joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
 )
+
+
+def _canonical_pon_name_from_card_port(
+    db: Session,
+    card_port: OltCardPort,
+) -> str:
+    card = db.get(OltCard, card_port.card_id)
+    shelf = db.get(OltShelf, card.shelf_id) if card else None
+    if shelf and card:
+        return f"{shelf.shelf_number}/{card.slot_number}/{card_port.port_number}"
+    if getattr(card_port, "name", None):
+        return str(card_port.name)
+    return f"pon-{card_port.port_number}"
+
+
+def _parse_canonical_pon_name(name: str | None) -> tuple[str, int] | None:
+    text = str(name or "").strip()
+    if not _CANONICAL_PON_NAME_RE.fullmatch(text):
+        return None
+    board, port = text.rsplit("/", 1)
+    return board, int(port)
+
+
+def _validate_assignment_target(
+    db: Session,
+    *,
+    ont_unit_id: object,
+    pon_port_id: object | None,
+    active: bool,
+    current_assignment_id: object | None = None,
+) -> tuple[OntUnit, PonPort | None]:
+    ont = db.get(OntUnit, ont_unit_id)
+    if not ont:
+        raise HTTPException(status_code=404, detail="ONT unit not found")
+
+    pon_port: PonPort | None = None
+    if pon_port_id is not None:
+        pon_port = db.get(PonPort, pon_port_id)
+        if not pon_port or not bool(getattr(pon_port, "is_active", True)):
+            raise HTTPException(status_code=404, detail="PON port not found")
+        if ont.olt_device_id and pon_port.olt_id != ont.olt_device_id:
+            raise HTTPException(
+                status_code=400,
+                detail="PON port does not belong to the ONT's OLT",
+            )
+
+    if active:
+        stmt = (
+            select(OntAssignment)
+            .where(OntAssignment.ont_unit_id == ont.id)
+            .where(OntAssignment.active.is_(True))
+            .limit(1)
+        )
+        if current_assignment_id is not None:
+            stmt = stmt.where(OntAssignment.id != current_assignment_id)
+        existing_active = db.scalars(stmt).first()
+        if existing_active is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="ONT already has an active assignment",
+            )
+
+    return ont, pon_port
+
+
+def _validate_assignment_customer_links(
+    db: Session,
+    *,
+    subscriber_id: object | None,
+    service_address_id: object | None,
+) -> None:
+    if subscriber_id is None:
+        if service_address_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="Service address requires a subscriber",
+            )
+        return
+    network_validators.validate_cpe_device_links(
+        db,
+        str(subscriber_id),
+        str(service_address_id) if service_address_id is not None else None,
+    )
+
+
+def _has_other_active_assignment(
+    db: Session,
+    *,
+    ont_unit_id: object,
+    exclude_assignment_id: object | None = None,
+) -> bool:
+    stmt = (
+        select(OntAssignment.id)
+        .where(OntAssignment.ont_unit_id == ont_unit_id)
+        .where(OntAssignment.active.is_(True))
+        .limit(1)
+    )
+    if exclude_assignment_id is not None:
+        stmt = stmt.where(OntAssignment.id != exclude_assignment_id)
+    return db.scalars(stmt).first() is not None
+
+
+def _sync_ont_assignment_runtime(db: Session, ont: OntUnit) -> None:
+    from app.services.network.cpe import ensure_cpe_for_ont
+
+    has_active_assignment = _has_other_active_assignment(db, ont_unit_id=ont.id)
+    ont.is_active = has_active_assignment
+    ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
 
 
 class OLTDevices(CRUDManager[OLTDevice]):
@@ -232,6 +344,13 @@ class PonPorts(CRUDManager[PonPort]):
             card_port = db.get(OltCardPort, payload.olt_card_port_id)
             if not card_port:
                 raise HTTPException(status_code=404, detail="OLT card port not found")
+            card = db.get(OltCard, card_port.card_id)
+            shelf = db.get(OltShelf, card.shelf_id) if card else None
+            if not shelf or shelf.olt_id != payload.olt_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="OLT card port does not belong to the selected OLT",
+                )
         elif payload.card_id:
             if payload.port_number is None:
                 raise HTTPException(
@@ -241,18 +360,86 @@ class PonPorts(CRUDManager[PonPort]):
             card = db.get(OltCard, payload.card_id)
             if not card:
                 raise HTTPException(status_code=404, detail="OLT card not found")
-            card_port = OltCardPort(
-                card_id=payload.card_id,
-                port_number=payload.port_number,
-                port_type=OltPortType.pon,
-                name=payload.name,
-                is_active=True,
-            )
-            db.add(card_port)
-            db.flush()
+            shelf = db.get(OltShelf, card.shelf_id)
+            if not shelf or shelf.olt_id != payload.olt_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="OLT card does not belong to the selected OLT",
+                )
+            card_port = db.scalars(
+                select(OltCardPort)
+                .where(OltCardPort.card_id == payload.card_id)
+                .where(OltCardPort.port_number == payload.port_number)
+                .limit(1)
+            ).first()
+            if card_port is None:
+                card_port = OltCardPort(
+                    card_id=payload.card_id,
+                    port_number=payload.port_number,
+                    port_type=OltPortType.pon,
+                    is_active=True,
+                )
+                db.add(card_port)
+                db.flush()
         data = payload.model_dump()
+        if not card_port:
+            parsed_name = _parse_canonical_pon_name(data.get("name"))
+            if parsed_name is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Canonical frame/slot/port name is required when no OLT card "
+                        "or card port is linked"
+                    ),
+                )
+            _, parsed_port_number = parsed_name
+            data["name"] = str(data["name"]).strip()
+            data["port_number"] = parsed_port_number
+            existing_port = db.scalars(
+                select(PonPort)
+                .where(PonPort.olt_id == payload.olt_id)
+                .where(PonPort.name == data["name"])
+                .limit(1)
+            ).first()
+            if existing_port is not None:
+                existing_port.is_active = True
+                existing_port.port_number = parsed_port_number
+                if data.get("notes") is not None:
+                    existing_port.notes = data["notes"]
+                db.commit()
+                db.refresh(existing_port)
+                return existing_port
         if payload.card_id and not payload.olt_card_port_id and card_port:
             data["olt_card_port_id"] = card_port.id
+        if card_port:
+            canonical_name = _canonical_pon_name_from_card_port(db, card_port)
+            card_port.name = canonical_name
+            card_port.is_active = True
+            data["port_number"] = card_port.port_number
+            data["name"] = canonical_name
+            existing_port = db.scalars(
+                select(PonPort)
+                .where(PonPort.olt_id == payload.olt_id)
+                .where(PonPort.olt_card_port_id == card_port.id)
+                .limit(1)
+            ).first()
+            if existing_port is None:
+                existing_port = db.scalars(
+                    select(PonPort)
+                    .where(PonPort.olt_id == payload.olt_id)
+                    .where(PonPort.name == canonical_name)
+                    .limit(1)
+                ).first()
+            if existing_port is not None:
+                existing_port.olt_card_port_id = card_port.id
+                existing_port.port_number = card_port.port_number
+                existing_port.name = canonical_name
+                existing_port.is_active = True
+                if data.get("notes") is not None:
+                    existing_port.notes = data["notes"]
+                db.commit()
+                db.refresh(existing_port)
+                return existing_port
         port = PonPort(**data)
         db.add(port)
         db.commit()
@@ -292,14 +479,78 @@ class PonPorts(CRUDManager[PonPort]):
     def update(db: Session, port_id: str, payload: PonPortUpdate) -> PonPort:
         port = PonPorts.get(db, port_id)
         data = payload.model_dump(exclude_unset=True)
+        target_olt_id = data.get("olt_id", port.olt_id)
         if "olt_id" in data:
-            olt = db.get(OLTDevice, data["olt_id"])
+            olt = db.get(OLTDevice, target_olt_id)
             if not olt:
                 raise HTTPException(status_code=404, detail="OLT device not found")
-        if "olt_card_port_id" in data and data["olt_card_port_id"]:
-            card_port = db.get(OltCardPort, data["olt_card_port_id"])
+        target_card_port_id = data.get("olt_card_port_id", port.olt_card_port_id)
+        if target_card_port_id:
+            card_port = db.get(OltCardPort, target_card_port_id)
             if not card_port:
                 raise HTTPException(status_code=404, detail="OLT card port not found")
+            card = db.get(OltCard, card_port.card_id)
+            shelf = db.get(OltShelf, card.shelf_id) if card else None
+            if not shelf or shelf.olt_id != target_olt_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="OLT card port does not belong to the selected OLT",
+                )
+            canonical_name = _canonical_pon_name_from_card_port(db, card_port)
+            card_port.name = canonical_name
+            card_port.is_active = True
+            data["port_number"] = card_port.port_number
+            data["name"] = canonical_name
+            duplicate_by_name = db.scalars(
+                select(PonPort)
+                .where(PonPort.olt_id == target_olt_id)
+                .where(PonPort.name == canonical_name)
+                .where(PonPort.id != port.id)
+                .limit(1)
+            ).first()
+            if duplicate_by_name is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A PON port already exists for this OLT and name",
+                )
+            duplicate = db.scalars(
+                select(PonPort)
+                .where(PonPort.olt_id == target_olt_id)
+                .where(PonPort.olt_card_port_id == target_card_port_id)
+                .where(PonPort.id != port.id)
+                .limit(1)
+            ).first()
+            if duplicate is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A PON port already exists for this OLT card port",
+                )
+        else:
+            target_name = data.get("name", port.name)
+            parsed_name = _parse_canonical_pon_name(target_name)
+            if parsed_name is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Canonical frame/slot/port name is required when no OLT card "
+                        "or card port is linked"
+                    ),
+                )
+            _, parsed_port_number = parsed_name
+            data["name"] = str(target_name).strip()
+            data["port_number"] = parsed_port_number
+            duplicate = db.scalars(
+                select(PonPort)
+                .where(PonPort.olt_id == target_olt_id)
+                .where(PonPort.name == data["name"])
+                .where(PonPort.id != port.id)
+                .limit(1)
+            ).first()
+            if duplicate is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="A PON port already exists for this OLT and name",
+                )
         for key, value in data.items():
             setattr(port, key, value)
         db.commit()
@@ -549,17 +800,34 @@ class OntAssignments(CRUDManager[OntAssignment]):
 
     @classmethod
     def create(cls, db: Session, payload: OntAssignmentCreate) -> OntAssignment:
-        assignment = super().create(db, payload)
-        ont = db.get(OntUnit, assignment.ont_unit_id)
-        if ont is None:
-            return assignment
-        if assignment.active:
-            ont.is_active = True
-            db.commit()
-            db.refresh(ont)
+        ont, _pon_port = _validate_assignment_target(
+            db,
+            ont_unit_id=payload.ont_unit_id,
+            pon_port_id=payload.pon_port_id,
+            active=payload.active,
+        )
+        _validate_assignment_customer_links(
+            db,
+            subscriber_id=payload.subscriber_id,
+            service_address_id=payload.service_address_id,
+        )
+        assignment = OntAssignment(**payload.model_dump())
         from app.services.network.cpe import ensure_cpe_for_ont
 
-        ensure_cpe_for_ont(db, ont, assignment)
+        try:
+            with db.begin_nested():
+                db.add(assignment)
+                db.flush()
+                if assignment.active:
+                    ont.is_active = True
+                    ensure_cpe_for_ont(db, ont, assignment, commit=False)
+                else:
+                    _sync_ont_assignment_runtime(db, ont)
+            db.commit()
+        except Exception:
+            db.expire(ont)
+            raise
+        db.refresh(assignment)
         return assignment
 
     @staticmethod
@@ -596,11 +864,84 @@ class OntAssignments(CRUDManager[OntAssignment]):
     def update(
         cls, db: Session, assignment_id: str, payload: OntAssignmentUpdate
     ) -> OntAssignment:
-        return super().update(db, assignment_id, payload)
+        assignment = cls.get(db, assignment_id)
+        original_ont_unit_id = assignment.ont_unit_id
+        data = payload.model_dump(exclude_unset=True)
+        fields_set = set(payload.model_fields_set)
+        target_ont_unit_id = data.get("ont_unit_id", assignment.ont_unit_id)
+        target_pon_port_id = data.get("pon_port_id", assignment.pon_port_id)
+        target_active = data.get("active", assignment.active)
+        target_subscriber_id = (
+            data.get("subscriber_id")
+            if "subscriber_id" in fields_set
+            else assignment.subscriber_id
+        )
+        target_service_address_id = (
+            data.get("service_address_id")
+            if "service_address_id" in fields_set
+            else assignment.service_address_id
+        )
+
+        ont, _pon_port = _validate_assignment_target(
+            db,
+            ont_unit_id=target_ont_unit_id,
+            pon_port_id=target_pon_port_id,
+            active=bool(target_active),
+            current_assignment_id=assignment.id,
+        )
+        _validate_assignment_customer_links(
+            db,
+            subscriber_id=target_subscriber_id,
+            service_address_id=target_service_address_id,
+        )
+
+        original_ont = ont if original_ont_unit_id == ont.id else db.get(
+            OntUnit, original_ont_unit_id
+        )
+
+        try:
+            with db.begin_nested():
+                for key, value in data.items():
+                    setattr(assignment, key, value)
+                db.flush()
+
+                if assignment.active:
+                    ont.is_active = True
+                else:
+                    _sync_ont_assignment_runtime(db, ont)
+
+                if original_ont is not None and original_ont.id != ont.id:
+                    _sync_ont_assignment_runtime(db, original_ont)
+
+                if assignment.active:
+                    from app.services.network.cpe import ensure_cpe_for_ont
+
+                    ensure_cpe_for_ont(db, ont, assignment, commit=False)
+            db.commit()
+        except Exception:
+            if original_ont is not None:
+                db.expire(original_ont)
+            if ont is not original_ont:
+                db.expire(ont)
+            raise
+        db.refresh(assignment)
+        return assignment
 
     @classmethod
     def delete(cls, db: Session, assignment_id: str) -> None:
-        return super().delete(db, assignment_id)
+        assignment = cls.get(db, assignment_id)
+        ont = db.get(OntUnit, assignment.ont_unit_id)
+        try:
+            with db.begin_nested():
+                db.delete(assignment)
+                db.flush()
+                if ont is not None:
+                    _sync_ont_assignment_runtime(db, ont)
+            db.commit()
+        except Exception:
+            if ont is not None:
+                db.expire(ont)
+            raise
 
 
 class OltShelves(CRUDManager[OltShelf]):

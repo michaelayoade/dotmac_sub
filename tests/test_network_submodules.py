@@ -12,9 +12,13 @@ import uuid
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import select
 
+from app.models.event_store import EventStore
 from app.models.catalog import NasDeviceStatus, NasVendor
-from app.models.network import DeviceStatus, DeviceType, IPVersion
+from app.models.network import CPEDevice, DeviceStatus, DeviceType, IPVersion
+from app.models.subscriber import Address, AddressType, Subscriber
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.catalog import NasDeviceCreate, NasDeviceUpdate
 from app.schemas.network import (
     CPEDeviceCreate,
@@ -78,6 +82,20 @@ class TestCPEDevicesCRUD:
         assert device.model == "Nokia G-240W-A"
         assert device.device_type == DeviceType.other
         assert device.status == DeviceStatus.active
+
+    def test_create_cpe_device_accepts_subscriber_id_field_name(
+        self, db_session, subscriber
+    ):
+        """Direct service callers should be able to use subscriber_id."""
+        device = network_service.cpe_devices.create(
+            db_session,
+            CPEDeviceCreate(
+                subscriber_id=subscriber.id,
+                serial_number="CPE-FIELDNAME-001",
+            ),
+        )
+        assert device.subscriber_id == subscriber.id
+        assert device.serial_number == "CPE-FIELDNAME-001"
 
     def test_create_cpe_device_with_extended_db_device_type(
         self, db_session, subscriber
@@ -864,12 +882,11 @@ class TestPonPortsCRUD:
         """Test creating a PON port."""
         olt = self._make_olt(db_session, "Pon Create OLT")
         pon = network_service.pon_ports.create(
-            db_session,
-            PonPortCreate(olt_id=olt.id, port_number=1),
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/1")
         )
         assert pon.olt_id == olt.id
         assert pon.port_number == 1
-        assert pon.name == "pon-1"  # auto-generated
+        assert pon.name == "0/1/1"
 
     def test_create_pon_port_bad_olt(self, db_session):
         """Test 404 when creating PON port with invalid OLT ID."""
@@ -884,7 +901,7 @@ class TestPonPortsCRUD:
         """Test getting a PON port by ID."""
         olt = self._make_olt(db_session, "Pon Get OLT")
         pon = network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=2)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/2")
         )
         fetched = network_service.pon_ports.get(db_session, str(pon.id))
         assert fetched.id == pon.id
@@ -899,12 +916,13 @@ class TestPonPortsCRUD:
         """Test updating a PON port."""
         olt = self._make_olt(db_session, "Pon Upd OLT")
         pon = network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=3)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/3")
         )
         updated = network_service.pon_ports.update(
-            db_session, str(pon.id), PonPortUpdate(name="pon-renamed", notes="updated")
+            db_session, str(pon.id), PonPortUpdate(name="0/1/9", notes="updated")
         )
-        assert updated.name == "pon-renamed"
+        assert updated.name == "0/1/9"
+        assert updated.port_number == 9
         assert updated.notes == "updated"
 
     def test_update_pon_port_not_found(self, db_session):
@@ -919,7 +937,7 @@ class TestPonPortsCRUD:
         """Test soft deleting a PON port."""
         olt = self._make_olt(db_session, "Pon Del OLT")
         pon = network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=4)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/4")
         )
         pon_id = str(pon.id)
         network_service.pon_ports.delete(db_session, pon_id)
@@ -932,10 +950,10 @@ class TestPonPortsCRUD:
         """Test listing PON ports filtered by OLT."""
         olt = self._make_olt(db_session, "Pon List OLT")
         network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=5)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/5")
         )
         network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=6)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/6")
         )
         pons = network_service.pon_ports.list(
             db_session,
@@ -952,15 +970,29 @@ class TestPonPortsCRUD:
         """Test PON port utilization report."""
         olt = self._make_olt(db_session, "Pon Util OLT")
         network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=7)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/7")
         )
         network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=8)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/8")
         )
         stats = network_service.pon_ports.utilization(db_session, str(olt.id))
         assert stats["olt_id"] == str(olt.id)
         assert stats["total_ports"] >= 2
         assert stats["assigned_ports"] >= 0
+
+    def test_create_pon_port_rejects_placeholder_name_without_linkage(self, db_session):
+        """Manual unlinked creates should not auto-create placeholder PON names."""
+        olt = self._make_olt(db_session, "Pon Reject Placeholder OLT")
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.pon_ports.create(
+                db_session,
+                PonPortCreate(olt_id=olt.id, port_number=9),
+            )
+        assert exc_info.value.status_code == 400
+        assert (
+            exc_info.value.detail
+            == "Canonical frame/slot/port name is required when no OLT card or card port is linked"
+        )
 
     def test_pon_port_utilization_no_olt(self, db_session):
         """Test PON port utilization report without OLT filter."""
@@ -1059,7 +1091,7 @@ class TestOntAssignmentsCRUD:
             ),
         )
         pon = network_service.pon_ports.create(
-            db_session, PonPortCreate(olt_id=olt.id, port_number=1)
+            db_session, PonPortCreate(olt_id=olt.id, name="0/1/1")
         )
         return ont, pon
 
@@ -1106,6 +1138,32 @@ class TestOntAssignmentsCRUD:
         assert cpes[0].subscriber_id == subscriber.id
         assert cpes[0].mac_address == "E0:37:68:80:50:11"
 
+    def test_create_inactive_ont_assignment_does_not_claim_cpe_ownership(
+        self, db_session, subscriber
+    ):
+        """Inactive assignment history should not attach ONT CPE inventory to a customer."""
+        ont, pon = self._make_ont_and_pon(db_session)
+
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                account_id=subscriber.id,
+                active=False,
+            ),
+        )
+
+        assert assignment.active is False
+        db_session.refresh(ont)
+        assert ont.is_active is False
+        cpe = db_session.scalars(
+            select(CPEDevice)
+            .where(CPEDevice.serial_number == ont.serial_number)
+            .limit(1)
+        ).first()
+        assert cpe is None
+
     def test_get_ont_assignment(self, db_session):
         """Test getting an ONT assignment by ID."""
         ont, pon = self._make_ont_and_pon(db_session)
@@ -1122,12 +1180,16 @@ class TestOntAssignmentsCRUD:
             network_service.ont_assignments.get(db_session, str(uuid.uuid4()))
         assert exc_info.value.status_code == 404
 
-    def test_update_ont_assignment(self, db_session):
+    def test_update_ont_assignment(self, db_session, subscriber):
         """Test updating an ONT assignment."""
         ont, pon = self._make_ont_and_pon(db_session)
         asg = network_service.ont_assignments.create(
             db_session,
-            OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id),
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                account_id=subscriber.id,
+            ),
         )
         updated = network_service.ont_assignments.update(
             db_session,
@@ -1136,19 +1198,509 @@ class TestOntAssignmentsCRUD:
         )
         assert updated.active is False
         assert updated.notes == "decommissioned"
+        db_session.refresh(ont)
+        assert ont.is_active is False
+        cpe = db_session.scalars(
+            select(CPEDevice)
+            .where(CPEDevice.serial_number == ont.serial_number)
+            .limit(1)
+        ).first()
+        assert cpe is not None
+        assert cpe.status == DeviceStatus.inactive
+        assert cpe.subscriber_id != subscriber.id
+        assert cpe.service_address_id is None
 
-    def test_delete_ont_assignment(self, db_session):
+    def test_update_ont_assignment_reassigns_runtime_and_cpe_state(
+        self, db_session, subscriber
+    ):
+        """Moving an active assignment to another ONT should reconcile both ONTs and CPE ownership."""
+        old_ont, pon = self._make_ont_and_pon(db_session)
+        new_ont = network_service.ont_units.create(
+            db_session,
+            OntUnitCreate(serial_number=f"ONT-ASG-{uuid.uuid4().hex[:6]}"),
+        )
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=old_ont.id,
+                pon_port_id=pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+
+        updated = network_service.ont_assignments.update(
+            db_session,
+            str(assignment.id),
+            OntAssignmentUpdate(ont_unit_id=new_ont.id),
+        )
+
+        db_session.refresh(old_ont)
+        db_session.refresh(new_ont)
+        assert updated.ont_unit_id == new_ont.id
+        assert old_ont.is_active is False
+        assert new_ont.is_active is True
+
+        cpes = network_service.cpe_devices.list(
+            db_session,
+            subscriber_id=str(subscriber.id),
+            order_by="created_at",
+            order_dir="desc",
+            limit=20,
+            offset=0,
+        )
+        assert len(cpes) == 1
+        assert cpes[0].serial_number == new_ont.serial_number
+        assert cpes[0].status == DeviceStatus.active
+        old_cpe = db_session.scalars(
+            select(CPEDevice)
+            .where(CPEDevice.serial_number == old_ont.serial_number)
+            .limit(1)
+        ).first()
+        assert old_cpe is not None
+        assert old_cpe.status == DeviceStatus.inactive
+        assert old_cpe.subscriber_id != subscriber.id
+        assert old_cpe.service_address_id is None
+
+    def test_create_ont_assignment_rejects_inactive_pon_port(self, db_session):
+        """Assignments should not target inactive PON ports."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        pon.is_active = False
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id),
+            )
+
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "PON port not found"
+
+    def test_create_ont_assignment_rejects_cross_olt_port(self, db_session):
+        """Assignments should not link an ONT to a port from a different OLT."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        foreign_olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Foreign OLT", hostname="foreign-olt.local"),
+        )
+        foreign_pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=foreign_olt.id, name="0/2/2"),
+        )
+        ont.olt_device_id = pon.olt_id
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=foreign_pon.id),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "PON port does not belong to the ONT's OLT"
+
+    def test_create_ont_assignment_rejects_address_without_subscriber(
+        self, db_session, subscriber
+    ):
+        """Assignments should not accept a service address without a subscriber."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        address = Address(
+            subscriber_id=subscriber.id,
+            address_type=AddressType.service,
+            address_line1="No Subscriber",
+            city="Abuja",
+            region="FCT",
+            country_code="NG",
+        )
+        db_session.add(address)
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(
+                    ont_unit_id=ont.id,
+                    pon_port_id=pon.id,
+                    service_address_id=address.id,
+                ),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Service address requires a subscriber"
+
+    def test_create_ont_assignment_rejects_mismatched_service_address(
+        self, db_session, subscriber
+    ):
+        """Assignments should validate that service addresses belong to the subscriber."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        other_subscriber = Subscriber(
+            first_name="Other",
+            last_name="Owner",
+            email=f"other-{uuid.uuid4().hex[:6]}@example.com",
+        )
+        db_session.add(other_subscriber)
+        db_session.flush()
+        address = Address(
+            subscriber_id=other_subscriber.id,
+            address_type=AddressType.service,
+            address_line1="Other Address",
+            city="Abuja",
+            region="FCT",
+            country_code="NG",
+        )
+        db_session.add(address)
+        db_session.commit()
+
+        with pytest.raises(
+            HTTPException, match="Service address does not belong to subscriber"
+        ) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(
+                    ont_unit_id=ont.id,
+                    pon_port_id=pon.id,
+                    account_id=subscriber.id,
+                    service_address_id=address.id,
+                ),
+            )
+
+        assert exc_info.value.status_code == 400
+
+    def test_create_ont_assignment_rejects_second_active_assignment(self, db_session):
+        """Assignments should fail cleanly when the ONT already has an active assignment."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        other_olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Other Asg OLT", hostname="other-asg-olt.local"),
+        )
+        other_pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=other_olt.id, name="0/3/3"),
+        )
+
+        network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id),
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=other_pon.id),
+            )
+
+        assert exc_info.value.status_code == 409
+        assert exc_info.value.detail == "ONT already has an active assignment"
+
+    def test_update_ont_assignment_rejects_cross_olt_port(self, db_session):
+        """Updating an assignment should not move it to a port from another OLT."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id, active=True),
+        )
+        ont.olt_device_id = pon.olt_id
+        foreign_olt = network_service.olt_devices.create(
+            db_session,
+            OLTDeviceCreate(name="Foreign Update OLT", hostname="foreign-update-olt.local"),
+        )
+        foreign_pon = network_service.pon_ports.create(
+            db_session,
+            PonPortCreate(olt_id=foreign_olt.id, name="0/4/4"),
+        )
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.update(
+                db_session,
+                str(assignment.id),
+                OntAssignmentUpdate(pon_port_id=foreign_pon.id),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "PON port does not belong to the ONT's OLT"
+
+    def test_update_ont_assignment_rejects_address_without_subscriber(
+        self, db_session, subscriber
+    ):
+        """Updating an assignment should reject a bare service address."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                account_id=subscriber.id,
+            ),
+        )
+        address = Address(
+            subscriber_id=subscriber.id,
+            address_type=AddressType.service,
+            address_line1="Update Address",
+            city="Abuja",
+            region="FCT",
+            country_code="NG",
+        )
+        db_session.add(address)
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.update(
+                db_session,
+                str(assignment.id),
+                OntAssignmentUpdate(
+                    account_id=None,
+                    service_address_id=address.id,
+                ),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Service address requires a subscriber"
+
+    def test_update_ont_assignment_rejects_address_without_subscriber_using_field_name(
+        self, db_session, subscriber
+    ):
+        """Direct service callers using subscriber_id should still clear ownership correctly."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                subscriber_id=subscriber.id,
+            ),
+        )
+        address = Address(
+            subscriber_id=subscriber.id,
+            address_type=AddressType.service,
+            address_line1="Update Address Field Name",
+            city="Abuja",
+            region="FCT",
+            country_code="NG",
+        )
+        db_session.add(address)
+        db_session.commit()
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.update(
+                db_session,
+                str(assignment.id),
+                OntAssignmentUpdate(
+                    subscriber_id=None,
+                    service_address_id=address.id,
+                ),
+            )
+
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail == "Service address requires a subscriber"
+
+    def test_create_ont_assignment_rejects_ambiguous_cpe_serial_match(
+        self, db_session, subscriber
+    ):
+        """ONT lifecycle sync should fail cleanly when duplicate CPE rows share one ONT serial."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        other_subscriber = Subscriber(
+            first_name="Dup",
+            last_name="Owner",
+            email=f"dup-{uuid.uuid4().hex[:6]}@example.com",
+        )
+        db_session.add(other_subscriber)
+        db_session.commit()
+
+        network_service.cpe_devices.create(
+            db_session,
+            CPEDeviceCreate(
+                account_id=subscriber.id,
+                serial_number=ont.serial_number,
+                vendor="Huawei",
+            ),
+        )
+        network_service.cpe_devices.create(
+            db_session,
+            CPEDeviceCreate(
+                account_id=other_subscriber.id,
+                serial_number=ont.serial_number,
+                vendor="ZTE",
+            ),
+        )
+
+        with pytest.raises(
+            HTTPException, match="Multiple CPE devices share this ONT serial number"
+        ) as exc_info:
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(
+                    ont_unit_id=ont.id,
+                    pon_port_id=pon.id,
+                    subscriber_id=subscriber.id,
+                ),
+            )
+
+        assert exc_info.value.status_code == 409
+
+    def test_delete_ont_assignment(self, db_session, subscriber):
         """Test deleting an ONT assignment (hard delete)."""
         ont, pon = self._make_ont_and_pon(db_session)
         asg = network_service.ont_assignments.create(
             db_session,
-            OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id),
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                account_id=subscriber.id,
+            ),
         )
         asg_id = str(asg.id)
         network_service.ont_assignments.delete(db_session, asg_id)
         with pytest.raises(HTTPException) as exc_info:
             network_service.ont_assignments.get(db_session, asg_id)
         assert exc_info.value.status_code == 404
+        db_session.refresh(ont)
+        assert ont.is_active is False
+        cpe = db_session.scalars(
+            select(CPEDevice)
+            .where(CPEDevice.serial_number == ont.serial_number)
+            .limit(1)
+        ).first()
+        assert cpe is not None
+        assert cpe.status == DeviceStatus.inactive
+        assert cpe.subscriber_id != subscriber.id
+        assert cpe.service_address_id is None
+
+    def test_delete_ont_assignment_succeeds_with_ambiguous_cpe_serial_match(
+        self, db_session, subscriber
+    ):
+        """Assignment teardown should still succeed when legacy duplicate CPE rows exist."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                subscriber_id=subscriber.id,
+            ),
+        )
+        other_subscriber = Subscriber(
+            first_name="Amb",
+            last_name="Dup",
+            email=f"amb-{uuid.uuid4().hex[:6]}@example.com",
+        )
+        db_session.add(other_subscriber)
+        db_session.commit()
+        network_service.cpe_devices.create(
+            db_session,
+            CPEDeviceCreate(
+                subscriber_id=other_subscriber.id,
+                serial_number=ont.serial_number,
+                vendor="ZTE",
+            ),
+        )
+
+        network_service.ont_assignments.delete(db_session, str(assignment.id))
+
+        with pytest.raises(HTTPException) as exc_info:
+            network_service.ont_assignments.get(db_session, str(assignment.id))
+        assert exc_info.value.status_code == 404
+        db_session.refresh(ont)
+        assert ont.is_active is False
+        alert = db_session.scalars(
+            select(EventStore)
+            .where(EventStore.event_type == "network.alert")
+            .order_by(EventStore.created_at.desc())
+            .limit(1)
+        ).first()
+        assert alert is not None
+        assert alert.payload["code"] == "ambiguous_ont_cpe_serial"
+        assert alert.payload["ont_id"] == str(ont.id)
+
+    def test_create_ont_assignment_uses_unique_inactive_tr069_link_to_disambiguate_cpe(
+        self, db_session, subscriber
+    ):
+        """A unique historical TR-069 link should still disambiguate duplicate serial rows."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        other_subscriber = Subscriber(
+            first_name="Hist",
+            last_name="Link",
+            email=f"hist-{uuid.uuid4().hex[:6]}@example.com",
+        )
+        db_session.add(other_subscriber)
+        db_session.commit()
+
+        chosen = network_service.cpe_devices.create(
+            db_session,
+            CPEDeviceCreate(
+                subscriber_id=subscriber.id,
+                serial_number=ont.serial_number,
+                vendor="Huawei",
+            ),
+        )
+        network_service.cpe_devices.create(
+            db_session,
+            CPEDeviceCreate(
+                subscriber_id=other_subscriber.id,
+                serial_number=ont.serial_number,
+                vendor="ZTE",
+            ),
+        )
+        acs_server = Tr069AcsServer(
+            name=f"Inactive Link ACS {uuid.uuid4().hex[:6]}",
+            base_url=f"http://acs-{uuid.uuid4().hex[:6]}.local",
+            is_active=True,
+        )
+        db_session.add(acs_server)
+        db_session.flush()
+        db_session.add(
+            Tr069CpeDevice(
+                acs_server_id=acs_server.id,
+                cpe_device_id=chosen.id,
+                serial_number=ont.serial_number,
+                is_active=False,
+            )
+        )
+        db_session.commit()
+
+        assignment = network_service.ont_assignments.create(
+            db_session,
+            OntAssignmentCreate(
+                ont_unit_id=ont.id,
+                pon_port_id=pon.id,
+                subscriber_id=subscriber.id,
+            ),
+        )
+
+        assert assignment.active is True
+        refreshed = network_service.cpe_devices.get(db_session, str(chosen.id))
+        assert refreshed.subscriber_id == subscriber.id
+
+    def test_create_ont_assignment_rolls_back_when_cpe_sync_fails(
+        self, db_session, monkeypatch
+    ):
+        """Assignment creation should not persist partial state when CPE sync fails."""
+        ont, pon = self._make_ont_and_pon(db_session)
+        original_active = ont.is_active
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("cpe sync failed")
+
+        monkeypatch.setattr("app.services.network.cpe.ensure_cpe_for_ont", _boom)
+
+        with pytest.raises(RuntimeError, match="cpe sync failed"):
+            network_service.ont_assignments.create(
+                db_session,
+                OntAssignmentCreate(ont_unit_id=ont.id, pon_port_id=pon.id),
+            )
+
+        assignments = network_service.ont_assignments.list(
+            db_session,
+            ont_unit_id=str(ont.id),
+            pon_port_id=None,
+            order_by="created_at",
+            order_dir="asc",
+            limit=20,
+            offset=0,
+        )
+        db_session.refresh(ont)
+        assert assignments == []
+        assert ont.is_active is original_active
 
     def test_list_ont_assignments(self, db_session):
         """Test listing ONT assignments."""

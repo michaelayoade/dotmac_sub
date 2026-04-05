@@ -43,6 +43,7 @@ class NetworkOperationType(enum.Enum):
     """Types of network operations that can be tracked."""
 
     olt_ont_sync = "olt_ont_sync"
+    olt_pon_repair = "olt_pon_repair"
     ont_authorize = "ont_authorize"
     ont_reboot = "ont_reboot"
     ont_factory_reset = "ont_factory_reset"
