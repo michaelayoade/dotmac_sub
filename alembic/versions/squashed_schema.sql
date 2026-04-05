@@ -1255,6 +1255,7 @@ CREATE TYPE public.networkoperationtargettype AS ENUM (
 
 CREATE TYPE public.networkoperationtype AS ENUM (
     'olt_ont_sync',
+    'olt_pon_repair',
     'ont_provision',
     'ont_authorize',
     'ont_reboot',
@@ -10314,6 +10315,83 @@ CREATE INDEX ix_subscribers_pop_site_id ON public.subscribers USING btree (pop_s
 
 
 --
+-- Name: uq_communication_logs_channel_external_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_communication_logs_channel_external_id ON public.communication_logs USING btree (channel, external_id) WHERE (external_id IS NOT NULL);
+
+
+--
+-- Name: uq_communication_logs_channel_splynx_message_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_communication_logs_channel_splynx_message_id ON public.communication_logs USING btree (channel, splynx_message_id) WHERE (splynx_message_id IS NOT NULL);
+
+
+--
+-- Name: uq_invoices_active_splynx_invoice_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_invoices_active_splynx_invoice_id ON public.invoices USING btree (splynx_invoice_id) WHERE ((is_active = true) AND (splynx_invoice_id IS NOT NULL));
+
+
+--
+-- Name: uq_network_devices_active_splynx_monitoring_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_network_devices_active_splynx_monitoring_id ON public.network_devices USING btree (splynx_monitoring_id) WHERE ((is_active = true) AND (splynx_monitoring_id IS NOT NULL));
+
+
+--
+-- Name: uq_notification_deliveries_provider_message; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_notification_deliveries_provider_message ON public.notification_deliveries USING btree (provider, provider_message_id) WHERE ((is_active = true) AND (provider IS NOT NULL) AND (provider_message_id IS NOT NULL));
+
+
+--
+-- Name: uq_ont_units_olt_external_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_ont_units_olt_external_id ON public.ont_units USING btree (olt_device_id, external_id) WHERE ((olt_device_id IS NOT NULL) AND (external_id IS NOT NULL));
+
+
+--
+-- Name: uq_payment_provider_events_external_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_payment_provider_events_external_id ON public.payment_provider_events USING btree (provider_id, external_id) WHERE (external_id IS NOT NULL);
+
+
+--
+-- Name: uq_payments_active_external_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_payments_active_external_id ON public.payments USING btree (provider_id, external_id) WHERE ((is_active = true) AND (provider_id IS NOT NULL) AND (external_id IS NOT NULL));
+
+
+--
+-- Name: uq_payments_active_splynx_payment_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_payments_active_splynx_payment_id ON public.payments USING btree (splynx_payment_id) WHERE ((is_active = true) AND (splynx_payment_id IS NOT NULL));
+
+
+--
+-- Name: uq_subscribers_splynx_customer_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_subscribers_splynx_customer_id ON public.subscribers USING btree (splynx_customer_id) WHERE (splynx_customer_id IS NOT NULL);
+
+
+--
+-- Name: uq_tr069_cpe_devices_active_genieacs_device_id; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX uq_tr069_cpe_devices_active_genieacs_device_id ON public.tr069_cpe_devices USING btree (genieacs_device_id) WHERE ((is_active = true) AND (genieacs_device_id IS NOT NULL));
+
+
+--
 -- Name: ix_support_ticket_comments_ticket; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -13442,4 +13520,3 @@ ALTER TABLE ONLY public.wireguard_peers
 --
 -- PostgreSQL database dump complete
 --
-

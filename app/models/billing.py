@@ -9,11 +9,13 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -140,6 +142,14 @@ class CollectionAccountType(enum.Enum):
 
 class Invoice(Base):
     __tablename__ = "invoices"
+    __table_args__ = (
+        Index(
+            "uq_invoices_active_splynx_invoice_id",
+            "splynx_invoice_id",
+            unique=True,
+            postgresql_where=text("is_active AND splynx_invoice_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -457,6 +467,23 @@ class BankAccount(Base):
 
 class Payment(Base):
     __tablename__ = "payments"
+    __table_args__ = (
+        Index(
+            "uq_payments_active_external_id",
+            "provider_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text(
+                "is_active AND provider_id IS NOT NULL AND external_id IS NOT NULL"
+            ),
+        ),
+        Index(
+            "uq_payments_active_splynx_payment_id",
+            "splynx_payment_id",
+            unique=True,
+            postgresql_where=text("is_active AND splynx_payment_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -752,6 +779,13 @@ class PaymentProviderEvent(Base):
             "provider_id",
             "idempotency_key",
             name="uq_payment_provider_events_idempotency",
+        ),
+        Index(
+            "uq_payment_provider_events_external_id",
+            "provider_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
         ),
     )
 

@@ -925,6 +925,15 @@ class OntUnit(Base):
     __tablename__ = "ont_units"
     __table_args__ = (
         UniqueConstraint("serial_number", name="uq_ont_units_serial_number"),
+        Index(
+            "uq_ont_units_olt_external_id",
+            "olt_device_id",
+            "external_id",
+            unique=True,
+            postgresql_where=text(
+                "olt_device_id IS NOT NULL AND external_id IS NOT NULL"
+            ),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

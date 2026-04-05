@@ -28,10 +28,12 @@ SPLYNX_SSH_USER = os.environ.get("SPLYNX_SSH_USER", "root")
 SPLYNX_SSH_KEY = os.path.expanduser(os.environ.get("SPLYNX_SSH_KEY", "~/.ssh/id_ed25519"))
 SPLYNX_MYSQL_DB = os.environ.get("SPLYNX_MYSQL_DB", "splynx")
 SPLYNX_MYSQL_USER = os.environ.get("SPLYNX_MYSQL_USER", "migration")
-SPLYNX_MYSQL_PASS = os.environ.get("SPLYNX_MYSQL_PASS", "")
+SPLYNX_MYSQL_PASS = os.environ.get(
+    "SPLYNX_MYSQL_PASS", os.environ.get("SPLYNX_MYSQL_PASSWORD", "")
+)
 if not SPLYNX_MYSQL_PASS:
     logger.warning(
-        "SPLYNX_MYSQL_PASS not set — set via env var or .env file. "
+        "SPLYNX_MYSQL_PASS/SPLYNX_MYSQL_PASSWORD not set — set via env var or .env file. "
         "Splynx connections will fail."
     )
 

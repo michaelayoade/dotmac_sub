@@ -99,8 +99,6 @@ def build_overview_data(
     result["partner_options"] = [
         {"id": str(r.id), "name": r.name} for r in partner_rows
     ]
-
-    result["location_options"] = _billing_location_options(db)
     return result
 
 

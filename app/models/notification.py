@@ -7,10 +7,12 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -115,6 +117,17 @@ class Notification(Base):
 
 class NotificationDelivery(Base):
     __tablename__ = "notification_deliveries"
+    __table_args__ = (
+        Index(
+            "uq_notification_deliveries_provider_message",
+            "provider",
+            "provider_message_id",
+            unique=True,
+            postgresql_where=text(
+                "is_active AND provider IS NOT NULL AND provider_message_id IS NOT NULL"
+            ),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

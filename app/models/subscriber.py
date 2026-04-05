@@ -12,11 +12,13 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict
@@ -137,6 +139,14 @@ class Subscriber(Base):
     """
 
     __tablename__ = "subscribers"
+    __table_args__ = (
+        Index(
+            "uq_subscribers_splynx_customer_id",
+            "splynx_customer_id",
+            unique=True,
+            postgresql_where=text("splynx_customer_id IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

@@ -260,8 +260,10 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     color: var(--white);
     padding: 22px 24px 18px;
   }}
-  .hero-top {{ display: flex; justify-content: space-between; gap: 24px; align-items: flex-start; }}
-  .brand {{ display: flex; gap: 14px; align-items: center; max-width: 58%; }}
+  .hero-top {{ display: flex; justify-content: space-between; align-items: flex-start; width: 100%; }}
+  .hero-top > * + * {{ margin-left: 24px; }}
+  .brand {{ display: flex; align-items: center; max-width: 58%; }}
+  .brand > * + * {{ margin-left: 14px; }}
   .logo {{ max-height: 52px; max-width: 150px; display: block; object-fit: contain; background: var(--white); border-radius: 12px; padding: 6px 10px; }}
   .logo-fallback {{ width: 54px; height: 54px; border-radius: 14px; background: rgba(255,255,255,0.16); color: var(--white); display: flex; align-items: center; justify-content: center; font-size: 24px; font-weight: 700; }}
   .company-name {{ margin: 0 0 6px; font-size: 24px; font-weight: 700; }}
@@ -272,8 +274,9 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
   .invoice-meta {{ margin-top: 8px; font-size: 11px; line-height: 1.7; }}
   .status-pill {{ display: inline-block; margin-top: 10px; border-radius: 999px; background: rgba(255,255,255,0.16); padding: 4px 10px; font-size: 10px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }}
   .body {{ padding: 22px 24px 24px; background: linear-gradient(180deg, var(--green-50), var(--white) 32%); }}
-  .summary-grid {{ display: grid; grid-template-columns: 1.2fr 1fr 1fr; gap: 14px; margin-bottom: 18px; }}
-  .card {{ background: var(--white); border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; }}
+  .summary-table {{ width: 100%; border-collapse: separate; border-spacing: 14px 0; margin: 0 -14px 18px; table-layout: fixed; }}
+  .summary-table td {{ vertical-align: top; padding: 0; border: none; background: transparent; }}
+  .card {{ background: var(--white); border: 1px solid var(--slate-200); border-radius: 16px; padding: 14px 16px; min-height: 100px; }}
   .card-title {{ margin: 0 0 8px; color: var(--green-900); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; }}
   .card-copy {{ margin: 0; color: var(--slate-700); line-height: 1.7; }}
   .highlight-card {{ border-color: var(--green-700); background: linear-gradient(180deg, var(--white), var(--green-50)); }}
@@ -300,7 +303,8 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
   .totals-card .grand-total td {{ color: var(--green-900); font-size: 15px; font-weight: 800; padding-top: 10px; border-top: 1px solid var(--slate-200); }}
   .memo {{ margin-top: 18px; border-left: 4px solid var(--red-700); background: #fff8f8; border-radius: 0 14px 14px 0; padding: 14px 16px; }}
   .memo strong {{ color: var(--red-700); }}
-  .footer {{ margin-top: 18px; color: var(--slate-500); font-size: 10px; display: flex; justify-content: space-between; gap: 16px; }}
+  .footer {{ margin-top: 18px; color: var(--slate-500); font-size: 10px; display: flex; justify-content: space-between; }}
+  .footer > * + * {{ margin-left: 16px; }}
 </style>
 </head>
 <body>
@@ -328,20 +332,28 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     </div>
 
     <div class=\"body\">
-      <div class=\"summary-grid\">
-        <div class=\"card\">
-          <p class=\"card-title\">Billed To</p>
-          <p class=\"card-copy\">{account_name}<br>{account_email}</p>
-        </div>
-        <div class=\"card highlight-card\">
-          <p class=\"card-title\">Balance Due</p>
-          <p class=\"highlight-value\">N{_money(invoice.balance_due)}</p>
-        </div>
-        <div class=\"card alert-card\">
-          <p class=\"card-title\">Reference</p>
-          <p class=\"card-copy\">Invoice {invoice_number}</p>
-        </div>
-      </div>
+      <table class=\"summary-table\" role=\"presentation\">
+        <tr>
+          <td style=\"width: 40%;\">
+            <div class=\"card\">
+              <p class=\"card-title\">Billed To</p>
+              <p class=\"card-copy\">{account_name}<br>{account_email}</p>
+            </div>
+          </td>
+          <td style=\"width: 30%;\">
+            <div class=\"card highlight-card\">
+              <p class=\"card-title\">Balance Due</p>
+              <p class=\"highlight-value\">N{_money(invoice.balance_due)}</p>
+            </div>
+          </td>
+          <td style=\"width: 30%;\">
+            <div class=\"card alert-card\">
+              <p class=\"card-title\">Reference</p>
+              <p class=\"card-copy\">Invoice {invoice_number}</p>
+            </div>
+          </td>
+        </tr>
+      </table>
 
       <div class=\"table-shell\">
         <table>

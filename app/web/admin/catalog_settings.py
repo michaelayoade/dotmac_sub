@@ -142,6 +142,7 @@ def region_zones_list(
     context.update(
         {
             "zones": result.items,
+            "zone_ids": [str(getattr(zone, "id", "")) for zone in result.items],
             "status": status,
             "search": search,
             "page": page,

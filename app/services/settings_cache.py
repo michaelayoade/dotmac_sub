@@ -14,21 +14,40 @@ import redis
 logger = logging.getLogger(__name__)
 
 _redis_client: redis.Redis | None = None
+_cache_disabled = False
 
 
-def get_settings_redis() -> redis.Redis:
+def _disable_settings_cache(exc: Exception) -> None:
+    """Disable the settings cache after a Redis failure to avoid warning storms."""
+    global _redis_client, _cache_disabled
+    if _cache_disabled:
+        return
+    _redis_client = None
+    _cache_disabled = True
+    logger.warning("Settings cache disabled: %s", exc)
+
+
+def get_settings_redis() -> redis.Redis | None:
     """Get Redis client for settings cache.
 
     Returns a Redis client connected to the configured Redis URL.
     The client is cached globally for reuse.
     """
     global _redis_client
+    if _cache_disabled:
+        return None
     if _redis_client is None:
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-        _redis_client = redis.Redis.from_url(
-            redis_url,
-            decode_responses=True,
-        )
+        try:
+            client = redis.Redis.from_url(
+                redis_url,
+                decode_responses=True,
+            )
+            client.ping()
+            _redis_client = client
+        except redis.RedisError as exc:
+            _disable_settings_cache(exc)
+            return None
     return _redis_client
 
 
@@ -60,12 +79,14 @@ class SettingsCache:
         """
         try:
             r = get_settings_redis()
+            if r is None:
+                return None
             cache_key = SettingsCache._cache_key(domain, key)
             value = cast(str | None, r.get(cache_key))
             if value is not None:
                 return json.loads(value)
         except redis.RedisError as exc:
-            logger.warning(f"Settings cache get failed: {exc}")
+            _disable_settings_cache(exc)
         except json.JSONDecodeError as exc:
             logger.warning(f"Settings cache JSON decode failed: {exc}")
         return None
@@ -84,11 +105,13 @@ class SettingsCache:
         """
         try:
             r = get_settings_redis()
+            if r is None:
+                return False
             cache_key = SettingsCache._cache_key(domain, key)
             r.setex(cache_key, SettingsCache.TTL, json.dumps(value))
             return True
         except redis.RedisError as exc:
-            logger.warning(f"Settings cache set failed: {exc}")
+            _disable_settings_cache(exc)
         except (TypeError, ValueError) as exc:
             logger.warning(f"Settings cache JSON encode failed: {exc}")
         return False
@@ -106,11 +129,13 @@ class SettingsCache:
         """
         try:
             r = get_settings_redis()
+            if r is None:
+                return False
             cache_key = SettingsCache._cache_key(domain, key)
             r.delete(cache_key)
             return True
         except redis.RedisError as exc:
-            logger.warning(f"Settings cache invalidate failed: {exc}")
+            _disable_settings_cache(exc)
         return False
 
     @staticmethod
@@ -125,6 +150,8 @@ class SettingsCache:
         """
         try:
             r = get_settings_redis()
+            if r is None:
+                return -1
             pattern = f"{SettingsCache.PREFIX}{domain}:*"
             count = 0
             for key in r.scan_iter(pattern):
@@ -132,7 +159,7 @@ class SettingsCache:
                 count += 1
             return count
         except redis.RedisError as exc:
-            logger.warning(f"Settings cache invalidate_domain failed: {exc}")
+            _disable_settings_cache(exc)
         return -1
 
     @staticmethod
@@ -149,6 +176,8 @@ class SettingsCache:
         result = {}
         try:
             r = get_settings_redis()
+            if r is None:
+                return result
             cache_keys = [SettingsCache._cache_key(domain, k) for k in keys]
             values = cast(list[str | None], r.mget(cache_keys))
             for key, value in zip(keys, values):
@@ -158,7 +187,7 @@ class SettingsCache:
                     except json.JSONDecodeError:
                         pass
         except redis.RedisError as exc:
-            logger.warning(f"Settings cache get_multi failed: {exc}")
+            _disable_settings_cache(exc)
         return result
 
     @staticmethod
@@ -174,6 +203,8 @@ class SettingsCache:
         """
         try:
             r = get_settings_redis()
+            if r is None:
+                return False
             pipe = r.pipeline()
             for key, value in values.items():
                 cache_key = SettingsCache._cache_key(domain, key)
@@ -181,7 +212,7 @@ class SettingsCache:
             pipe.execute()
             return True
         except redis.RedisError as exc:
-            logger.warning(f"Settings cache set_multi failed: {exc}")
+            _disable_settings_cache(exc)
         except (TypeError, ValueError) as exc:
             logger.warning(f"Settings cache JSON encode failed: {exc}")
         return False

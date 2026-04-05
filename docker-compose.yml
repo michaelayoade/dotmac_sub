@@ -10,6 +10,7 @@ services:
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/1
       REDIS_URL: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/0
+      SESSION_REDIS_URL: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/0
       WIREGUARD_USE_NSENTER: '1'
       VPN_BLOCKED_LAN_SUBNETS: 172.20.255.0/24
       S3_ENDPOINT_URL: http://minio:9000
@@ -17,18 +18,24 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
+      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
+      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
       # Monitoring
       SERVER_NAME: ${SERVER_NAME:-dotmac-sub-prod}
-      GLITCHTIP_DSN: ${GLITCHTIP_DSN:-http://1f5a78dd8b9942bbaa2f1c0fc0a7840c@160.119.127.195:8080/1}
+      GLITCHTIP_DSN: ${GLITCHTIP_DSN:-}
     env_file:
     - .env
     depends_on:
-    - db
-    - redis
-    - minio
-    - openbao
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
     cap_add:
     - NET_ADMIN
     privileged: true
@@ -60,15 +67,21 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
+      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
+      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
     env_file:
     - .env
     depends_on:
-    - db
-    - redis
-    - minio
-    - openbao
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     - ./uploads:/app/uploads
@@ -92,15 +105,21 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
       S3_REGION: ${S3_REGION:-us-east-1}
+      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
+      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
     env_file:
     - .env
     depends_on:
-    - db
-    - redis
-    - minio
-    - openbao
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     command:
@@ -258,11 +277,16 @@ services:
     env_file:
     - .env
     depends_on:
-    - db
-    - redis
-    - victoriametrics
-    - minio
-    - openbao
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_started
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
     volumes:
     - ./app:/app/app
     command:

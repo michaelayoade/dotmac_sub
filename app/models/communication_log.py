@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -55,6 +56,20 @@ class CommunicationLog(Base):
         Index("ix_communication_logs_subscriber", "subscriber_id"),
         Index("ix_communication_logs_channel", "channel"),
         Index("ix_communication_logs_sent_at", "sent_at"),
+        Index(
+            "uq_communication_logs_channel_external_id",
+            "channel",
+            "external_id",
+            unique=True,
+            postgresql_where=text("external_id IS NOT NULL"),
+        ),
+        Index(
+            "uq_communication_logs_channel_splynx_message_id",
+            "channel",
+            "splynx_message_id",
+            unique=True,
+            postgresql_where=text("splynx_message_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

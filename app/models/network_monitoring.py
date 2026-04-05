@@ -16,6 +16,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -194,6 +195,12 @@ class NetworkDevice(Base):
     __table_args__ = (
         UniqueConstraint("hostname", name="uq_network_devices_hostname"),
         UniqueConstraint("mgmt_ip", name="uq_network_devices_mgmt_ip"),
+        Index(
+            "uq_network_devices_active_splynx_monitoring_id",
+            "splynx_monitoring_id",
+            unique=True,
+            postgresql_where=text("is_active AND splynx_monitoring_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
