@@ -146,10 +146,21 @@ def monitoring_page(
     force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
     if force_refresh:
         try:
-            from app.celery_app import celery_app as _celery
+            from app.celery_app import enqueue_celery_task
 
-            _celery.send_task("app.tasks.network_monitoring.refresh_core_device_ping")
-            _celery.send_task("app.tasks.network_monitoring.refresh_core_device_snmp")
+            request_id = getattr(request.state, "request_id", None)
+            enqueue_celery_task(
+                "app.tasks.network_monitoring.refresh_core_device_ping",
+                correlation_id="monitoring_refresh:ping",
+                source="admin_network_monitoring",
+                request_id=request_id,
+            )
+            enqueue_celery_task(
+                "app.tasks.network_monitoring.refresh_core_device_snmp",
+                correlation_id="monitoring_refresh:snmp",
+                source="admin_network_monitoring",
+                request_id=request_id,
+            )
         except Exception:
             logger.debug("Could not dispatch monitoring refresh task")
 

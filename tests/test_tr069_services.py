@@ -514,6 +514,60 @@ def test_tr069_job_status_transitions(db_session, acs_server):
     assert updated.status == Tr069JobStatus.succeeded
 
 
+def test_execute_tr069_job_logs_structured_lifecycle(
+    db_session, acs_server, monkeypatch, caplog
+):
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="JOB-LOG-CPE",
+            oui="HWTC",
+            product_class="HG8546M",
+        ),
+    )
+    job = tr069_service.jobs.create(
+        db_session,
+        Tr069JobCreate(
+            device_id=device.id,
+            name="Reboot",
+            command="reboot",
+            status=Tr069JobStatus.queued,
+        ),
+    )
+
+    class _FakeClient:
+        def __init__(self, _base_url):
+            return None
+
+        def build_device_id(self, oui, product_class, serial_number):
+            return f"{oui}-{product_class}-{serial_number}"
+
+        def create_task(self, _device_id, _task):
+            return {"_id": "task-1"}
+
+    monkeypatch.setattr(tr069_service, "GenieACSClient", _FakeClient)
+    caplog.set_level("INFO")
+
+    updated = tr069_service.jobs.execute(db_session, str(job.id))
+
+    assert updated.status == Tr069JobStatus.succeeded
+    start_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "tr069_job_execute_start"
+    )
+    complete_record = next(
+        record
+        for record in caplog.records
+        if record.getMessage() == "tr069_job_execute_complete"
+    )
+    assert start_record.job_id == str(job.id)
+    assert start_record.event == "tr069_job"
+    assert start_record.serial_number == "JOB-LOG-CPE"
+    assert complete_record.job_status == Tr069JobStatus.succeeded.value
+
+
 def test_create_tr069_parameter(db_session, acs_server):
     """Test creating a TR-069 parameter."""
     device = tr069_service.cpe_devices.create(
@@ -759,3 +813,29 @@ def test_create_acs_server_requires_reachable_genieacs(db_session):
             web_network_tr069_service.create_acs_server(db_session, values)
 
     assert "Failed to connect to GenieACS" in str(exc_info.value)
+
+
+def test_queue_bulk_action_uses_correlated_enqueue(monkeypatch):
+    captured: dict[str, object] = {}
+
+    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, **extra):
+        captured["task"] = task
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        captured["correlation_id"] = correlation_id
+        captured["source"] = source
+        captured["extra"] = extra
+        return type("AsyncResult", (), {"id": "task-bulk-1"})()
+
+    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
+
+    task_id = web_network_tr069_service.queue_bulk_action(
+        ["device-1", "device-2"],
+        "reboot",
+    )
+
+    assert task_id == "task-bulk-1"
+    assert captured["args"] == [["device-1", "device-2"], "reboot", {}]
+    assert captured["kwargs"] is None
+    assert captured["correlation_id"] == "tr069_bulk:reboot:2"
+    assert captured["source"] == "web_network_tr069"

@@ -1209,9 +1209,15 @@ def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | 
 
         # Queue CLI output capture for parser testing (non-blocking)
         try:
+            from app.celery_app import enqueue_celery_task
             from app.tasks.olt_capture import capture_olt_samples_task
 
-            capture_olt_samples_task.delay(str(olt.id))
+            enqueue_celery_task(
+                capture_olt_samples_task,
+                args=[str(olt.id)],
+                correlation_id=f"olt_cli_capture:{olt.id}",
+                source="web_network_olts",
+            )
             logger.debug("Queued CLI capture for OLT %s", olt.id)
         except Exception:
             logger.debug(

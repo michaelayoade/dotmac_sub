@@ -82,7 +82,15 @@ def vpn_index(
     )
 
     if web_vpn_management_service.should_schedule_health_scan(db):
-        run_vpn_health_scan.delay()
+        from app.celery_app import enqueue_celery_task
+
+        enqueue_celery_task(
+            run_vpn_health_scan,
+            correlation_id="vpn_health_scan:auto",
+            source="admin_wireguard_dashboard",
+            request_id=getattr(request.state, "request_id", None),
+            actor_id=_get_actor_id(request),
+        )
 
     return templates.TemplateResponse(
         "admin/network/vpn/index.html",
@@ -635,7 +643,16 @@ def vpn_control_action(
         server_id=server_id,
         actor_id=_get_actor_id(request),
     )
-    run_vpn_control_job.delay(job_id=job["job_id"])
+    from app.celery_app import enqueue_celery_task
+
+    enqueue_celery_task(
+        run_vpn_control_job,
+        kwargs={"job_id": job["job_id"]},
+        correlation_id=f"vpn_control:{protocol}:{action}:{job['job_id']}",
+        source="admin_wireguard_control",
+        request_id=getattr(request.state, "request_id", None),
+        actor_id=_get_actor_id(request),
+    )
     return RedirectResponse(
         url=f"/admin/network/vpn?protocol={protocol}&server_id={server_id or ''}&control_job_id={job['job_id']}",
         status_code=303,

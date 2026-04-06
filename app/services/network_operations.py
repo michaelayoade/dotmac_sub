@@ -53,6 +53,20 @@ _EXPECTED_WARNING_PATTERNS = (
 )
 
 
+def _operation_extra(op: NetworkOperation) -> dict[str, object]:
+    return {
+        "event": "network_operation",
+        "operation_id": str(op.id),
+        "operation_type": op.operation_type.value,
+        "target_type": op.target_type.value,
+        "target_id": str(op.target_id),
+        "operation_status": op.status.value,
+        "correlation_key": op.correlation_key,
+        "parent_id": str(op.parent_id) if op.parent_id else None,
+        "initiated_by": op.initiated_by,
+    }
+
+
 def _get_operation(db: Session, operation_id: str) -> NetworkOperation:
     """Fetch an operation by ID or raise 404."""
     op = db.get(NetworkOperation, operation_id)
@@ -153,6 +167,7 @@ class NetworkOperations(ListResponseMixin):
             target_type.value,
             target_id,
             op.id,
+            extra=_operation_extra(op),
         )
         return op
 
@@ -166,6 +181,7 @@ class NetworkOperations(ListResponseMixin):
             op.started_at = datetime.now(UTC)
         op.waiting_reason = None
         db.flush()
+        logger.info("Operation running", extra=_operation_extra(op))
         return op
 
     @staticmethod
@@ -183,7 +199,9 @@ class NetworkOperations(ListResponseMixin):
         if output_payload is not None:
             op.output_payload = output_payload
         db.flush()
-        logger.info("Operation succeeded: %s", operation_id)
+        extra = _operation_extra(op)
+        extra["output_payload"] = output_payload
+        logger.info("Operation succeeded", extra=extra)
         return op
 
     @staticmethod
@@ -209,7 +227,10 @@ class NetworkOperations(ListResponseMixin):
             if any(pattern in error_text for pattern in _EXPECTED_WARNING_PATTERNS)
             else logger.error
         )
-        log("Operation failed: %s — %s", operation_id, error)
+        extra = _operation_extra(op)
+        extra["error"] = error
+        extra["output_payload"] = output_payload
+        log("Operation failed", extra=extra)
         return op
 
     @staticmethod
@@ -224,7 +245,9 @@ class NetworkOperations(ListResponseMixin):
         op.status = NetworkOperationStatus.waiting
         op.waiting_reason = reason
         db.flush()
-        logger.info("Operation waiting: %s — %s", operation_id, reason)
+        extra = _operation_extra(op)
+        extra["waiting_reason"] = reason
+        logger.info("Operation waiting", extra=extra)
         return op
 
     @staticmethod
@@ -235,7 +258,7 @@ class NetworkOperations(ListResponseMixin):
         op.status = NetworkOperationStatus.canceled
         op.completed_at = datetime.now(UTC)
         db.flush()
-        logger.info("Operation canceled: %s", operation_id)
+        logger.info("Operation canceled", extra=_operation_extra(op))
         return op
 
     @staticmethod

@@ -254,6 +254,32 @@ class TestEventDispatcher:
         # Verify db.add was called (event persistence)
         mock_db.add.assert_called_once()
 
+    def test_dispatch_logs_structured_lifecycle(self, db_session, caplog):
+        dispatcher = EventDispatcher()
+        handler = MagicMock()
+        dispatcher.register_handler(handler)
+
+        event = Event(
+            event_type=EventType.payment_received,
+            payload={"amount": 50},
+        )
+        mock_db = MagicMock()
+
+        caplog.set_level("INFO")
+        dispatcher.dispatch(mock_db, event)
+
+        start_record = next(
+            record for record in caplog.records if record.getMessage() == "event_dispatch_start"
+        )
+        complete_record = next(
+            record for record in caplog.records if record.getMessage() == "event_dispatch_complete"
+        )
+
+        assert start_record.event_id == str(event.event_id)
+        assert start_record.event_type == EventType.payment_received.value
+        assert start_record.handler_count == 1
+        assert complete_record.failed_handler_count == 0
+
     def test_retry_event_calls_only_failed_handlers(self, db_session):
         dispatcher = EventDispatcher()
         h1 = MagicMock()

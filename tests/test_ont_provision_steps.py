@@ -178,6 +178,11 @@ class TestWaitTr069Bootstrap:
         send_task.assert_called_once_with(
             "app.tasks.tr069.wait_for_ont_bootstrap",
             args=["ont-1", "op-1"],
+            kwargs={},
+            headers={
+                "correlation_id": "tr069_bootstrap:ont-1",
+                "source": "ont_provision_step",
+            },
         )
 
     def test_queue_wait_tr069_bootstrap_marks_operation_failed_when_dispatch_fails(

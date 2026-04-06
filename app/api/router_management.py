@@ -337,9 +337,16 @@ def create_push(
         raise HTTPException(status_code=422, detail=str(exc))
 
     try:
+        from app.celery_app import enqueue_celery_task
         from app.tasks.router_sync import execute_config_push
 
-        execute_config_push.delay(str(push.id))
+        enqueue_celery_task(
+            execute_config_push,
+            args=[str(push.id)],
+            correlation_id=f"router_config_push:{push.id}",
+            source="api_router_management",
+            actor_id=str(user_id),
+        )
     except ImportError:
         pass
 

@@ -13,7 +13,8 @@ Usage:
 
     # Or via Celery task
     from app.tasks.olt_capture import capture_olt_samples_task
-    capture_olt_samples_task.delay(str(olt_id))
+    from app.celery_app import enqueue_celery_task
+    enqueue_celery_task(capture_olt_samples_task, args=[str(olt_id)])
 """
 
 from __future__ import annotations

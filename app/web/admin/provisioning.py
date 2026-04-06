@@ -258,7 +258,16 @@ def bulk_activate_execute(
             mapping=mapping,
             actor_id=actor_id,
         )
-        run_bulk_activation_job.delay(job_id=str(job["job_id"]))
+        from app.celery_app import enqueue_celery_task
+
+        enqueue_celery_task(
+            run_bulk_activation_job,
+            kwargs={"job_id": str(job["job_id"])},
+            correlation_id=f"bulk_activation:{job['job_id']}",
+            source="admin_provisioning_bulk_activate",
+            request_id=getattr(request.state, "request_id", None),
+            actor_id=actor_id,
+        )
         notice = quote_plus("Bulk activation job queued.")
         return RedirectResponse(
             url=f"/admin/provisioning/bulk-activate?tab={quote_plus(filters.tab)}&job_id={job['job_id']}&notice={notice}",
@@ -391,12 +400,29 @@ def service_migration_execute(
         scheduled_at = job.get("scheduled_at")
         if scheduled_at:
             eta = datetime.fromisoformat(str(scheduled_at))
-            run_service_migration_job.apply_async(
-                kwargs={"job_id": str(job["job_id"])}, eta=eta
+            from app.celery_app import enqueue_celery_task
+
+            enqueue_celery_task(
+                run_service_migration_job,
+                kwargs={"job_id": str(job["job_id"])},
+                eta=eta,
+                correlation_id=f"service_migration:{job['job_id']}",
+                source="admin_provisioning_migration",
+                request_id=getattr(request.state, "request_id", None),
+                actor_id=actor_id,
             )
             notice = quote_plus("Service migration scheduled.")
         else:
-            run_service_migration_job.delay(job_id=str(job["job_id"]))
+            from app.celery_app import enqueue_celery_task
+
+            enqueue_celery_task(
+                run_service_migration_job,
+                kwargs={"job_id": str(job["job_id"])},
+                correlation_id=f"service_migration:{job['job_id']}",
+                source="admin_provisioning_migration",
+                request_id=getattr(request.state, "request_id", None),
+                actor_id=actor_id,
+            )
             notice = quote_plus("Service migration queued.")
         return RedirectResponse(
             url=f"/admin/provisioning/migrate?job_id={job['job_id']}&notice={notice}",

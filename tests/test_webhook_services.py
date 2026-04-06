@@ -44,6 +44,54 @@ def test_webhook_endpoint_subscription_delivery_flow(db_session):
     assert updated.status == WebhookDeliveryStatus.delivered
 
 
+def test_webhook_delivery_logs_structured_lifecycle(db_session, caplog):
+    endpoint = webhook_service.webhook_endpoints.create(
+        db_session,
+        WebhookEndpointCreate(
+            name="Core Webhooks",
+            url="https://example.com/webhooks",
+            secret="secret-token",
+        ),
+    )
+    subscription = webhook_service.webhook_subscriptions.create(
+        db_session,
+        WebhookSubscriptionCreate(
+            endpoint_id=endpoint.id,
+            event_type=WebhookEventType.subscriber_created,
+        ),
+    )
+
+    caplog.set_level("INFO")
+    delivery = webhook_service.webhook_deliveries.create(
+        db_session,
+        WebhookDeliveryCreate(
+            subscription_id=subscription.id,
+            event_type=WebhookEventType.subscriber_created,
+            payload={"id": "sub-1"},
+        ),
+    )
+    webhook_service.webhook_deliveries.update(
+        db_session,
+        str(delivery.id),
+        WebhookDeliveryUpdate(
+            status=WebhookDeliveryStatus.delivered,
+            response_status=200,
+        ),
+    )
+
+    created_record = next(
+        record for record in caplog.records if record.getMessage() == "webhook_delivery_created"
+    )
+    updated_record = next(
+        record for record in caplog.records if record.getMessage() == "webhook_delivery_updated"
+    )
+
+    assert created_record.event == "webhook_delivery"
+    assert created_record.delivery_id == str(delivery.id)
+    assert updated_record.delivery_status == WebhookDeliveryStatus.delivered.value
+    assert updated_record.response_status == 200
+
+
 def test_webhook_endpoints_default_active(db_session):
     active = webhook_service.webhook_endpoints.create(
         db_session,

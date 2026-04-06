@@ -133,6 +133,33 @@ class TestNetworkOperationLifecycle:
         assert updated.completed_at is not None
         assert updated.error == "Connection refused"
 
+    def test_operation_logs_include_structured_fields(self, db_session, caplog):
+        caplog.set_level("INFO")
+        op = network_operations.start(
+            db_session,
+            NetworkOperationType.ont_reboot,
+            NetworkOperationTargetType.ont,
+            _make_target_id(),
+            correlation_key="ont_reboot:test",
+            initiated_by="admin:alice",
+        )
+
+        network_operations.mark_running(db_session, str(op.id))
+        network_operations.mark_waiting(db_session, str(op.id), "next_inform")
+
+        start_record = next(
+            record for record in caplog.records if record.getMessage().startswith("Operation started")
+        )
+        waiting_record = next(
+            record for record in caplog.records if record.getMessage() == "Operation waiting"
+        )
+
+        assert start_record.operation_id == str(op.id)
+        assert start_record.operation_type == NetworkOperationType.ont_reboot.value
+        assert start_record.correlation_key == "ont_reboot:test"
+        assert waiting_record.operation_status == NetworkOperationStatus.waiting.value
+        assert waiting_record.waiting_reason == "next_inform"
+
     def test_running_to_failed_with_payload(self, db_session):
         """mark_failed stores both error and output_payload."""
         op = network_operations.start(

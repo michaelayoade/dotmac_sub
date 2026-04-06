@@ -37,6 +37,51 @@ from app.services.events.types import EventType
 logger = logging.getLogger(__name__)
 
 
+def _billing_run_extra(
+    *,
+    run_uuid: object | None,
+    run_at: datetime,
+    billing_cycle: BillingCycle | None,
+    dry_run: bool,
+    include_pending: bool,
+    auto_activate_pending: bool,
+    summary: dict[str, Any] | None = None,
+    error: str | None = None,
+    attempt: int | None = None,
+    max_retries: int | None = None,
+) -> dict[str, object]:
+    extra: dict[str, object] = {
+        "event": "billing_run",
+        "billing_run_id": str(run_uuid) if run_uuid else None,
+        "run_at": run_at.isoformat(),
+        "billing_cycle": billing_cycle.value if billing_cycle else None,
+        "dry_run": dry_run,
+        "include_pending": include_pending,
+        "auto_activate_pending": auto_activate_pending,
+    }
+    if summary is not None:
+        for key in (
+            "subscriptions_scanned",
+            "subscriptions_billed",
+            "invoices_created",
+            "lines_created",
+            "skipped",
+            "pending_activated",
+            "invoice_reminders_sent",
+            "dunning_escalations_sent",
+            "run_id",
+        ):
+            if key in summary:
+                extra[key] = summary[key]
+    if error is not None:
+        extra["error"] = error
+    if attempt is not None:
+        extra["attempt"] = attempt
+    if max_retries is not None:
+        extra["max_retries"] = max_retries
+    return extra
+
+
 def _coerce_int_setting(value: object) -> int | None:
     # settings_spec.resolve_value() returns object | None.
     if value is None:
@@ -452,6 +497,17 @@ def run_invoice_cycle(
         db.commit()
         db.refresh(run)
         run_uuid = run.id
+    logger.info(
+        "billing_run_start",
+        extra=_billing_run_extra(
+            run_uuid=run_uuid,
+            run_at=run_at,
+            billing_cycle=billing_cycle,
+            dry_run=dry_run,
+            include_pending=include_pending,
+            auto_activate_pending=auto_activate_pending,
+        ),
+    )
 
     # Query active subscriptions
     active_subscriptions = (
@@ -637,6 +693,18 @@ def run_invoice_cycle(
 
     if dry_run:
         summary["run_id"] = None
+        logger.info(
+            "billing_run_dry_run_complete",
+            extra=_billing_run_extra(
+                run_uuid=None,
+                run_at=run_at,
+                billing_cycle=billing_cycle,
+                dry_run=dry_run,
+                include_pending=include_pending,
+                auto_activate_pending=auto_activate_pending,
+                summary=summary,
+            ),
+        )
         return summary
 
     try:
@@ -681,13 +749,35 @@ def run_invoice_cycle(
             summary["invoices_created"],
             summary["lines_created"],
             summary["pending_activated"],
+            extra=_billing_run_extra(
+                run_uuid=run_uuid,
+                run_at=run_at,
+                billing_cycle=billing_cycle,
+                dry_run=dry_run,
+                include_pending=include_pending,
+                auto_activate_pending=auto_activate_pending,
+                summary=summary,
+            ),
         )
         return summary
 
     except Exception as exc:
         db.rollback()
         error_msg = str(exc)
-        logger.error("Billing run failed: %s", error_msg)
+        logger.error(
+            "Billing run failed: %s",
+            error_msg,
+            extra=_billing_run_extra(
+                run_uuid=run_uuid,
+                run_at=run_at,
+                billing_cycle=billing_cycle,
+                dry_run=dry_run,
+                include_pending=include_pending,
+                auto_activate_pending=auto_activate_pending,
+                summary=summary,
+                error=error_msg,
+            ),
+        )
 
         run_db = db.get(BillingRun, run_uuid) if run_uuid else None
         if run_db:
@@ -872,6 +962,19 @@ def run_invoice_cycle_with_retry(
     last_error: BaseException | None = None
     for attempt in range(max_retries):
         try:
+            logger.info(
+                "billing_run_attempt_start",
+                extra=_billing_run_extra(
+                    run_uuid=None,
+                    run_at=_as_utc(run_at) or datetime.now(UTC),
+                    billing_cycle=billing_cycle,
+                    dry_run=dry_run,
+                    include_pending=include_pending,
+                    auto_activate_pending=auto_activate_pending,
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                ),
+            )
             return run_invoice_cycle(
                 db=db,
                 run_at=run_at,
@@ -887,6 +990,17 @@ def run_invoice_cycle_with_retry(
                 attempt + 1,
                 max_retries,
                 exc,
+                extra=_billing_run_extra(
+                    run_uuid=None,
+                    run_at=_as_utc(run_at) or datetime.now(UTC),
+                    billing_cycle=billing_cycle,
+                    dry_run=dry_run,
+                    include_pending=include_pending,
+                    auto_activate_pending=auto_activate_pending,
+                    error=str(exc),
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                ),
             )
             if attempt < max_retries - 1:
                 db.rollback()

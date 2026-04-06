@@ -23,6 +23,11 @@ from app.models.network import OntAssignment, OntUnit, PonPort
 logger = logging.getLogger(__name__)
 
 
+def _is_serial_already_registered_message(message: str | None) -> bool:
+    lowered = str(message or "").lower()
+    return "sn already exists" in lowered or "serial already exists" in lowered
+
+
 @dataclass
 class AuthorizationStepResult:
     """Result of a single step in the authorization workflow."""
@@ -217,6 +222,16 @@ def authorize_autofind_ont(
             db, olt_id, serial_number, fsp=fsp
         )
         if matched_candidate is None:
+            logger.warning(
+                "ONT authorization validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s sync_message=%s sync_stats=%s failure_step=%s",
+                olt_id,
+                getattr(olt, "name", None),
+                fsp,
+                serial_number,
+                sync_message,
+                _sync_stats,
+                "Validate discovered ONT row",
+            )
             return _fail(
                 "Validate discovered ONT row",
                 "The discovered ONT entry is no longer active for that port/serial after refreshing autofind data.",
@@ -249,17 +264,64 @@ def authorize_autofind_ont(
                 olt.name,
                 fsp,
             )
-        return _fail(
+        elif _is_serial_already_registered_message(msg):
+            duplicate_verification = verify_ont_authorized(
+                olt,
+                fsp=fsp,
+                ont_id=None,
+                serial_number=serial_number,
+            )
+            if duplicate_verification.success:
+                verified_ont_id = duplicate_verification.details.get("ont_id") if duplicate_verification.details else None
+                ont_id = (
+                    int(verified_ont_id)
+                    if isinstance(verified_ont_id, int | str)
+                    and str(verified_ont_id).isdigit()
+                    else None
+                )
+                recovery_message = (
+                    "ONT serial was already registered on the OLT; reusing the existing registration."
+                )
+                if ont_id is not None:
+                    recovery_message += f" Resolved ONT-ID {ont_id} on {fsp}."
+                else:
+                    recovery_message += f" Verified existing registration on {fsp}."
+                logger.info(
+                    "ONT authorization recovered existing registration olt_id=%s olt_name=%s fsp=%s serial=%s ont_id=%s",
+                    olt_id,
+                    getattr(olt, "name", None),
+                    fsp,
+                    serial_number,
+                    ont_id,
+                )
+                _append_step(
+                    "Authorize ONT on OLT",
+                    True,
+                    recovery_message,
+                    step_started_at=authorize_started_at,
+                )
+            else:
+                return _fail(
+                    "Authorize ONT on OLT",
+                    "OLT reported the serial already exists, but readback could not confirm a matching ONT registration "
+                    f"on {fsp}: {duplicate_verification.message}",
+                    step_started_at=authorize_started_at,
+                )
+        else:
+            return _fail(
+                "Authorize ONT on OLT",
+                failure_message,
+                step_started_at=authorize_started_at,
+            )
+    if steps and steps[-1].name == "Authorize ONT on OLT" and steps[-1].success:
+        pass
+    else:
+        _append_step(
             "Authorize ONT on OLT",
-            failure_message,
+            True,
+            f"{msg} Resolved ONT-ID {ont_id} on {fsp}.",
             step_started_at=authorize_started_at,
         )
-    _append_step(
-        "Authorize ONT on OLT",
-        True,
-        f"{msg} Resolved ONT-ID {ont_id} on {fsp}.",
-        step_started_at=authorize_started_at,
-    )
 
     verify_started_at = monotonic()
     verification = verify_ont_authorized(
@@ -499,13 +561,20 @@ def queue_post_authorization_follow_up(
     db.commit()
 
     try:
-        run_post_authorization_follow_up_task.delay(
-            str(op.id),
-            ont_unit_id,
-            olt_id,
-            fsp,
-            serial_number,
-            ont_id_on_olt,
+        from app.celery_app import enqueue_celery_task
+
+        enqueue_celery_task(
+            run_post_authorization_follow_up_task,
+            args=[
+                str(op.id),
+                ont_unit_id,
+                olt_id,
+                fsp,
+                serial_number,
+                ont_id_on_olt,
+            ],
+            correlation_id=correlation_key,
+            source="olt_post_authorization",
         )
     except Exception as exc:
         network_operations.mark_failed(

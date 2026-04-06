@@ -592,11 +592,13 @@ def submit_bulk_action(payload: OntBulkActionRequest) -> OntBulkActionResponse:
             status_code=400,
             detail=f"Invalid action '{payload.action}'. Allowed: {sorted(ALLOWED_BULK_ACTIONS)}",
         )
-    from app.celery_app import celery_app
+    from app.celery_app import enqueue_celery_task
 
-    task = celery_app.send_task(
+    task = enqueue_celery_task(
         "app.tasks.ont_bulk.execute_bulk_action",
         args=[payload.ont_ids, payload.action, payload.params],
+        correlation_id=f"ont_bulk:{payload.action}:{len(payload.ont_ids)}",
+        source="api_network_ont_bulk",
     )
     return OntBulkActionResponse(
         task_id=task.id,

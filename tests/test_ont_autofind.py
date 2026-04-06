@@ -77,3 +77,52 @@ def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
     assert item.is_active is False
     assert item.resolution_reason == "authorized"
     assert item.resolved_at is not None
+
+
+def test_build_unconfigured_onts_page_data_supports_history_filters(db_session):
+    olt = OLTDevice(name="OLT-History", mgmt_ip="198.51.100.202", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    active_item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/3",
+        serial_number="ACTIVE-ONT",
+        is_active=True,
+    )
+    authorized_item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/4",
+        serial_number="AUTH-ONT",
+        is_active=False,
+        resolution_reason="authorized",
+    )
+    disappeared_item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/5",
+        serial_number="DISC-ONT",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    db_session.add_all([active_item, authorized_item, disappeared_item])
+    db_session.commit()
+
+    history_data = autofind_service.build_unconfigured_onts_page_data(
+        db_session,
+        view="history",
+    )
+    assert history_data["selected_view"] == "history"
+    assert {entry["serial_number"] for entry in history_data["entries"]} == {
+        "AUTH-ONT",
+        "DISC-ONT",
+    }
+    assert history_data["stats"]["history_candidates"] == 2
+
+    disappeared_data = autofind_service.build_unconfigured_onts_page_data(
+        db_session,
+        view="history",
+        resolution="disappeared",
+    )
+    assert [entry["serial_number"] for entry in disappeared_data["entries"]] == [
+        "DISC-ONT"
+    ]

@@ -30,6 +30,18 @@ from app.services.response import ListResponseMixin
 logger = logging.getLogger(__name__)
 
 
+def _delivery_extra(delivery: WebhookDelivery) -> dict[str, object]:
+    return {
+        "event": "webhook_delivery",
+        "delivery_id": str(delivery.id),
+        "subscription_id": str(delivery.subscription_id),
+        "endpoint_id": str(delivery.endpoint_id),
+        "event_type": delivery.event_type.value if delivery.event_type else None,
+        "delivery_status": delivery.status.value if delivery.status else None,
+        "response_status": delivery.response_status,
+    }
+
+
 class WebhookEndpoints(ListResponseMixin):
     @staticmethod
     def create(db: Session, payload: WebhookEndpointCreate):
@@ -255,6 +267,7 @@ class WebhookDeliveries(ListResponseMixin):
         db.add(delivery)
         db.commit()
         db.refresh(delivery)
+        logger.info("webhook_delivery_created", extra=_delivery_extra(delivery))
         return delivery
 
     @staticmethod
@@ -315,6 +328,7 @@ class WebhookDeliveries(ListResponseMixin):
             setattr(delivery, key, value)
         db.commit()
         db.refresh(delivery)
+        logger.info("webhook_delivery_updated", extra=_delivery_extra(delivery))
         return delivery
 
 

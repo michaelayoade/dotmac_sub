@@ -391,19 +391,28 @@ def system_import_wizard_submit(
                     "error": None,
                 },
             )
-            run_import_job.delay(
-                job_id=job_id,
-                module=module,
-                data_format=data_format,
-                raw_text=payload_text,
-                source_name=source_name,
-                dry_run=dry_run is not None,
-                column_mapping=column_mapping,
-                csv_delimiter=csv_delimiter,
-                file_bytes_b64=b64encode(file_bytes).decode("ascii")
-                if file_bytes is not None
-                else None,
-                notify_email=(current_user.get("email") or "").strip() or None,
+            from app.celery_app import enqueue_celery_task
+
+            enqueue_celery_task(
+                run_import_job,
+                kwargs={
+                    "job_id": job_id,
+                    "module": module,
+                    "data_format": data_format,
+                    "raw_text": payload_text,
+                    "source_name": source_name,
+                    "dry_run": dry_run is not None,
+                    "column_mapping": column_mapping,
+                    "csv_delimiter": csv_delimiter,
+                    "file_bytes_b64": b64encode(file_bytes).decode("ascii")
+                    if file_bytes is not None
+                    else None,
+                    "notify_email": (current_user.get("email") or "").strip() or None,
+                },
+                correlation_id=f"system_import:{job_id}",
+                source="admin_system_import",
+                request_id=getattr(request.state, "request_id", None),
+                actor_id=str(current_user.get("subscriber_id") or "").strip() or None,
             )
             notice = quote_plus(
                 f"Large import queued in background ({total_rows} rows). Track progress below."
@@ -634,7 +643,16 @@ def system_export_download(request: Request, db: Session = Depends(get_db)):
                 requested_by_email=requester_email,
                 row_count=row_count,
             )
-            run_export_job.delay(job_id=str(job["id"]))
+            from app.celery_app import enqueue_celery_task
+
+            enqueue_celery_task(
+                run_export_job,
+                kwargs={"job_id": str(job["id"])},
+                correlation_id=f"system_export:{job['id']}",
+                source="admin_system_export",
+                request_id=getattr(request.state, "request_id", None),
+                actor_id=actor_id,
+            )
             web_system_export_tool_service.log_export_audit_event(
                 db,
                 action="export_job_queued",
@@ -2633,12 +2651,55 @@ def _smtp_page_context(
     settings_context = web_system_settings_views_service.build_settings_context(
         db, "notification"
     )
+    selected_sender_key = str(request.query_params.get("edit_sender") or "").strip().lower()
+    smtp_sender_form = {
+        "sender_key": "",
+        "host": "",
+        "port": 587,
+        "username": "",
+        "from_email": "",
+        "from_name": "DotMac SM",
+        "use_tls": True,
+        "use_ssl": False,
+        "is_active": True,
+        "is_default": False,
+        "is_editing": False,
+    }
+    if selected_sender_key:
+        selected_sender = next(
+            (
+                sender
+                for sender in settings_context.get("smtp_sender_profiles", [])
+                if str(sender.get("sender_key", "")).strip().lower() == selected_sender_key
+            ),
+            None,
+        )
+        if selected_sender:
+            smtp_sender_form.update(
+                {
+                    "sender_key": str(selected_sender.get("sender_key", "")),
+                    "host": str(selected_sender.get("host", "")),
+                    "port": int(selected_sender.get("port") or 587),
+                    "username": str(selected_sender.get("username", "")),
+                    "from_email": str(selected_sender.get("from_email", "")),
+                    "from_name": str(selected_sender.get("from_name", "") or "DotMac SM"),
+                    "use_tls": bool(selected_sender.get("use_tls", True)),
+                    "use_ssl": bool(selected_sender.get("use_ssl", False)),
+                    "is_active": bool(selected_sender.get("is_active", True)),
+                    "is_default": (
+                        str(selected_sender.get("sender_key", "")).strip().lower()
+                        == str(settings_context.get("smtp_sender_default_key", "default")).strip().lower()
+                    ),
+                    "is_editing": True,
+                }
+            )
     return _config_context(
         request,
         db,
         {
             "active_page": "system-email",
             **settings_context,
+            "smtp_sender_form": smtp_sender_form,
             **(extra or {}),
         },
     )
@@ -2906,7 +2967,16 @@ def geocode_tool_start(
         filters=filters,
         actor_id=str(actor_id) if actor_id else None,
     )
-    run_batch_geocode_job.delay(job_id=job["job_id"])
+    from app.celery_app import enqueue_celery_task
+
+    enqueue_celery_task(
+        run_batch_geocode_job,
+        kwargs={"job_id": job["job_id"]},
+        correlation_id=f"batch_geocode:{job['job_id']}",
+        source="admin_system_geocode",
+        request_id=getattr(request.state, "request_id", None),
+        actor_id=str(actor_id) if actor_id else None,
+    )
     return RedirectResponse(
         url=f"/admin/system/tools/geocode?job_id={job['job_id']}",
         status_code=303,

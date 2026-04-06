@@ -579,9 +579,13 @@ def queue_wait_tr069_bootstrap(
             "Waiting for background TR-069 bootstrap polling to start.",
         )
         db.commit()
-        celery_app.send_task(
+        from app.celery_app import enqueue_celery_task
+
+        enqueue_celery_task(
             "app.tasks.tr069.wait_for_ont_bootstrap",
             args=[ont_id, str(op.id)],
+            correlation_id=f"tr069_bootstrap:{ont_id}",
+            source="ont_provision_step",
         )
         return StepResult(
             "wait_tr069_bootstrap",

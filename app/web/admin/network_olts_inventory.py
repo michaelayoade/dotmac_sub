@@ -772,9 +772,14 @@ def olt_autofind_scan_redirect(olt_id: str) -> RedirectResponse:
     dependencies=[Depends(require_permission("network:write"))],
 )
 def unconfigured_onts_scan_now() -> RedirectResponse:
+    from app.celery_app import enqueue_celery_task
     from app.tasks.ont_autofind import discover_all_olt_autofind
 
-    discover_all_olt_autofind.delay()
+    enqueue_celery_task(
+        discover_all_olt_autofind,
+        correlation_id="olt_autofind:all",
+        source="admin_network_olts_inventory",
+    )
     return RedirectResponse(
         "/admin/network/onts?status=success&message="
         + quote_plus("Aggregated OLT autofind scan queued."),

@@ -1276,10 +1276,10 @@ def get_onu_olt_status_summary(db: Session) -> dict[str, int]:
 
 
 def get_pon_outage_summary(db: Session) -> list[dict]:
-    """Detect PON ports with multiple offline ONTs (possible fiber cut).
+    """Detect fully offline PON ports (possible fiber cut).
 
-    Groups offline ONTs by PON port and returns ports exceeding the
-    configured minimum offline threshold.
+    Groups offline ONTs by PON port and returns only ports where every
+    assigned ONT is currently offline.
 
     Returns:
         List of dicts: {pon_port_name, olt_name, offline_count, total_count,
@@ -1294,18 +1294,6 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
         OnuOnlineStatus,
         PonPort,
     )
-
-    # Load the minimum offline ONUs threshold from settings
-    try:
-        from app.models.domain_settings import SettingDomain
-        from app.services.settings_spec import resolve_value
-
-        raw = resolve_value(
-            db, SettingDomain.network_monitoring, "pon_outage_min_offline_onus"
-        )
-        min_offline = int(str(raw)) if raw is not None else 2
-    except Exception:
-        min_offline = 2
 
     # Get offline ONTs with their assignments
     offline_onts = (
@@ -1333,9 +1321,23 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
             {"reason": reason.value if reason else "unknown", "last_seen": last_seen}
         )
 
-    # Filter to ports exceeding threshold
+    # Get total assigned ONTs per port for context
+    total_counts_raw = (
+        db.query(
+            OntAssignment.pon_port_id,
+            sa_func.count(OntAssignment.id),
+        )
+        .filter(OntAssignment.active.is_(True))
+        .group_by(OntAssignment.pon_port_id)
+        .all()
+    )
+    total_per_port = {str(pid): cnt for pid, cnt in total_counts_raw}
+
+    # Filter to ports where every assigned ONT is offline.
     outage_port_ids = [
-        pid for pid, items in port_offline.items() if len(items) >= min_offline
+        pid
+        for pid, items in port_offline.items()
+        if total_per_port.get(pid, 0) > 0 and len(items) == total_per_port[pid]
     ]
     if not outage_port_ids:
         return []
@@ -1343,21 +1345,6 @@ def get_pon_outage_summary(db: Session) -> list[dict]:
     # Enrich with PON port and OLT names + total ONT count per port
     pon_ports = db.query(PonPort).filter(PonPort.id.in_(outage_port_ids)).all()
     pon_port_map = {str(p.id): p for p in pon_ports}
-
-    # Get total assigned ONTs per port for context
-    total_counts_raw = (
-        db.query(
-            OntAssignment.pon_port_id,
-            sa_func.count(OntAssignment.id),
-        )
-        .filter(
-            OntAssignment.pon_port_id.in_(outage_port_ids),
-            OntAssignment.active.is_(True),
-        )
-        .group_by(OntAssignment.pon_port_id)
-        .all()
-    )
-    total_per_port = {str(pid): cnt for pid, cnt in total_counts_raw}
 
     # Get OLT names
     olt_ids = list({str(p.olt_id) for p in pon_ports if p.olt_id})

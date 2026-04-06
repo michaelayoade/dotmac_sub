@@ -706,6 +706,8 @@ def unconfigured_onts_list(
     request: Request,
     search: str | None = None,
     olt_id: str | None = None,
+    view: str | None = None,
+    resolution: str | None = None,
     status: str | None = None,
     message: str | None = None,
     db: Session = Depends(get_db),
@@ -716,6 +718,8 @@ def unconfigured_onts_list(
             db,
             search=search,
             olt_id=olt_id,
+            view=view,
+            resolution=resolution,
         )
     )
     context["status"] = status
@@ -731,9 +735,14 @@ def unconfigured_onts_list(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def unconfigured_onts_scan_now() -> RedirectResponse:
+    from app.celery_app import enqueue_celery_task
     from app.tasks.ont_autofind import discover_all_olt_autofind
 
-    discover_all_olt_autofind.delay()
+    enqueue_celery_task(
+        discover_all_olt_autofind,
+        correlation_id="olt_autofind:all",
+        source="admin_network_olts",
+    )
     return RedirectResponse(
         "/admin/network/unconfigured-onts?status=success&message="
         + quote_plus("Aggregated OLT autofind scan queued."),

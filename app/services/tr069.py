@@ -47,6 +47,39 @@ _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
 logger = logging.getLogger(__name__)
 
 
+def _job_extra(
+    job: Tr069Job,
+    *,
+    device: Tr069CpeDevice | None = None,
+    server: Tr069AcsServer | None = None,
+    task: dict | None = None,
+    result: object | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    extra: dict[str, object] = {
+        "event": "tr069_job",
+        "job_id": str(job.id),
+        "job_name": job.name,
+        "job_status": job.status.value,
+        "command": job.command,
+        "device_id": str(job.device_id),
+    }
+    if device is not None:
+        extra["serial_number"] = device.serial_number
+        extra["acs_server_id"] = str(device.acs_server_id) if device.acs_server_id else None
+        extra["genieacs_device_id"] = device.genieacs_device_id
+    if server is not None:
+        extra["acs_server_name"] = server.name
+        extra["acs_base_url"] = server.base_url
+    if task is not None:
+        extra["task"] = task
+    if result is not None:
+        extra["result"] = result
+    if error is not None:
+        extra["error"] = error
+    return extra
+
+
 def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
     """Build a SQL expression that strips common serial formatting."""
     expr = func.upper(column)
@@ -839,6 +872,10 @@ class Jobs(ListResponseMixin):
         job.started_at = datetime.now(UTC)
         job.error = None
         db.commit()
+        logger.info(
+            "tr069_job_execute_start",
+            extra=_job_extra(job, device=device, server=server),
+        )
 
         try:
             client = GenieACSClient(server.base_url)
@@ -871,34 +908,79 @@ class Jobs(ListResponseMixin):
                     fault_msg = fault.get("detail", {}).get("faultString") or str(fault)
                     job.status = Tr069JobStatus.failed
                     job.error = f"Task fault: {fault_msg}"
-                    logger.error(f"Job {job_id} failed with fault: {fault_msg}")
+                    logger.error(
+                        "tr069_job_execute_fault",
+                        extra=_job_extra(
+                            job,
+                            device=device,
+                            server=server,
+                            task=task,
+                            result=result,
+                            error=fault_msg,
+                        ),
+                    )
                 else:
                     job.status = Tr069JobStatus.succeeded
                     if connection_request_error:
                         # Task was queued but device couldn't be notified immediately
                         logger.warning(
-                            f"Job {job_id} task queued but connection request failed: "
-                            f"{connection_request_error}"
+                            "tr069_job_connection_request_failed",
+                            extra=_job_extra(
+                                job,
+                                device=device,
+                                server=server,
+                                task=task,
+                                result=result,
+                                error=str(connection_request_error),
+                            ),
                         )
                     else:
-                        logger.info(f"Job {job_id} executed successfully: {result}")
+                        logger.info(
+                            "tr069_job_execute_success",
+                            extra=_job_extra(
+                                job,
+                                device=device,
+                                server=server,
+                                task=task,
+                                result=result,
+                            ),
+                        )
             else:
                 job.status = Tr069JobStatus.succeeded
-                logger.info(f"Job {job_id} executed successfully: {result}")
+                logger.info(
+                    "tr069_job_execute_success",
+                    extra=_job_extra(
+                        job,
+                        device=device,
+                        server=server,
+                        task=task,
+                        result=result,
+                    ),
+                )
 
         except GenieACSError as e:
             job.status = Tr069JobStatus.failed
             job.error = str(e)
-            logger.error(f"Job {job_id} failed: {e}")
+            logger.error(
+                "tr069_job_execute_failed",
+                extra=_job_extra(job, device=device, server=server, error=str(e)),
+            )
 
         except Exception as e:
             job.status = Tr069JobStatus.failed
             job.error = str(e)
-            logger.exception(f"Job {job_id} failed with unexpected error")
+            logger.exception(
+                "tr069_job_execute_unexpected_error",
+                extra=_job_extra(job, device=device, server=server, error=str(e)),
+            )
 
         job.completed_at = datetime.now(UTC)
         db.commit()
         db.refresh(job)
+        logger.info(
+            "tr069_job_execute_complete",
+            extra=_job_extra(job, device=device, server=server),
+        )
         return job
 
     @staticmethod

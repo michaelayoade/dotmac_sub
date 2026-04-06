@@ -1,10 +1,11 @@
 """Tests for network monitoring service."""
 
 import json
+import uuid
 from datetime import UTC, datetime, timedelta
 
 from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
+from app.models.network import OLTDevice, OntAssignment, OntUnit, OnuOnlineStatus, PonPort
 from app.models.network_monitoring import (
     Alert,
     AlertOperator,
@@ -203,6 +204,67 @@ def test_get_onu_olt_status_summary_uses_raw_olt_status(db_session):
     assert summary["online"] == 1
     assert summary["offline"] == 1
     assert summary["unknown"] == 1
+
+
+def test_get_pon_outage_summary_only_flags_fully_offline_ports(db_session):
+    olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    full_port = PonPort(olt_id=olt.id, name="pon-0/1/1")
+    partial_port = PonPort(olt_id=olt.id, name="pon-0/1/2")
+    db_session.add_all([full_port, partial_port])
+    db_session.commit()
+    db_session.refresh(full_port)
+    db_session.refresh(partial_port)
+
+    for idx in range(2):
+        ont = OntUnit(
+            serial_number=f"FULL-{idx}-{uuid.uuid4().hex[:8]}",
+            online_status=OnuOnlineStatus.offline,
+            effective_status=OnuOnlineStatus.offline,
+        )
+        db_session.add(ont)
+        db_session.flush()
+        db_session.add(
+            OntAssignment(ont_unit_id=ont.id, pon_port_id=full_port.id, active=True)
+        )
+
+    offline_partial = OntUnit(
+        serial_number=f"PARTIAL-OFFLINE-{uuid.uuid4().hex[:8]}",
+        online_status=OnuOnlineStatus.offline,
+        effective_status=OnuOnlineStatus.offline,
+    )
+    online_partial = OntUnit(
+        serial_number=f"PARTIAL-ONLINE-{uuid.uuid4().hex[:8]}",
+        online_status=OnuOnlineStatus.online,
+        effective_status=OnuOnlineStatus.online,
+    )
+    db_session.add_all([offline_partial, online_partial])
+    db_session.flush()
+    db_session.add_all(
+        [
+            OntAssignment(
+                ont_unit_id=offline_partial.id,
+                pon_port_id=partial_port.id,
+                active=True,
+            ),
+            OntAssignment(
+                ont_unit_id=online_partial.id,
+                pon_port_id=partial_port.id,
+                active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    summary = monitoring_service.get_pon_outage_summary(db_session)
+
+    assert len(summary) == 1
+    assert summary[0]["pon_port_name"] == "pon-0/1/1"
+    assert summary[0]["offline_count"] == 2
+    assert summary[0]["total_count"] == 2
 
 
 def test_get_onu_status_trend_includes_effective_and_raw_olt_series(monkeypatch):

@@ -133,10 +133,19 @@ def test_export_file_exists_and_stream_export_uses_s3(
 def test_queue_export_ignores_non_subscriber_requested_by_id(db_session, subscriber_account, monkeypatch):
     invoice = _invoice(db_session, subscriber_account)
 
-    monkeypatch.setattr(
-        "app.tasks.invoice_pdf.generate_invoice_pdf_export.delay",
-        lambda _export_id: type("AsyncResult", (), {"id": "task-123"})(),
-    )
+    captured: dict[str, object] = {}
+
+    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, actor_id=None, **extra):
+        captured["task"] = task
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        captured["correlation_id"] = correlation_id
+        captured["source"] = source
+        captured["actor_id"] = actor_id
+        captured["extra"] = extra
+        return type("AsyncResult", (), {"id": "task-123"})()
+
+    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
 
     export = pdf_service.queue_export(
         db_session,
@@ -145,6 +154,53 @@ def test_queue_export_ignores_non_subscriber_requested_by_id(db_session, subscri
     )
 
     assert export.requested_by_id is None
+    assert captured["args"] == [str(export.id)]
+    assert captured["kwargs"] is None
+    assert captured["correlation_id"] == f"invoice_pdf_export:{export.id}"
+    assert captured["source"] == "billing_invoice_pdf"
+    assert captured["actor_id"] is None
+
+
+def test_queue_export_reuses_queued_export_without_task_id_with_correlated_enqueue(
+    db_session, subscriber_account, monkeypatch
+):
+    invoice = _invoice(db_session, subscriber_account)
+    export = InvoicePdfExport(
+        invoice_id=invoice.id,
+        status=InvoicePdfExportStatus.queued,
+        requested_by_id=subscriber_account.id,
+    )
+    db_session.add(export)
+    db_session.commit()
+    db_session.refresh(export)
+
+    captured: dict[str, object] = {}
+
+    def _fake_enqueue(task, *, args=None, kwargs=None, correlation_id=None, source=None, actor_id=None, **extra):
+        captured["task"] = task
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        captured["correlation_id"] = correlation_id
+        captured["source"] = source
+        captured["actor_id"] = actor_id
+        captured["extra"] = extra
+        return type("AsyncResult", (), {"id": "task-queued-1"})()
+
+    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
+
+    reused = pdf_service.queue_export(
+        db_session,
+        invoice_id=str(invoice.id),
+        requested_by_id=str(subscriber_account.id),
+    )
+
+    assert reused.id == export.id
+    assert reused.celery_task_id == "task-queued-1"
+    assert captured["args"] == [str(export.id)]
+    assert captured["kwargs"] is None
+    assert captured["correlation_id"] == f"invoice_pdf_export:{export.id}"
+    assert captured["source"] == "billing_invoice_pdf"
+    assert captured["actor_id"] == str(subscriber_account.id)
 
 
 def test_render_invoice_html_includes_branding_and_company_info(db_session, subscriber_account):

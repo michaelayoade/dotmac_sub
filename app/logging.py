@@ -3,6 +3,18 @@ import logging
 import logging.config
 from datetime import UTC, datetime
 
+_BASE_LOG_RECORD_FIELDS = set(logging.makeLogRecord({}).__dict__.keys())
+
+
+def _json_safe(value):
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return str(value)
+
 
 class JsonLogFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
@@ -23,6 +35,10 @@ class JsonLogFormatter(logging.Formatter):
             value = getattr(record, key, None)
             if value is not None:
                 payload[key] = value
+        for key, value in record.__dict__.items():
+            if key in payload or key in _BASE_LOG_RECORD_FIELDS or key.startswith("_"):
+                continue
+            payload[key] = _json_safe(value)
         if record.exc_info:
             payload["exception"] = self.formatException(record.exc_info)
         return json.dumps(payload)

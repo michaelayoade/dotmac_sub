@@ -742,3 +742,51 @@ class TestRunInvoiceCycle:
         assert calls[-1][0] == EventType.invoice_overdue
         assert calls[-1][1]["invoice_number"] == "INV-DUN-1"
         assert (invoice.metadata_ or {}).get("dunning_escalation_sent_3")
+
+    def test_run_invoice_cycle_logs_structured_summary(
+        self,
+        db_session,
+        subscriber,
+        monkeypatch,
+        caplog,
+    ):
+        from app.models.billing import Invoice, InvoiceStatus
+        from app.models.domain_settings import DomainSetting, SettingDomain
+        from app.models.subscription_engine import SettingValueType
+
+        run_at = datetime.now(UTC).replace(tzinfo=None)
+        invoice = Invoice(
+            account_id=subscriber.id,
+            invoice_number="INV-LOG-1",
+            status=InvoiceStatus.issued,
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            due_at=run_at + timedelta(days=7),
+            metadata_={},
+        )
+        db_session.add(invoice)
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.billing,
+                key="invoice_reminder_days",
+                value_type=SettingValueType.string,
+                value_text="7",
+                is_active=True,
+            )
+        )
+        db_session.commit()
+        monkeypatch.setattr("app.services.billing_automation.emit_event", lambda *a, **k: None)
+
+        caplog.set_level("INFO")
+        summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
+
+        start_record = next(
+            record for record in caplog.records if record.getMessage() == "billing_run_start"
+        )
+        complete_record = next(
+            record for record in caplog.records if "Billing run completed:" in record.getMessage()
+        )
+
+        assert start_record.event == "billing_run"
+        assert complete_record.invoice_reminders_sent == summary["invoice_reminders_sent"]
+        assert complete_record.dunning_escalations_sent == summary["dunning_escalations_sent"]

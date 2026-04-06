@@ -243,6 +243,82 @@ def test_get_smtp_config_uses_activity_mapped_sender(db_session):
     assert config["from_email"] == "billing@example.com"
 
 
+def test_upsert_smtp_sender_updates_existing_sender_in_place(db_session):
+    """Upserting the same sender key should update the existing sender profile."""
+    sender_key = email_service.upsert_smtp_sender(
+        db_session,
+        sender_key="billing",
+        host="smtp.old.local",
+        port=587,
+        username="mailer-old",
+        password="secret-old",
+        from_email="old@example.com",
+        from_name="Old Sender",
+        use_tls=True,
+        use_ssl=False,
+        is_active=True,
+    )
+
+    assert sender_key == "billing"
+
+    sender_key = email_service.upsert_smtp_sender(
+        db_session,
+        sender_key="billing",
+        host="smtp.new.local",
+        port=2525,
+        username="mailer-new",
+        password="",
+        from_email="new@example.com",
+        from_name="New Sender",
+        use_tls=False,
+        use_ssl=True,
+        is_active=True,
+    )
+
+    senders = email_service.list_smtp_senders(db_session)
+
+    assert sender_key == "billing"
+    assert len(senders) == 1
+    assert senders[0]["sender_key"] == "billing"
+    assert senders[0]["host"] == "smtp.new.local"
+    assert senders[0]["port"] == 2525
+    assert senders[0]["username"] == "mailer-new"
+    assert senders[0]["from_email"] == "new@example.com"
+    assert senders[0]["from_name"] == "New Sender"
+    assert senders[0]["use_tls"] is False
+    assert senders[0]["use_ssl"] is True
+    assert senders[0]["has_password"] is True
+
+    config = email_service.get_smtp_config(db_session, sender_key="billing")
+
+    assert config["password"] == "secret-old"
+
+
+def test_deactivate_smtp_sender_removes_sender_from_active_list(db_session):
+    """Deactivating a sender should hide it from active sender listings."""
+    email_service.upsert_smtp_sender(
+        db_session,
+        sender_key="billing",
+        host="smtp.billing.local",
+        port=587,
+        username="mailer",
+        password="secret",
+        from_email="billing@example.com",
+        from_name="Billing",
+        use_tls=True,
+        use_ssl=False,
+        is_active=True,
+    )
+
+    assert [sender["sender_key"] for sender in email_service.list_smtp_senders(db_session)] == [
+        "billing"
+    ]
+
+    email_service.deactivate_smtp_sender(db_session, "billing")
+
+    assert email_service.list_smtp_senders(db_session) == []
+
+
 def test_get_smtp_config_falls_back_to_legacy_env(monkeypatch):
     """Legacy env config should still work when no sender profiles exist."""
     monkeypatch.setenv("SMTP_HOST", "legacy.smtp.local")

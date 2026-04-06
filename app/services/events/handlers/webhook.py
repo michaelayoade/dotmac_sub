@@ -133,10 +133,16 @@ class WebhookHandler:
 
         # Queue Celery task for delivery
         try:
+            from app.celery_app import enqueue_celery_task
             from app.tasks.webhooks import deliver_webhook
 
             for delivery_id in delivery_ids:
-                deliver_webhook.delay(delivery_id)
+                enqueue_celery_task(
+                    deliver_webhook,
+                    args=[delivery_id],
+                    correlation_id=f"webhook_event:{event.event_id}",
+                    source="event_webhook_handler",
+                )
 
             logger.info(
                 f"Queued {len(delivery_ids)} webhook deliveries for "

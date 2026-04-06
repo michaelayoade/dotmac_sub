@@ -25,6 +25,41 @@ from app.services.nas._helpers import _emit_nas_event, _redact_sensitive
 logger = logging.getLogger(__name__)
 
 
+def _provision_extra(
+    *,
+    device: NasDevice,
+    action: ProvisioningAction,
+    triggered_by: str,
+    connection_type: ConnectionType | None = None,
+    execution_method: str | None = None,
+    template_id: object | None = None,
+    log_id: object | None = None,
+    execution_time_ms: int | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    extra: dict[str, object] = {
+        "event": "nas_provisioning",
+        "device_id": str(device.id),
+        "device_name": device.name,
+        "vendor": device.vendor.value if getattr(device, "vendor", None) else None,
+        "action": action.value,
+        "triggered_by": triggered_by,
+    }
+    if connection_type is not None:
+        extra["connection_type"] = connection_type.value
+    if execution_method is not None:
+        extra["execution_method"] = execution_method
+    if template_id is not None:
+        extra["template_id"] = str(template_id)
+    if log_id is not None:
+        extra["provisioning_log_id"] = str(log_id)
+    if execution_time_ms is not None:
+        extra["duration_ms"] = execution_time_ms
+    if error is not None:
+        extra["error"] = error
+    return extra
+
+
 class DeviceProvisioner:
     """
     Execute provisioning commands on NAS devices.
@@ -64,6 +99,15 @@ class DeviceProvisioner:
 
         # Determine connection type
         connection_type = device.default_connection_type or ConnectionType.pppoe
+        logger.info(
+            "nas_provisioning_start",
+            extra=_provision_extra(
+                device=device,
+                action=action,
+                triggered_by=triggered_by,
+                connection_type=connection_type,
+            ),
+        )
 
         # Find appropriate template
         template = ProvisioningTemplates.find_template(
@@ -97,9 +141,8 @@ class DeviceProvisioner:
         # Execute the command with template-defined timeout
         timeout_secs = template.timeout_seconds or 60
         start_time = time.time()
+        execution_method = template.execution_method or "ssh"
         try:
-            execution_method = template.execution_method or "ssh"
-
             if execution_method == "ssh":
                 response = DeviceProvisioner._execute_ssh(
                     device, command, timeout_seconds=timeout_secs
@@ -124,6 +167,19 @@ class DeviceProvisioner:
                 response=response,
                 execution_time_ms=execution_time,
             )
+            logger.info(
+                "nas_provisioning_success",
+                extra=_provision_extra(
+                    device=device,
+                    action=action,
+                    triggered_by=triggered_by,
+                    connection_type=connection_type,
+                    execution_method=execution_method,
+                    template_id=template.id,
+                    log_id=log.id,
+                    execution_time_ms=execution_time,
+                ),
+            )
 
             # Handle queue mapping for bandwidth monitoring
             DeviceProvisioner._handle_queue_mapping(db, device, action, variables)
@@ -147,6 +203,20 @@ class DeviceProvisioner:
                 error=f"Command timed out after {timeout_secs}s",
                 execution_time_ms=execution_time,
             )
+            logger.warning(
+                "nas_provisioning_timeout",
+                extra=_provision_extra(
+                    device=device,
+                    action=action,
+                    triggered_by=triggered_by,
+                    connection_type=connection_type,
+                    execution_method=execution_method,
+                    template_id=template.id,
+                    log_id=log.id,
+                    execution_time_ms=execution_time,
+                    error=f"Command timed out after {timeout_secs}s",
+                ),
+            )
             _emit_nas_event(
                 db,
                 "nas_provisioning_failed",
@@ -165,6 +235,20 @@ class DeviceProvisioner:
                 ProvisioningLogStatus.failed,
                 error=str(e),
                 execution_time_ms=execution_time,
+            )
+            logger.error(
+                "nas_provisioning_failed",
+                extra=_provision_extra(
+                    device=device,
+                    action=action,
+                    triggered_by=triggered_by,
+                    connection_type=connection_type,
+                    execution_method=execution_method,
+                    template_id=template.id,
+                    log_id=log.id,
+                    execution_time_ms=execution_time,
+                    error=str(e),
+                ),
             )
             _emit_nas_event(
                 db,

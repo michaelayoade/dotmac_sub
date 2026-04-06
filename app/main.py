@@ -16,6 +16,7 @@ warnings.filterwarnings(
 from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+from sqlalchemy import inspect as sqlalchemy_inspect
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 
@@ -80,6 +81,7 @@ from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
 from app.services.object_storage import (
+    ObjectStorageError,
     ObjectStorageConnectionError,
     ensure_storage_bucket,
 )
@@ -127,21 +129,54 @@ _AUDIT_SETTINGS_CACHE_TTL_SECONDS = 30.0
 _AUDIT_SETTINGS_LOCK = Lock()
 
 
+def _assert_required_schema() -> None:
+    """Fail fast when required DB schema changes are missing."""
+    db = SessionLocal()
+    try:
+        inspector = sqlalchemy_inspect(db.get_bind())
+        if not inspector.has_table("ont_units"):
+            raise RuntimeError(
+                "Database schema is incompatible: required table 'ont_units' is missing. "
+                "Run `alembic upgrade head` before starting the app."
+            )
+        ont_columns = {column["name"] for column in inspector.get_columns("ont_units")}
+        if "contact" not in ont_columns:
+            raise RuntimeError(
+                "Database schema is incompatible: required column 'ont_units.contact' is missing. "
+                "Run `alembic upgrade head` before starting the app."
+            )
+    finally:
+        db.close()
+
+
 def _seed_startup_settings() -> None:
+    started_at = monotonic()
+    logger.info("startup_seed_begin", extra={"event": "startup_seed_begin"})
     # Enforce credential encryption if configured (P0 security fix)
     from app.config import settings
     from app.services.credential_crypto import require_encryption_key
 
     if settings.enforce_credential_encryption:
         require_encryption_key(enforce=True)
-        logger.info("Credential encryption enforcement enabled")
+        logger.info(
+            "Credential encryption enforcement enabled",
+            extra={"event": "credential_encryption_enforced"},
+        )
+
+    _assert_required_schema()
 
     try:
         ensure_storage_bucket(raise_on_failure=False)
-    except ObjectStorageConnectionError:
-        logger.warning("Storage bucket initialization deferred during startup")
+    except (ObjectStorageConnectionError, ObjectStorageError):
+        logger.warning(
+            "Storage bucket initialization deferred during startup",
+            extra={"event": "storage_bucket_init_deferred"},
+        )
     except Exception:
-        logger.exception("Failed to ensure storage bucket during startup")
+        logger.exception(
+            "Failed to ensure storage bucket during startup",
+            extra={"event": "storage_bucket_init_failed"},
+        )
     db = SessionLocal()
     try:
         seed_auth_settings(db)
@@ -173,19 +208,43 @@ def _seed_startup_settings() -> None:
         seed_wireguard_settings(db)
     finally:
         db.close()
+    logger.info(
+        "startup_seed_complete",
+        extra={
+            "event": "startup_seed_complete",
+            "duration_ms": round((monotonic() - started_at) * 1000.0, 2),
+        },
+    )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("app_lifespan_start", extra={"event": "app_lifespan_start"})
     _seed_startup_settings()
     from app.websocket.manager import get_connection_manager
 
     manager = get_connection_manager()
+    logger.info(
+        "websocket_manager_connect_begin",
+        extra={"event": "websocket_manager_connect_begin"},
+    )
     await manager.connect()
+    logger.info(
+        "websocket_manager_connect_complete",
+        extra={"event": "websocket_manager_connect_complete"},
+    )
     try:
         yield
     finally:
+        logger.info(
+            "websocket_manager_disconnect_begin",
+            extra={"event": "websocket_manager_disconnect_begin"},
+        )
         await manager.disconnect()
+        logger.info(
+            "websocket_manager_disconnect_complete",
+            extra={"event": "websocket_manager_disconnect_complete"},
+        )
 
 
 app = FastAPI(title="dotmac_sm API", lifespan=lifespan)

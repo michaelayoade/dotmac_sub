@@ -825,11 +825,18 @@ def queue_export(
     if latest and latest.status == InvoicePdfExportStatus.processing:
         return latest
 
+    from app.celery_app import enqueue_celery_task
     from app.tasks.invoice_pdf import generate_invoice_pdf_export
 
     if latest and latest.status == InvoicePdfExportStatus.queued:
         if not latest.celery_task_id:
-            async_result = generate_invoice_pdf_export.delay(str(latest.id))
+            async_result = enqueue_celery_task(
+                generate_invoice_pdf_export,
+                args=[str(latest.id)],
+                correlation_id=f"invoice_pdf_export:{latest.id}",
+                source="billing_invoice_pdf",
+                actor_id=requested_by_id,
+            )
             latest.celery_task_id = str(async_result.id)
             db.commit()
             db.refresh(latest)
@@ -844,7 +851,13 @@ def queue_export(
     db.commit()
     db.refresh(export)
 
-    async_result = generate_invoice_pdf_export.delay(str(export.id))
+    async_result = enqueue_celery_task(
+        generate_invoice_pdf_export,
+        args=[str(export.id)],
+        correlation_id=f"invoice_pdf_export:{export.id}",
+        source="billing_invoice_pdf",
+        actor_id=requested_by_id,
+    )
     export.celery_task_id = str(async_result.id)
     db.commit()
     db.refresh(export)

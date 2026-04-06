@@ -121,7 +121,15 @@ def capture_all_olts_task(force: bool = False) -> dict:
         results = []
         for olt in olts:
             # Queue individual capture task
-            task = capture_olt_samples_task.delay(str(olt.id), force=force)
+            from app.celery_app import enqueue_celery_task
+
+            task = enqueue_celery_task(
+                capture_olt_samples_task,
+                args=[str(olt.id)],
+                kwargs={"force": force},
+                correlation_id=f"olt_capture:{olt.id}",
+                source="capture_all_olts_task",
+            )
             results.append({
                 "olt_id": str(olt.id),
                 "olt_name": olt.name,

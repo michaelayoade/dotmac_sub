@@ -36,6 +36,10 @@
             <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.active_candidates }}</p>
         </div>
         <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">History</p>
+            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.history_candidates }}</p>
+        </div>
+        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
             <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">OLTs With Candidates</p>
             <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.olts_with_candidates }}</p>
         </div>
@@ -48,12 +52,28 @@
     </div>
 
     <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-        <form method="GET" action="/admin/network/unconfigured-onts" class="grid gap-3 md:grid-cols-6">
-            <div class="md:col-span-3">
+        <form method="GET" action="/admin/network/unconfigured-onts" class="grid gap-3 md:grid-cols-8">
+            <div class="md:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">View</label>
+                <select name="view" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="active" {% if selected_view == 'active' %}selected{% endif %}>Active only</option>
+                    <option value="history" {% if selected_view == 'history' %}selected{% endif %}>History only</option>
+                    <option value="all" {% if selected_view == 'all' %}selected{% endif %}>Active + history</option>
+                </select>
+            </div>
+            <div class="md:col-span-2">
+                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">History Status</label>
+                <select name="resolution" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">All</option>
+                    <option value="authorized" {% if selected_resolution == 'authorized' %}selected{% endif %}>Authorized</option>
+                    <option value="disappeared" {% if selected_resolution == 'disappeared' %}selected{% endif %}>Disappeared</option>
+                </select>
+            </div>
+            <div class="md:col-span-2">
                 <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
                 <input type="text" name="search" value="{{ search }}" placeholder="Serial, OLT, port, model, MAC" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
-            <div class="md:col-span-2">
+            <div class="md:col-span-1">
                 <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">OLT</label>
                 <select name="olt_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">All active OLTs</option>
@@ -62,7 +82,7 @@
                     {% endfor %}
                 </select>
             </div>
-            <div class="flex items-end gap-2">
+            <div class="md:col-span-1 flex items-end gap-2">
                 <button type="submit" class="rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700">Filter</button>
                 <a href="/admin/network/unconfigured-onts" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Reset</a>
             </div>
@@ -80,6 +100,7 @@
                         <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
                         <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Model</th>
                         <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">MAC</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">State</th>
                         <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Seen</th>
                         <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</th>
                     </tr>
@@ -101,10 +122,25 @@
                         </td>
                         <td class="px-4 py-3 font-mono text-sm text-slate-700 dark:text-slate-300">{{ entry.mac or '-' }}</td>
                         <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
+                            {% if entry.is_active %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300">Active</span>
+                            {% elif entry.resolution_reason == 'authorized' %}
+                            <span class="inline-flex items-center rounded-full bg-sky-100 px-2.5 py-1 text-xs font-semibold text-sky-800 dark:bg-sky-900/30 dark:text-sky-300">Authorized</span>
+                            {% elif entry.resolution_reason == 'disappeared' %}
+                            <span class="inline-flex items-center rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">Disappeared</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-300">Inactive</span>
+                            {% endif %}
+                            {% if entry.resolved_at %}
+                            <div class="mt-1 text-xs text-slate-500 dark:text-slate-400">Resolved: {{ entry.resolved_at.strftime('%Y-%m-%d %H:%M') }}</div>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 text-sm text-slate-700 dark:text-slate-300">
                             <div>First: {% if entry.first_seen_at %}{{ entry.first_seen_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
                             <div class="text-xs text-slate-500 dark:text-slate-400">Last: {% if entry.last_seen_at %}{{ entry.last_seen_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
                         </td>
                         <td class="px-4 py-3 text-right">
+                            {% if entry.is_active %}
                             <form method="POST" action="/admin/network/olts/{{ entry.olt_id }}/authorize-ont" class="inline">
                                 {% include "components/forms/csrf_input.html" %}
                                 <input type="hidden" name="fsp" value="{{ entry.fsp }}">
@@ -114,6 +150,9 @@
                                     Authorize
                                 </button>
                             </form>
+                            {% else %}
+                            <span class="text-xs text-slate-500 dark:text-slate-400">{{ entry.resolution_reason or 'inactive' }}</span>
+                            {% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -122,7 +161,7 @@
         </div>
     </div>
     {% else %}
-    {{ empty_state("No Unconfigured ONTs", "The cached autofind inventory is empty. Wait for the scheduled scan or run Scan Now.") }}
+    {{ empty_state("No Matching ONTs", "No autofind candidates matched the current filters. Adjust the view or run Scan Now.") }}
     {% endif %}
 </div>
 {% endblock %}

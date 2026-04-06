@@ -666,13 +666,23 @@ def queue_bulk_action(
     if action not in valid_actions:
         raise ValueError(f"Invalid bulk action: {action}")
 
+    from app.celery_app import enqueue_celery_task
     from app.tasks.tr069 import execute_bulk_action
 
-    task = execute_bulk_action.delay(device_ids, action, params or {})
+    task = enqueue_celery_task(
+        execute_bulk_action,
+        args=[device_ids, action, params or {}],
+        correlation_id=f"tr069_bulk:{action}:{len(device_ids)}",
+        source="web_network_tr069",
+    )
     logger.info(
-        "Queued bulk TR-069 action %s for %d devices, task_id=%s",
-        action,
-        len(device_ids),
-        task.id,
+        "tr069_bulk_action_queued",
+        extra={
+            "event": "tr069_bulk_action",
+            "action": action,
+            "device_count": len(device_ids),
+            "task_id": str(task.id),
+            "correlation_id": f"tr069_bulk:{action}:{len(device_ids)}",
+        },
     )
     return str(task.id)

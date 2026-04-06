@@ -172,13 +172,27 @@ def build_unconfigured_onts_page_data(
     *,
     search: str | None = None,
     olt_id: str | None = None,
+    view: str | None = None,
+    resolution: str | None = None,
 ) -> dict[str, object]:
     """Build page data for the global unconfigured ONT inventory."""
+    selected_view = (view or "active").strip().lower()
+    if selected_view not in {"active", "history", "all"}:
+        selected_view = "active"
+    selected_resolution = (resolution or "").strip().lower()
+    if selected_resolution not in {"authorized", "disappeared"}:
+        selected_resolution = ""
+
     query = (
         db.query(OltAutofindCandidate, OLTDevice)
         .join(OLTDevice, OLTDevice.id == OltAutofindCandidate.olt_id)
-        .filter(OltAutofindCandidate.is_active.is_(True))
     )
+    if selected_view == "active":
+        query = query.filter(OltAutofindCandidate.is_active.is_(True))
+    elif selected_view == "history":
+        query = query.filter(OltAutofindCandidate.is_active.is_(False))
+    if selected_resolution:
+        query = query.filter(OltAutofindCandidate.resolution_reason == selected_resolution)
     if olt_id:
         query = query.filter(OltAutofindCandidate.olt_id == olt_id)
     if search:
@@ -190,11 +204,14 @@ def build_unconfigured_onts_page_data(
                 OltAutofindCandidate.model.ilike(term),
                 OltAutofindCandidate.mac.ilike(term),
                 OLTDevice.name.ilike(term),
+                OltAutofindCandidate.resolution_reason.ilike(term),
             )
         )
 
     rows = query.order_by(
-        OltAutofindCandidate.last_seen_at.desc(),
+        func.coalesce(
+            OltAutofindCandidate.resolved_at, OltAutofindCandidate.last_seen_at
+        ).desc(),
         OLTDevice.name.asc(),
         OltAutofindCandidate.fsp.asc(),
     ).all()
@@ -212,6 +229,10 @@ def build_unconfigured_onts_page_data(
             "autofind_time": candidate.autofind_time,
             "first_seen_at": candidate.first_seen_at,
             "last_seen_at": candidate.last_seen_at,
+            "is_active": candidate.is_active,
+            "resolution_reason": candidate.resolution_reason,
+            "resolved_at": candidate.resolved_at,
+            "notes": candidate.notes,
         }
         for candidate, olt in rows
     ]
@@ -228,6 +249,14 @@ def build_unconfigured_onts_page_data(
             OltAutofindCandidate.is_active.is_(True)
         )
     )
+    history_total = (
+        db.scalar(
+            select(func.count())
+            .select_from(OltAutofindCandidate)
+            .where(OltAutofindCandidate.is_active.is_(False))
+        )
+        or 0
+    )
     olts = list(
         db.scalars(
             select(OLTDevice)
@@ -239,9 +268,12 @@ def build_unconfigured_onts_page_data(
         "entries": entries,
         "search": search or "",
         "selected_olt_id": olt_id or "",
+        "selected_view": selected_view,
+        "selected_resolution": selected_resolution,
         "olts": olts,
         "stats": {
             "active_candidates": int(active_total),
+            "history_candidates": int(history_total),
             "olts_with_candidates": len({entry["olt_id"] for entry in entries}),
             "last_seen_at": last_seen,
         },

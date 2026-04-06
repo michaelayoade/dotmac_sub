@@ -140,7 +140,14 @@ def poll_all_olt_signals() -> dict[str, int]:
         # Each subtask handles its own DB session, per-OLT lock, and commits independently
         dispatched = 0
         for olt in olts:
-            poll_single_olt.delay(str(olt.id))
+            from app.celery_app import enqueue_celery_task
+
+            enqueue_celery_task(
+                poll_single_olt,
+                args=[str(olt.id)],
+                correlation_id=f"olt_poll:{olt.id}",
+                source="poll_all_olts",
+            )
             dispatched += 1
             logger.debug("Dispatched poll task for OLT %s (%s)", olt.name, olt.id)
 

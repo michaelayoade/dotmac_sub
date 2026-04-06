@@ -53,6 +53,7 @@ from app.services.network.vlan_chain import (
     VlanChainWarning,
     validate_chain,
 )
+from app.services.network import olt_authorization_workflow
 
 
 def _create_business_subscriber(db_session) -> Subscriber:
@@ -112,6 +113,112 @@ def test_reference_ont_options_include_huawei_dotted_external_ids(db_session) ->
     assert len(options) == 1
     assert options[0]["id"] == str(ref.id)
     assert "ONT-ID 7" in options[0]["label"]
+
+
+def test_authorize_autofind_logs_disappeared_candidate_after_refresh(
+    db_session, monkeypatch, caplog
+) -> None:
+    olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    monkeypatch.setattr(
+        "app.services.web_network_olts.get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_autofind_candidate_by_serial",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_autofind.sync_olt_autofind_candidates",
+        lambda *_args, **_kwargs: (True, "Refreshed autofind cache.", {"resolved": 1}),
+    )
+
+    caplog.set_level("WARNING")
+
+    result = olt_authorization_workflow.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/3",
+        "UBNT-F9AA7344",
+    )
+
+    assert result.status == "error"
+    assert result.message == "Authorization failed at step 2: Validate discovered ONT row"
+    assert any(
+        "validation failed after autofind refresh" in record.getMessage()
+        and "UBNT-F9AA7344" in record.getMessage()
+        and "Validate discovered ONT row" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(name="SPDC Huawei OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/1/3",
+        serial_number="HWTC-8535819A",
+        serial_hex="485754438535819A",
+        vendor_id="HWTC",
+        model="HG8546M",
+        mac="",
+        equipment_sn="",
+        autofind_time="2026-04-06 09:00:00",
+        is_active=True,
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.web_network_olts.get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.authorize_ont",
+        lambda *_args, **_kwargs: (
+            False,
+            "OLT rejected command: Failure: SN already exists",
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_write_reconciliation.verify_ont_authorized",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=True,
+            message="Verified ONT HWTC-8535819A on 0/1/3.",
+            details={"ont_id": 9, "fsp": "0/1/3", "serial_number": "HWTC8535819A"},
+        ),
+    )
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "queue_post_authorization_follow_up",
+        lambda *_args, **_kwargs: (True, "Queued follow-up.", "op-123"),
+    )
+
+    result = olt_authorization_workflow.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/3",
+        "HWTC-8535819A",
+    )
+
+    assert result.success is True
+    assert result.completed_authorization is True
+    assert result.ont_id_on_olt == 9
+    assert result.follow_up_operation_id == "op-123"
+    assert any(
+        "already registered on the OLT" in step.message for step in result.steps
+    )
 
 # ---------------------------------------------------------------------------
 # Phase 1: Service-port SSH parsing and filtering

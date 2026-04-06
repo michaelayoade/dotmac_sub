@@ -185,6 +185,8 @@ def retry_failed_deliveries():
     """
     session = SessionLocal()
     try:
+        from app.celery_app import enqueue_celery_task
+
         # Find failed deliveries that might be retried
         # (failed but with fewer than max attempts)
         failed_deliveries = (
@@ -200,7 +202,12 @@ def retry_failed_deliveries():
             # Reset status to pending and requeue
             delivery.status = WebhookDeliveryStatus.pending
             session.commit()
-            deliver_webhook.delay(str(delivery.id))
+            enqueue_celery_task(
+                deliver_webhook,
+                args=[str(delivery.id)],
+                correlation_id=f"webhook_delivery:{delivery.id}",
+                source="retry_failed_deliveries",
+            )
             requeued += 1
 
         if requeued:

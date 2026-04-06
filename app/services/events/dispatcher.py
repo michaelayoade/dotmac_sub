@@ -20,6 +20,38 @@ from app.services.events.types import Event, EventType
 logger = logging.getLogger(__name__)
 
 
+def _event_extra(
+    event: Event,
+    *,
+    handler_count: int | None = None,
+    failed_handlers: list[dict[str, str]] | None = None,
+    retry_count: int | None = None,
+) -> dict[str, object]:
+    extra: dict[str, object] = {
+        "event": "domain_event",
+        "event_id": str(event.event_id),
+        "event_type": event.event_type.value,
+        "actor": event.actor,
+        "subscriber_id": str(event.subscriber_id) if event.subscriber_id else None,
+        "account_id": str(event.account_id) if event.account_id else None,
+        "subscription_id": str(event.subscription_id)
+        if event.subscription_id
+        else None,
+        "invoice_id": str(event.invoice_id) if event.invoice_id else None,
+        "service_order_id": str(event.service_order_id)
+        if event.service_order_id
+        else None,
+    }
+    if handler_count is not None:
+        extra["handler_count"] = handler_count
+    if failed_handlers is not None:
+        extra["failed_handlers"] = failed_handlers
+        extra["failed_handler_count"] = len(failed_handlers)
+    if retry_count is not None:
+        extra["retry_count"] = retry_count
+    return extra
+
+
 class EventDispatcher:
     """Central dispatcher that routes events to all registered handlers.
 
@@ -47,8 +79,9 @@ class EventDispatcher:
         """
         from app.models.event_store import EventStatus, EventStore
 
-        logger.debug(
-            f"Dispatching event {event.event_type.value} (id={event.event_id})"
+        logger.info(
+            "event_dispatch_start",
+            extra=_event_extra(event, handler_count=len(self._handlers)),
         )
 
         # 1. Persist event before processing
@@ -70,7 +103,11 @@ class EventDispatcher:
         except Exception as persist_exc:
             # If we can't persist, still try to process but log the error
             logger.warning(
-                f"Failed to persist event {event.event_id} to event_store: {persist_exc}"
+                "event_persist_failed",
+                extra={
+                    **_event_extra(event, handler_count=len(self._handlers)),
+                    "error": str(persist_exc),
+                },
             )
             db.rollback()
             event_record = None
@@ -83,8 +120,12 @@ class EventDispatcher:
             except Exception as exc:
                 handler_name = handler.__class__.__name__
                 logger.exception(
-                    f"Handler {handler_name} failed for event "
-                    f"{event.event_type.value}: {exc}"
+                    "event_handler_failed",
+                    extra={
+                        **_event_extra(event, handler_count=len(self._handlers)),
+                        "handler": handler_name,
+                        "error": str(exc),
+                    },
                 )
                 failed_handlers.append(
                     {
@@ -108,9 +149,25 @@ class EventDispatcher:
                 db.commit()
             except Exception as update_exc:
                 logger.warning(
-                    f"Failed to update event_store status for {event.event_id}: {update_exc}"
+                    "event_status_update_failed",
+                    extra={
+                        **_event_extra(
+                            event,
+                            handler_count=len(self._handlers),
+                            failed_handlers=failed_handlers,
+                        ),
+                        "error": str(update_exc),
+                    },
                 )
                 db.rollback()
+        logger.info(
+            "event_dispatch_complete",
+            extra=_event_extra(
+                event,
+                handler_count=len(self._handlers),
+                failed_handlers=failed_handlers,
+            ),
+        )
 
     def retry_event(self, db: Session, event_record) -> bool:
         """Retry processing a failed event.
@@ -148,6 +205,14 @@ class EventDispatcher:
         event_record.retry_count += 1
         event_record.status = EventStatus.processing
         db.commit()
+        logger.info(
+            "event_retry_start",
+            extra=_event_extra(
+                event,
+                handler_count=len(self._handlers),
+                retry_count=event_record.retry_count,
+            ),
+        )
 
         # Retry only failed handlers (or all if no specific failures recorded)
         new_failures: list[dict] = []
@@ -160,8 +225,16 @@ class EventDispatcher:
                 handler.handle(db, event)
             except Exception as exc:
                 logger.exception(
-                    f"Handler {handler_name} failed on retry for event "
-                    f"{event.event_type.value}: {exc}"
+                    "event_retry_handler_failed",
+                    extra={
+                        **_event_extra(
+                            event,
+                            handler_count=len(self._handlers),
+                            retry_count=event_record.retry_count,
+                        ),
+                        "handler": handler_name,
+                        "error": str(exc),
+                    },
                 )
                 new_failures.append(
                     {
@@ -181,6 +254,15 @@ class EventDispatcher:
             event_record.error = None
         event_record.processed_at = datetime.now(UTC)
         db.commit()
+        logger.info(
+            "event_retry_complete",
+            extra=_event_extra(
+                event,
+                handler_count=len(self._handlers),
+                failed_handlers=new_failures,
+                retry_count=event_record.retry_count,
+            ),
+        )
 
         return len(new_failures) == 0
 
@@ -217,7 +299,11 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(CrmSyncHandler())
 
     logger.info(
-        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, crm_sync"
+        "Event handlers initialized: webhook, integration_hooks, lifecycle, notification, provisioning, enforcement, crm_sync",
+        extra={
+            "event": "event_handlers_initialized",
+            "handler_count": len(dispatcher._handlers),
+        },
     )
 
 
@@ -290,6 +376,9 @@ def emit_event(
     dispatcher = get_dispatcher()
     dispatcher.dispatch(db, event)
 
-    logger.info(f"Event emitted: {event_type.value} (id={event.event_id})")
+    logger.info(
+        "event_emitted",
+        extra=_event_extra(event, handler_count=len(dispatcher._handlers)),
+    )
 
     return event

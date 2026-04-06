@@ -354,7 +354,13 @@ class TestEnqueueTask:
             )
 
             mock_send.assert_called_once_with(
-                "app.tasks.test", args=["arg1"], kwargs={"key": "value"}
+                "app.tasks.test",
+                args=["arg1"],
+                kwargs={"key": "value"},
+                headers={
+                    "correlation_id": "scheduled_task:app.tasks.test",
+                    "source": "scheduler_service",
+                },
             )
             assert result["queued"] is True
             assert result["task_id"] == "task-123"
@@ -370,6 +376,12 @@ class TestEnqueueTask:
             result = scheduler_service.enqueue_task("app.tasks.empty", None, None)
 
             mock_send.assert_called_once_with(
-                "app.tasks.empty", args=[], kwargs={}
+                "app.tasks.empty",
+                args=[],
+                kwargs={},
+                headers={
+                    "correlation_id": "scheduled_task:app.tasks.empty",
+                    "source": "scheduler_service",
+                },
             )
             assert result["queued"] is True
