@@ -176,6 +176,7 @@ class S3StorageService:
     ) -> None:
         self.bucket_name = bucket_name
         self.region = region
+        self._bucket_ready = False
         if client is not None:
             self.client = client
             return
@@ -202,8 +203,11 @@ class S3StorageService:
 
     def ensure_bucket(self) -> None:
         """Create bucket if missing (safe to call repeatedly)."""
+        if self._bucket_ready:
+            return
         try:
             self.client.head_bucket(Bucket=self.bucket_name)
+            self._bucket_ready = True
             return
         except Exception as exc:
             code = self._error_code(exc)
@@ -214,9 +218,11 @@ class S3StorageService:
         if self.region and self.region != "us-east-1":
             kwargs["CreateBucketConfiguration"] = {"LocationConstraint": self.region}
         self.client.create_bucket(**kwargs)
+        self._bucket_ready = True
         logger.info("Created storage bucket: %s", self.bucket_name)
 
     def upload(self, key: str, data: bytes, content_type: str | None) -> None:
+        self.ensure_bucket()
         kwargs: dict = {
             "Bucket": self.bucket_name,
             "Key": key,
@@ -288,7 +294,9 @@ def get_s3_storage() -> S3StorageService:
 def ensure_storage_bucket(
     max_attempts: int = DEFAULT_RETRY_ATTEMPTS,
     base_delay: float = DEFAULT_RETRY_BASE_DELAY,
-) -> None:
+    *,
+    raise_on_failure: bool = True,
+) -> bool:
     """
     Startup hook helper to guarantee bucket availability with retry logic.
 
@@ -304,9 +312,18 @@ def ensure_storage_bucket(
     def _ensure() -> None:
         get_s3_storage().ensure_bucket()
 
-    _retry_with_backoff(
-        operation="bucket initialization",
-        func=_ensure,
-        max_attempts=max_attempts,
-        base_delay=base_delay,
-    )
+    try:
+        _retry_with_backoff(
+            operation="bucket initialization",
+            func=_ensure,
+            max_attempts=max_attempts,
+            base_delay=base_delay,
+        )
+        return True
+    except ObjectStorageConnectionError:
+        if raise_on_failure:
+            raise
+        logger.warning(
+            "Storage bucket initialization deferred; object storage is currently unreachable"
+        )
+        return False

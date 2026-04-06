@@ -31,11 +31,6 @@ SPLYNX_MYSQL_USER = os.environ.get("SPLYNX_MYSQL_USER", "migration")
 SPLYNX_MYSQL_PASS = os.environ.get(
     "SPLYNX_MYSQL_PASS", os.environ.get("SPLYNX_MYSQL_PASSWORD", "")
 )
-if not SPLYNX_MYSQL_PASS:
-    logger.warning(
-        "SPLYNX_MYSQL_PASS/SPLYNX_MYSQL_PASSWORD not set — set via env var or .env file. "
-        "Splynx connections will fail."
-    )
 
 # --- DotMac Sub PostgreSQL ---
 DOTMAC_DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -54,6 +49,11 @@ def splynx_connection(
                 cur.execute("SELECT * FROM customers LIMIT 5")
                 rows = cur.fetchall()
     """
+    if not SPLYNX_MYSQL_PASS:
+        raise RuntimeError(
+            "SPLYNX_MYSQL_PASS/SPLYNX_MYSQL_PASSWORD not set. "
+            "Set it via environment or .env before opening a Splynx connection."
+        )
     tunnel = SSHTunnelForwarder(
         SPLYNX_SSH_HOST,
         ssh_username=SPLYNX_SSH_USER,

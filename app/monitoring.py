@@ -22,6 +22,16 @@ DEFAULT_MONITORING_HOST = "160.119.127.195"
 DEFAULT_LOKI_URL = f"http://{DEFAULT_MONITORING_HOST}:3100/loki/api/v1/push"
 
 
+def _has_matching_loki_handler(root_logger: logging.Logger, loki_url: str) -> bool:
+    for handler in root_logger.handlers:
+        if getattr(handler, "url", None) == loki_url and (
+            handler.__class__.__name__ == "LokiHandler"
+            or "loki" in handler.__class__.__name__.lower()
+        ):
+            return True
+    return False
+
+
 def _setup_loki(
     app_name: str,
     server: str,
@@ -54,6 +64,9 @@ def _setup_loki(
         )
         # Add to root logger so all logs are pushed
         root_logger = logging.getLogger()
+        if _has_matching_loki_handler(root_logger, loki_url):
+            logger.info("Loki handler already configured for url=%s", loki_url)
+            return True
         handler.setLevel(logging.INFO)
         root_logger.addHandler(handler)
         logger.info(

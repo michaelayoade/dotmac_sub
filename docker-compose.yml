@@ -52,7 +52,7 @@ services:
     command:
     - /bin/sh
     - -c
-    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --reload
+    - alembic upgrade heads && uvicorn app.main:app --host 0.0.0.0 --port 8001 --no-access-log
   celery-worker:
     build: .
     container_name: dotmac_sub_celery_worker

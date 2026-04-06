@@ -17,6 +17,7 @@ from app.models.notification import (
 from app.services.events.types import Event, EventType
 
 logger = logging.getLogger(__name__)
+_LOGGED_MISSING_TEMPLATE_CODES: set[str] = set()
 
 CHANNEL_TEMPLATE_SUFFIXES: dict[NotificationChannel, str] = {
     NotificationChannel.email: "email",
@@ -80,7 +81,11 @@ class NotificationHandler:
 
         templates = self._load_templates(db, template_code)
         if not templates:
-            logger.warning("No active notification template for code %s", template_code)
+            templates = self._seed_and_reload_templates(db, template_code)
+        if not templates:
+            if template_code not in _LOGGED_MISSING_TEMPLATE_CODES:
+                logger.warning("No active notification template for code %s", template_code)
+                _LOGGED_MISSING_TEMPLATE_CODES.add(template_code)
             return
 
         # Build enriched context and render
@@ -134,6 +139,24 @@ class NotificationHandler:
             .all()
         )
         return self._order_templates(templates, template_code)
+
+    def _seed_and_reload_templates(
+        self,
+        db: Session,
+        template_code: str,
+    ) -> list[NotificationTemplate]:
+        """Best-effort self-heal for missing default templates without committing."""
+        try:
+            from app.services.settings_seed import _seed_missing_notification_templates
+
+            _seed_missing_notification_templates(db)
+        except Exception:
+            logger.debug(
+                "Notification template reseed failed for code %s",
+                template_code,
+                exc_info=True,
+            )
+        return self._load_templates(db, template_code)
 
     def _order_templates(
         self,

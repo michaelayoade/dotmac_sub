@@ -51,6 +51,7 @@ def test_csrf_middleware_returns_204_when_no_response_and_request_still_connecte
 
     assert response.status_code == 204
     assert "reload_or_shutdown" in caplog.text
+    assert any(record.levelname == "INFO" for record in caplog.records)
 
 
 def test_csrf_middleware_returns_204_for_actual_disconnect(monkeypatch):

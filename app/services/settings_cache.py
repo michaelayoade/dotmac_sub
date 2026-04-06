@@ -10,6 +10,7 @@ import os
 from typing import Any, cast
 
 import redis
+from dotenv import load_dotenv
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,9 @@ def get_settings_redis() -> redis.Redis | None:
     if _cache_disabled:
         return None
     if _redis_client is None:
+        # Load .env here as well because this module is used by CLI/script contexts
+        # that may not import app.config before touching the settings cache.
+        load_dotenv()
         redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
         try:
             client = redis.Redis.from_url(

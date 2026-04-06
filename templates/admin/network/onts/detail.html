@@ -555,8 +555,8 @@
                 currentSplitterName: {{ ((ont.splitter.name if ont.splitter is defined and ont.splitter else "")) | tojson }},
                 currentSplitterPort: {{ (ont.splitter_port_id|string if ont.splitter_port_id else "") | tojson }},
                 currentLocationName: {{ (ont.name or "") | tojson }},
-                currentAddressComment: {{ (ont.address_or_comment or "") | tojson }},
-                currentContact: {{ "" | tojson }},
+                currentAddressComment: {{ (location_address_or_comment or "") | tojson }},
+                currentContact: {{ (location_contact or "") | tojson }},
                 currentLatitude: {{ (ont.gps_latitude|string if ont.gps_latitude is not none else "") | tojson }},
                 currentLongitude: {{ (ont.gps_longitude|string if ont.gps_longitude is not none else "") | tojson }},
                 draftOltId: {{ (ont.olt_device_id|string if ont.olt_device_id else "") | tojson }},
@@ -572,8 +572,8 @@
                 draftSplitterId: {{ (ont.splitter_id|string if ont.splitter_id else "") | tojson }},
                 draftSplitterPort: {{ (ont.splitter_port_id|string if ont.splitter_port_id else "") | tojson }},
                 draftLocationName: {{ (ont.name or "") | tojson }},
-                draftAddressComment: {{ (ont.address_or_comment or "") | tojson }},
-                draftContact: {{ "" | tojson }},
+                draftAddressComment: {{ (location_address_or_comment or "") | tojson }},
+                draftContact: {{ (location_contact or "") | tojson }},
                 draftLatitude: {{ (ont.gps_latitude|string if ont.gps_latitude is not none else "") | tojson }},
                 draftLongitude: {{ (ont.gps_longitude|string if ont.gps_longitude is not none else "") | tojson }},
                 openModal() {
@@ -952,6 +952,16 @@
                     Update
                 </button>
                 {% endset %}
+                {% else %}
+                {% set device_info_actions %}
+                <button type="button"
+                        hx-get="/admin/network/onts/{{ ont.id }}/device-info"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                    Update
+                </button>
+                {% endset %}
                 {% endif %}
                 {% call card("Device Information", color="blue", actions=device_info_actions) %}
                 <div class="space-y-4">
@@ -1056,56 +1066,65 @@
                 </div>
                 {% endif %}
 
+                {% set location_details_actions = none %}
                 {% if preview_mode %}
-                {% call card("Location Details", color="emerald") %}
+                {% set location_details_actions %}
+                <button type="button"
+                        @click="openLocationModal()"
+                        class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                    Update
+                </button>
+                {% endset %}
+                {% else %}
+                {% set location_details_actions %}
+                <button type="button"
+                        hx-get="/admin/network/onts/{{ ont.id }}/location-details"
+                        hx-target="#modal-container"
+                        hx-swap="innerHTML"
+                        class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                    Update
+                </button>
+                {% endset %}
+                {% endif %}
+                {% call card("Location Details", color="emerald", actions=location_details_actions) %}
                 <div class="space-y-4">
-                    <div class="flex items-start justify-between gap-4">
-                        <div>
-                            <p class="text-sm text-slate-500 dark:text-slate-400">Summary of zone, splitter, site naming, and GPS details.</p>
-                        </div>
-                        <button type="button"
-                                @click="openLocationModal()"
-                                class="shrink-0 text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
-                            Update
-                        </button>
-                    </div>
+                    <p class="text-sm text-slate-500 dark:text-slate-400">Summary of zone, splitter, site naming, and GPS details.</p>
                     <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Zone</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentZoneName || 'None'"></dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentZoneName || 'None'"{% endif %}>{{ ont.zone.name if ont.zone else 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">ODB (Splitter)</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentSplitterName || 'None'"></dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentSplitterName || 'None'"{% endif %}>{{ ont.splitter.name if ont.splitter else 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">ODB Port</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" x-text="currentSplitterPort || 'None'"></dd>
+                            <dd class="mt-1 text-sm font-mono text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentSplitterPort || 'None'"{% endif %}>{{ ont.splitter_port_rel.port_number if ont.splitter_port_rel else 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Name</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentLocationName || 'None'"></dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentLocationName || 'None'"{% endif %}>{{ ont.name or 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Address or comment</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap" x-text="currentAddressComment || 'None'"></dd>
+                            <dd class="mt-1 whitespace-pre-wrap text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentAddressComment || 'None'"{% endif %}>{{ location_address_or_comment or 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Contact</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" x-text="currentContact || 'None'"></dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentContact || 'None'"{% endif %}>{{ location_contact or 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Latitude</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" x-text="currentLatitude || 'None'"></dd>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentLatitude || 'None'"{% endif %}>{{ ont.gps_latitude if ont.gps_latitude is not none else 'None' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Longitude</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" x-text="currentLongitude || 'None'"></dd>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 dark:text-white" {% if preview_mode %}x-text="currentLongitude || 'None'"{% endif %}>{{ ont.gps_longitude if ont.gps_longitude is not none else 'None' }}</dd>
                         </div>
                     </dl>
                 </div>
                 {% endcall %}
-                {% endif %}
 
                 {# Signal Thresholds Reference #}
                 {% if signal_info %}
@@ -1237,6 +1256,38 @@
                         </div>
                     </div>
                     {% endif %}
+                    {% if ont.board %}
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Board</p>
+                            <p class="text-sm text-slate-900 dark:text-white">{{ ont.board }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if ont.port %}
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Port</p>
+                            <p class="text-sm text-slate-900 dark:text-white">{{ ont.port }}</p>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
+                        <div>
+                            <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">GPON Channel</p>
+                            <div class="mt-1 flex items-center gap-3">
+                                {% set current_gpon_channel = ont.gpon_channel.value if ont.gpon_channel and ont.gpon_channel.value is defined else ont.gpon_channel %}
+                                <p class="text-sm text-slate-900 dark:text-white">{{ (current_gpon_channel or 'gpon') | replace('_', '-') | upper }}</p>
+                                <button type="button"
+                                        hx-get="/admin/network/onts/{{ ont.id }}/gpon-channel"
+                                        hx-target="#modal-container"
+                                        hx-swap="innerHTML"
+                                        class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
+                                    Update
+                                </button>
+                            </div>
+                        </div>
+                    </div>
                     {% if network_path.pon_port %}
                     <div class="flex items-center gap-3 ml-4 border-l-2 border-slate-200 pl-4 dark:border-slate-700">
                         <div>

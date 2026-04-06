@@ -7,8 +7,70 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.models.subscriber import Reseller, Subscriber
 from app.services.web_billing_overview import (
     build_invoices_list_data,
+    build_overview_data,
     render_invoices_csv,
 )
+from app.services import web_billing_overview as web_billing_overview_service
+
+
+def _reset_overview_cache() -> None:
+    web_billing_overview_service._overview_cache.clear()
+
+
+def test_build_overview_data_uses_short_ttl_cache(db_session, monkeypatch):
+    _reset_overview_cache()
+    calls = {"count": 0}
+
+    class _FakeReporting:
+        @staticmethod
+        def get_dashboard_stats(_db, **_kwargs):
+            calls["count"] += 1
+            return {
+                "stats": {"payments_count": 1},
+                "period_comparison": [],
+                "payment_method_breakdown": {"labels": [], "values": []},
+                "daily_payments": {"labels": [], "values": []},
+            }
+
+    monkeypatch.setattr(
+        "app.services.billing.reporting.billing_reporting",
+        _FakeReporting,
+    )
+
+    first = build_overview_data(db_session, period="this_month")
+    second = build_overview_data(db_session, period="this_month")
+
+    assert first["stats"]["payments_count"] == 1
+    assert second["stats"]["payments_count"] == 1
+    assert calls["count"] == 1
+
+
+def test_build_overview_data_cache_is_scoped_by_filters(db_session, monkeypatch):
+    _reset_overview_cache()
+    calls = {"count": 0}
+
+    class _FakeReporting:
+        @staticmethod
+        def get_dashboard_stats(_db, **_kwargs):
+            calls["count"] += 1
+            return {
+                "stats": {"payments_count": calls["count"]},
+                "period_comparison": [],
+                "payment_method_breakdown": {"labels": [], "values": []},
+                "daily_payments": {"labels": [], "values": []},
+            }
+
+    monkeypatch.setattr(
+        "app.services.billing.reporting.billing_reporting",
+        _FakeReporting,
+    )
+
+    first = build_overview_data(db_session, period="this_month")
+    second = build_overview_data(db_session, period="last_month")
+
+    assert first["stats"]["payments_count"] == 1
+    assert second["stats"]["payments_count"] == 2
+    assert calls["count"] == 2
 
 
 def _create_invoice(

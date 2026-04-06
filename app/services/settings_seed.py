@@ -369,12 +369,8 @@ def seed_notification_settings(db: Session) -> None:
     )
 
 
-def seed_notification_templates(db: Session) -> None:
-    """Seed default notification templates for key ISP events.
-
-    Uses upsert-by-code-and-channel: creates if missing, skips if already exists
-    (admin may have customized the content).
-    """
+def _seed_missing_notification_templates(db: Session) -> int:
+    """Insert any missing default notification templates without committing."""
     from app.models.notification import NotificationChannel, NotificationTemplate
 
     templates = [
@@ -711,6 +707,7 @@ def seed_notification_templates(db: Session) -> None:
         },
     ]
 
+    created = 0
     for tmpl_data in templates:
         from sqlalchemy import select as sa_select
 
@@ -723,8 +720,20 @@ def seed_notification_templates(db: Session) -> None:
         if not existing:
             tmpl = NotificationTemplate(**tmpl_data)
             db.add(tmpl)
+            created += 1
             logger.info("Seeded notification template: %s", tmpl_data["code"])
 
+    db.flush()
+    return created
+
+
+def seed_notification_templates(db: Session) -> None:
+    """Seed default notification templates for key ISP events.
+
+    Uses upsert-by-code-and-channel: creates if missing, skips if already exists
+    (admin may have customized the content).
+    """
+    _seed_missing_notification_templates(db)
     db.commit()
 
 

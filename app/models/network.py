@@ -1026,6 +1026,7 @@ class OntUnit(Base):
     )
     name: Mapped[str | None] = mapped_column(String(200))
     address_or_comment: Mapped[str | None] = mapped_column(Text)
+    contact: Mapped[str | None] = mapped_column(String(255))
     external_id: Mapped[str | None] = mapped_column(String(120))
     use_gps: Mapped[bool] = mapped_column(Boolean, default=False)
     gps_latitude: Mapped[float | None] = mapped_column(Float)

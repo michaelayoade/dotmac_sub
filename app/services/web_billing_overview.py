@@ -5,8 +5,11 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
+from threading import Lock
+from time import monotonic
 from uuid import UUID
 
 from sqlalchemy import func, or_
@@ -27,6 +30,9 @@ _BUCKET_LABELS = {
     "61_90": "61-90 Days",
     "90_plus": "90+ Days",
 }
+_OVERVIEW_CACHE_TTL_SECONDS = 15.0
+_overview_cache_lock = Lock()
+_overview_cache: dict[tuple[str | None, str | None, str], tuple[float, dict[str, object]]] = {}
 
 
 def _add_months(value: date, months: int) -> date:
@@ -68,6 +74,39 @@ def _billing_location_options(db) -> list[str]:
     )
 
 
+def _normalized_overview_key(
+    *,
+    partner_id: str | None,
+    location: str | None,
+    period: str,
+) -> tuple[str | None, str | None, str]:
+    normalized_partner = (partner_id or "").strip() or None
+    normalized_location = (location or "").strip().lower() or None
+    normalized_period = (period or "").strip() or "this_month"
+    return (normalized_partner, normalized_location, normalized_period)
+
+
+def _get_cached_overview(
+    key: tuple[str | None, str | None, str],
+) -> dict[str, object] | None:
+    now = monotonic()
+    with _overview_cache_lock:
+        cached = _overview_cache.get(key)
+        if cached and (now - cached[0]) < _OVERVIEW_CACHE_TTL_SECONDS:
+            return deepcopy(cached[1])
+        if cached:
+            _overview_cache.pop(key, None)
+    return None
+
+
+def _store_cached_overview(
+    key: tuple[str | None, str | None, str],
+    value: dict[str, object],
+) -> None:
+    with _overview_cache_lock:
+        _overview_cache[key] = (monotonic(), deepcopy(value))
+
+
 def build_overview_data(
     db,
     *,
@@ -78,13 +117,21 @@ def build_overview_data(
     """Build billing dashboard data via centralized reporting service."""
     from app.services.billing.reporting import billing_reporting
 
-    result = billing_reporting.get_dashboard_stats(
-        db,
+    cache_key = _normalized_overview_key(
         partner_id=partner_id,
         location=location,
         period=period,
     )
-    result["selected_partner_id"] = (partner_id or "").strip() or None
+    result = _get_cached_overview(cache_key)
+    if result is None:
+        result = billing_reporting.get_dashboard_stats(
+            db,
+            partner_id=partner_id,
+            location=location,
+            period=period,
+        )
+        _store_cached_overview(cache_key, result)
+    result["selected_partner_id"] = cache_key[0]
     result["selected_location"] = (location or "").strip() or None
 
     from app.models.subscriber import Reseller

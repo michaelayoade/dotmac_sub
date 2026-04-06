@@ -768,10 +768,9 @@ def olt_authorize_ont(
             status_code=303,
         )
 
-    ok, message = web_network_olts_service.authorize_autofind_ont(
+    ok, status, message = web_network_olts_service.authorize_autofind_ont(
         db, olt_id, fsp, serial_number
     )
-    status = "success" if ok else "error"
     current_user = get_current_user(request)
     actor_id = str(current_user.get("subscriber_id")) if current_user else None
     log_audit_event(
@@ -787,31 +786,9 @@ def olt_authorize_ont(
             "fsp": fsp,
             "serial_number": serial_number,
         },
-        status_code=200 if ok else 500,
-        is_success=ok,
+        status_code=200 if status != "error" else 500,
+        is_success=status != "error",
     )
-
-    # Trigger SNMP discovery to pick up the newly authorized ONT
-    if ok:
-        try:
-            web_network_olts_service.sync_onts_from_olt_snmp(db, olt_id)
-        except Exception as e:
-            logger.warning("Post-authorize SNMP sync failed for OLT %s: %s", olt_id, e)
-        try:
-            web_network_ont_autofind_service.resolve_candidate_authorized(
-                db,
-                olt_id=olt_id,
-                fsp=fsp,
-                serial_number=serial_number,
-            )
-        except Exception as e:
-            logger.warning(
-                "Failed to resolve cached autofind candidate for %s on %s %s: %s",
-                serial_number,
-                olt_id,
-                fsp,
-                e,
-            )
 
     if return_to == "/admin/network/unconfigured-onts":
         return RedirectResponse(

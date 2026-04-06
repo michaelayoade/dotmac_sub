@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import redis
 
 from app.services import settings_cache
@@ -63,3 +65,30 @@ def test_settings_cache_uses_client_when_redis_is_available(monkeypatch):
     assert settings_cache.SettingsCache.get("billing", "currency") == "NGN"
     assert settings_cache.SettingsCache.invalidate("billing", "currency") is True
     assert settings_cache.SettingsCache.get("billing", "currency") is None
+
+
+def test_settings_cache_loads_dotenv_before_resolving_redis_url(monkeypatch):
+    settings_cache._redis_client = None
+    settings_cache._cache_disabled = False
+    monkeypatch.delenv("REDIS_URL", raising=False)
+
+    seen: dict[str, str] = {}
+
+    class _RedisStub:
+        def ping(self):
+            return True
+
+    def _load_dotenv() -> None:
+        os.environ["REDIS_URL"] = "redis://:from-dotenv@redis:6379/0"
+
+    def _from_url(url, **kwargs):
+        seen["url"] = url
+        return _RedisStub()
+
+    monkeypatch.setattr(settings_cache, "load_dotenv", _load_dotenv)
+    monkeypatch.setattr(settings_cache.redis.Redis, "from_url", _from_url)
+
+    client = settings_cache.get_settings_redis()
+
+    assert client is not None
+    assert seen["url"] == "redis://:from-dotenv@redis:6379/0"

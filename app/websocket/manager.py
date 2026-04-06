@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from urllib.parse import urlsplit, urlunsplit
 
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
@@ -14,6 +15,21 @@ logger = get_logger(__name__)
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 CHANNEL_PREFIX = "inbox_ws:"
+
+
+def _mask_redis_url(url: str) -> str:
+    """Mask the password segment of a Redis URL for safe logging."""
+    parsed = urlsplit(url)
+    if "@" not in parsed.netloc:
+        return url
+
+    userinfo, hostinfo = parsed.netloc.rsplit("@", 1)
+    if ":" not in userinfo:
+        return url
+
+    username, _separator, _password = userinfo.partition(":")
+    masked_netloc = f"{username}:***@{hostinfo}"
+    return urlunsplit(parsed._replace(netloc=masked_netloc))
 
 
 class ConnectionManager:
@@ -42,7 +58,7 @@ class ConnectionManager:
             await self._pubsub.psubscribe(f"{CHANNEL_PREFIX}*")
             self._running = True
             self._listener_task = asyncio.create_task(self._redis_listener())
-            logger.info("websocket_manager_connected redis=%s", REDIS_URL)
+            logger.info("websocket_manager_connected redis=%s", _mask_redis_url(REDIS_URL))
         except Exception as exc:
             logger.warning("websocket_manager_redis_failed error=%s", exc)
 

@@ -481,6 +481,7 @@ class OntUnitBase(BaseModel):
     upload_speed_profile_id: UUID | None = None
     name: str | None = Field(default=None, max_length=200)
     address_or_comment: str | None = None
+    contact: str | None = Field(default=None, max_length=255)
     external_id: str | None = Field(default=None, max_length=120)
     use_gps: bool = False
     gps_latitude: float | None = None
@@ -515,6 +516,7 @@ class OntUnitUpdate(BaseModel):
     upload_speed_profile_id: UUID | None = None
     name: str | None = Field(default=None, max_length=200)
     address_or_comment: str | None = None
+    contact: str | None = Field(default=None, max_length=255)
     external_id: str | None = Field(default=None, max_length=120)
     use_gps: bool | None = None
     gps_latitude: float | None = None

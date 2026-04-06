@@ -1,10 +1,17 @@
 import logging
 import os
 import secrets
+import warnings
 from contextlib import asynccontextmanager
 from threading import Lock
 from time import monotonic
 from typing import TypedDict
+
+warnings.filterwarnings(
+    "ignore",
+    category=SyntaxWarning,
+    module=r"routeros_api\.sentence",
+)
 
 from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
@@ -72,7 +79,10 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
-from app.services.object_storage import ensure_storage_bucket
+from app.services.object_storage import (
+    ObjectStorageConnectionError,
+    ensure_storage_bucket,
+)
 from app.services.settings_seed import (
     seed_audit_settings,
     seed_auth_policy_settings,
@@ -127,7 +137,9 @@ def _seed_startup_settings() -> None:
         logger.info("Credential encryption enforcement enabled")
 
     try:
-        ensure_storage_bucket()
+        ensure_storage_bucket(raise_on_failure=False)
+    except ObjectStorageConnectionError:
+        logger.warning("Storage bucket initialization deferred during startup")
     except Exception:
         logger.exception("Failed to ensure storage bucket during startup")
     db = SessionLocal()
@@ -475,7 +487,7 @@ async def csrf_middleware(request: Request, call_next):
             disconnected = await request.is_disconnected()
             # During client disconnects and dev auto-reload windows Starlette may not
             # produce a downstream response; treat it as a benign terminated request.
-            logger.warning(
+            logger.info(
                 "No response returned from downstream app; request terminated (%s): %s %s",
                 "client_disconnected" if disconnected else "reload_or_shutdown",
                 method,

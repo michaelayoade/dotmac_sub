@@ -46,6 +46,12 @@ _TERMINAL_STATUSES = frozenset(
     }
 )
 
+_EXPECTED_WARNING_PATTERNS = (
+    "no tr-069 device found in genieacs",
+    "no matching genieacs device found",
+    "cpe device not found",
+)
+
 
 def _get_operation(db: Session, operation_id: str) -> NetworkOperation:
     """Fetch an operation by ID or raise 404."""
@@ -197,7 +203,13 @@ class NetworkOperations(ListResponseMixin):
         if output_payload is not None:
             op.output_payload = output_payload
         db.flush()
-        logger.error("Operation failed: %s — %s", operation_id, error)
+        error_text = str(error).strip().lower()
+        log = (
+            logger.warning
+            if any(pattern in error_text for pattern in _EXPECTED_WARNING_PATTERNS)
+            else logger.error
+        )
+        log("Operation failed: %s — %s", operation_id, error)
         return op
 
     @staticmethod

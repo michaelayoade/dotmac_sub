@@ -28,6 +28,8 @@ from app.models.network import (
     OntUnit,
     PonPort,
     PppoePasswordMode,
+    Splitter,
+    SplitterPort,
     VlanMode,
 )
 from app.models.ont_autofind import OltAutofindCandidate
@@ -950,116 +952,67 @@ class TestWebNetworkOltsMigration:
     def test_authorize_autofind_skips_clone_when_ont_id_unknown(self, db_session, monkeypatch) -> None:
         from app.services.web_network_olts import authorize_autofind_ont
 
-        olt = OLTDevice(name="Authorize OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
-
         monkeypatch.setattr(
-            "app.services.web_network_olts.olt_ssh_service.authorize_ont",
-            lambda *_args, **_kwargs: (True, "Authorized", None),
-        )
-        monkeypatch.setattr(
-            "app.services.web_network_olts.provision_ont_service_ports",
-            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("service-port provisioning should be skipped")),
+            "app.services.network.olt_authorization_workflow.authorize_autofind_ont",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                success=True,
+                status="warning",
+                message="Authorization completed on OLT, but follow-up is pending.",
+            ),
         )
 
-        ok, msg = authorize_autofind_ont(db_session, str(olt.id), "0/2/1", "48575443ABCDEF01")
+        ok, status, msg = authorize_autofind_ont(
+            db_session,
+            str(uuid.uuid4()),
+            "0/2/1",
+            "48575443ABCDEF01",
+        )
 
         assert ok is True
-        assert "ONT-ID could not be determined" in msg
+        assert status == "warning"
+        assert msg == "Authorization completed on OLT, but follow-up is pending."
 
-    def test_authorize_autofind_persists_ont_and_assignment_without_cloning(self, db_session, monkeypatch) -> None:
+    def test_authorize_autofind_delegates_to_authorization_workflow(self, db_session, monkeypatch) -> None:
         from app.services.web_network_olts import authorize_autofind_ont
 
-        olt = OLTDevice(name="Authorize Persist OLT", vendor="Huawei", model="MA5608T")
-        db_session.add(olt)
-        db_session.commit()
-        db_session.refresh(olt)
+        captured: dict[str, object] = {}
 
-        shelf = OltShelf(olt_id=olt.id, shelf_number=0)
-        db_session.add(shelf)
-        db_session.commit()
-        db_session.refresh(shelf)
-
-        card = OltCard(shelf_id=shelf.id, slot_number=2)
-        db_session.add(card)
-        db_session.commit()
-        db_session.refresh(card)
-
-        candidate = OltAutofindCandidate(
-            olt_id=olt.id,
-            fsp="0/2/1",
-            serial_number="48575443ABCDEF02",
-            vendor_id="HWTC",
-            model="EchoLife HG8010H",
-            software_version="V3R019",
-            mac="AA:BB:CC:DD:EE:FF",
-            is_active=True,
-        )
-        db_session.add(candidate)
-        db_session.commit()
-        db_session.refresh(candidate)
+        def _fake_authorize_workflow(db, olt_id, fsp, serial_number):
+            captured.update(
+                {
+                    "db": db,
+                    "olt_id": olt_id,
+                    "fsp": fsp,
+                    "serial_number": serial_number,
+                }
+            )
+            return SimpleNamespace(
+                success=True,
+                status="success",
+                message="Queued post-authorization sync and ACS bind in the background.",
+            )
 
         monkeypatch.setattr(
-            "app.services.web_network_olts.olt_ssh_service.authorize_ont",
-            lambda *_args, **_kwargs: (True, "Authorized", 7),
+            "app.services.network.olt_authorization_workflow.authorize_autofind_ont",
+            _fake_authorize_workflow,
         )
 
-        clone_called = {"value": False}
-
-        def _unexpected_clone(*_args, **_kwargs):
-            clone_called["value"] = True
-            return True, "service-ports cloned"
-
-        monkeypatch.setattr(
-            "app.services.web_network_olts.clone_service_ports",
-            _unexpected_clone,
-        )
-
-        ok, msg = authorize_autofind_ont(
+        ok, status, msg = authorize_autofind_ont(
             db_session,
-            str(olt.id),
+            "olt-123",
             "0/2/1",
             "48575443ABCDEF02",
         )
 
         assert ok is True
-        assert msg == "Authorized"
-        assert clone_called["value"] is False
-
-        ont = db_session.query(OntUnit).filter_by(serial_number="48575443ABCDEF02").one()
-        assert ont.olt_device_id == olt.id
-        assert ont.pon_type.value == "gpon"
-        assert ont.gpon_channel.value == "gpon"
-        assert ont.board == "0/2"
-        assert ont.port == "1"
-        assert ont.external_id == "7"
-        assert ont.online_status.value == "unknown"
-        assert ont.vendor == "HWTC"
-        assert ont.model == "EchoLife HG8010H"
-        assert ont.firmware_version == "V3R019"
-        assert ont.mac_address == "AA:BB:CC:DD:EE:FF"
-        assert ont.tr069_acs_server_id == olt.tr069_acs_server_id
-
-        pon = db_session.query(PonPort).filter_by(olt_id=olt.id, name="0/2/1").one()
-        card_port = db_session.get(OltCardPort, pon.olt_card_port_id)
-        assignment = (
-            db_session.query(OntAssignment)
-            .filter_by(ont_unit_id=ont.id, active=True)
-            .one()
-        )
-        assert assignment.pon_port_id == pon.id
-        assert assignment.assigned_at is not None
-        assert pon.port_number == 1
-        assert card_port is not None
-        assert card_port.port_number == 1
-
-        refreshed_candidate = db_session.get(OltAutofindCandidate, candidate.id)
-        assert refreshed_candidate is not None
-        assert refreshed_candidate.is_active is False
-        assert refreshed_candidate.resolution_reason == "authorized"
-        assert refreshed_candidate.ont_unit_id == ont.id
+        assert status == "success"
+        assert msg == "Queued post-authorization sync and ACS bind in the background."
+        assert captured == {
+            "db": db_session,
+            "olt_id": "olt-123",
+            "fsp": "0/2/1",
+            "serial_number": "48575443ABCDEF02",
+        }
 
     def test_command_preview_profile_not_found(self, db_session) -> None:
         from app.services.web_network_olt_profiles import command_preview_context
@@ -1145,6 +1098,9 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/actions/configure-mgmt-ip" in route_paths
         assert "/network/onts/{ont_id}/actions/bind-tr069-profile" in route_paths
         assert "/network/onts/{ont_id}/iphost-config" in route_paths
+        assert "/network/onts/{ont_id}/location-details" in route_paths
+        assert "/network/onts/{ont_id}/device-info" in route_paths
+        assert "/network/onts/{ont_id}/gpon-channel" in route_paths
 
         # Phase 3: OLT profile routes remain, provisioning UI routes do not
         assert "/network/olts/{olt_id}/profiles/line" in route_paths
@@ -1163,6 +1119,63 @@ class TestProvisioningUiTemplates:
         assert "Manual ONT Operations" in template
         assert "Coordinated provisioning is not available" in template
         assert "clone service-ports" in template
+
+    def test_ont_detail_template_includes_live_location_details_card(self) -> None:
+        template = Path("templates/admin/network/onts/detail.html").read_text()
+
+        assert 'card("Location Details"' in template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/location-details"' in template
+        assert "ODB (Splitter)" in template
+        assert "Address or comment" in template
+        assert "Contact" in template
+
+    def test_ont_detail_template_includes_live_device_and_gpon_modals(self) -> None:
+        template = Path("templates/admin/network/onts/detail.html").read_text()
+
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/device-info"' in template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/gpon-channel"' in template
+        assert "Board" in template
+        assert "GPON Channel" in template
+
+
+class TestOntLocationDetailsHelpers:
+    def test_resolve_splitter_port_id_by_number(self, db_session) -> None:
+        from app.web.admin.network_onts import _resolve_splitter_port_id
+
+        splitter = Splitter(name="ODB-A", splitter_ratio="1:8")
+        db_session.add(splitter)
+        db_session.commit()
+        db_session.refresh(splitter)
+
+        db_session.add_all(
+            [
+                SplitterPort(splitter_id=splitter.id, port_number=1),
+                SplitterPort(splitter_id=splitter.id, port_number=8),
+            ]
+        )
+        db_session.commit()
+
+        resolved = _resolve_splitter_port_id(
+            db_session,
+            splitter_id=splitter.id,
+            splitter_port_number=8,
+        )
+
+        assert resolved is not None
+
+    def test_resolve_splitter_port_id_rejects_port_without_splitter(self, db_session) -> None:
+        from app.web.admin.network_onts import _resolve_splitter_port_id
+
+        try:
+            _resolve_splitter_port_id(
+                db_session,
+                splitter_id=None,
+                splitter_port_number=3,
+            )
+        except ValueError as exc:
+            assert "Select an ODB" in str(exc)
+        else:
+            raise AssertionError("Expected ValueError when ODB Port is set without splitter")
 
     def test_provisioning_widget_has_no_orchestration_controls(self) -> None:
         template = Path("templates/admin/network/onts/_provision_action.html").read_text()

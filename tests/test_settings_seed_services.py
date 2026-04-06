@@ -225,6 +225,21 @@ class TestSeedNotificationSettings:
 
 
 class TestSeedNotificationTemplates:
+    def test_seed_missing_notification_templates_does_not_commit(self, db_session, monkeypatch):
+        commit_called = False
+
+        def _unexpected_commit():
+            nonlocal commit_called
+            commit_called = True
+            raise AssertionError("commit should not be called")
+
+        monkeypatch.setattr(db_session, "commit", _unexpected_commit)
+
+        created = settings_seed._seed_missing_notification_templates(db_session)
+
+        assert created > 0
+        assert commit_called is False
+
     def test_seeds_suspension_warning_template(self, db_session):
         settings_seed.seed_notification_templates(db_session)
 

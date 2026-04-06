@@ -10,6 +10,7 @@ from app.services.object_storage import (
     S3StorageService,
     _is_transient_error,
     _retry_with_backoff,
+    ensure_storage_bucket,
 )
 
 
@@ -108,6 +109,34 @@ def test_upload_download_stream_exists_delete():
 
     service.delete("k/1.txt")
     assert service.exists("k/1.txt") is False
+
+
+def test_upload_ensures_bucket_before_write():
+    fake = _FakeS3Client()
+    fake.bucket_exists = False
+    service = S3StorageService(
+        "bucket", "http://minio:9000", "a", "b", "us-east-1", client=fake
+    )
+
+    service.upload("k/1.txt", b"hello", "text/plain")
+
+    assert fake.created_bucket is True
+    assert fake.objects["k/1.txt"] == b"hello"
+
+
+def test_ensure_storage_bucket_can_defer_connection_failures(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.object_storage.get_s3_storage",
+        MagicMock(
+            return_value=MagicMock(
+                ensure_bucket=MagicMock(
+                    side_effect=ObjectStorageConnectionError("storage unavailable")
+                )
+            )
+        ),
+    )
+
+    assert ensure_storage_bucket(raise_on_failure=False) is False
 
 
 class TestTransientErrorDetection:

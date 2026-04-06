@@ -11,6 +11,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from app.metrics import REQUEST_COUNT, REQUEST_ERRORS, REQUEST_LATENCY
 
 logger = logging.getLogger(__name__)
+_SKIP_OBSERVABILITY_PATHS = {"/health", "/metrics"}
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -59,6 +60,10 @@ def _request_path(request: Request) -> str:
     return request.url.path
 
 
+def _should_skip_observability(path: str) -> bool:
+    return path in _SKIP_OBSERVABILITY_PATHS
+
+
 class ObservabilityMiddleware:
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -71,6 +76,10 @@ class ObservabilityMiddleware:
         request = Request(scope)
         request_id = request.headers.get("x-request-id") or str(uuid.uuid4())
         scope.setdefault("state", {})["request_id"] = request_id
+        path = _request_path(request)
+        if _should_skip_observability(path):
+            await self.app(scope, receive, send)
+            return
         token = _extract_bearer_token(request)
         actor_id = scope["state"].get("actor_id") or _extract_actor_id_from_jwt(token)
         start = time.monotonic()
@@ -88,7 +97,6 @@ class ObservabilityMiddleware:
             await self.app(scope, receive, send_wrapper)
         except Exception:
             duration_ms = (time.monotonic() - start) * 1000.0
-            path = _request_path(request)
             REQUEST_COUNT.labels(request.method, path, str(status_code)).inc()
             REQUEST_LATENCY.labels(request.method, path, str(status_code)).observe(
                 duration_ms / 1000.0
@@ -108,7 +116,6 @@ class ObservabilityMiddleware:
             raise
 
         duration_ms = (time.monotonic() - start) * 1000.0
-        path = _request_path(request)
         REQUEST_COUNT.labels(request.method, path, str(status_code)).inc()
         REQUEST_LATENCY.labels(request.method, path, str(status_code)).observe(
             duration_ms / 1000.0

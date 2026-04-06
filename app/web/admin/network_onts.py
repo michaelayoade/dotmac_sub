@@ -16,6 +16,7 @@ from fastapi.responses import (
     Response,
 )
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
@@ -25,6 +26,8 @@ from app.models.network import (
     GponChannel,
     IpProtocol,
     OnuMode,
+    SplitterPort,
+    SplitterPortType,
     WanMode,
 )
 from app.services import network as network_service
@@ -51,6 +54,7 @@ from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
+_LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -141,6 +145,188 @@ def _form_float_or_none(form: FormData, key: str) -> float | None:
         return float(raw)
     except ValueError:
         return None
+
+
+def _form_int_or_none(form: FormData, key: str) -> int | None:
+    """Extract an integer from form data, returning None if empty or invalid."""
+    value = form.get(key, "")
+    raw = value if isinstance(value, str) else ""
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+def _resolve_splitter_port_id(
+    db: Session,
+    *,
+    splitter_id: uuid.UUID | None,
+    splitter_port_number: int | None,
+) -> uuid.UUID | None:
+    """Resolve a splitter/output port UUID from splitter and port number inputs."""
+    if splitter_port_number is None:
+        return None
+    if splitter_id is None:
+        raise ValueError("Select an ODB (Splitter) before setting an ODB Port.")
+
+    stmt = (
+        select(SplitterPort)
+        .where(
+            SplitterPort.splitter_id == splitter_id,
+            SplitterPort.port_number == splitter_port_number,
+            SplitterPort.port_type == SplitterPortType.output,
+            SplitterPort.is_active.is_(True),
+        )
+        .limit(1)
+    )
+    splitter_port = db.scalars(stmt).first()
+    if splitter_port is None:
+        raise ValueError(
+            f"ODB Port {splitter_port_number} was not found on the selected splitter."
+        )
+    return cast(uuid.UUID, splitter_port.id)
+
+
+def _split_location_metadata(value: str | None) -> tuple[str, str]:
+    """Split address/comment text from embedded location contact metadata."""
+    raw = (value or "").strip()
+    if not raw:
+        return "", ""
+    if raw.startswith("---\nLocation Contact: "):
+        return "", raw.removeprefix("---\nLocation Contact: ").strip()
+    if _LOCATION_CONTACT_MARKER not in raw:
+        return raw, ""
+    address_part, contact_part = raw.split(_LOCATION_CONTACT_MARKER, 1)
+    return address_part.strip(), contact_part.strip()
+
+
+def _build_location_address_or_comment(address: str, contact: str) -> str | None:
+    """Persist only the address/comment now that contact has its own column."""
+    address_clean = address.strip()
+    return address_clean or None
+
+
+def _location_modal_context(
+    request: Request,
+    db: Session,
+    ont: Any,
+    *,
+    error: str | None = None,
+    form_values: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build modal context for ONT location details editing."""
+    address_value, contact_value = _split_location_metadata(
+        getattr(ont, "address_or_comment", None)
+    )
+    contact_value = str(getattr(ont, "contact", None) or contact_value)
+    initial_port_number = (
+        ont.splitter_port_rel.port_number
+        if getattr(ont, "splitter_port_rel", None) is not None
+        else None
+    )
+    form = {
+        "zone_id": str(form_values["zone_id"])
+        if form_values and form_values.get("zone_id")
+        else str(ont.zone_id)
+        if getattr(ont, "zone_id", None)
+        else "",
+        "splitter_id": str(form_values["splitter_id"])
+        if form_values and form_values.get("splitter_id")
+        else str(ont.splitter_id)
+        if getattr(ont, "splitter_id", None)
+        else "",
+        "splitter_port_number": str(form_values["splitter_port_number"])
+        if form_values and form_values.get("splitter_port_number") is not None
+        else str(initial_port_number)
+        if initial_port_number is not None
+        else "",
+        "name": str(form_values["name"])
+        if form_values and form_values.get("name") is not None
+        else str(getattr(ont, "name", "") or ""),
+        "address_or_comment": str(form_values["address_or_comment"])
+        if form_values and form_values.get("address_or_comment") is not None
+        else address_value,
+        "contact": str(form_values["contact"])
+        if form_values and form_values.get("contact") is not None
+        else contact_value,
+        "gps_latitude": str(form_values["gps_latitude"])
+        if form_values and form_values.get("gps_latitude") is not None
+        else str(getattr(ont, "gps_latitude", "") or ""),
+        "gps_longitude": str(form_values["gps_longitude"])
+        if form_values and form_values.get("gps_longitude") is not None
+        else str(getattr(ont, "gps_longitude", "") or ""),
+    }
+    return {
+        "request": request,
+        "ont": ont,
+        "zones": web_network_onts_service.get_zones(db),
+        "splitters": web_network_onts_service.get_splitters(db),
+        "form": form,
+        "error": error,
+    }
+
+
+def _device_info_modal_context(
+    request: Request,
+    db: Session,
+    ont: Any,
+    *,
+    error: str | None = None,
+    form_values: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build modal context for ONT device information editing."""
+    form = {
+        "serial_number": str(form_values["serial_number"])
+        if form_values and form_values.get("serial_number") is not None
+        else str(getattr(ont, "serial_number", "") or ""),
+        "vendor": str(form_values["vendor"])
+        if form_values and form_values.get("vendor") is not None
+        else str(getattr(ont, "vendor", "") or ""),
+        "model": str(form_values["model"])
+        if form_values and form_values.get("model") is not None
+        else str(getattr(ont, "model", "") or ""),
+        "firmware_version": str(form_values["firmware_version"])
+        if form_values and form_values.get("firmware_version") is not None
+        else str(getattr(ont, "firmware_version", "") or ""),
+        "onu_type_id": str(form_values["onu_type_id"])
+        if form_values and form_values.get("onu_type_id")
+        else str(ont.onu_type_id)
+        if getattr(ont, "onu_type_id", None)
+        else "",
+    }
+    return {
+        "request": request,
+        "ont": ont,
+        "onu_types": web_network_onts_service.get_onu_types(db),
+        "form": form,
+        "error": error,
+    }
+
+
+def _gpon_channel_modal_context(
+    request: Request,
+    ont: Any,
+    *,
+    error: str | None = None,
+    form_value: str | None = None,
+) -> dict[str, Any]:
+    """Build modal context for GPON channel editing."""
+    current_channel = (
+        ont.gpon_channel.value
+        if getattr(ont, "gpon_channel", None) is not None
+        and getattr(ont.gpon_channel, "value", None) is not None
+        else getattr(ont, "gpon_channel", None)
+    )
+    return {
+        "request": request,
+        "ont": ont,
+        "gpon_channels": [e.value for e in GponChannel],
+        "form": {"gpon_channel": form_value if form_value is not None else (current_channel or "gpon")},
+        "error": error,
+    }
 
 
 def _normalize_iphost_key(value: str) -> str:
@@ -473,12 +659,18 @@ def ont_detail(
         )
         operations = []
     context = _base_context(request, db, active_page="onts")
+    address_value, contact_value = _split_location_metadata(
+        getattr(page_data["ont"], "address_or_comment", None)
+    )
+    contact_value = str(getattr(page_data["ont"], "contact", None) or contact_value)
     context.update(
         {
             **page_data,
             "activities": activities,
             "operations": operations,
             "ont_active_tab": active_tab,
+            "location_address_or_comment": address_value,
+            "location_contact": contact_value,
         }
     )
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
@@ -529,6 +721,10 @@ def ont_detail_preview(
         operations = []
 
     context = _base_context(request, db, active_page="onts")
+    address_value, contact_value = _split_location_metadata(
+        getattr(page_data["ont"], "address_or_comment", None)
+    )
+    contact_value = str(getattr(page_data["ont"], "contact", None) or contact_value)
     context.update(
         {
             **page_data,
@@ -538,6 +734,8 @@ def ont_detail_preview(
             "ont_active_tab": active_tab,
             "preview_mode": True,
             "preview_origin_url": f"/admin/network/onts/{ont_id}",
+            "location_address_or_comment": address_value,
+            "location_contact": contact_value,
         }
     )
     return templates.TemplateResponse("admin/network/onts/detail.html", context)
@@ -750,6 +948,273 @@ def ont_update(request: Request, ont_id: str, db: Session = Depends(get_db)):
 
 
 # -- ONU Mode Modal -----------------------------------------------------------
+
+
+@router.get(
+    "/onts/{ont_id}/location-details",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_location_details_modal(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Serve location details modal partial."""
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    return templates.TemplateResponse(
+        "admin/network/onts/_location_details_modal.html",
+        _location_modal_context(request, db, ont),
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/location-details",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_location_details_update(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Update ONT location details."""
+    from app.schemas.network import OntUnitUpdate
+
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    form = parse_form_data_sync(request)
+    zone_id = _form_uuid_or_none(form, "zone_id")
+    splitter_id = _form_uuid_or_none(form, "splitter_id")
+    splitter_port_number = _form_int_or_none(form, "splitter_port_number")
+    form_values = {
+        "zone_id": zone_id,
+        "splitter_id": splitter_id,
+        "splitter_port_number": splitter_port_number,
+        "name": _form_str(form, "name").strip(),
+        "address_or_comment": _form_str(form, "address_or_comment").strip(),
+        "contact": _form_str(form, "contact").strip(),
+        "gps_latitude": _form_str(form, "gps_latitude").strip(),
+        "gps_longitude": _form_str(form, "gps_longitude").strip(),
+    }
+
+    try:
+        splitter_port_id = _resolve_splitter_port_id(
+            db,
+            splitter_id=splitter_id,
+            splitter_port_number=splitter_port_number,
+        )
+    except ValueError as exc:
+        return templates.TemplateResponse(
+            "admin/network/onts/_location_details_modal.html",
+            _location_modal_context(request, db, ont, error=str(exc), form_values=form_values),
+            status_code=400,
+        )
+
+    gps_latitude = _form_float_or_none(form, "gps_latitude")
+    gps_longitude = _form_float_or_none(form, "gps_longitude")
+    payload = OntUnitUpdate(
+        zone_id=zone_id,
+        splitter_id=splitter_id,
+        splitter_port_id=splitter_port_id,
+        name=form_values["name"] or None,
+        address_or_comment=_build_location_address_or_comment(
+            form_values["address_or_comment"],
+            form_values["contact"],
+        ),
+        contact=form_values["contact"] or None,
+        use_gps=gps_latitude is not None or gps_longitude is not None,
+        gps_latitude=gps_latitude,
+        gps_longitude=gps_longitude,
+    )
+
+    before_snapshot = model_to_dict(ont)
+    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+    after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    after_snapshot = model_to_dict(after)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update_location_details",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"changes": changes} if changes else None,
+    )
+    return RedirectResponse(url=f"/admin/network/onts/{ont_id}", status_code=303)
+
+
+@router.get(
+    "/onts/{ont_id}/device-info",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_device_info_modal(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Serve device information modal partial."""
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    return templates.TemplateResponse(
+        "admin/network/onts/_device_info_modal.html",
+        _device_info_modal_context(request, db, ont),
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/device-info",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_device_info_update(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Update ONT device information."""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.schemas.network import OntUnitUpdate
+
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    form = parse_form_data_sync(request)
+    serial_number = _form_str(form, "serial_number").strip()
+    form_values = {
+        "serial_number": serial_number,
+        "vendor": _form_str(form, "vendor").strip(),
+        "model": _form_str(form, "model").strip(),
+        "firmware_version": _form_str(form, "firmware_version").strip(),
+        "onu_type_id": _form_uuid_or_none(form, "onu_type_id"),
+    }
+    if not serial_number:
+        return templates.TemplateResponse(
+            "admin/network/onts/_device_info_modal.html",
+            _device_info_modal_context(
+                request,
+                db,
+                ont,
+                error="Serial number is required.",
+                form_values=form_values,
+            ),
+            status_code=400,
+        )
+
+    payload = OntUnitUpdate(
+        serial_number=serial_number,
+        vendor=form_values["vendor"] or None,
+        model=form_values["model"] or None,
+        firmware_version=form_values["firmware_version"] or None,
+        onu_type_id=form_values["onu_type_id"],
+    )
+
+    try:
+        before_snapshot = model_to_dict(ont)
+        network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+        after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+        after_snapshot = model_to_dict(after)
+        changes = diff_dicts(before_snapshot, after_snapshot)
+    except IntegrityError as exc:
+        db.rollback()
+        return templates.TemplateResponse(
+            "admin/network/onts/_device_info_modal.html",
+            _device_info_modal_context(
+                request,
+                db,
+                ont,
+                error=_ont_unit_integrity_error_message(exc),
+                form_values=form_values,
+            ),
+            status_code=400,
+        )
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update_device_info",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"changes": changes} if changes else None,
+    )
+    return RedirectResponse(url=f"/admin/network/onts/{ont_id}", status_code=303)
+
+
+@router.get(
+    "/onts/{ont_id}/gpon-channel",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_gpon_channel_modal(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Serve GPON channel modal partial."""
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    return templates.TemplateResponse(
+        "admin/network/onts/_gpon_channel_modal.html",
+        _gpon_channel_modal_context(request, ont),
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/gpon-channel",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_gpon_channel_update(
+    ont_id: str, request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Update ONT GPON channel."""
+    from app.schemas.network import OntUnitUpdate
+
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        raise HTTPException(status_code=404, detail="ONT not found")
+
+    form = parse_form_data_sync(request)
+    gpon_channel = _form_str(form, "gpon_channel").strip() or "gpon"
+
+    before_snapshot = model_to_dict(ont)
+    network_service.ont_units.update(
+        db=db, unit_id=ont_id, payload=OntUnitUpdate(gpon_channel=gpon_channel)
+    )
+    after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    after_snapshot = model_to_dict(after)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update_gpon_channel",
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"changes": changes} if changes else None,
+    )
+    return RedirectResponse(url=f"/admin/network/onts/{ont_id}", status_code=303)
 
 
 @router.get(

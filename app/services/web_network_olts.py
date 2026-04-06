@@ -1373,36 +1373,19 @@ def get_autofind_onts(
 
 def authorize_autofind_ont(
     db: Session, olt_id: str, fsp: str, serial_number: str
-) -> tuple[bool, str]:
-    """Authorize an unregistered ONT and persist app-side inventory state."""
-    olt = get_olt_or_none(db, olt_id)
-    if not olt:
-        return False, "OLT not found"
-
-    # Step 1: Authorize the ONT
-    ok, msg, ont_id = olt_ssh_service.authorize_ont(olt, fsp, serial_number)
-    if not ok:
-        return False, msg
-    if ont_id is None:
-        logger.warning(
-            "Could not determine ONT-ID for authorized serial %s on %s %s",
-            serial_number,
-            olt.name,
-            fsp,
-        )
-        return (
-            True,
-            f"{msg}. Warning: ONT-ID could not be determined, so service-port provisioning was skipped",
-        )
-
-    _persist_authorized_ont_inventory(
-        db,
-        olt=olt,
-        fsp=fsp,
-        serial_number=serial_number,
-        ont_id=ont_id,
+) -> tuple[bool, str, str]:
+    """Authorize an unregistered ONT via the tracked workflow."""
+    from app.services.network import (
+        olt_authorization_workflow as olt_authorization_workflow_service,
     )
-    return True, msg
+
+    result = olt_authorization_workflow_service.authorize_autofind_ont(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+    )
+    return result.success, result.status, result.message
 
 
 def clone_service_ports(

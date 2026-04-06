@@ -1093,7 +1093,7 @@ def maybe_finalize_stalled_export(
     if not should_process_inline:
         return export
 
-    logger.warning(
+    logger.info(
         "INLINE_INVOICE_PDF_FALLBACK export_id=%s status=%s",
         export.id,
         export.status.value,
@@ -1126,7 +1126,7 @@ def _build_pdf_bytes(db: Session, invoice: Invoice) -> bytes:
 
         return HTML(string=html_content).write_pdf()
     except Exception as exc:
-        logger.warning(
+        logger.info(
             "WeasyPrint export failed for invoice %s; using branded PDF fallback: %s",
             invoice.id,
             exc,
