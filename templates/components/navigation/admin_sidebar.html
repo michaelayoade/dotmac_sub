@@ -53,8 +53,12 @@
 {% set cls_link = 'flex min-h-[40px] items-center gap-3 rounded-r-xl pl-3 pr-3 py-2 text-sm font-medium transition-colors' %}
 
 {# ── Macros ── #}
-{% macro nav_link(label, href, icon_svg, page_id, badge=None) %}
-{% set is_active = active_item == page_id %}
+{% macro nav_link(label, href, icon_svg, page_id, badge=None, active_pages=[]) %}
+{% if active_pages %}
+{% set is_active = active_page == page_id or active_page in active_pages %}
+{% else %}
+{% set is_active = active_page == page_id or active_item == page_id %}
+{% endif %}
 <div x-data="{
         showTip: false,
         tipTop: 0,
@@ -190,5 +194,36 @@
     {% if module_states.get('provisioning', True) %}
     {{ nav_link("Provisioning", "/admin/provisioning", icon_provisioning, "provisioning", badge=pending_orders_count) }}
     {% endif %}
-    {{ nav_link("System", "/admin/settings", icon_settings, "system") }}
+    {{ nav_link("System Overview", "/admin/system", icon_settings, "system",
+        active_pages=[
+            "system",
+            "system-health",
+            "system-modules",
+            "users",
+            "roles",
+            "permissions",
+            "api-keys",
+            "audit-log",
+            "scheduler",
+            "system-about",
+            "system-import",
+            "system-export",
+            "system-restore-tool",
+            "system-db-inspector",
+            "legal",
+            "design-system"
+        ]) }}
+    {{ nav_link("Settings", "/admin/settings", icon_settings, "settings-hub",
+        active_pages=[
+            "settings-hub",
+            "billing-setup",
+            "config-billing",
+            "config-payment-methods",
+            "config-tax",
+            "config-reminders",
+            "config-billing-notif",
+            "company-info",
+            "system-branding",
+            "system-email"
+        ]) }}
 </div>

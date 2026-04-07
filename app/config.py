@@ -12,8 +12,8 @@ class Settings:
         "DATABASE_URL",
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",
     )
-    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "15"))
-    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+    db_pool_size: int = int(os.getenv("DB_POOL_SIZE", "30"))
+    db_max_overflow: int = int(os.getenv("DB_MAX_OVERFLOW", "30"))
     db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "30"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
 

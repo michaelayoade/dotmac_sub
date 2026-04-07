@@ -258,15 +258,30 @@ app.add_middleware(ObservabilityMiddleware)
 register_error_handlers(app)
 
 
+def _get_cached_audit_settings() -> dict | None:
+    """Return cached audit settings if valid, else None."""
+    with _AUDIT_SETTINGS_LOCK:
+        if (
+            _AUDIT_SETTINGS_CACHE
+            and _AUDIT_SETTINGS_CACHE_AT
+            and monotonic() - _AUDIT_SETTINGS_CACHE_AT < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
+        ):
+            return _AUDIT_SETTINGS_CACHE
+    return None
+
+
 @app.middleware("http")
 async def audit_middleware(request: Request, call_next):
     response: Response
     path = request.url.path
-    db = SessionLocal()
-    try:
-        audit_settings = _load_audit_settings(db)
-    finally:
-        db.close()
+    # Check cache first to avoid unnecessary session creation
+    audit_settings = _get_cached_audit_settings()
+    if audit_settings is None:
+        db = SessionLocal()
+        try:
+            audit_settings = _load_audit_settings(db)
+        finally:
+            db.close()
     if not audit_settings["enabled"]:
         return await call_next(request)
     track_read = request.method == "GET" and (
@@ -343,6 +358,16 @@ def _load_domain_routing(db: Session) -> dict[str, str]:
     }
 
 
+def _get_cached_domain_routing() -> dict[str, str] | None:
+    """Return cached domain routing if valid, else None."""
+    if monotonic() - _domain_routing_cache["ts"] < 30:
+        return {
+            "selfcare": _domain_routing_cache["selfcare"],
+            "redirect": _domain_routing_cache["redirect"],
+        }
+    return None
+
+
 @app.middleware("http")
 async def domain_routing_middleware(request: Request, call_next):
     """Apply lightweight host-aware routing for the selfcare domain."""
@@ -350,11 +375,14 @@ async def domain_routing_middleware(request: Request, call_next):
     if not host:
         return await call_next(request)
 
-    db = SessionLocal()
-    try:
-        routing = _load_domain_routing(db)
-    finally:
-        db.close()
+    # Check cache first to avoid unnecessary session creation
+    routing = _get_cached_domain_routing()
+    if routing is None:
+        db = SessionLocal()
+        try:
+            routing = _load_domain_routing(db)
+        finally:
+            db.close()
 
     selfcare = str(routing.get("selfcare", "")).strip().lower()
     if not selfcare or host != selfcare:

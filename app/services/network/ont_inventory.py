@@ -40,7 +40,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
         select(OntAssignment)
         .where(
             OntAssignment.ont_unit_id == ont.id,
-            OntAssignment.is_active.is_(True),
+            OntAssignment.active.is_(True),
         )
         .order_by(OntAssignment.created_at.desc())
     ).all()
@@ -63,7 +63,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             )
 
     for assignment in active_assignments:
-        assignment.is_active = False
+        assignment.active = False
 
     ont.is_active = False
     ont.olt_device_id = None

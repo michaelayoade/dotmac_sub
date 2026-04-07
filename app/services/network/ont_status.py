@@ -123,18 +123,22 @@ def resolve_ont_status_snapshot(
         online_window_minutes=online_window_minutes,
     )
 
-    if normalized_olt == OnuOnlineStatus.online:
-        effective_status = OnuOnlineStatus.online
-        source = OntStatusSource.olt
-    elif acs_status == OntAcsStatus.online:
+    # ACS recent inform is proof of online - device communicated end-to-end.
+    # Check ACS first because it proves connectivity even if OLT SNMP data is stale.
+    if acs_status == OntAcsStatus.online:
         effective_status = OnuOnlineStatus.online
         source = OntStatusSource.acs
-    elif normalized_olt == OnuOnlineStatus.offline:
-        effective_status = OnuOnlineStatus.offline
+    elif normalized_olt == OnuOnlineStatus.online:
+        effective_status = OnuOnlineStatus.online
         source = OntStatusSource.olt
     else:
-        effective_status = OnuOnlineStatus.unknown
-        source = OntStatusSource.derived
+        # No recent ACS and OLT not online = offline
+        effective_status = OnuOnlineStatus.offline
+        source = (
+            OntStatusSource.olt
+            if normalized_olt == OnuOnlineStatus.offline
+            else OntStatusSource.derived
+        )
 
     return OntStatusSnapshot(
         olt_status=normalized_olt,

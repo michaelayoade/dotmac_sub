@@ -334,7 +334,7 @@ def get_tr069_profiles_context(
         .outerjoin(
             OntAssignment,
             (OntAssignment.ont_unit_id == OntUnit.id)
-            & (OntAssignment.is_active.is_(True)),
+            & (OntAssignment.active.is_(True)),
         )
         .outerjoin(PonPort, PonPort.id == OntAssignment.pon_port_id)
         .where(

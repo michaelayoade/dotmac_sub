@@ -103,7 +103,7 @@ def _health_base_query() -> Any:
             OntAssignment,
             and_(
                 OntAssignment.ont_unit_id == OntUnit.id,
-                OntAssignment.is_active.is_(True),
+                OntAssignment.active.is_(True),
             ),
         )
         .outerjoin(
@@ -287,7 +287,7 @@ class PppoeHealthClassifier:
                 OntAssignment,
                 and_(
                     OntAssignment.ont_unit_id == OntUnit.id,
-                    OntAssignment.is_active.is_(True),
+                    OntAssignment.active.is_(True),
                 ),
             )
             .outerjoin(

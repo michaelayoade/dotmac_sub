@@ -1132,7 +1132,7 @@ class OntAssignment(Base):
             "ix_ont_assignments_active_unit",
             "ont_unit_id",
             unique=True,
-            postgresql_where=text("active"),
+            postgresql_where=text("is_active"),
         ),
     )
 
@@ -1152,7 +1152,8 @@ class OntAssignment(Base):
         UUID(as_uuid=True), ForeignKey("addresses.id")
     )
     assigned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Map 'active' property to 'is_active' column in database
+    active: Mapped[bool] = mapped_column("is_active", Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[datetime] = mapped_column(

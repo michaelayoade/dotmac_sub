@@ -5,6 +5,19 @@
 
 {% block content %}
 {{ ambient_background("slate", "gray") }}
+{% set smtp_sender_form = smtp_sender_form|default({
+    "sender_key": "",
+    "host": "",
+    "port": 587,
+    "username": "",
+    "from_email": "",
+    "from_name": "DotMac SM",
+    "use_tls": true,
+    "use_ssl": false,
+    "is_active": true,
+    "is_default": false,
+    "is_editing": false
+}) %}
 
 <div class="relative space-y-8">
     {% call page_header(

@@ -374,7 +374,7 @@ def sync_onts_from_olt_snmp(
         str(ont_unit_id)
         for ont_unit_id in db.scalars(
             select(OntAssignment.ont_unit_id).where(
-                OntAssignment.is_active.is_(True),
+                OntAssignment.active.is_(True),
                 OntAssignment.ont_unit_id.in_([ont.id for ont in existing_onts]),
             )
         ).all()

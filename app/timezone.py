@@ -138,6 +138,9 @@ def localize_for_display(value: Any) -> Any:
         return value
     if isinstance(value, _DisplayProxyBase):
         return value
+    # Preserve callables (functions, methods, lambdas) so they remain invocable
+    if callable(value):
+        return value
     if isinstance(value, Mapping):
         return {
             key: localize_for_display(item)

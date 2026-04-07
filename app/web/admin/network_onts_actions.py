@@ -52,10 +52,23 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
     }
 
 
+def _sanitize_header_message(message: str) -> str:
+    """Sanitize a message for safe inclusion in HTTP headers.
+
+    Removes control characters and non-printable bytes that would cause
+    'Invalid HTTP header value' errors from uvicorn/httptools.
+    """
+    # Remove control characters (0x00-0x1F, 0x7F) and non-ASCII
+    return "".join(
+        c for c in message if 0x20 <= ord(c) < 0x7F or c in ("\t",)
+    ).strip()
+
+
 def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
+    safe_message = _sanitize_header_message(message)
     return {
         "HX-Trigger": json.dumps(
-            {"showToast": {"message": message, "type": toast_type}},
+            {"showToast": {"message": safe_message, "type": toast_type}},
             ensure_ascii=True,
         )
     }
