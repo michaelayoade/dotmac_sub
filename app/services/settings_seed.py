@@ -883,6 +883,18 @@ def seed_geocoding_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("GEOCODING_TIMEOUT_SEC", "5"),
     )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="batch_geocode_jobs_log",
+        value_type=SettingValueType.json,
+        value_json=[],
+    )
+    geocoding_settings.ensure_by_key(
+        db,
+        key="batch_geocode_log_rows",
+        value_type=SettingValueType.json,
+        value_json=[],
+    )
 
 
 def seed_scheduler_settings(db: Session) -> None:
@@ -1529,6 +1541,18 @@ def seed_provisioning_settings(db: Session) -> None:
         value_type=SettingValueType.string,
         value_text=os.getenv("PROVISIONING_DEFAULT_SERVICE_ORDER_STATUS", "draft"),
     )
+    provisioning_settings.ensure_by_key(
+        db,
+        key="service_migration_jobs_log",
+        value_type=SettingValueType.json,
+        value_json=[],
+    )
+    provisioning_settings.ensure_by_key(
+        db,
+        key="bulk_activation_jobs_log",
+        value_type=SettingValueType.json,
+        value_json=[],
+    )
 
 
 def seed_provisioning_workflows(db: Session) -> None:
@@ -1789,6 +1813,12 @@ def seed_network_settings(db: Session) -> None:
         key="default_mikrotik_address_list",
         value_type=SettingValueType.string,
         value_text=os.getenv("NETWORK_DEFAULT_MIKROTIK_ADDRESS_LIST", ""),
+    )
+    network_settings.ensure_by_key(
+        db,
+        key="vpn_control_jobs_log",
+        value_type=SettingValueType.json,
+        value_json=[],
     )
 
 
