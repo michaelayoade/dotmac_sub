@@ -91,6 +91,48 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
+    - -Q
+    - celery
+  celery-worker-tr069:
+    build: .
+    container_name: dotmac_sub_celery_worker_tr069
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD:-Bes3SpEVyg61QebbXSpUse7_4vbOVOa_}@db:5432/dotmac_sub
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/1
+      REDIS_URL: redis://:${REDIS_PASSWORD:-nP9DMP9A_XxHIhTT7AVH3LEJGzklQ-Rq}@redis:6379/0
+      S3_ENDPOINT_URL: http://minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:-dotmac-private}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      SPLYNX_MYSQL_PASS: ${SPLYNX_MYSQL_PASS:-}
+      SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
+      OPENBAO_ADDR: http://openbao:8200
+      OPENBAO_TOKEN: dotmac-sub-dev-token
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_started
+      openbao:
+        condition: service_healthy
+    volumes:
+    - ./app:/app/app
+    - ./uploads:/app/uploads
+    command:
+    - celery
+    - -A
+    - app.celery_app.celery_app
+    - worker
+    - --loglevel=info
+    - -Q
+    - tr069
   celery-beat:
     build: .
     container_name: dotmac_sub_celery_beat

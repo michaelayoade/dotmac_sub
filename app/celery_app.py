@@ -14,6 +14,24 @@ celery_app.conf.beat_schedule = build_beat_schedule()
 celery_app.conf.beat_scheduler = "app.celery_scheduler.DbScheduler"
 celery_app.autodiscover_tasks(["app.tasks"])
 
+# Route critical TR-069 tasks to a dedicated queue for priority processing.
+# This prevents TR-069 sync from being starved by slow SNMP/polling tasks.
+celery_app.conf.task_routes = {
+    "app.tasks.tr069.sync_all_acs_devices": {"queue": "tr069"},
+    "app.tasks.tr069.execute_pending_jobs": {"queue": "tr069"},
+    "app.tasks.tr069.check_device_health": {"queue": "tr069"},
+    "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "tr069"},
+    "app.tasks.tr069.cleanup_tr069_records": {"queue": "tr069"},
+    "app.tasks.tr069.execute_bulk_action": {"queue": "tr069"},
+}
+
+# Define queues
+from kombu import Queue
+celery_app.conf.task_queues = (
+    Queue("celery"),  # Default queue
+    Queue("tr069"),   # Dedicated TR-069 queue
+)
+
 # Ensure all tasks are registered by importing the tasks package
 import app.tasks  # noqa: E402, F401
 
