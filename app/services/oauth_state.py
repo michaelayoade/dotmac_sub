@@ -3,32 +3,23 @@
 Stores OAuth state tokens in Redis with a short TTL to prevent CSRF attacks
 and replay attacks during the OAuth flow.
 
-Environment Variables:
-    REDIS_URL: Redis connection URL (default: redis://localhost:6379/0)
+Uses the centralized Redis client with circuit breaker protection to prevent
+retry storms during Redis outages.
 """
 
 import json
 import logging
-import os
 from datetime import timedelta
-from typing import Any, cast
-
-import redis
+from typing import Any
 
 from app.logging import get_logger
+from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
-
 logger = get_logger(__name__)
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 STATE_TTL = timedelta(minutes=10)
 STATE_PREFIX = "oauth_state:"
-
-
-def _get_redis_client() -> redis.Redis:
-    """Get a Redis client connection."""
-    return cast(redis.Redis, redis.from_url(REDIS_URL, decode_responses=True))
 
 
 def _loads_dict(value: str) -> dict[str, Any] | None:
@@ -49,16 +40,22 @@ def store_oauth_state(state: str, data: dict) -> None:
     Args:
         state: The random state token generated for this OAuth flow
         data: Dict of data to associate with this state (e.g., connector_config_id)
+
+    Raises:
+        RuntimeError: If Redis is unavailable (circuit breaker open)
     """
+    client = get_redis()
+    if client is None:
+        logger.error("failed_to_store_oauth_state error=Redis unavailable (circuit open)")
+        raise RuntimeError("Redis unavailable for OAuth state storage")
     try:
-        client = _get_redis_client()
         client.setex(
             f"{STATE_PREFIX}{state}",
             STATE_TTL,
             json.dumps(data),
         )
         logger.debug("stored_oauth_state state=%s...", state[:8])
-    except redis.RedisError as exc:
+    except Exception as exc:
         logger.error("failed_to_store_oauth_state error=%s", exc)
         raise
 
@@ -73,17 +70,20 @@ def get_and_delete_oauth_state(state: str) -> dict[str, Any] | None:
         state: The state token from the OAuth callback
 
     Returns:
-        The associated data dict, or None if state not found or expired
+        The associated data dict, or None if state not found, expired, or Redis unavailable
     """
+    client = get_redis()
+    if client is None:
+        logger.error("failed_to_get_oauth_state error=Redis unavailable (circuit open)")
+        return None
     try:
-        client = _get_redis_client()
         key = f"{STATE_PREFIX}{state}"
 
         # Use pipeline for atomic get-then-delete
-        pipe = cast(Any, client.pipeline())
+        pipe = client.pipeline()
         pipe.get(key)
         pipe.delete(key)
-        results = cast(list[object], pipe.execute())
+        results = pipe.execute()
 
         data = results[0]
         if data:
@@ -94,7 +94,7 @@ def get_and_delete_oauth_state(state: str) -> dict[str, Any] | None:
         logger.warning("oauth_state_not_found state=%s...", state[:8])
         return None
 
-    except redis.RedisError as exc:
+    except Exception as exc:
         logger.error("failed_to_get_oauth_state error=%s", exc)
         return None
 
@@ -109,18 +109,21 @@ def verify_oauth_state(state: str) -> dict[str, Any] | None:
         state: The state token to verify
 
     Returns:
-        The associated data dict, or None if state not found
+        The associated data dict, or None if state not found or Redis unavailable
     """
+    client = get_redis()
+    if client is None:
+        logger.error("failed_to_verify_oauth_state error=Redis unavailable (circuit open)")
+        return None
     try:
-        client = _get_redis_client()
         key = f"{STATE_PREFIX}{state}"
-        data = cast(Any, client.get(key))
+        data = client.get(key)
 
         if data:
             return _loads_dict(str(data))
         return None
 
-    except redis.RedisError as exc:
+    except Exception as exc:
         logger.error("failed_to_verify_oauth_state error=%s", exc)
         return None
 
@@ -132,13 +135,16 @@ def delete_oauth_state(state: str) -> bool:
         state: The state token to delete
 
     Returns:
-        True if deleted, False if not found
+        True if deleted, False if not found or Redis unavailable
     """
+    client = get_redis()
+    if client is None:
+        logger.error("failed_to_delete_oauth_state error=Redis unavailable (circuit open)")
+        return False
     try:
-        client = _get_redis_client()
         key = f"{STATE_PREFIX}{state}"
-        result = cast(int, client.delete(key))
-        return result > 0
-    except redis.RedisError as exc:
+        deleted: int = client.delete(key)  # type: ignore[assignment]
+        return deleted > 0
+    except Exception as exc:
         logger.error("failed_to_delete_oauth_state error=%s", exc)
         return False

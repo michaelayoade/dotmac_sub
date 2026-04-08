@@ -2,57 +2,29 @@
 
 This module provides a centralized cache for domain settings using Redis,
 eliminating race conditions with in-memory caches in multi-worker environments.
+
+Uses the centralized Redis client with circuit breaker protection to prevent
+retry storms during Redis outages.
 """
 
 import json
 import logging
-import os
 from typing import Any, cast
 
 import redis
-from dotenv import load_dotenv
+
+from app.services.redis_client import get_redis
 
 logger = logging.getLogger(__name__)
-
-_redis_client: redis.Redis | None = None
-_cache_disabled = False
-
-
-def _disable_settings_cache(exc: Exception) -> None:
-    """Disable the settings cache after a Redis failure to avoid warning storms."""
-    global _redis_client, _cache_disabled
-    if _cache_disabled:
-        return
-    _redis_client = None
-    _cache_disabled = True
-    logger.warning("Settings cache disabled: %s", exc)
 
 
 def get_settings_redis() -> redis.Redis | None:
     """Get Redis client for settings cache.
 
-    Returns a Redis client connected to the configured Redis URL.
-    The client is cached globally for reuse.
+    Uses the centralized Redis client with circuit breaker protection.
+    Returns None if Redis is unavailable (circuit breaker open or connection failed).
     """
-    global _redis_client
-    if _cache_disabled:
-        return None
-    if _redis_client is None:
-        # Load .env here as well because this module is used by CLI/script contexts
-        # that may not import app.config before touching the settings cache.
-        load_dotenv()
-        redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
-        try:
-            client = redis.Redis.from_url(
-                redis_url,
-                decode_responses=True,
-            )
-            client.ping()
-            _redis_client = client
-        except redis.RedisError as exc:
-            _disable_settings_cache(exc)
-            return None
-    return _redis_client
+    return get_redis()
 
 
 class SettingsCache:
@@ -90,9 +62,9 @@ class SettingsCache:
             if value is not None:
                 return json.loads(value)
         except redis.RedisError as exc:
-            _disable_settings_cache(exc)
+            logger.debug("Settings cache read failed: %s", exc)
         except json.JSONDecodeError as exc:
-            logger.warning(f"Settings cache JSON decode failed: {exc}")
+            logger.warning("Settings cache JSON decode failed: %s", exc)
         return None
 
     @staticmethod
@@ -115,9 +87,9 @@ class SettingsCache:
             r.setex(cache_key, SettingsCache.TTL, json.dumps(value))
             return True
         except redis.RedisError as exc:
-            _disable_settings_cache(exc)
+            logger.debug("Settings cache write failed: %s", exc)
         except (TypeError, ValueError) as exc:
-            logger.warning(f"Settings cache JSON encode failed: {exc}")
+            logger.warning("Settings cache JSON encode failed: %s", exc)
         return False
 
     @staticmethod
@@ -139,7 +111,7 @@ class SettingsCache:
             r.delete(cache_key)
             return True
         except redis.RedisError as exc:
-            _disable_settings_cache(exc)
+            logger.debug("Settings cache invalidate failed: %s", exc)
         return False
 
     @staticmethod
@@ -163,7 +135,7 @@ class SettingsCache:
                 count += 1
             return count
         except redis.RedisError as exc:
-            _disable_settings_cache(exc)
+            logger.debug("Settings cache domain invalidate failed: %s", exc)
         return -1
 
     @staticmethod
@@ -177,7 +149,7 @@ class SettingsCache:
         Returns:
             Dict mapping keys to their cached values (missing keys are omitted)
         """
-        result = {}
+        result: dict[str, Any] = {}
         try:
             r = get_settings_redis()
             if r is None:
@@ -191,7 +163,7 @@ class SettingsCache:
                     except json.JSONDecodeError:
                         pass
         except redis.RedisError as exc:
-            _disable_settings_cache(exc)
+            logger.debug("Settings cache multi-get failed: %s", exc)
         return result
 
     @staticmethod
@@ -216,7 +188,7 @@ class SettingsCache:
             pipe.execute()
             return True
         except redis.RedisError as exc:
-            _disable_settings_cache(exc)
+            logger.debug("Settings cache multi-set failed: %s", exc)
         except (TypeError, ValueError) as exc:
-            logger.warning(f"Settings cache JSON encode failed: {exc}")
+            logger.warning("Settings cache JSON encode failed: %s", exc)
         return False

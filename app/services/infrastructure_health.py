@@ -110,17 +110,29 @@ def _check_postgres(db: Session) -> ServiceStatus:
 
 
 def _check_redis(db: Session) -> ServiceStatus:
-    """Check Redis via the session store client."""
-    from app.services.session_store import get_session_redis
+    """Check Redis via the centralized client with circuit breaker."""
+    from app.services.redis_client import get_circuit_state, get_redis
 
     start = time.monotonic()
+    circuit_state = get_circuit_state()
+
     try:
-        client = get_session_redis()
+        client = get_redis()
         if client is None:
+            elapsed = (time.monotonic() - start) * 1000
+            details: dict[str, object] = {
+                "error": "No Redis client available",
+                "circuit_open": circuit_state["circuit_open"],
+                "failure_count": circuit_state["failure_count"],
+            }
+            if circuit_state["retry_after_seconds"] > 0:
+                details["retry_after_seconds"] = round(
+                    circuit_state["retry_after_seconds"], 1
+                )
             return ServiceStatus(
                 name="Redis",
                 status="down",
-                details={"error": "No Redis client available"},
+                details=details,
                 icon=_ICON_CACHE,
             )
         client.ping()
@@ -131,10 +143,20 @@ def _check_redis(db: Session) -> ServiceStatus:
         used_memory_human = str(all_info.get("used_memory_human", ""))
         connected_clients = all_info.get("connected_clients", 0)
 
-        details: dict[str, object] = {
+        # Calculate hit rate
+        hits = all_info.get("keyspace_hits", 0)
+        misses = all_info.get("keyspace_misses", 0)
+        hit_rate = None
+        if hits + misses > 0:
+            hit_rate = round(hits / (hits + misses) * 100, 1)
+
+        details = {
             "memory": used_memory_human,
             "clients": connected_clients,
+            "circuit_open": False,
         }
+        if hit_rate is not None:
+            details["hit_rate"] = f"{hit_rate}%"
         if uptime_seconds:
             days = int(uptime_seconds) // 86400
             hours = (int(uptime_seconds) % 86400) // 3600
@@ -154,7 +176,11 @@ def _check_redis(db: Session) -> ServiceStatus:
             name="Redis",
             status="down",
             response_ms=round(elapsed, 1),
-            details={"error": str(exc)[:200]},
+            details={
+                "error": str(exc)[:200],
+                "circuit_open": circuit_state["circuit_open"],
+                "failure_count": circuit_state["failure_count"],
+            },
             icon=_ICON_CACHE,
         )
 

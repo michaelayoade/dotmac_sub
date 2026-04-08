@@ -6,33 +6,26 @@ Provides caching for:
 - MikroTik scripts
 
 Caching reduces database load and speeds up configuration downloads.
+
+Uses the centralized Redis client with circuit breaker protection to prevent
+retry storms during Redis outages.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Callable
 from functools import wraps
 from typing import Any, TypeVar, cast
 
 from app.models.domain_settings import SettingDomain
+from app.services.redis_client import get_redis
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
-# Redis is optional - if not available, caching is disabled
-try:
-    import redis
-
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
-    redis = None  # type: ignore[assignment]
-
 # Configuration
-REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/1")
 CACHE_PREFIX = "wg:"
 _DEFAULT_TTL = 900  # 15 minutes fallback
 
@@ -84,28 +77,13 @@ def _get_mikrotik_script_ttl() -> int:
     return _get_default_ttl()
 
 
-_redis_client: Any | None = None
-
-
 def get_redis_client() -> Any | None:
-    """Get or create Redis client.
+    """Get Redis client for VPN caching.
 
-    Returns None if Redis is not available or connection fails.
+    Uses the centralized Redis client with circuit breaker protection.
+    Returns None if Redis is unavailable.
     """
-    global _redis_client
-
-    if not REDIS_AVAILABLE:
-        return None
-
-    if _redis_client is None:
-        try:
-            _redis_client = redis.from_url(REDIS_URL, decode_responses=True)
-            # Test connection
-            _redis_client.ping()
-        except Exception:
-            _redis_client = None
-
-    return _redis_client
+    return get_redis()
 
 
 def is_cache_available() -> bool:

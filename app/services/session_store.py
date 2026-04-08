@@ -1,4 +1,8 @@
-"""Shared Redis-first session storage helpers."""
+"""Shared Redis-first session storage helpers.
+
+Uses the centralized Redis client with circuit breaker protection
+to prevent retry storms during Redis outages.
+"""
 
 from __future__ import annotations
 
@@ -9,10 +13,9 @@ from typing import Any, cast
 
 import redis
 
-logger = logging.getLogger(__name__)
+from app.services.redis_client import get_redis
 
-_SESSION_REDIS_CLIENT: redis.Redis | None = None
-_SESSION_REDIS_UNAVAILABLE = False
+logger = logging.getLogger(__name__)
 
 
 def _fallback_enabled() -> bool:
@@ -25,26 +28,11 @@ def _fallback_enabled() -> bool:
 
 
 def get_session_redis() -> redis.Redis | None:
-    """Get a shared Redis client for session storage."""
-    global _SESSION_REDIS_CLIENT, _SESSION_REDIS_UNAVAILABLE
-    if _SESSION_REDIS_CLIENT is not None:
-        return _SESSION_REDIS_CLIENT
-    if _SESSION_REDIS_UNAVAILABLE:
-        return None
+    """Get a shared Redis client for session storage.
 
-    redis_url = os.getenv("SESSION_REDIS_URL") or os.getenv("REDIS_URL")
-    if not redis_url:
-        return None
-
-    try:
-        client = redis.Redis.from_url(redis_url, decode_responses=True)
-        client.ping()
-        _SESSION_REDIS_CLIENT = client
-        return client
-    except redis.RedisError as exc:
-        logger.warning("Session Redis unavailable, using in-memory fallback: %s", exc)
-        _SESSION_REDIS_UNAVAILABLE = True
-        return None
+    Uses the centralized Redis client with circuit breaker protection.
+    """
+    return get_redis()
 
 
 def load_session(

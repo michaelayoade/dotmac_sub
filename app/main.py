@@ -17,6 +17,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from sqlalchemy import inspect as sqlalchemy_inspect
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.responses import Response
 
@@ -43,6 +44,7 @@ from app.api.fiber_plant import router as fiber_plant_router
 from app.api.files import router as files_router
 from app.api.geocoding import router as geocoding_router
 from app.api.gis import router as gis_router
+from app.api.health import router as health_router
 from app.api.imports import router as imports_router
 from app.api.integrations import router as integrations_router
 from app.api.nas import router as nas_router
@@ -81,8 +83,8 @@ from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.services import audit as audit_service
 from app.services.object_storage import (
-    ObjectStorageError,
     ObjectStorageConnectionError,
+    ObjectStorageError,
     ensure_storage_bucket,
 )
 from app.services.settings_seed import (
@@ -149,9 +151,42 @@ def _assert_required_schema() -> None:
         db.close()
 
 
+def _check_test_environment_leakage() -> None:
+    """Warn if test environment variables are set in production.
+
+    The PYTEST_CURRENT_TEST variable being set in production can cause
+    test stubs/mocks to be used instead of real implementations, leading
+    to errors like '_RedisStub' object has no attribute 'get'.
+    """
+    test_env_vars = [
+        "PYTEST_CURRENT_TEST",
+        "PYTEST_VERSION",
+        "_PYTEST_RAISE",
+    ]
+    found = []
+    for var in test_env_vars:
+        if os.environ.get(var):
+            found.append(var)
+
+    if found:
+        logger.error(
+            "test_environment_variables_detected",
+            extra={
+                "event": "test_environment_variables_detected",
+                "variables": found,
+                "warning": "Test environment variables are set in production. "
+                "This can cause test stubs to be used instead of real implementations.",
+            },
+        )
+
+
 def _seed_startup_settings() -> None:
     started_at = monotonic()
     logger.info("startup_seed_begin", extra={"event": "startup_seed_begin"})
+
+    # Check for test environment leakage (can cause _RedisStub errors)
+    _check_test_environment_leakage()
+
     # Enforce credential encryption if configured (P0 security fix)
     from app.config import settings
     from app.services.credential_crypto import require_encryption_key
@@ -264,7 +299,8 @@ def _get_cached_audit_settings() -> dict | None:
         if (
             _AUDIT_SETTINGS_CACHE
             and _AUDIT_SETTINGS_CACHE_AT
-            and monotonic() - _AUDIT_SETTINGS_CACHE_AT < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
+            and monotonic() - _AUDIT_SETTINGS_CACHE_AT
+            < _AUDIT_SETTINGS_CACHE_TTL_SECONDS
         ):
             return _AUDIT_SETTINGS_CACHE
     return None
@@ -358,9 +394,12 @@ def _load_domain_routing(db: Session) -> dict[str, str]:
     }
 
 
-def _get_cached_domain_routing() -> dict[str, str] | None:
-    """Return cached domain routing if valid, else None."""
-    if monotonic() - _domain_routing_cache["ts"] < 30:
+def _get_cached_domain_routing(*, allow_stale: bool = False) -> dict[str, str] | None:
+    """Return cached domain routing when still fresh, or stale if allowed."""
+    cache_ts = _domain_routing_cache["ts"]
+    if cache_ts <= 0:
+        return None
+    if allow_stale or monotonic() - cache_ts < 30:
         return {
             "selfcare": _domain_routing_cache["selfcare"],
             "redirect": _domain_routing_cache["redirect"],
@@ -381,6 +420,16 @@ async def domain_routing_middleware(request: Request, call_next):
         db = SessionLocal()
         try:
             routing = _load_domain_routing(db)
+        except SQLAlchemyError:
+            routing = _get_cached_domain_routing(allow_stale=True) or {
+                "selfcare": "",
+                "redirect": "/portal/",
+            }
+            logger.warning(
+                "domain_routing_refresh_failed",
+                exc_info=True,
+                extra={"event": "domain_routing_refresh_failed"},
+            )
         finally:
             db.close()
 
@@ -456,9 +505,7 @@ async def csrf_middleware(request: Request, call_next):
             try:
                 from jinja2 import Environment, FileSystemLoader
 
-                env = Environment(
-                    loader=FileSystemLoader("templates"), autoescape=True
-                )
+                env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
                 template = env.get_template("errors/csrf.html")
                 content = template.render(request_id=request_id)
                 return HTMLResponse(content=content, status_code=403)
@@ -725,6 +772,8 @@ _include_api_router(defaults_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(wireguard_public_router)
 # TR-069 inform callback - no auth required (called by GenieACS)
 _include_api_router(tr069_inform_router)
+# Health check endpoints - no auth required (for monitoring/load balancers)
+_include_api_router(health_router)
 app.include_router(web_home_router)
 app.include_router(web_domains_router)
 app.include_router(web_router)

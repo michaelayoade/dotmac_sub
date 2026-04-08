@@ -1,6 +1,5 @@
 import hashlib
 import logging
-import os
 import secrets
 import time
 from datetime import UTC, datetime
@@ -43,6 +42,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.redis_client import get_redis
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -54,7 +54,6 @@ def hash_api_key(value: str) -> str:
 
 _API_KEY_WINDOW_SECONDS = 60
 _API_KEY_MAX_PER_WINDOW = 5
-_REDIS_CLIENT: redis.Redis | None = None
 
 
 def _auth_setting(db: Session, key: str) -> str | None:
@@ -85,19 +84,11 @@ def _auth_int_setting(db: Session, key: str, default: int) -> int:
 
 
 def _get_redis_client() -> redis.Redis | None:
-    global _REDIS_CLIENT
-    if _REDIS_CLIENT is not None:
-        return _REDIS_CLIENT
-    url = os.getenv("REDIS_URL")
-    if not url:
-        return None
-    try:
-        client = redis.Redis.from_url(url, decode_responses=True)
-        client.ping()
-        _REDIS_CLIENT = client
-        return client
-    except redis.RedisError:
-        return None
+    """Get Redis client for auth rate limiting.
+
+    Uses the centralized Redis client with circuit breaker protection.
+    """
+    return get_redis()
 
 
 def _ensure_subscriber(db: Session, subscriber_id: str):
