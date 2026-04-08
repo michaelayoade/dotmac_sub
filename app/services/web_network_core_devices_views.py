@@ -37,7 +37,7 @@ from app.models.network_operation import (
 from app.models.subscriber import SubscriberCategory
 from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
-from app.services.network._common import decode_huawei_hex_serial
+from app.services.network._common import decode_huawei_hex_serial, encode_to_hex_serial
 from app.services.network.olt_polling_parsers import _decode_huawei_packed_fsp
 from app.services.network.ont_status import resolve_ont_status_for_model
 from app.services.web_network_core_devices_inventory import (
@@ -1670,10 +1670,15 @@ def onts_list_page_data(
     ont_ids = list({ont.id for ont in list(onts) + list(diagnostics_onts)})
     assignment_info: dict[str, dict[str, str]] = {}
     serial_display_by_ont_id: dict[str, str] = {}
+    hex_serial_by_ont_id: dict[str, str] = {}
     for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
         serial_value = str(getattr(ont, "serial_number", "") or "").strip()
         if serial_value:
             serial_display_by_ont_id[str(ont.id)] = _display_ont_serial(serial_value)
+            # Compute hex serial for display
+            hex_serial = encode_to_hex_serial(serial_value)
+            if hex_serial:
+                hex_serial_by_ont_id[str(ont.id)] = hex_serial
             continue
         mac_value = str(getattr(ont, "mac_address", "") or "").strip()
         if mac_value:
@@ -1745,6 +1750,7 @@ def onts_list_page_data(
         "signal_data": signal_data,
         "assignment_info": assignment_info,
         "serial_display_by_ont_id": serial_display_by_ont_id,
+        "hex_serial_by_ont_id": hex_serial_by_ont_id,
         "olts": olts,
         "vendors": list(vendor_rows),
         # Active filters for template state

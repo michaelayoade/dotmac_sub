@@ -86,7 +86,7 @@
                     <div class="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
                         <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
                     </div>
-                    <input type="text" name="search" value="{{ filters.search }}" placeholder="Search serial, MAC, OLT, PON, firmware..."
+                    <input type="text" name="search" value="{{ filters.search }}" placeholder="Search serial, hex serial, MAC, OLT, PON..."
                            class="w-full rounded-lg border border-slate-200 bg-slate-50/50 py-2 pl-9 pr-4 text-sm text-slate-900 transition-all placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white dark:placeholder:text-slate-500 dark:focus:bg-slate-700 dark:focus:text-white"
                            hx-get="/admin/network/onts" hx-trigger="keyup changed delay:400ms" hx-target="body" hx-push-url="true" hx-include="#ont-filter-form">
                 </div>
@@ -254,6 +254,7 @@
                                     aria-label="Select all ONTs">
                             </th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
+                            <th scope="col" class="hidden lg:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Hex Serial</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Subscriber / Customer</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
@@ -282,6 +283,14 @@
                                     {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else ont.serial_number %}
                                     <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400 max-w-[120px] sm:max-w-none truncate inline-block" title="{{ serial_display or ont.serial_number or '-' }}">{{ serial_display or ont.serial_number or '-' }}</a>
                                 </div>
+                            </td>
+                            <td class="hidden lg:table-cell px-4 py-4 whitespace-nowrap">
+                                {% set hex_serial = hex_serial_by_ont_id.get(ont.id | string) if hex_serial_by_ont_id else none %}
+                                {% if hex_serial %}
+                                <span class="font-mono text-xs text-slate-500 dark:text-slate-400 select-all" title="Hex serial for OLT search">{{ hex_serial }}</span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">-</span>
+                                {% endif %}
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 {% if ai.get("olt_name") %}
@@ -424,6 +433,7 @@
                     <thead>
                         <tr class="border-b border-slate-100 bg-gradient-to-r from-amber-50/50 to-orange-50/30 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
+                            <th scope="col" class="hidden lg:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Hex Serial</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT Rx</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">ONU Rx</th>
@@ -442,6 +452,14 @@
                                 {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else ont.serial_number %}
                                 <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ serial_display or ont.serial_number or '-' }}</a>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ ont.vendor or '' }} {{ ont.model or '' }}</p>
+                            </td>
+                            <td class="hidden lg:table-cell px-4 py-3 whitespace-nowrap">
+                                {% set hex_serial = hex_serial_by_ont_id.get(ont.id | string) if hex_serial_by_ont_id else none %}
+                                {% if hex_serial %}
+                                <span class="font-mono text-xs text-slate-500 dark:text-slate-400 select-all">{{ hex_serial }}</span>
+                                {% else %}
+                                <span class="text-xs text-slate-400">-</span>
+                                {% endif %}
                             </td>
                             <td class="px-6 py-3 whitespace-nowrap">
                                 {% if ai.get("olt_name") %}

@@ -43,13 +43,15 @@ from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
 from app.services.events import emit_event
 from app.services.events.types import EventType
-from app.validators import network as network_validators
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
     _validate_enum,
+    decode_huawei_hex_serial,
+    encode_to_hex_serial,
 )
 from app.services.query_builders import apply_active_state, apply_optional_equals
+from app.validators import network as network_validators
 
 logger = logging.getLogger(__name__)
 
@@ -703,6 +705,25 @@ class OntUnits(CRUDManager[OntUnit]):
             search_pon_port = aliased(PonPort)
             search_olt = aliased(OLTDevice)
             search_subscriber = aliased(Subscriber)
+
+            # Build list of serial search conditions including hex serial variants
+            serial_conditions = [OntUnit.serial_number.ilike(term)]
+
+            # If search looks like a hex serial, also search for the decoded form
+            search_clean = search.strip().upper()
+            decoded = decode_huawei_hex_serial(search_clean)
+            if decoded:
+                serial_conditions.append(
+                    OntUnit.serial_number.ilike(f"%{decoded}%")
+                )
+
+            # If search looks like a vendor+serial, also search for the hex form
+            encoded = encode_to_hex_serial(search_clean)
+            if encoded:
+                serial_conditions.append(
+                    OntUnit.serial_number.ilike(f"%{encoded}%")
+                )
+
             stmt = (
                 stmt.outerjoin(
                     search_assignment,
@@ -719,7 +740,7 @@ class OntUnits(CRUDManager[OntUnit]):
                 )
                 .where(
                     or_(
-                        OntUnit.serial_number.ilike(term),
+                        *serial_conditions,
                         OntUnit.mac_address.ilike(term),
                         OntUnit.vendor.ilike(term),
                         OntUnit.model.ilike(term),
