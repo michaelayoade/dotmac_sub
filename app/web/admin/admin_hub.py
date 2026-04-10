@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_admin_hub as web_admin_hub_service
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/admin-hub", tags=["web-admin-hub"])
@@ -24,7 +25,11 @@ def _base_context(request: Request, db: Session, active_page: str):
     }
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def admin_hub_index(request: Request, db: Session = Depends(get_db)):
     """Admin hub overview with cards for access control and monitoring."""
     context = _base_context(request, db, active_page="admin-hub")

@@ -14,6 +14,7 @@ from app.db import get_db
 from app.schemas.usage import UsageChargePostRequest, UsageRatingRunRequest
 from app.services import usage as usage_service
 from app.services import web_usage as web_usage_service
+from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data
 
 logger = logging.getLogger(__name__)
@@ -51,7 +52,11 @@ def usage_legacy_redirect(path: str) -> RedirectResponse:
 # =============================================================================
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def usage_dashboard_index(request: Request, db: Session = Depends(get_db)):
     """Usage dashboard overview with stats."""
     page_data = web_usage_service.get_dashboard_data(db)
@@ -136,7 +141,11 @@ def usage_charges_list(
     return templates.TemplateResponse("admin/catalog/usage/charges.html", context)
 
 
-@router.post("/charges/{charge_id}/post", response_class=HTMLResponse)
+@router.post(
+    "/charges/{charge_id}/post",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(get_db)):
     """Post a single usage charge."""
     try:
@@ -197,7 +206,11 @@ def rating_runs_list(
     return templates.TemplateResponse("admin/catalog/usage/rating.html", context)
 
 
-@router.post("/rating/run", response_class=HTMLResponse)
+@router.post(
+    "/rating/run",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def rating_run_trigger(
     request: Request,
     form: FormData = Depends(parse_form_data),

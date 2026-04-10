@@ -14,6 +14,7 @@ from app.services import integration_hooks as integration_hooks_service
 from app.services import web_integrations as web_integrations_service
 from app.services import web_integrations_whatsapp as web_integrations_whatsapp_service
 from app.services.audit_helpers import recent_activity_for_paths
+from app.services.auth_dependencies import require_permission
 from app.services.integrations import accounting_sync as accounting_sync_service
 
 router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
@@ -38,7 +39,11 @@ def _base_context(
 # ==================== Connectors ====================
 
 
-@router.get("/connectors", response_class=HTMLResponse)
+@router.get(
+    "/connectors",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def connectors_list(request: Request, db: Session = Depends(get_db)):
     """List all connector configurations."""
     state = web_integrations_service.build_connectors_list_data(db)
@@ -118,7 +123,11 @@ def integrations_installed_relay_toggle(
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
-@router.post("/installed/{connector_id}/toggle", response_class=HTMLResponse)
+@router.post(
+    "/installed/{connector_id}/toggle",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def integrations_installed_toggle(
     connector_id: str,
     enabled: bool = Form(False),
@@ -1071,7 +1080,11 @@ def whatsapp_config_page(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/whatsapp/config", response_class=HTMLResponse)
+@router.post(
+    "/whatsapp/config",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def whatsapp_config_save(
     request: Request,
     provider: str = Form("meta_cloud_api"),

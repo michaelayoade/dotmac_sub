@@ -129,6 +129,17 @@ def _dbi_principal_id(request: Request) -> str:
     return principal
 
 
+def _require_system_user_principal(request: Request) -> dict:
+    """Require that the current principal is a system user, not a subscriber."""
+    auth = getattr(request.state, "auth", None) or {}
+    if auth.get("principal_type") != "system_user":
+        raise HTTPException(
+            status_code=403,
+            detail="This action requires a system user principal",
+        )
+    return auth
+
+
 @router.get("/health", response_class=HTMLResponse)
 def system_health_page(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats

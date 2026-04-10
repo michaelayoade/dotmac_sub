@@ -12,6 +12,7 @@ from app.schemas.subscriber import ResellerCreate, ResellerUpdate
 from app.services import rbac as rbac_service
 from app.services import subscriber as subscriber_service
 from app.services import web_admin_resellers as reseller_svc
+from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data
 
 templates = Jinja2Templates(directory="templates")
@@ -43,7 +44,11 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
     }
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def resellers_list(
     request: Request,
     page: int = Query(1, ge=1),
@@ -111,7 +116,11 @@ def reseller_edit(
     return templates.TemplateResponse("admin/resellers/reseller_form.html", context)
 
 
-@router.post("", response_class=HTMLResponse)
+@router.post(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:write"))],
+)
 def reseller_create(
     request: Request,
     form: FormData = Depends(parse_form_data),

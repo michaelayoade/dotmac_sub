@@ -11,6 +11,7 @@ from app.db import get_db
 from app.models.legal import LegalDocumentType
 from app.schemas.legal import LegalDocumentCreate, LegalDocumentUpdate
 from app.services import legal as legal_service
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/legal", tags=["web-admin-legal"])
@@ -28,7 +29,11 @@ def _base_context(request: Request, db: Session, active_page: str = "legal"):
     }
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def legal_documents_list(
     request: Request,
     document_type: str | None = None,
@@ -338,7 +343,11 @@ def legal_document_delete_file(
     return RedirectResponse(url=f"/admin/system/legal/{document.id}", status_code=303)
 
 
-@router.post("/{document_id}/publish", response_class=HTMLResponse)
+@router.post(
+    "/{document_id}/publish",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:write"))],
+)
 def legal_document_publish(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):

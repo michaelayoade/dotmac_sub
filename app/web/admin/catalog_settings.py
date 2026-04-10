@@ -41,6 +41,7 @@ from app.schemas.catalog import (
 )
 from app.services import catalog as catalog_service
 from app.services import web_catalog_settings as settings_svc
+from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,11 @@ def add_ons_legacy_redirect(path: str) -> RedirectResponse:
 # =============================================================================
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_settings_index(
     request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
@@ -169,7 +174,11 @@ def region_zone_new(request: Request, db: Session = Depends(get_db)) -> HTMLResp
     )
 
 
-@router.post("/region-zones", response_class=HTMLResponse)
+@router.post(
+    "/region-zones",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def region_zone_create(
     request: Request,
     form: FormData = Depends(parse_form_data),

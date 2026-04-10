@@ -368,15 +368,25 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
             failed_handlers=[{"handler": "NotificationHandler", "error": "smtp"}],
         )
     )
-    template = NotificationTemplate(
-        name="Subscription Suspended",
-        code="subscription_suspended",
-        channel=NotificationChannel.email,
-        body="Suspended",
-        is_active=True,
+    # Get existing template or create test-specific one
+    template = (
+        db_session.query(NotificationTemplate)
+        .filter(
+            NotificationTemplate.code == "subscription_suspended",
+            NotificationTemplate.channel == NotificationChannel.email,
+        )
+        .first()
     )
-    db_session.add(template)
-    db_session.flush()
+    if template is None:
+        template = NotificationTemplate(
+            name="Subscription Suspended",
+            code="subscription_suspended",
+            channel=NotificationChannel.email,
+            body="Suspended",
+            is_active=True,
+        )
+        db_session.add(template)
+        db_session.flush()
     db_session.add(
         Notification(
             template_id=template.id,

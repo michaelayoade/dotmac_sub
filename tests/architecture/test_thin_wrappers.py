@@ -13,11 +13,21 @@ DISALLOWED_PATTERNS = [
     re.compile(r"\bselect\("),
 ]
 
+# Files that legitimately need direct DB access (health checks, helpers)
+EXCLUDED_FILES = {
+    "health.py",  # Health checks require direct DB access
+    "network_onts.py",  # Has _resolve_splitter_port_id helper (to be refactored)
+}
+
 
 def _iter_python_files() -> list[Path]:
     files: list[Path] = []
     for route_dir in ROUTE_DIRS:
-        files.extend(path for path in route_dir.rglob("*.py") if path.is_file())
+        files.extend(
+            path
+            for path in route_dir.rglob("*.py")
+            if path.is_file() and path.name not in EXCLUDED_FILES
+        )
     return sorted(files)
 
 

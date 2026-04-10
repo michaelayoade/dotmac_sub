@@ -67,7 +67,11 @@ def _redirect_to_fup_context(form: FormData, offer_id: str) -> str:
     return f"/admin/catalog/offers/{offer_id}/fup"
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:read"))],
+)
 def catalog_overview(
     request: Request,
     status: str | None = None,
@@ -130,7 +134,11 @@ def catalog_offers_create(
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
-@router.post("/offers", response_class=HTMLResponse)
+@router.post(
+    "/offers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
 def catalog_offers_create_post(
     request: Request,
     form: FormData = Depends(parse_form_data),

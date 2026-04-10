@@ -6,11 +6,16 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_admin_dashboard as web_admin_dashboard_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter(tags=["web-admin-dashboard"])
 
 
-@router.get("/dashboard", response_class=HTMLResponse)
+@router.get(
+    "/dashboard",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def dashboard(request: Request, db: Session = Depends(get_db)):
     """Admin dashboard overview page."""
     return web_admin_dashboard_service.dashboard(request, db)

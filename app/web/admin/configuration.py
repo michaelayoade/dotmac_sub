@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_configuration as web_configuration_service
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/configuration", tags=["web-admin-configuration"])
@@ -24,7 +25,11 @@ def _base_context(request: Request, db: Session, active_page: str):
     }
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:read"))],
+)
 def configuration_index(request: Request, db: Session = Depends(get_db)):
     """Configuration overview with cards linking to each section."""
     context = _base_context(request, db, active_page="configuration")

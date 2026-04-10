@@ -119,26 +119,32 @@ def test_validate_enum_and_ensure_helpers(db_session, person):
 
 
 def test_get_redis_client_cached(monkeypatch):
+    """Test _get_redis_client delegates to centralized get_redis()."""
     fake = _FakeRedisClient()
-    monkeypatch.setenv("REDIS_URL", "redis://fake")
-    monkeypatch.setattr(auth_service.redis, "Redis", type("Redis", (), {"from_url": lambda *args, **kwargs: fake}))
-    auth_service._REDIS_CLIENT = None
+
+    # Mock the centralized get_redis function
+    monkeypatch.setattr(
+        "app.services.auth.get_redis",
+        lambda: fake,
+    )
     client = auth_service._get_redis_client()
     assert client is fake
-    assert fake.ping_called is True
-    assert auth_service._get_redis_client() is fake
-    monkeypatch.delenv("REDIS_URL", raising=False)
-    auth_service._REDIS_CLIENT = None
+
+    # When get_redis returns None, _get_redis_client should return None
+    monkeypatch.setattr(
+        "app.services.auth.get_redis",
+        lambda: None,
+    )
     assert auth_service._get_redis_client() is None
 
 
 def test_get_redis_client_error(monkeypatch):
-    def _raise(*_args, **_kwargs):
-        raise auth_service.redis.RedisError("boom")
-
-    monkeypatch.setenv("REDIS_URL", "redis://bad")
-    monkeypatch.setattr(auth_service.redis, "Redis", type("Redis", (), {"from_url": _raise}))
-    auth_service._REDIS_CLIENT = None
+    """Test _get_redis_client handles errors from get_redis gracefully."""
+    # When get_redis returns None (e.g., circuit breaker open), return None
+    monkeypatch.setattr(
+        "app.services.auth.get_redis",
+        lambda: None,
+    )
     assert auth_service._get_redis_client() is None
 
 

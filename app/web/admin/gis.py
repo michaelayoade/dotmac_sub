@@ -17,12 +17,17 @@ from app.schemas.gis import (
     GeoLocationUpdate,
 )
 from app.services import gis as gis_service
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/gis", tags=["web-admin-gis"])
 
 
-@router.get("", response_class=HTMLResponse)
+@router.get(
+    "",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def gis_index(request: Request, tab: str = "locations", db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -167,7 +172,11 @@ def gis_location_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/gis/location_form.html", context)
 
 
-@router.post("/locations/new", response_class=HTMLResponse)
+@router.post(
+    "/locations/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
 def gis_location_create(
     request: Request,
     name: str = Form(...),
