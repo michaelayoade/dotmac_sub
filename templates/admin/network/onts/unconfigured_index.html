@@ -17,7 +17,7 @@
     ) %}
         <form method="POST" action="/admin/network/unconfigured-onts/scan">
             {% include "components/forms/csrf_input.html" %}
-            <button type="submit" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5">
+            <button type="submit" class="group inline-flex items-center gap-2 rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2">
                 <svg class="h-4 w-4 transition-transform group-hover:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.357 15m13.062 0H15"/></svg>
                 Scan Now
             </button>
@@ -67,10 +67,10 @@
                 {{ filter_select("olt_id", olt_options, value=selected_olt_id or "", label="OLT", color="sky") }}
             </div>
             <div class="md:col-span-1 flex items-end gap-2">
-                <button type="submit" class="rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5">
+                <button type="submit" class="rounded-xl bg-gradient-to-r from-sky-500 to-cyan-600 px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2">
                     Filter
                 </button>
-                {{ action_button("Reset", href="/admin/network/unconfigured-onts", variant="secondary", color="slate", size="sm") }}
+                {{ action_button("Reset", href="/admin/network/unconfigured-onts", variant="ghost", color="slate", size="sm") }}
             </div>
         </form>
     {% endcall %}
@@ -81,14 +81,14 @@
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 <thead class="bg-slate-50 dark:bg-slate-900/40">
                     <tr>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">OLT</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Port</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Serial</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Model</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">MAC</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">State</th>
-                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Seen</th>
-                        <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Action</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Port</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Model</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">MAC</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">State</th>
+                        <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Seen</th>
+                        <th class="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Action</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
@@ -132,14 +132,14 @@
                                 <input type="hidden" name="fsp" value="{{ entry.fsp }}">
                                 <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
                                 <input type="hidden" name="return_to" value="/admin/network/unconfigured-onts">
-                                <button type="submit" onclick="return confirm('Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}?')" class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:from-emerald-600 hover:to-teal-700">
+                                <button type="submit" onclick="return confirm('Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}?')" class="inline-flex items-center gap-1.5 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md hover:-translate-y-px hover:from-emerald-600 hover:to-teal-700 focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2">
                                     Authorize
                                 </button>
                             </form>
                             {% elif entry.resolution_reason == 'disappeared' %}
                             <form method="POST" action="/admin/network/unconfigured-onts/{{ entry.id }}/restore" class="inline">
                                 {% include "components/forms/csrf_input.html" %}
-                                <button type="submit" onclick="return confirm('Restore ONT {{ entry.serial_number }} to active state?')" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30">
+                                <button type="submit" onclick="return confirm('Restore ONT {{ entry.serial_number }} to active state?')" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 hover:border-amber-400 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-2">
                                     Restore
                                 </button>
                             </form>
