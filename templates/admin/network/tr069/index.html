@@ -24,7 +24,7 @@
     </div>
     {% endif %}
 
-    <div class="grid gap-4 sm:grid-cols-5">
+    <div class="grid gap-4 grid-cols-2 sm:grid-cols-3 lg:grid-cols-5">
         {{ stats_card("ACS Servers", stats.servers, color="sky", color2="blue") }}
         {{ stats_card("Devices", stats.devices, color="slate") }}
         {{ stats_card("Seen 24h", stats.seen_24h, color="emerald") }}
@@ -33,26 +33,26 @@
     </div>
 
     {% call filter_bar() %}
-        <form method="GET" action="/admin/network/tr069" class="grid gap-4 md:grid-cols-8">
-            <div class="md:col-span-3">
+        <form method="GET" action="/admin/network/tr069" class="grid gap-4 grid-cols-1 sm:grid-cols-2 lg:grid-cols-8">
+            <div class="sm:col-span-1 lg:col-span-3">
                 {% set server_options = [{"value": "", "label": "All Servers"}] %}
                 {% for server in servers %}
                     {% set _ = server_options.append({"value": server.id|string, "label": server.name}) %}
                 {% endfor %}
                 {{ filter_select("acs_server_id", server_options, value=selected_server_id or "", label="ACS Server", color="sky") }}
             </div>
-            <div class="md:col-span-3">
+            <div class="sm:col-span-1 lg:col-span-3">
                 <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Search</label>
                 {{ search_input(name="search", value=filters.search or "", placeholder="Serial, OUI, product class...", color="sky") }}
             </div>
-            <div class="md:col-span-1 flex items-end pb-0.5">
-                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
-                    <input type="checkbox" name="only_unlinked" value="true" {% if filters.only_unlinked %}checked{% endif %} class="rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-700">
-                    Unlinked Only
+            <div class="sm:col-span-1 lg:col-span-1 flex items-end pb-0.5">
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300 min-h-[44px]">
+                    <input type="checkbox" name="only_unlinked" value="true" {% if filters.only_unlinked %}checked{% endif %} class="h-5 w-5 rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-700">
+                    <span class="whitespace-nowrap">Unlinked Only</span>
                 </label>
             </div>
-            <div class="md:col-span-1 flex items-end">
-                <button type="submit" class="w-full rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5">
+            <div class="sm:col-span-1 lg:col-span-1 flex items-end">
+                <button type="submit" class="w-full rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5 min-h-[44px]">
                     Apply
                 </button>
             </div>
@@ -150,21 +150,23 @@
 
     <!-- Bulk Actions Toolbar -->
     <div id="bulk-actions-bar" class="hidden rounded-2xl border border-sky-200/60 bg-sky-50 p-4 shadow-sm dark:border-sky-800/40 dark:bg-sky-900/20">
-        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" class="flex flex-wrap items-center gap-4">
+        <form id="bulk-action-form" method="POST" action="/admin/network/tr069/bulk-action" class="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-3 sm:gap-4">
             {% include "components/forms/csrf_input.html" %}
             <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
             <input type="hidden" id="bulk-device-ids" name="device_ids" value="">
             <div class="flex items-center gap-2">
                 <span class="text-sm font-medium text-sky-700 dark:text-sky-300"><span id="selected-count">0</span> device(s) selected</span>
             </div>
-            <select name="bulk_action" required class="rounded-xl border border-sky-300 bg-white px-3 py-2 text-sm transition-colors focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 dark:border-sky-600 dark:bg-slate-700 dark:text-white">
+            <select name="bulk_action" required class="rounded-xl border border-sky-300 bg-white px-3 py-2.5 text-sm transition-colors focus:border-sky-500 focus:ring-2 focus:ring-sky-500/20 dark:border-sky-600 dark:bg-slate-700 dark:text-white min-h-[44px]">
                 <option value="">Select action...</option>
                 <option value="refresh">Refresh All</option>
                 <option value="reboot">Reboot All</option>
                 <option value="factory_reset">Factory Reset All</option>
             </select>
-            <button type="submit" class="rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition-all hover:shadow-md hover:-translate-y-px focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2">Execute Bulk Action</button>
-            <button type="button" onclick="clearBulkSelection()" class="rounded-xl border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700 transition-all hover:bg-sky-50 hover:border-sky-400 dark:border-sky-600 dark:bg-slate-800 dark:text-sky-300 dark:hover:bg-sky-900/20 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2">Clear Selection</button>
+            <div class="flex gap-2 sm:gap-3">
+                <button type="submit" class="flex-1 sm:flex-none rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:shadow-md hover:-translate-y-px focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 min-h-[44px]">Execute</button>
+                <button type="button" onclick="clearBulkSelection()" class="flex-1 sm:flex-none rounded-xl border border-sky-300 bg-white px-4 py-2.5 text-sm font-semibold text-sky-700 transition-all hover:bg-sky-50 hover:border-sky-400 dark:border-sky-600 dark:bg-slate-800 dark:text-sky-300 dark:hover:bg-sky-900/20 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-2 min-h-[44px]">Clear</button>
+            </div>
         </form>
     </div>
 
@@ -173,7 +175,44 @@
             <div class="border-b border-amber-100 px-4 py-3 dark:border-amber-900/40">
                 <h3 class="text-sm font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">Unconfigured Devices ({{ stats.unconfigured }})</h3>
             </div>
-            <div class="overflow-x-auto">
+            {# Mobile Card View #}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/50 lg:hidden">
+                {% for device in unconfigured_devices %}
+                <div class="p-4 space-y-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ device.display_serial_number or device.serial_number or '-' }}</div>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">{{ device.product_class or '-' }} • OUI: {{ device.oui or '-' }}</div>
+                        </div>
+                        <input type="checkbox" class="bulk-device-checkbox h-5 w-5 rounded border-slate-300 dark:border-slate-600" value="{{ device.id }}" data-table="unconfigured">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                            <span class="text-slate-500 dark:text-slate-400">Last Inform:</span>
+                            <span class="ml-1 text-slate-700 dark:text-slate-300">{% if device.last_inform_at %}{{ device.last_inform_at.strftime('%m/%d %H:%M') }}{% else %}-{% endif %}</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-500 dark:text-slate-400">OLT:</span>
+                            <span class="ml-1 text-slate-700 dark:text-slate-300">{{ device.linked_olt_name or '-' }}</span>
+                        </div>
+                    </div>
+                    <div class="flex flex-wrap gap-2">
+                        <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/create-ont" class="contents">
+                            {% include "components/forms/csrf_input.html" %}
+                            <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+                            <button type="submit" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 min-h-[36px]">Create ONT</button>
+                        </form>
+                        <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 min-h-[36px]">Configure</button>
+                        <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 min-h-[36px]">NAT</button>
+                        <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 min-h-[36px]">Firmware</button>
+                    </div>
+                </div>
+                {% else %}
+                <div class="px-4 py-6 text-center text-sm text-slate-500">No unconfigured TR-069 devices.</div>
+                {% endfor %}
+            </div>
+            {# Desktop Table View #}
+            <div class="hidden lg:block overflow-x-auto">
                 <table class="min-w-full">
                     <thead>
                         <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
@@ -264,7 +303,45 @@
             <div class="border-b border-emerald-100 px-4 py-3 dark:border-emerald-900/40">
                 <h3 class="text-sm font-semibold uppercase tracking-wide text-emerald-700 dark:text-emerald-400">Configured Devices ({{ stats.configured }})</h3>
             </div>
-            <div class="overflow-x-auto">
+            {# Mobile Card View #}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700/50 lg:hidden">
+                {% for device in configured_devices %}
+                <div class="p-4 space-y-3">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <div class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ device.display_serial_number or device.serial_number or '-' }}</div>
+                            <div class="text-xs text-slate-500 dark:text-slate-400">{{ device.product_class or '-' }} • OUI: {{ device.oui or '-' }}</div>
+                        </div>
+                        <input type="checkbox" class="bulk-device-checkbox h-5 w-5 rounded border-slate-300 dark:border-slate-600" value="{{ device.id }}" data-table="configured">
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 text-xs">
+                        <div>
+                            <span class="text-slate-500 dark:text-slate-400">Last Inform:</span>
+                            <span class="ml-1 text-slate-700 dark:text-slate-300">{% if device.last_inform_at %}{{ device.last_inform_at.strftime('%m/%d %H:%M') }}{% else %}-{% endif %}</span>
+                        </div>
+                        <div>
+                            <span class="text-slate-500 dark:text-slate-400">OLT:</span>
+                            <span class="ml-1 text-slate-700 dark:text-slate-300">{{ device.linked_olt_name or '-' }}</span>
+                        </div>
+                    </div>
+                    {% if device.linked_cpe %}
+                    <div class="text-xs">
+                        <span class="text-slate-500 dark:text-slate-400">Linked CPE:</span>
+                        <a href="/admin/network/cpes/{{ device.linked_cpe.id }}" class="ml-1 text-sky-600 hover:text-sky-700 dark:text-sky-400">{{ device.linked_cpe.serial_number or device.linked_cpe.model or 'View' }}</a>
+                    </div>
+                    {% endif %}
+                    <div class="flex flex-wrap gap-2">
+                        <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 min-h-[36px]">Configure</button>
+                        <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 min-h-[36px]">NAT</button>
+                        <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 min-h-[36px]">Firmware</button>
+                    </div>
+                </div>
+                {% else %}
+                <div class="px-4 py-6 text-center text-sm text-slate-500">No configured TR-069 devices.</div>
+                {% endfor %}
+            </div>
+            {# Desktop Table View #}
+            <div class="hidden lg:block overflow-x-auto">
                 <table class="min-w-full">
                     <thead>
                         <tr class="border-b border-slate-100 bg-slate-50/50 dark:border-slate-700/50 dark:bg-slate-800/50">
@@ -383,8 +460,8 @@
 </div>
 
 <!-- Config Push Modal -->
-<div id="config-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
-    <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800">
+<div id="config-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-0 sm:p-4">
+    <div class="w-full h-full sm:h-auto sm:max-w-md sm:mx-auto rounded-none sm:rounded-2xl bg-white p-5 sm:p-6 shadow-xl dark:bg-slate-800 overflow-y-auto">
         <h3 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Configure Device</h3>
         <form id="config-form" method="POST" class="space-y-4">
             {% include "components/forms/csrf_input.html" %}
@@ -412,8 +489,8 @@
 </div>
 
 <!-- Firmware Update Modal -->
-<div id="firmware-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
-    <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800">
+<div id="firmware-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-0 sm:p-4">
+    <div class="w-full h-full sm:h-auto sm:max-w-md sm:mx-auto rounded-none sm:rounded-2xl bg-white p-5 sm:p-6 shadow-xl dark:bg-slate-800 overflow-y-auto">
         <h3 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Firmware Update</h3>
         <form id="firmware-form" method="POST" class="space-y-4">
             {% include "components/forms/csrf_input.html" %}
@@ -439,8 +516,8 @@
 </div>
 
 <!-- NAT Port Forward Modal -->
-<div id="nat-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
-    <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800">
+<div id="nat-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50 p-0 sm:p-4">
+    <div class="w-full h-full sm:h-auto sm:max-w-md sm:mx-auto rounded-none sm:rounded-2xl bg-white p-5 sm:p-6 shadow-xl dark:bg-slate-800 overflow-y-auto">
         <h3 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">NAT Port Forwarding</h3>
         <form id="nat-form" method="POST" class="space-y-4">
             {% include "components/forms/csrf_input.html" %}
