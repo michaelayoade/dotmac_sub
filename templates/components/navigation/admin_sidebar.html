@@ -53,7 +53,7 @@
 {% set cls_link = 'flex min-h-[40px] items-center gap-3 rounded-r-xl pl-3 pr-3 py-2 text-sm font-medium transition-colors' %}
 
 {# ── Macros ── #}
-{% macro nav_link(label, href, icon_svg, page_id, badge=None, active_pages=[]) %}
+{% macro nav_link(label, href, icon_svg, page_id, badge=None, active_pages=[], tour_id=None) %}
 {% if active_pages %}
 {% set is_active = active_page == page_id or active_page in active_pages %}
 {% else %}
@@ -83,6 +83,7 @@
     <a href="{{ href }}"
        x-ref="trigger"
        {% if is_active %}aria-current="page"{% endif %}
+       {% if tour_id %}data-tour-id="{{ tour_id }}"{% endif %}
        :aria-label="sidebarCollapsed ? '{{ label }}' : null"
        :class="sidebarCollapsed ? 'justify-center !pl-0 !pr-0 !border-l-0 rounded-xl' : ''"
        class="{{ cls_link }} {{ cls_active if is_active else cls_inactive }}">
@@ -160,19 +161,19 @@
 
     {{ section_label("Core") }}
     {% if module_states.get('customer', True) %}
-    {{ nav_link("Customers", "/admin/customers", icon_customers, "customers") }}
+    {{ nav_link("Customers", "/admin/customers", icon_customers, "customers", tour_id="nav-customers") }}
     {% endif %}
     {{ nav_link("Support", "/admin/support/tickets", icon_support, "support-tickets") }}
 
     {{ section_label("Operations") }}
     {% if module_states.get('billing', True) %}
-    {{ nav_link("Billing", "/admin/billing", icon_billing, "billing", badge=overdue_count) }}
+    {{ nav_link("Billing", "/admin/billing", icon_billing, "billing", badge=overdue_count, tour_id="nav-billing") }}
     {% endif %}
     {% if module_states.get('catalog', True) %}
     {{ nav_link("Catalog", "/admin/catalog/offers", icon_catalog, "catalog") }}
     {% endif %}
     {% if module_states.get('network', True) %}
-    {{ nav_link("Network", "/admin/network", icon_network, "network") }}
+    {{ nav_link("Network", "/admin/network", icon_network, "network", tour_id="nav-network") }}
     {% endif %}
     {% if module_states.get('vpn', True) %}
     {{ nav_link("VPN", "/admin/network/vpn", icon_vpn, "vpn") }}

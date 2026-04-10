@@ -264,6 +264,7 @@
                                     </form>
                                     {% endfor %}
                                     <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Configure</button>
+                                    <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">NAT</button>
                                     <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">Firmware</button>
                                 </div>
                             </td>
@@ -358,6 +359,7 @@
                                     </form>
                                     {% endfor %}
                                     <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">Configure</button>
+                                    <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">NAT</button>
                                     <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">Firmware</button>
                                 </div>
                             </td>
@@ -453,6 +455,51 @@
     </div>
 </div>
 
+<!-- NAT Port Forward Modal -->
+<div id="nat-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/50">
+    <div class="mx-4 w-full max-w-md rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800">
+        <h3 class="mb-4 text-lg font-semibold text-slate-900 dark:text-white">NAT Port Forwarding</h3>
+        <form id="nat-form" method="POST" class="space-y-4">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="acs_server_id" value="{{ selected_server_id }}">
+            <div class="grid grid-cols-2 gap-4">
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">External Port</label>
+                    <input type="number" name="external_port" min="1" max="65535" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="8080">
+                </div>
+                <div>
+                    <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Protocol</label>
+                    <select name="protocol" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="TCP">TCP</option>
+                        <option value="UDP">UDP</option>
+                        <option value="TCP/UDP">TCP/UDP</option>
+                    </select>
+                </div>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Internal IP Address</label>
+                <input type="text" name="internal_ip" required pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="192.168.1.100">
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">LAN IP address to forward traffic to</p>
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Internal Port</label>
+                <input type="number" name="internal_port" min="1" max="65535" required class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="80">
+            </div>
+            <div>
+                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Description (optional)</label>
+                <input type="text" name="description" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white" placeholder="Web server">
+            </div>
+            <div class="rounded-lg border border-indigo-200 bg-indigo-50 p-3 text-sm text-indigo-800 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">
+                <strong>Note:</strong> This creates a port forwarding rule to allow external access to internal services.
+            </div>
+            <div class="flex justify-end gap-2">
+                <button type="button" onclick="closeNatModal()" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-300">Cancel</button>
+                <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Create Rule</button>
+            </div>
+        </form>
+    </div>
+</div>
+
 <script>
 (() => {
     const labelToId = {{ cpe_typeahead_map | tojson }};
@@ -484,7 +531,7 @@
     };
 
     // Config actions that don't need value input
-    const noValueActions = ["wifi_enable", "wifi_disable"];
+    const noValueActions = ["wifi_enable", "wifi_disable", "dhcp_enable", "dhcp_disable"];
 
     // Update description and value visibility when action changes
     const configSelect = document.querySelector('select[name="config_action"]');
@@ -554,12 +601,38 @@ function closeFirmwareModal() {
     }
 }
 
+function openNatModal(deviceId) {
+    const modal = document.getElementById("nat-modal");
+    const form = document.getElementById("nat-form");
+    if (modal && form) {
+        form.action = "/admin/network/tr069/devices/" + deviceId + "/nat-forward";
+        form.querySelector('input[name="external_port"]').value = "";
+        form.querySelector('input[name="internal_ip"]').value = "";
+        form.querySelector('input[name="internal_port"]').value = "";
+        form.querySelector('select[name="protocol"]').value = "TCP";
+        form.querySelector('input[name="description"]').value = "";
+        modal.classList.remove("hidden");
+        modal.classList.add("flex");
+    }
+}
+
+function closeNatModal() {
+    const modal = document.getElementById("nat-modal");
+    if (modal) {
+        modal.classList.add("hidden");
+        modal.classList.remove("flex");
+    }
+}
+
 // Close modals when clicking outside
 document.getElementById("config-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "config-modal") closeConfigModal();
 });
 document.getElementById("firmware-modal")?.addEventListener("click", (e) => {
     if (e.target.id === "firmware-modal") closeFirmwareModal();
+});
+document.getElementById("nat-modal")?.addEventListener("click", (e) => {
+    if (e.target.id === "nat-modal") closeNatModal();
 });
 
 // Bulk selection handling

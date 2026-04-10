@@ -13,6 +13,189 @@
         background-color: rgb(15 23 42);
         color: rgb(255 255 255);
     }
+
+    .app-tour-root {
+        position: fixed;
+        inset: 0;
+        z-index: 2100;
+    }
+
+    .app-tour-overlay {
+        position: absolute;
+        inset: 0;
+        background: rgba(15, 23, 42, 0.66);
+        backdrop-filter: blur(1px);
+    }
+
+    .app-tour-spotlight {
+        position: fixed;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.7);
+        box-shadow:
+            0 0 0 9999px rgba(15, 23, 42, 0.14),
+            0 22px 45px rgba(15, 23, 42, 0.34);
+        pointer-events: none;
+        transition:
+            top 180ms ease,
+            left 180ms ease,
+            width 180ms ease,
+            height 180ms ease;
+    }
+
+    .app-tour-tooltip {
+        position: fixed;
+        width: min(22rem, calc(100vw - 1.5rem));
+        padding: 1rem;
+        border-radius: 1rem;
+        border: 1px solid rgba(148, 163, 184, 0.35);
+        background: rgba(255, 255, 255, 0.98);
+        color: rgb(15, 23, 42);
+        box-shadow: 0 24px 50px rgba(15, 23, 42, 0.28);
+    }
+
+    .dark .app-tour-tooltip {
+        border-color: rgba(71, 85, 105, 0.8);
+        background: rgba(15, 23, 42, 0.98);
+        color: rgb(241, 245, 249);
+    }
+
+    .app-tour-progress {
+        font-size: 0.72rem;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: rgb(8, 145, 178);
+    }
+
+    .dark .app-tour-progress {
+        color: rgb(103, 232, 249);
+    }
+
+    .app-tour-title {
+        margin-top: 0.45rem;
+        font-family: 'Outfit', system-ui, sans-serif;
+        font-size: 1.05rem;
+        font-weight: 600;
+        line-height: 1.3;
+    }
+
+    .app-tour-body {
+        margin-top: 0.55rem;
+        font-size: 0.92rem;
+        line-height: 1.55;
+        color: rgb(71, 85, 105);
+    }
+
+    .dark .app-tour-body {
+        color: rgb(203, 213, 225);
+    }
+
+    .app-tour-actions {
+        margin-top: 1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .app-tour-button {
+        appearance: none;
+        border: 0;
+        border-radius: 0.8rem;
+        padding: 0.65rem 0.9rem;
+        font-size: 0.88rem;
+        font-weight: 600;
+        transition:
+            transform 160ms ease,
+            background-color 160ms ease,
+            color 160ms ease,
+            opacity 160ms ease;
+    }
+
+    .app-tour-button:hover:not(:disabled) {
+        transform: translateY(-1px);
+    }
+
+    .app-tour-button:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+    }
+
+    .app-tour-button-secondary {
+        background: rgb(226, 232, 240);
+        color: rgb(15, 23, 42);
+    }
+
+    .app-tour-button-secondary:hover:not(:disabled) {
+        background: rgb(203, 213, 225);
+    }
+
+    .dark .app-tour-button-secondary {
+        background: rgb(30, 41, 59);
+        color: rgb(241, 245, 249);
+    }
+
+    .dark .app-tour-button-secondary:hover:not(:disabled) {
+        background: rgb(51, 65, 85);
+    }
+
+    .app-tour-button-ghost {
+        margin-left: auto;
+        background: transparent;
+        color: rgb(100, 116, 139);
+    }
+
+    .app-tour-button-ghost:hover:not(:disabled) {
+        background: rgba(148, 163, 184, 0.12);
+        color: rgb(15, 23, 42);
+    }
+
+    .dark .app-tour-button-ghost {
+        color: rgb(148, 163, 184);
+    }
+
+    .dark .app-tour-button-ghost:hover:not(:disabled) {
+        background: rgba(51, 65, 85, 0.85);
+        color: rgb(241, 245, 249);
+    }
+
+    .app-tour-button-primary {
+        background: linear-gradient(135deg, rgb(8, 145, 178), rgb(14, 116, 144));
+        color: white;
+    }
+
+    .app-tour-button-primary:hover:not(:disabled) {
+        background: linear-gradient(135deg, rgb(14, 116, 144), rgb(21, 94, 117));
+    }
+
+    .app-tour-target-active {
+        position: relative !important;
+        z-index: 2105 !important;
+    }
+
+    .app-tour-open [data-tour-launch] {
+        position: relative;
+        z-index: 2105;
+    }
+
+    @media (max-width: 640px) {
+        .app-tour-tooltip {
+            width: calc(100vw - 1rem);
+            padding: 0.9rem;
+        }
+
+        .app-tour-actions {
+            flex-wrap: wrap;
+        }
+
+        .app-tour-button {
+            flex: 1 1 calc(50% - 0.25rem);
+            justify-content: center;
+        }
+
+        .app-tour-button-ghost {
+            margin-left: 0;
+        }
+    }
 </style>
 <div data-admin-shell x-data="{ sidebarOpen: window.innerWidth >= 1024, sidebarCollapsed: localStorage.getItem('sidebarCollapsed') === 'true', isDesktop: window.innerWidth >= 1024 }"
      x-init="
@@ -247,9 +430,9 @@
                 {% block breadcrumbs %}
                 <button type="button"
                         onclick="if (window.history.length > 1) { window.history.back(); } else { window.location.href = '/admin/dashboard'; }"
-                        @mouseenter="openTopbarTooltip($el, 'Go back')"
+                        @mouseenter="openTopbarTooltip($el, 'Return to previous page')"
                         @mouseleave="closeTopbarTooltip()"
-                        @focus="openTopbarTooltip($el, 'Go back')"
+                        @focus="openTopbarTooltip($el, 'Return to previous page')"
                         @blur="closeTopbarTooltip()"
                         class="inline-flex items-center gap-1.5 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
@@ -293,6 +476,7 @@
                     </button>
                     <div :class="mobileOpen ? 'absolute left-2 right-2 top-14 z-50 sm:static sm:left-auto sm:right-auto sm:top-auto' : 'hidden sm:block'">
                     <div class="relative"
+                         data-tour-id="global-search"
                          x-ref="searchShell"
                          @mouseenter="openTopbarTooltip($refs.searchShell, 'Search')"
                          @mouseleave="closeTopbarTooltip()">
@@ -416,6 +600,21 @@
                     </div>
                 </div>
 
+                <!-- Quick tour -->
+                <button type="button"
+                        data-tour-launch
+                        data-tour-id="help-tour"
+                        @mouseenter="openTopbarTooltip($el, 'Quick tour')"
+                        @mouseleave="closeTopbarTooltip()"
+                        @focus="openTopbarTooltip($el, 'Quick tour')"
+                        @blur="closeTopbarTooltip()"
+                        aria-label="Take a tour"
+                        class="flex h-10 w-10 items-center justify-center rounded-lg text-slate-500 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700">
+                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 10h.01M12 10h.01M16 10h.01M9 16h6M7 5h10a2 2 0 012 2v10a2 2 0 01-2 2H9l-4 3V7a2 2 0 012-2z"/>
+                    </svg>
+                </button>
+
                 <!-- Dark mode toggle -->
                 <button x-on:click="$store.darkMode.toggle()"
                         @mouseenter="openTopbarTooltip($el, $store.darkMode.on ? 'Light mode' : 'Dark mode')"
@@ -474,6 +673,7 @@
                 <!-- User dropdown -->
                 <div x-data="{ open: false }" class="relative">
                     <button x-on:click="open = !open"
+                            data-tour-id="profile-menu"
                             @mouseenter="openTopbarTooltip($el, 'User menu')"
                             @mouseleave="closeTopbarTooltip()"
                             @focus="openTopbarTooltip($el, 'User menu')"
@@ -541,4 +741,69 @@
         </main>
     </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="/static/js/admin-tour.js"></script>
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        if (!window.DotmacTour) {
+            return;
+        }
+
+        const tour = window.DotmacTour.create({
+            storageKey: 'dotmac_admin_tour_seen_v1',
+            autoStart: true,
+            startDelay: 700,
+            steps: [
+                {
+                    selector: '[data-tour-id="global-search"]',
+                    title: 'Search',
+                    body: 'Find customers, invoices, ONTs, IPs, and more from one place.',
+                    placement: 'bottom'
+                },
+                {
+                    selector: '[data-tour-id="nav-customers"]',
+                    title: 'Customers',
+                    body: 'Open customer records when you need account details, contacts, or service history.',
+                    placement: 'right'
+                },
+                {
+                    selector: '[data-tour-id="nav-billing"]',
+                    title: 'Billing',
+                    body: 'Use billing for invoices, payments, overdue balances, and finance tasks.',
+                    placement: 'right'
+                },
+                {
+                    selector: '[data-tour-id="nav-network"]',
+                    title: 'Network',
+                    body: 'Go here for ONTs, OLTs, monitoring, and operational network work.',
+                    placement: 'right'
+                },
+                {
+                    selector: '[data-tour-id="profile-menu"]',
+                    title: 'Profile',
+                    body: 'Open your profile menu for account details, settings, and sign out.',
+                    placement: 'bottom-end'
+                },
+                {
+                    selector: '[data-tour-id="help-tour"]',
+                    title: 'Help',
+                    body: 'Use this button anytime to reopen the quick tour.',
+                    placement: 'bottom-end'
+                }
+            ]
+        });
+
+        window.adminQuickTour = tour;
+
+        const launchButton = document.querySelector('[data-tour-launch]');
+        if (launchButton) {
+            launchButton.addEventListener('click', function() {
+                tour.start({ force: true });
+            });
+        }
+    });
+</script>
 {% endblock %}

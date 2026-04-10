@@ -57,13 +57,19 @@
             <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Real-time monitoring and management dashboard.</p>
         </div>
         <div class="flex gap-3">
+            <button type="button"
+                    data-dashboard-tour-launch
+                    class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition hover:border-amber-300 hover:bg-amber-50 hover:text-amber-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-200 dark:hover:border-amber-500/40 dark:hover:bg-amber-900/10 dark:hover:text-amber-300">
+                {{ icon_view("h-4 w-4") }}
+                <span>Page Tips</span>
+            </button>
             {{ action_button("Add Customer", "/admin/customers/new", icon_plus(), "primary", "amber", "orange") }}
         </div>
     </div>
 
     {# ═══════════ Section 2: Attention Banner (only when issues exist) ═══════════ #}
     {% if attention_items %}
-    <div class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-slate-900 dark:via-rose-950/20 dark:to-slate-800">
+    <div data-tour-id="dashboard-attention" class="flex items-center gap-4 rounded-2xl border border-rose-200/70 bg-gradient-to-r from-rose-50 to-amber-50/50 px-5 py-4 dark:border-rose-900/40 dark:from-slate-900 dark:via-rose-950/20 dark:to-slate-800">
         <div class="flex h-10 w-10 shrink-0 animate-pulse items-center justify-center rounded-xl bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400">
             {{ icon_warning("h-5 w-5") }}
         </div>
@@ -82,7 +88,7 @@
     {% set dev_pct = ((dev_online / dev_total * 100) if dev_total > 0 else 0) | round(1) %}
     {% set ont_pct = ((ont_on / ont_total * 100) if ont_total > 0 else 0) | round(1) %}
 
-    <section class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 60s" hx-swap="none">
+    <section data-tour-id="dashboard-kpis" class="grid grid-cols-2 gap-4 lg:grid-cols-4" hx-get="/admin/dashboard/stats" hx-trigger="every 60s" hx-swap="none">
         {{ kpi_tile(
             "Subscribers",
             stats.total_subscribers,
@@ -151,7 +157,7 @@
     </section>
 
     {# ═══════════ Section 4: Quick Launch (4 compact cards) ═══════════ #}
-    <section class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+    <section data-tour-id="dashboard-quick-actions" class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
         {# Subscribers #}
         {% if show_subscribers %}
         <div class="rounded-2xl border border-slate-200/60 bg-white dark:border-slate-700/60 dark:bg-slate-800">
@@ -264,7 +270,7 @@
 
     {# ═══════════ Section 5: Recent Events Table ═══════════ #}
     {% if recent_activities %}
-    <section class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <section data-tour-id="dashboard-recent-events" class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
             <h3 class="font-display font-bold text-slate-900 dark:text-white">Recent Events</h3>
             <a href="/admin/system/audit" class="text-xs font-semibold uppercase tracking-wider text-amber-600 hover:text-amber-700 dark:text-amber-400">Full History</a>
@@ -309,4 +315,72 @@
     </section>
     {% endif %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        if (!window.DotmacTour) {
+            return;
+        }
+
+        const dashboardTour = window.DotmacTour.create({
+            storageKey: 'dotmac_dashboard_tips_seen_v1',
+            autoStart: false,
+            steps: [
+                {
+                    selector: '[data-tour-id="dashboard-attention"]',
+                    title: 'Attention items',
+                    body: 'Check this first when something needs urgent action.',
+                    placement: 'bottom'
+                },
+                {
+                    selector: '[data-tour-id="dashboard-kpis"]',
+                    title: 'Summary cards',
+                    body: 'Use these numbers to spot customer, billing, and network changes fast.',
+                    placement: 'bottom'
+                },
+                {
+                    selector: '[data-tour-id="dashboard-quick-actions"]',
+                    title: 'Quick actions',
+                    body: 'Jump into common work here instead of searching through menus.',
+                    placement: 'top'
+                },
+                {
+                    selector: '[data-tour-id="dashboard-recent-events"]',
+                    title: 'Recent events',
+                    body: 'Review recent changes here to understand what happened across the system.',
+                    placement: 'top'
+                }
+            ]
+        });
+
+        window.dashboardPageTips = dashboardTour;
+
+        function startDashboardTips(force) {
+            const globalTour = window.adminQuickTour;
+            if (globalTour && globalTour.active) {
+                window.setTimeout(function() {
+                    startDashboardTips(force);
+                }, 500);
+                return;
+            }
+            dashboardTour.start({ force: !!force });
+        }
+
+        const launchButton = document.querySelector('[data-dashboard-tour-launch]');
+        if (launchButton) {
+            launchButton.addEventListener('click', function() {
+                startDashboardTips(true);
+            });
+        }
+
+        if (!dashboardTour.isCompleted()) {
+            window.setTimeout(function() {
+                startDashboardTips(false);
+            }, 1200);
+        }
+    });
+</script>
 {% endblock %}
