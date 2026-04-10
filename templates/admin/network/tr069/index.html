@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, status_badge %}
+{% from "components/ui/macros.html" import ambient_background, page_header, status_badge, stats_card, action_button, filter_bar, filter_select, search_input %}
 
 {% block title %}TR-069 (ACS) - Admin{% endblock %}
 
@@ -23,10 +23,7 @@
         color2="blue",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "TR-069 / ACS"}]
     ) %}
-        <a href="/admin/network/tr069/acs/new" class="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-sky-700">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>
-            Add ACS Server
-        </a>
+        {{ action_button("Add ACS Server", href="/admin/network/tr069/acs/new", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v12m6-6H6"/></svg>', variant="primary", color="sky", color2="blue") }}
     {% endcall %}
 
     {% if message %}
@@ -36,54 +33,39 @@
     {% endif %}
 
     <div class="grid gap-4 sm:grid-cols-5">
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">ACS Servers</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.servers }}</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Devices</p>
-            <p class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ stats.devices }}</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Seen 24h</p>
-            <p class="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">{{ stats.seen_24h }}</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Unlinked</p>
-            <p class="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">{{ stats.unlinked }}</p>
-        </div>
-        <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-400">Failed Jobs</p>
-            <p class="mt-1 text-2xl font-bold text-rose-600 dark:text-rose-400">{{ stats.jobs_failed }}</p>
-        </div>
+        {{ stats_card("ACS Servers", stats.servers, color="sky", color2="blue") }}
+        {{ stats_card("Devices", stats.devices, color="slate") }}
+        {{ stats_card("Seen 24h", stats.seen_24h, color="emerald") }}
+        {{ stats_card("Unlinked", stats.unlinked, color="amber") }}
+        {{ stats_card("Failed Jobs", stats.jobs_failed, color="rose") }}
     </div>
 
-    <div class="rounded-2xl border border-slate-200/60 bg-white p-4 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-        <form method="GET" action="/admin/network/tr069" class="grid gap-3 md:grid-cols-8">
+    {% call filter_bar() %}
+        <form method="GET" action="/admin/network/tr069" class="grid gap-4 md:grid-cols-8">
             <div class="md:col-span-3">
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">ACS Server</label>
-                <select name="acs_server_id" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    <option value="">All</option>
-                    {% for server in servers %}
-                    <option value="{{ server.id }}" {% if selected_server_id == server.id|string %}selected{% endif %}>{{ server.name }}</option>
-                    {% endfor %}
-                </select>
+                {% set server_options = [{"value": "", "label": "All Servers"}] %}
+                {% for server in servers %}
+                    {% set _ = server_options.append({"value": server.id|string, "label": server.name}) %}
+                {% endfor %}
+                {{ filter_select("acs_server_id", server_options, value=selected_server_id or "", label="ACS Server", color="sky") }}
             </div>
             <div class="md:col-span-3">
-                <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search</label>
-                <input name="search" value="{{ filters.search }}" placeholder="serial, OUI, product" class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Search</label>
+                {{ search_input(name="search", value=filters.search or "", placeholder="Serial, OUI, product class...", color="sky") }}
             </div>
-            <div class="md:col-span-1 flex items-end">
-                <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                    <input type="checkbox" name="only_unlinked" value="true" {% if filters.only_unlinked %}checked{% endif %}>
-                    Unlinked
+            <div class="md:col-span-1 flex items-end pb-0.5">
+                <label class="inline-flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300">
+                    <input type="checkbox" name="only_unlinked" value="true" {% if filters.only_unlinked %}checked{% endif %} class="rounded border-slate-300 text-sky-600 focus:ring-sky-500 dark:border-slate-600 dark:bg-slate-700">
+                    Unlinked Only
                 </label>
             </div>
             <div class="md:col-span-1 flex items-end">
-                <button type="submit" class="w-full rounded-lg bg-sky-600 px-3 py-2 text-sm font-semibold text-white hover:bg-sky-700">Apply</button>
+                <button type="submit" class="w-full rounded-xl bg-gradient-to-r from-sky-500 to-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-sky-500/25 transition-all hover:shadow-xl hover:shadow-sky-500/30 hover:-translate-y-0.5">
+                    Apply
+                </button>
             </div>
         </form>
-    </div>
+    {% endcall %}
 
     {% if selected_server_id %}
     <div class="flex flex-wrap items-center justify-between gap-4">
@@ -150,10 +132,13 @@
 
         {# Server Actions #}
         <div class="flex items-center gap-2">
-            <a href="/admin/network/tr069/acs/{{ selected_server_id }}/edit" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-500 focus:ring-offset-1">Edit ACS Server</a>
+            {{ action_button("Edit ACS Server", href="/admin/network/tr069/acs/" ~ selected_server_id ~ "/edit", variant="secondary", color="slate", size="sm") }}
             <form method="POST" action="/admin/network/tr069/acs/{{ selected_server_id }}/sync">
                 {% include "components/forms/csrf_input.html" %}
-                <button type="submit" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 focus:outline-none focus:ring-2 focus:ring-sky-500 focus:ring-offset-1">Sync from GenieACS</button>
+                <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 shadow-sm transition-all hover:border-sky-300 hover:bg-sky-50 hover:text-sky-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-sky-500 dark:hover:bg-sky-900/20 dark:hover:text-sky-400">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                    Sync from GenieACS
+                </button>
             </form>
         </div>
     </div>
