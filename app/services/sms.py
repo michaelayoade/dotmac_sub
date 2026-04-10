@@ -235,6 +235,12 @@ def send_sms(
     Returns:
         True if SMS was sent successfully
     """
+    # Check if SMS is disabled
+    sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true")
+    if sms_enabled.lower() in ("false", "0", "no", "disabled"):
+        logger.debug("SMS sending is disabled")
+        return False
+
     provider = _get_setting(db, "sms_provider", "SMS_PROVIDER", "webhook")
     api_key = _get_setting(db, "sms_api_key", "SMS_API_KEY")
     api_secret = _get_setting(db, "sms_api_secret", "SMS_API_SECRET")
