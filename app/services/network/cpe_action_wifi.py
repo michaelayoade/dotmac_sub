@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from sqlalchemy.orm import Session
 
@@ -40,7 +41,7 @@ _LAN_PORT_PATHS = {
 }
 
 
-def _request_runtime_refresh(client: object, device_id: str, root: str) -> None:
+def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
     """Best-effort refresh so UI snapshots catch up after a config push."""
     refresh = getattr(client, "refresh_object", None)
     if not callable(refresh):
@@ -56,7 +57,7 @@ def _request_runtime_refresh(client: object, device_id: str, root: str) -> None:
 
 
 def _set_first_supported_path(
-    client: object,
+    client: Any,
     device_id: str,
     root: str,
     candidate_paths: list[str],

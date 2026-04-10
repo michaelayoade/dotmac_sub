@@ -476,7 +476,7 @@ class Subscribers(ListResponseMixin):
                     Subscriber.notes.ilike(like),
                 )
                 # Subscription fields (IP, login, MAC)
-                sub_match = (
+                (
                     db.query(Subscription.subscriber_id)
                     .filter(
                         or_(

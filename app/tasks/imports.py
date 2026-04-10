@@ -179,4 +179,3 @@ def run_import_job(
         raise
     finally:
         session.close()
-    file_bytes = b64decode(file_bytes_b64) if file_bytes_b64 else None

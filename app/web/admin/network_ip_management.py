@@ -363,7 +363,7 @@ def ip_pool_detail(request: Request, pool_id: str, db: Session = Depends(get_db)
             {"request": request, "message": "IP Pool not found"},
             status_code=404,
         )
-    pool = state["pool"]
+    state["pool"]
     activities = build_audit_activities(db, "ip_pool", str(pool_id))
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"

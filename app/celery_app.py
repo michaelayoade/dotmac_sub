@@ -102,6 +102,7 @@ def enqueue_celery_task(
         actor_id=actor_id,
         headers=headers,
     )
+    task_name: str | None = None
     if isinstance(task_or_name, str):
         result = celery_app.send_task(
             task_or_name,

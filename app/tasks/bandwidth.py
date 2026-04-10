@@ -283,7 +283,7 @@ def aggregate_to_metrics():
         # Calculate aggregates for the last minute
         now = datetime.now(UTC)
         minute_start = now.replace(second=0, microsecond=0)
-        minute_end = minute_start + timedelta(minutes=1)
+        minute_start + timedelta(minutes=1)
 
         # Query aggregates grouped by subscription
         aggregates = (

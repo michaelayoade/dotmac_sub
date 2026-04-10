@@ -287,6 +287,51 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     return bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
 
 
+def _cleanup_olt_state_for_return(
+    db: Session, ont_id: str
+) -> tuple[bool, list[str], list[str]]:
+    """Remove service ports and deauthorize ONT from OLT.
+
+    Returns:
+        (success, completed_steps, errors)
+    """
+    from app.services.network.olt_ssh_ont import deauthorize_ont
+    from app.services.network.olt_ssh_service_ports import (
+        delete_service_port,
+        get_service_ports_for_ont,
+    )
+
+    completed: list[str] = []
+    errors: list[str] = []
+
+    ont, olt, fsp, olt_ont_id = _resolve_return_olt_context(db, ont_id)
+    if ont is None:
+        return False, completed, ["ONT not found"]
+    if not olt or not fsp or olt_ont_id is None:
+        # No OLT context to clean up - that's OK
+        return True, completed, errors
+
+    ok, msg, service_ports = get_service_ports_for_ont(olt, fsp, olt_ont_id)
+    if not ok:
+        errors.append(f"Cannot read OLT service-ports: {msg}")
+        return False, completed, errors
+
+    for service_port in service_ports:
+        ok, msg = delete_service_port(olt, service_port.index)
+        if not ok:
+            errors.append(f"Failed to remove service-port {service_port.index}: {msg}")
+            return False, completed, errors
+        completed.append(f"Removed service-port {service_port.index}")
+
+    ok, msg = deauthorize_ont(olt, fsp, olt_ont_id)
+    if not ok:
+        errors.append(f"Failed to deauthorize ONT: {msg}")
+        return False, completed, errors
+    completed.append("Deauthorized ONT from OLT")
+
+    return True, completed, errors
+
+
 def return_to_inventory(
     db: Session, ont_id: str, *, initiated_by: str | None = None
 ) -> ActionResult:

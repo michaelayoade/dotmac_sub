@@ -49,10 +49,10 @@ def get_tr069_server_profiles(
     """
     from app.services.network.olt_ssh import (
         _open_shell,
+        _parse_profile_table,
         _read_until_prompt,
         _run_huawei_cmd,
     )
-    from app.services.network.olt_ssh_profiles import _parse_profile_table
 
     try:
         transport, channel, policy = _open_shell(olt)

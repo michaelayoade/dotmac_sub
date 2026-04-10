@@ -262,7 +262,6 @@ def build_invoices_list_data(
 
     invoices: list[Invoice] = []
     total = 0
-    filtered_for_summary: list[Invoice] = []
     if account_ids or not customer_filtered:
         filtered_query = _apply_filters(db.query(Invoice), include_status=True)
         invoices = (

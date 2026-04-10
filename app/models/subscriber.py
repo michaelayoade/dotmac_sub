@@ -2,6 +2,7 @@ import enum
 import uuid
 from datetime import UTC, date, datetime
 from decimal import Decimal
+from typing import ClassVar
 
 from geoalchemy2 import Geometry
 from sqlalchemy import (
@@ -263,6 +264,10 @@ class Subscriber(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+    # === Transient Attributes (not persisted) ===
+    # Used by legacy_bss.py to stage customer ID before syncing to SplynxIdMapping
+    _legacy_bss_customer_id: ClassVar[int | None] = None
 
     # === Relationships ===
     reseller = relationship("Reseller", back_populates="subscribers")

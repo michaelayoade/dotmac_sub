@@ -1191,8 +1191,12 @@ class TestRouteRegistration:
 
     def test_new_routes_registered(self) -> None:
         from app.web.admin.network_olts_onts import router
+        from app.web.admin.network_onts_actions import router as actions_router
 
+        # Collect paths from both routers (main routes + action routes)
         route_paths = [route.path for route in router.routes if isinstance(route, Route)]
+        action_paths = [route.path for route in actions_router.routes if isinstance(route, Route)]
+        all_paths = route_paths + action_paths
 
         # Phase 1: Service-port routes
         assert "/network/onts/{ont_id}/service-ports" in route_paths
@@ -1200,10 +1204,10 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/service-ports/{index}/delete" in route_paths
         assert "/network/onts/{ont_id}/service-ports/clone" in route_paths
 
-        # Phase 2: OMCI / management IP / TR-069 routes
-        assert "/network/onts/{ont_id}/actions/omci-reboot" in route_paths
-        assert "/network/onts/{ont_id}/actions/configure-mgmt-ip" in route_paths
-        assert "/network/onts/{ont_id}/actions/bind-tr069-profile" in route_paths
+        # Phase 2: OMCI / management IP / TR-069 routes (on actions router)
+        assert "/network/onts/{ont_id}/actions/omci-reboot" in action_paths
+        assert "/network/onts/{ont_id}/actions/configure-mgmt-ip" in action_paths
+        assert "/network/onts/{ont_id}/actions/bind-tr069-profile" in action_paths
         assert "/network/onts/{ont_id}/iphost-config" in route_paths
         assert "/network/onts/{ont_id}/location-details" in route_paths
         assert "/network/onts/{ont_id}/device-info" in route_paths
@@ -1213,10 +1217,10 @@ class TestRouteRegistration:
         assert "/network/olts/{olt_id}/profiles/line" in route_paths
         assert "/network/olts/{olt_id}/profiles/tr069" in route_paths
 
-        assert "/network/onts/{ont_id}/provisioning-preview" not in route_paths
-        assert "/network/onts/{ont_id}/preflight" not in route_paths
-        assert "/network/onts/{ont_id}/provision" not in route_paths
-        assert "/network/onts/{ont_id}/provision-status" not in route_paths
+        assert "/network/onts/{ont_id}/provisioning-preview" not in all_paths
+        assert "/network/onts/{ont_id}/preflight" not in all_paths
+        assert "/network/onts/{ont_id}/provision" not in all_paths
+        assert "/network/onts/{ont_id}/provision-status" not in all_paths
 
 
 class TestProvisioningUiTemplates:

@@ -376,6 +376,9 @@ def authorize_ont(
     olt: OLTDevice,
     fsp: str,
     serial_number: str,
+    *,
+    line_profile_id: int | None = None,
+    service_profile_id: int | None = None,
 ) -> tuple[bool, str, int | None]:
     """SSH into OLT and register an ONT via sn-auth on the given port.
 
@@ -383,10 +386,14 @@ def authorize_ont(
         olt: The OLT device to connect to.
         fsp: Frame/Slot/Port string, e.g. "0/2/1".
         serial_number: ONT serial in vendor format, e.g. "HWTC-7D4733C3".
+        line_profile_id: Optional OLT line profile ID (defaults to 1).
+        service_profile_id: Optional OLT service profile ID (defaults to 1).
 
     Returns:
-        Tuple of (success, message).
+        Tuple of (success, message, assigned_ont_id).
     """
+    line_pid = line_profile_id if line_profile_id is not None else 1
+    srv_pid = service_profile_id if service_profile_id is not None else 1
     ok, err = _validate_fsp(fsp)
     if not ok:
         return False, err, None
@@ -423,7 +430,7 @@ def authorize_ont(
         # Authorize the ONT — sn-auth uses the serial without dashes
         sn_clean = serial_number.replace("-", "")
         channel.send(
-            f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id 1 ont-srvprofile-id 1\n"
+            f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid}\n"
         )
         # Huawei may prompt "{ <cr>|desc<K>|ont-type<K> }:" — send CR to confirm
         initial = _read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
@@ -623,6 +630,33 @@ def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> s
         channel.send("\n")
         out = _read_until_prompt(channel, prompt, timeout_sec=12)
     return out
+
+
+def _run_huawei_paged_cmd(
+    channel: Channel, command: str, prompt: str = r"#\s*$", *, timeout_sec: int = 60
+) -> str:
+    """Send a command and handle pagination (---- More ----) prompts."""
+    channel.send(f"{command}\n")
+    output_parts: list[str] = []
+    pager_pattern = r"---- More ----|<cr>|Press any key"
+    combined_pattern = rf"{prompt}|{pager_pattern}"
+
+    while True:
+        chunk = _read_until_prompt(channel, combined_pattern, timeout_sec=timeout_sec)
+        output_parts.append(chunk)
+
+        # Check if we hit a pager prompt
+        if "---- More ----" in chunk or "Press any key" in chunk:
+            channel.send(" ")  # Send space to continue
+            continue
+        elif "<cr>" in chunk:
+            channel.send("\n")
+            continue
+        else:
+            # Hit the shell prompt - we're done
+            break
+
+    return "".join(output_parts)
 
 
 def get_service_ports(

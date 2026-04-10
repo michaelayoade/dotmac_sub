@@ -1250,3 +1250,49 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
         result["errors"],
     )
     return result
+
+
+def reconcile_snmp_status_with_signal(
+    *,
+    vendor: str,
+    raw_status: str | None,
+    olt_rx_dbm: float | None,
+) -> tuple[OnuOnlineStatus, OnuOfflineReason | None, bool]:
+    """Determine effective ONT status using SNMP state and signal level.
+
+    Args:
+        vendor: OLT vendor key (e.g. "huawei", "zte").
+        raw_status: Raw SNMP online/offline state string.
+        olt_rx_dbm: OLT-side received signal in dBm.
+
+    Returns:
+        Tuple of (status, offline_reason, was_reconciled).
+    """
+    if raw_status is None:
+        return OnuOnlineStatus.unknown, None, False
+
+    state_lower = raw_status.lower().strip()
+
+    # Map SNMP states to status
+    if state_lower in ("online", "up", "1", "active"):
+        return OnuOnlineStatus.online, None, False
+
+    if state_lower in ("offline", "down", "0", "inactive", "2"):
+        # If SNMP says offline but we have a valid signal, something is off
+        if olt_rx_dbm is not None and -30.0 < olt_rx_dbm < 0.0:
+            logger.warning(
+                "SNMP reports offline but has valid signal %.1f dBm (vendor=%s)",
+                olt_rx_dbm,
+                vendor,
+            )
+            # Reconcile: trust signal over SNMP state
+            return OnuOnlineStatus.online, None, True
+        return OnuOnlineStatus.offline, OnuOfflineReason.unknown, False
+
+    # Handle vendor-specific offline reasons
+    if "los" in state_lower or "loss" in state_lower:
+        return OnuOnlineStatus.offline, OnuOfflineReason.los, False
+    if "dying" in state_lower:
+        return OnuOnlineStatus.offline, OnuOfflineReason.dying_gasp, False
+
+    return OnuOnlineStatus.unknown, None, False

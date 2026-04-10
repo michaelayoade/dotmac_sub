@@ -26,7 +26,7 @@ class WebSocketEvent(BaseModel):
     data: dict[str, Any]
     timestamp: datetime | None = None
 
-    def model_post_init(self, __context: Any) -> None:
+    def model_post_init(self, _context: Any) -> None:
         if self.timestamp is None:
             object.__setattr__(self, "timestamp", datetime.now(UTC))
 

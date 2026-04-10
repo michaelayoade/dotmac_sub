@@ -604,13 +604,12 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 current.provisioning_nas_device_id = uuid.UUID(targets.nas_device_id)
 
             moved_ip = 0
-            moved_olt = 0
             if targets.ip_pool_id:
                 moved_ip = _update_ip_pool_for_subscriber(
                     db, subscriber_id=subscriber_id, pool_id=targets.ip_pool_id
                 )
             if targets.pon_port_id:
-                moved_olt = _update_olt_port_for_subscriber(
+                _update_olt_port_for_subscriber(
                     db, subscriber_id=subscriber_id, pon_port_id=targets.pon_port_id
                 )
 

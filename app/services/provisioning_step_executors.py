@@ -79,12 +79,12 @@ def execute_create_olt_service_port(
         if isinstance(ont_ctx, tuple):
             ont, olt, fsp, olt_ont_id = ont_ctx
         elif isinstance(ont_ctx, dict):
-            ont = ont_ctx.get("ont")
+            ont_ctx.get("ont")
             olt = ont_ctx.get("olt")
             fsp = ont_ctx.get("fsp")
             olt_ont_id = ont_ctx.get("olt_ont_id")
         else:
-            ont = olt = fsp = olt_ont_id = None
+            olt = fsp = olt_ont_id = None
         if olt is None or fsp is None or olt_ont_id is None:
             return ProvisioningResult(
                 status="failed",

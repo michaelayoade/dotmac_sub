@@ -645,9 +645,10 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
     cache_key = "dashboard:stats_partial"
     try:
         r = get_settings_redis()
-        cached = r.get(cache_key)
-        if cached and isinstance(cached, (str, bytes)):
-            return json.loads(cached)
+        if r is not None:
+            cached = r.get(cache_key)
+            if cached and isinstance(cached, (str, bytes)):
+                return json.loads(cached)
     except Exception:
         logger.debug("Dashboard cache read failed", exc_info=True)
 
@@ -689,7 +690,8 @@ def _get_cached_dashboard_stats(db: Session) -> dict:
     # Cache for 30 seconds
     try:
         r = get_settings_redis()
-        r.setex(cache_key, 30, json.dumps(stats))
+        if r is not None:
+            r.setex(cache_key, 30, json.dumps(stats))
     except Exception:
         logger.debug("Dashboard cache write failed", exc_info=True)
 

@@ -98,5 +98,59 @@ class SplynxMappingManager:
         )
         return db.scalar(stmt) is not None
 
+    @staticmethod
+    def delete_by_dotmac(
+        db: Session,
+        entity_type: SplynxEntityType,
+        dotmac_id: str | uuid.UUID,
+        *,
+        flush: bool = True,
+    ) -> bool:
+        """Delete a mapping by DotMac UUID. Returns True if deleted."""
+        stmt = select(SplynxIdMapping).where(
+            SplynxIdMapping.entity_type == entity_type,
+            SplynxIdMapping.dotmac_id == uuid.UUID(str(dotmac_id)),
+        )
+        mapping = db.scalar(stmt)
+        if mapping:
+            db.delete(mapping)
+            if flush:
+                db.flush()
+            return True
+        return False
+
+    @staticmethod
+    def register_or_update(
+        db: Session,
+        entity_type: SplynxEntityType,
+        splynx_id: int,
+        dotmac_id: str | uuid.UUID,
+        *,
+        metadata: dict | None = None,
+        flush: bool = True,
+    ) -> SplynxIdMapping:
+        """Register or update a Splynx→DotMac mapping."""
+        dotmac_uuid = uuid.UUID(str(dotmac_id))
+        stmt = select(SplynxIdMapping).where(
+            SplynxIdMapping.entity_type == entity_type,
+            SplynxIdMapping.dotmac_id == dotmac_uuid,
+        )
+        mapping = db.scalar(stmt)
+        if mapping:
+            mapping.splynx_id = splynx_id
+            if metadata is not None:
+                mapping.metadata_ = metadata
+        else:
+            mapping = SplynxIdMapping(
+                entity_type=entity_type,
+                splynx_id=splynx_id,
+                dotmac_id=dotmac_uuid,
+                metadata_=metadata,
+            )
+            db.add(mapping)
+        if flush:
+            db.flush()
+        return mapping
+
 
 splynx_mapping = SplynxMappingManager()

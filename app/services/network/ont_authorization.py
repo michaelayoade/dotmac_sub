@@ -146,7 +146,7 @@ class OntAuthorizationService:
                 serial_number=ctx.ont.serial_number,
             )
             if verification.success:
-                ctx.ont.authorization_status = OntAuthorizationStatus.unauthorized
+                ctx.ont.authorization_status = OntAuthorizationStatus.deauthorized
                 db.flush()
                 logger.info(
                     "ONT %s deauthorized from OLT %s",

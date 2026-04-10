@@ -157,9 +157,9 @@ class TestWaitTr069Bootstrap:
                 "app.services.network_operations.network_operations.mark_waiting",
             ) as mark_waiting,
             patch(
-                "app.services.network.ont_provision_steps.celery_app.send_task",
+                "app.celery_app.enqueue_celery_task",
                 side_effect=_assert_committed,
-            ) as send_task,
+            ) as enqueue_task,
         ):
             result = queue_wait_tr069_bootstrap(
                 db_session,
@@ -175,14 +175,11 @@ class TestWaitTr069Bootstrap:
             "op-1",
             "Waiting for background TR-069 bootstrap polling to start.",
         )
-        send_task.assert_called_once_with(
+        enqueue_task.assert_called_once_with(
             "app.tasks.tr069.wait_for_ont_bootstrap",
             args=["ont-1", "op-1"],
-            kwargs={},
-            headers={
-                "correlation_id": "tr069_bootstrap:ont-1",
-                "source": "ont_provision_step",
-            },
+            correlation_id="tr069_bootstrap:ont-1",
+            source="ont_provision_step",
         )
 
     def test_queue_wait_tr069_bootstrap_marks_operation_failed_when_dispatch_fails(
@@ -202,7 +199,7 @@ class TestWaitTr069Bootstrap:
                 "app.services.network_operations.network_operations.mark_failed",
             ) as mark_failed,
             patch(
-                "app.services.network.ont_provision_steps.celery_app.send_task",
+                "app.celery_app.enqueue_celery_task",
                 side_effect=RuntimeError("broker down"),
             ),
         ):

@@ -977,7 +977,7 @@ def ont_location_details_modal(
 )
 def ont_location_details_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
-) -> HTMLResponse:
+) -> Response:
     """Update ONT location details."""
     from app.schemas.network import OntUnitUpdate
 
@@ -1016,16 +1016,16 @@ def ont_location_details_update(
 
     gps_latitude = _form_float_or_none(form, "gps_latitude")
     gps_longitude = _form_float_or_none(form, "gps_longitude")
+    name_val = str(form_values["name"]) if form_values["name"] else None
+    address_val = str(form_values["address_or_comment"]) if form_values["address_or_comment"] else ""
+    contact_val = str(form_values["contact"]) if form_values["contact"] else ""
     payload = OntUnitUpdate(
         zone_id=zone_id,
         splitter_id=splitter_id,
         splitter_port_id=splitter_port_id,
-        name=form_values["name"] or None,
-        address_or_comment=_build_location_address_or_comment(
-            form_values["address_or_comment"],
-            form_values["contact"],
-        ),
-        contact=form_values["contact"] or None,
+        name=name_val,
+        address_or_comment=_build_location_address_or_comment(address_val, contact_val),
+        contact=contact_val or None,
         use_gps=gps_latitude is not None or gps_longitude is not None,
         gps_latitude=gps_latitude,
         gps_longitude=gps_longitude,
@@ -1079,7 +1079,7 @@ def ont_device_info_modal(
 )
 def ont_device_info_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
-) -> HTMLResponse:
+) -> Response:
     """Update ONT device information."""
     from sqlalchemy.exc import IntegrityError
 
@@ -1112,12 +1112,16 @@ def ont_device_info_update(
             status_code=400,
         )
 
+    vendor_val = str(form_values["vendor"]) if form_values["vendor"] else None
+    model_val = str(form_values["model"]) if form_values["model"] else None
+    fw_val = str(form_values["firmware_version"]) if form_values["firmware_version"] else None
+    onu_type_id_val = form_values["onu_type_id"]
     payload = OntUnitUpdate(
         serial_number=serial_number,
-        vendor=form_values["vendor"] or None,
-        model=form_values["model"] or None,
-        firmware_version=form_values["firmware_version"] or None,
-        onu_type_id=form_values["onu_type_id"],
+        vendor=vendor_val,
+        model=model_val,
+        firmware_version=fw_val,
+        onu_type_id=onu_type_id_val if isinstance(onu_type_id_val, uuid.UUID) else None,
     )
 
     try:
@@ -1182,7 +1186,7 @@ def ont_gpon_channel_modal(
 )
 def ont_gpon_channel_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
-) -> HTMLResponse:
+) -> Response:
     """Update ONT GPON channel."""
     from app.schemas.network import OntUnitUpdate
 
@@ -2147,80 +2151,6 @@ def ont_service_port_clone(
 
 
 # -- ONT management IP / OMCI / TR-069 routes ---------------------------------
-
-
-@router.post(
-    "/onts/{ont_id}/actions/omci-reboot",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_omci_reboot(
-    request: Request,
-    ont_id: str,
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Reboot ONT via OMCI through the OLT."""
-    ok, msg = web_network_ont_actions_service.execute_omci_reboot(db, ont_id)
-    return JSONResponse(
-        content={"success": ok, "message": msg},
-        status_code=200 if ok else 400,
-        headers={
-            "HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'
-        },
-    )
-
-
-@router.post(
-    "/onts/{ont_id}/actions/configure-mgmt-ip",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_configure_mgmt_ip(
-    request: Request,
-    ont_id: str,
-    vlan_id: int = Form(...),
-    ip_mode: str = Form(default="dhcp"),
-    ip_address: str = Form(default=""),
-    subnet: str = Form(default=""),
-    gateway: str = Form(default=""),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Configure ONT management IP via OLT IPHOST command."""
-    ok, msg = web_network_ont_actions_service.configure_management_ip(
-        db,
-        ont_id,
-        vlan_id,
-        ip_mode,
-        ip_address=ip_address or None,
-        subnet=subnet or None,
-        gateway=gateway or None,
-    )
-    return JSONResponse(
-        content={"success": ok, "message": msg},
-        status_code=200 if ok else 400,
-        headers={
-            "HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'
-        },
-    )
-
-
-@router.post(
-    "/onts/{ont_id}/actions/bind-tr069-profile",
-    dependencies=[Depends(require_permission("network:write"))],
-)
-def ont_bind_tr069_profile(
-    request: Request,
-    ont_id: str,
-    profile_id: int = Form(...),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Bind TR-069 server profile to ONT via OLT."""
-    ok, msg = web_network_ont_actions_service.bind_tr069_profile(db, ont_id, profile_id)
-    return JSONResponse(
-        content={"success": ok, "message": msg},
-        status_code=200 if ok else 400,
-        headers={
-            "HX-Trigger": f'{{"showToast": {{"message": "{msg}", "type": "{"success" if ok else "error"}"}}}}'
-        },
-    )
 
 
 @router.get(

@@ -38,6 +38,26 @@ class AuditEvents(ListResponseMixin):
         return event
 
     @staticmethod
+    def record(
+        db: Session,
+        payload: AuditEventCreate,
+        *,
+        defer_until_commit: bool = False,
+    ) -> AuditEvent:
+        """Record an audit event. Alias for create with optional deferred commit."""
+        data = payload.model_dump()
+        if payload.occurred_at is None:
+            data.pop("occurred_at", None)
+        event = AuditEvent(**data)
+        db.add(event)
+        if not defer_until_commit:
+            db.commit()
+            db.refresh(event)
+        else:
+            db.flush()
+        return event
+
+    @staticmethod
     def get(db: Session, event_id: str):
         event = db.get(AuditEvent, event_id)
         if not event:

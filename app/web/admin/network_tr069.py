@@ -638,3 +638,61 @@ def tr069_bulk_action(
             f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
             status_code=303,
         )
+
+
+@router.post("/tr069/devices/{device_id}/nat-forward")
+def tr069_nat_forward(
+    device_id: str, request: Request, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Create a NAT port forwarding rule on a TR-069 device."""
+    form = parse_form_data_sync(request)
+    acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
+
+    try:
+        external_port = int(str(form.get("external_port") or "0").strip())
+        internal_ip = str(form.get("internal_ip") or "").strip()
+        internal_port = int(str(form.get("internal_port") or "0").strip())
+        protocol = str(form.get("protocol") or "TCP").strip()
+        description = str(form.get("description") or "").strip() or None
+
+        if not external_port or not internal_ip or not internal_port:
+            raise ValueError("External port, internal IP, and internal port are required")
+
+        job = web_network_tr069_service.create_nat_port_forward_job(
+            db,
+            tr069_device_id=device_id,
+            external_port=external_port,
+            internal_ip=internal_ip,
+            internal_port=internal_port,
+            protocol=protocol,
+            description=description,
+        )
+        from app.web.admin import get_current_user
+
+        current_user = get_current_user(request)
+        log_audit_event(
+            db=db,
+            request=request,
+            action="nat_port_forward",
+            entity_type="tr069_device",
+            entity_id=device_id,
+            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            metadata={
+                "external_port": external_port,
+                "internal_ip": internal_ip,
+                "internal_port": internal_port,
+                "protocol": protocol,
+                "job_id": str(job.id),
+            },
+        )
+        message = quote_plus(f"NAT forward rule queued: {external_port} → {internal_ip}:{internal_port}")
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=success&message={message}",
+            status_code=303,
+        )
+    except Exception as exc:
+        message = quote_plus(str(exc))
+        return RedirectResponse(
+            f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
+            status_code=303,
+        )

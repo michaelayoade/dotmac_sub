@@ -221,7 +221,6 @@ def invoice_generate_batch_preview(
     billing_cycle: str | None = Form(None),
     subscription_status: str | None = Form(None),
     billing_date: str | None = Form(None),
-    invoice_status: str | None = Form(None),
     separate_by_partner: str | None = Form(None),
     db: Session = Depends(get_db),
 ):

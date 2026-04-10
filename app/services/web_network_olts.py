@@ -2766,3 +2766,74 @@ def ensure_tr069_profile_for_linked_acs(
         olt.id,
     )
     return True, "TR-069 profile check passed (stub)", None
+
+
+# ── ONT serial normalization and matching helpers ──────────────────────
+
+
+def _normalize_ont_serial(serial: str | None) -> str:
+    """Normalize ONT serial for comparison: uppercase, strip non-alphanumeric."""
+    if not serial:
+        return ""
+    return re.sub(r"[^A-Za-z0-9]", "", serial).upper()
+
+
+def _prefer_ont_candidate(
+    existing: OntUnit | None,
+    new_candidate: OntUnit,
+    *,
+    active_assignment_ont_ids: set | None = None,
+) -> OntUnit:
+    """Select the preferred ONT when duplicates exist.
+
+    Priority: has active assignment > is_active > newer updated_at
+    """
+    if existing is None:
+        return new_candidate
+    active_ids = active_assignment_ont_ids or set()
+
+    existing_has_assignment = existing.id in active_ids
+    new_has_assignment = new_candidate.id in active_ids
+    if new_has_assignment and not existing_has_assignment:
+        return new_candidate
+    if existing_has_assignment and not new_has_assignment:
+        return existing
+
+    if new_candidate.is_active and not existing.is_active:
+        return new_candidate
+    if existing.is_active and not new_candidate.is_active:
+        return existing
+
+    existing_updated = getattr(existing, "updated_at", None)
+    new_updated = getattr(new_candidate, "updated_at", None)
+    if new_updated and existing_updated and new_updated > existing_updated:
+        return new_candidate
+    return existing
+
+
+def _looks_synthetic_ont_serial(serial: str | None) -> bool:
+    """Return True if serial looks auto-generated or placeholder."""
+    if not serial:
+        return True
+    normalized = _normalize_ont_serial(serial)
+    if len(normalized) < 4:
+        return True
+    # Check for common patterns like all zeros, all Fs, sequential digits
+    if normalized in ("0000000000000000", "FFFFFFFFFFFFFFFF"):
+        return True
+    if normalized.startswith("UNKNOWN") or normalized.startswith("AUTO"):
+        return True
+    return False
+
+
+def _is_plausible_vendor_serial(vendor_serial: str | None) -> bool:
+    """Return True if vendor serial looks like a real device serial."""
+    if not vendor_serial:
+        return False
+    normalized = _normalize_ont_serial(vendor_serial)
+    # Vendor serials are typically 8-20 alphanumeric characters
+    if len(normalized) < 8 or len(normalized) > 24:
+        return False
+    if _looks_synthetic_ont_serial(vendor_serial):
+        return False
+    return True

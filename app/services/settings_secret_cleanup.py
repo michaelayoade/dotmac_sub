@@ -112,7 +112,7 @@ def migrate_plaintext_secret_settings(
             continue
 
         path = openbao_secret_path(setting)
-        existing = read_secret_fields(path, masked=False)
+        existing = read_secret_fields(path)
         payload = dict(existing)
         payload[setting.key] = str(setting.value_text or "")
 

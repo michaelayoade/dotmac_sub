@@ -49,6 +49,13 @@ class GeoLayerSource(enum.Enum):
     areas = "areas"
 
 
+class CustomerLocationChangeRequestStatus(enum.Enum):
+    pending = "pending"
+    approved = "approved"
+    rejected = "rejected"
+    cancelled = "cancelled"
+
+
 class GeoLocation(Base):
     __tablename__ = "geo_locations"
 
@@ -177,3 +184,45 @@ class GeoLayer(Base):
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
     )
+
+
+class CustomerLocationChangeRequest(Base):
+    """Request to change a customer's service location."""
+
+    __tablename__ = "customer_location_change_requests"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("subscribers.id"), nullable=False
+    )
+    address_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("addresses.id")
+    )
+    current_latitude: Mapped[float | None] = mapped_column(Float)
+    current_longitude: Mapped[float | None] = mapped_column(Float)
+    requested_latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    requested_longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    customer_note: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[CustomerLocationChangeRequestStatus] = mapped_column(
+        Enum(CustomerLocationChangeRequestStatus),
+        default=CustomerLocationChangeRequestStatus.pending,
+    )
+    reviewed_by_actor_id: Mapped[str | None] = mapped_column(String(120))
+    reviewed_by_actor_name: Mapped[str | None] = mapped_column(String(200))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    subscriber = relationship("Subscriber")
+    address = relationship("Address")

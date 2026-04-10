@@ -670,7 +670,7 @@ def get_technician_report_data(db: Session) -> dict:
         )
         or 0
     )
-    no_show_count = (
+    (
         db.scalar(
             select(func.count(InstallAppointment.id)).where(
                 InstallAppointment.status == AppointmentStatus.no_show

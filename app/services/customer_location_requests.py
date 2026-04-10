@@ -390,7 +390,7 @@ def cancel_request(
     if location_request.status != CustomerLocationChangeRequestStatus.pending:
         raise HTTPException(status_code=400, detail="Only pending requests can be canceled")
 
-    location_request.status = CustomerLocationChangeRequestStatus.canceled
+    location_request.status = CustomerLocationChangeRequestStatus.cancelled
     location_request.reviewed_at = datetime.now(UTC)
     db.commit()
     db.refresh(location_request)

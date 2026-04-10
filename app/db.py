@@ -1,5 +1,8 @@
+from contextlib import contextmanager
+from typing import Generator
+
 from sqlalchemy import create_engine
-from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
 
@@ -36,5 +39,27 @@ def get_db():
     db = SessionLocal()
     try:
         yield db
+    finally:
+        db.close()
+
+
+@contextmanager
+def task_session() -> Generator[Session, None, None]:
+    """Context manager for database sessions in Celery tasks.
+
+    Creates a new session and ensures proper cleanup. Commits on success,
+    rolls back on exception.
+
+    Example:
+        with task_session() as db:
+            db.query(Model).all()
+    """
+    db = SessionLocal()
+    try:
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()

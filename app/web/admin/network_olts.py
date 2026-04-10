@@ -751,6 +751,42 @@ def unconfigured_onts_scan_now() -> RedirectResponse:
 
 
 @router.post(
+    "/unconfigured-onts/{candidate_id}/restore",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def restore_autofind_candidate(
+    request: Request, candidate_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    """Restore a disappeared autofind candidate to active state."""
+    from app.web.admin import get_current_user
+
+    ok, message = web_network_ont_autofind_service.restore_candidate(
+        db, candidate_id=candidate_id
+    )
+    status = "success" if ok else "error"
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    log_audit_event(
+        db=db,
+        request=request,
+        action="restore_autofind_candidate",
+        entity_type="olt_autofind_candidate",
+        entity_id=candidate_id,
+        actor_id=actor_id,
+        metadata={
+            "result": status,
+            "message": message,
+        },
+        status_code=200 if ok else 400,
+        is_success=ok,
+    )
+    return RedirectResponse(
+        f"/admin/network/unconfigured-onts?status={status}&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
     "/olts/{olt_id}/authorize-ont",
     dependencies=[Depends(require_permission("network:write"))],
 )

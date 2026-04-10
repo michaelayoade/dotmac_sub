@@ -369,6 +369,15 @@ def authorize_autofind_ont(
     )
 
     queue_started_at = monotonic()
+    if ont_id is None:
+        return _fail(
+            "Queue post-authorization sync",
+            "ONT ID on OLT is not available",
+            step_started_at=queue_started_at,
+            ont_unit_id=ont_unit_id,
+            status="warning",
+            completed_authorization=True,
+        )
     queue_ok, queue_msg, follow_up_operation_id = (
         queue_post_authorization_follow_up(
             db,

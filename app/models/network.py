@@ -161,6 +161,13 @@ class ConfigMethod(enum.Enum):
     tr069 = "tr069"
 
 
+class OntAuthorizationStatus(enum.Enum):
+    pending = "pending"
+    authorized = "authorized"
+    deauthorized = "deauthorized"
+    failed = "failed"
+
+
 class IpProtocol(enum.Enum):
     ipv4 = "ipv4"
     dual_stack = "dual_stack"
@@ -661,6 +668,7 @@ class OLTDevice(Base):
 
     pon_ports = relationship("PonPort", back_populates="olt")
     power_units = relationship("OltPowerUnit", back_populates="olt")
+    fan_units = relationship("OltFanUnit", back_populates="olt")
     shelves = relationship("OltShelf", back_populates="olt")
     config_backups = relationship("OltConfigBackup", back_populates="olt")
     tr069_acs_server = relationship("Tr069AcsServer")
@@ -727,6 +735,10 @@ class OltShelf(Base):
     )
     shelf_number: Mapped[int] = mapped_column(Integer, nullable=False)
     label: Mapped[str | None] = mapped_column(String(120))
+    serial_number: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[HardwareUnitStatus | None] = mapped_column(
+        Enum(HardwareUnitStatus, values_callable=lambda x: [e.value for e in x]),
+    )
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -760,6 +772,13 @@ class OltCard(Base):
     slot_number: Mapped[int] = mapped_column(Integer, nullable=False)
     card_type: Mapped[str | None] = mapped_column(String(120))
     model: Mapped[str | None] = mapped_column(String(120))
+    serial_number: Mapped[str | None] = mapped_column(String(120))
+    hardware_version: Mapped[str | None] = mapped_column(String(80))
+    firmware_version: Mapped[str | None] = mapped_column(String(80))
+    status: Mapped[HardwareUnitStatus | None] = mapped_column(
+        Enum(HardwareUnitStatus, values_callable=lambda x: [e.value for e in x]),
+    )
+    temperature: Mapped[float | None] = mapped_column(Float)
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -795,6 +814,9 @@ class OltCardPort(Base):
     port_type: Mapped[OltPortType] = mapped_column(
         Enum(OltPortType), default=OltPortType.pon
     )
+    status: Mapped[HardwareUnitStatus | None] = mapped_column(
+        Enum(HardwareUnitStatus, values_callable=lambda x: [e.value for e in x]),
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
 
@@ -826,6 +848,7 @@ class PonPort(Base):
         UUID(as_uuid=True), ForeignKey("olt_card_ports.id")
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(255))
     port_number: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -883,6 +906,38 @@ class OltPowerUnit(Base):
     )
 
     olt = relationship("OLTDevice", back_populates="power_units")
+
+
+class OltFanUnit(Base):
+    __tablename__ = "olt_fan_units"
+    __table_args__ = (
+        UniqueConstraint("olt_id", "slot", name="uq_olt_fan_units_olt_slot"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id"), nullable=False
+    )
+    slot: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str | None] = mapped_column(String(120))
+    status: Mapped[HardwareUnitStatus | None] = mapped_column(
+        Enum(HardwareUnitStatus, values_callable=lambda x: [e.value for e in x]),
+    )
+    notes: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt = relationship("OLTDevice", back_populates="fan_units")
 
 
 class OltSfpModule(Base):
@@ -1082,6 +1137,13 @@ class OntUnit(Base):
     provisioning_status: Mapped[OntProvisioningStatus | None] = mapped_column(
         Enum(
             OntProvisioningStatus, name="ontprovisioningstatus", create_constraint=False
+        ),
+    )
+    authorization_status: Mapped[OntAuthorizationStatus | None] = mapped_column(
+        Enum(
+            OntAuthorizationStatus,
+            name="ontauthorizationstatus",
+            create_constraint=False,
         ),
     )
     last_provisioned_at: Mapped[datetime | None] = mapped_column(

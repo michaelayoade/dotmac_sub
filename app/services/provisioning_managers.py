@@ -299,11 +299,6 @@ class ServiceOrders(CRUDManager[ServiceOrder]):
                 if order.subscription_id
                 else None,
             }
-            context = {
-                "service_order_id": order.id,
-                "account_id": order.subscriber_id,
-                "subscription_id": order.subscription_id,
-            }
             if new_status == ServiceOrderStatus.active:
                 emit_event(
                     db,

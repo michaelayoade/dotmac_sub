@@ -1028,3 +1028,7 @@ def unbind_tr069_server_profile(
         f"undo ont tr069-server-config {port_num} {ont_id}",
         success_message="TR-069 profile binding cleared",
     )
+
+
+# Alias for backwards compatibility
+delete_ont_registration = deauthorize_ont

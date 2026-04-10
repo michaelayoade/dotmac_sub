@@ -112,6 +112,38 @@ _CONFIG_ACTIONS: dict[str, ConfigAction] = {
             "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Password",
         ],
     ),
+    "lan_ip": ConfigAction(
+        label="Set LAN IP Address",
+        description="Change the LAN gateway IP address",
+        parameters=[
+            "Device.IP.Interface.2.IPv4Address.1.IPAddress",
+            "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceIPAddress",
+        ],
+    ),
+    "lan_subnet": ConfigAction(
+        label="Set LAN Subnet Mask",
+        description="Change the LAN subnet mask",
+        parameters=[
+            "Device.IP.Interface.2.IPv4Address.1.SubnetMask",
+            "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceSubnetMask",
+        ],
+    ),
+    "dhcp_enable": ConfigAction(
+        label="Enable DHCP Server",
+        description="Turn on the DHCP server for LAN clients",
+        parameters=[
+            "Device.DHCPv4.Server.Enable",
+            "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
+        ],
+    ),
+    "dhcp_disable": ConfigAction(
+        label="Disable DHCP Server",
+        description="Turn off the DHCP server",
+        parameters=[
+            "Device.DHCPv4.Server.Enable",
+            "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
+        ],
+    ),
 }
 
 
@@ -583,6 +615,10 @@ def create_config_push_job(
         parameter_value = "true"
     elif action_key == "wifi_disable":
         parameter_value = "false"
+    elif action_key == "dhcp_enable":
+        parameter_value = "true"
+    elif action_key == "dhcp_disable":
+        parameter_value = "false"
 
     # Create job with setParameterValues command
     payload = Tr069JobCreate(
@@ -686,3 +722,95 @@ def queue_bulk_action(
         },
     )
     return str(task.id)
+
+
+def create_nat_port_forward_job(
+    db: Session,
+    *,
+    tr069_device_id: str,
+    external_port: int,
+    internal_ip: str,
+    internal_port: int,
+    protocol: str,
+    description: str | None = None,
+) -> Tr069Job:
+    """Create a NAT port forwarding rule on a TR-069 device.
+
+    Args:
+        db: Database session
+        tr069_device_id: TR-069 CPE device ID
+        external_port: External/WAN port number
+        internal_ip: Internal/LAN IP address to forward to
+        internal_port: Internal/LAN port number
+        protocol: Protocol (TCP, UDP, or TCP/UDP)
+        description: Optional description for the rule
+
+    Returns:
+        Created job
+    """
+    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
+    if not device:
+        raise ValueError("TR-069 device not found")
+
+    # Validate inputs
+    if not (1 <= external_port <= 65535):
+        raise ValueError("External port must be between 1 and 65535")
+    if not (1 <= internal_port <= 65535):
+        raise ValueError("Internal port must be between 1 and 65535")
+
+    protocol_upper = protocol.upper()
+    if protocol_upper not in {"TCP", "UDP", "TCP/UDP"}:
+        raise ValueError("Protocol must be TCP, UDP, or TCP/UDP")
+
+    # Validate IP format (basic check)
+    ip_parts = internal_ip.split(".")
+    if len(ip_parts) != 4:
+        raise ValueError("Invalid internal IP address format")
+    for part in ip_parts:
+        try:
+            num = int(part)
+            if not (0 <= num <= 255):
+                raise ValueError("Invalid internal IP address format")
+        except ValueError:
+            raise ValueError("Invalid internal IP address format")
+
+    # Build port mapping parameters using TR-181 paths
+    # GenieACS uses addObject to create new instances
+    rule_description = description or f"Port {external_port} to {internal_ip}:{internal_port}"
+
+    # First, we need to add an object, then set its values
+    # This is a two-step process in TR-069, but GenieACS can handle it with
+    # setParameterValues on a new index if we use the right approach
+    # For simplicity, we'll use a provision script approach or direct SPV
+
+    # TR-181 PortMapping structure
+    # Device.NAT.PortMapping.{i}.Enable
+    # Device.NAT.PortMapping.{i}.Protocol
+    # Device.NAT.PortMapping.{i}.ExternalPort
+    # Device.NAT.PortMapping.{i}.InternalClient
+    # Device.NAT.PortMapping.{i}.InternalPort
+    # Device.NAT.PortMapping.{i}.Description
+
+    # Use setParameterValues with a new instance indicator
+    # GenieACS handles addObject internally when setting on non-existent instance
+    parameter_values: list[list[object]] = [
+        ["Device.NAT.PortMapping.*.Enable", True, "xsd:boolean"],
+        ["Device.NAT.PortMapping.*.Protocol", protocol_upper, "xsd:string"],
+        ["Device.NAT.PortMapping.*.ExternalPort", external_port, "xsd:unsignedInt"],
+        ["Device.NAT.PortMapping.*.InternalClient", internal_ip, "xsd:string"],
+        ["Device.NAT.PortMapping.*.InternalPort", internal_port, "xsd:unsignedInt"],
+        ["Device.NAT.PortMapping.*.Description", rule_description, "xsd:string"],
+    ]
+
+    payload = Tr069JobCreate(
+        device_id=coerce_uuid(tr069_device_id),
+        name=f"NAT Forward: {external_port} → {internal_ip}:{internal_port}",
+        command="setParameterValues",
+        payload={
+            "parameterValues": parameter_values,
+        },
+    )
+    job = tr069_service.jobs.create(db=db, payload=payload)
+
+    # Execute immediately
+    return tr069_service.jobs.execute(db=db, job_id=str(job.id))

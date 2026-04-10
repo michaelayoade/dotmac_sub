@@ -1128,7 +1128,7 @@ def generate_cancellation_credit(
         return  # Never billed
 
     # Calculate unused portion
-    start_at = _as_utc(subscription.start_at) or now
+    _as_utc(subscription.start_at) or now
     cycle = BillingCycle.monthly  # fallback
     if subscription.offer and subscription.offer.billing_cycle:
         cycle = subscription.offer.billing_cycle

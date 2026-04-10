@@ -167,6 +167,43 @@ def resolve_candidate_authorized(
     db.commit()
 
 
+def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
+    """Restore a disappeared autofind candidate to active state.
+
+    Args:
+        db: Database session
+        candidate_id: UUID of the autofind candidate
+
+    Returns:
+        Tuple of (success, message)
+    """
+    from app.services.common import coerce_uuid
+
+    candidate = db.get(OltAutofindCandidate, coerce_uuid(candidate_id))
+    if not candidate:
+        return False, "Autofind candidate not found"
+    if candidate.is_active:
+        return False, "Candidate is already active"
+    if candidate.resolution_reason != "disappeared":
+        return False, f"Cannot restore candidate with resolution: {candidate.resolution_reason}"
+
+    candidate.is_active = True
+    candidate.resolution_reason = None
+    candidate.resolved_at = None
+    candidate.last_seen_at = datetime.now(UTC)
+    db.commit()
+    logger.info(
+        "autofind_candidate_restored",
+        extra={
+            "event": "autofind_candidate_restored",
+            "candidate_id": str(candidate.id),
+            "serial_number": candidate.serial_number,
+            "olt_id": str(candidate.olt_id),
+        },
+    )
+    return True, f"Restored autofind candidate {candidate.serial_number}"
+
+
 def build_unconfigured_onts_page_data(
     db: Session,
     *,

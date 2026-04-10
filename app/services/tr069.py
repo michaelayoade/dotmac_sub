@@ -441,7 +441,7 @@ class CpeDevices(ListResponseMixin):
             raise HTTPException(status_code=502, detail=f"GenieACS error: {e}")
 
         created, updated = 0, 0
-        now = datetime.now(UTC)
+        datetime.now(UTC)
 
         for device_data in devices:
             # Extract GenieACS device ID (the authoritative identifier)

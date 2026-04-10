@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.models.catalog import (
     ConfigBackupMethod,
     ConnectionType,
+    ExecutionMethod,
     NasConfigBackup,
     NasDevice,
     NasVendor,
@@ -31,7 +32,7 @@ def _provision_extra(
     action: ProvisioningAction,
     triggered_by: str,
     connection_type: ConnectionType | None = None,
-    execution_method: str | None = None,
+    execution_method: ExecutionMethod | str | None = None,
     template_id: object | None = None,
     log_id: object | None = None,
     execution_time_ms: int | None = None,
@@ -48,7 +49,11 @@ def _provision_extra(
     if connection_type is not None:
         extra["connection_type"] = connection_type.value
     if execution_method is not None:
-        extra["execution_method"] = execution_method
+        extra["execution_method"] = (
+            execution_method.value
+            if isinstance(execution_method, ExecutionMethod)
+            else execution_method
+        )
     if template_id is not None:
         extra["template_id"] = str(template_id)
     if log_id is not None:

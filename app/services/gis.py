@@ -42,6 +42,17 @@ from app.services.response import ListResponseMixin, list_response
 logger = logging.getLogger(__name__)
 
 
+def _point_wkt(latitude: float, longitude: float) -> str:
+    """Return WKT representation of a point."""
+    return f"SRID=4326;POINT({longitude} {latitude})"
+
+
+def _sync_location_geometry(location: GeoLocation) -> None:
+    """Sync the geom column from latitude/longitude."""
+    if location.latitude is not None and location.longitude is not None:
+        location.geom = _point_wkt(location.latitude, location.longitude)
+
+
 def subscriber_locations_geojson(db: Session, *, limit: int = 500) -> dict[str, object]:
     """Return subscriber locations as a GeoJSON feature collection."""
     from app.models.subscriber import Address, Subscriber

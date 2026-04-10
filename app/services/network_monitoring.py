@@ -684,7 +684,7 @@ class NetworkDevices(ListResponseMixin):
         devices_online = sum(1 for d in devices if d.status in online_statuses)
         devices_offline = sum(1 for d in devices if d.status == DStatus.offline)
 
-        total_count = len(devices)
+        len(devices)
         online_count = sum(1 for d in devices if d.status == DStatus.online)
         degraded_count = sum(1 for d in devices if d.status == DStatus.degraded)
         offline_count = devices_offline
