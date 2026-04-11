@@ -25,8 +25,9 @@ class ProvisioningHandler:
     def _handle_subscription_activated(self, db: Session, event: Event) -> None:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
-            logger.warning(
-                "Skipping auto IP allocation: missing subscription_id in event payload."
+            logger.debug(
+                "Skipping auto IP allocation: event %s missing subscription_id",
+                event.event_type.value if event.event_type else "unknown",
             )
             return
         # Step 1: Allocate IP addresses
@@ -179,14 +180,18 @@ class ProvisioningHandler:
             "service_order_id"
         )
         if not service_order_id:
-            logger.warning(
-                "Skipping provisioning run: missing service_order_id in event payload."
+            logger.debug(
+                "Skipping provisioning run: event %s missing service_order_id",
+                event.event_type.value if event.event_type else "unknown",
             )
             return
         try:
             order_uuid = coerce_uuid(service_order_id)
         except (TypeError, ValueError):
-            logger.warning("Skipping provisioning run: invalid service_order_id.")
+            logger.warning(
+                "Skipping provisioning run: invalid service_order_id=%r",
+                service_order_id,
+            )
             return
         service_order = db.get(ServiceOrder, order_uuid)
         if not service_order:

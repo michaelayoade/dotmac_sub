@@ -122,7 +122,7 @@ class EnforcementHandler:
 
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         if not subscription_id:
-            logger.warning("Skipping session disconnect: missing subscription_id.")
+            logger.debug("Skipping session disconnect: event missing subscription_id")
             return
 
         subscription = db.get(Subscription, subscription_id)
@@ -241,7 +241,7 @@ class EnforcementHandler:
     def _handle_account_throttle(self, db: Session, event: Event) -> None:
         account_id = event.account_id or event.payload.get("account_id")
         if not account_id:
-            logger.warning("Skipping throttle enforcement: missing account_id.")
+            logger.debug("Skipping throttle enforcement: event missing account_id")
             return
         refresh = settings_spec.resolve_value(
             db, SettingDomain.radius, "refresh_sessions_on_profile_change"
@@ -261,7 +261,11 @@ class EnforcementHandler:
         subscription_id = event.subscription_id or event.payload.get("subscription_id")
         account_id = event.account_id or event.payload.get("account_id")
         if not subscription_id or not account_id:
-            logger.warning("Skipping FUP enforcement: missing subscription/account.")
+            logger.warning(
+                "Skipping FUP enforcement: event missing subscription_id=%s account_id=%s",
+                subscription_id,
+                account_id,
+            )
             return
         action = (
             settings_spec.resolve_value(db, SettingDomain.usage, "fup_action")
@@ -343,7 +347,10 @@ class EnforcementHandler:
             db, SettingDomain.usage, "fup_throttle_radius_profile_id"
         )
         if not throttle_profile_id:
-            logger.warning("FUP throttle profile not configured.")
+            logger.warning(
+                "FUP throttle profile not configured. "
+                "Set 'fup_throttle_radius_profile_id' in usage domain settings."
+            )
             return
         try:
             updated = apply_radius_profile_to_account(
@@ -399,8 +406,8 @@ class EnforcementHandler:
             if subscription:
                 offer_id = str(subscription.offer_id) if subscription.offer_id else None
         if not offer_id:
-            logger.warning(
-                "Cannot persist FUP state: no offer_id for subscription %s",
+            logger.debug(
+                "Cannot persist FUP state: subscription %s has no offer_id (direct plan?)",
                 subscription_id,
             )
             return

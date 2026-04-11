@@ -303,6 +303,18 @@ def auth_env(monkeypatch):
     )
 
 
+@pytest.fixture(autouse=True)
+def _reset_singletons():
+    """Reset module-level singletons after each test to prevent mock leaking."""
+    yield
+    # Reset event dispatcher to clear any mocked handlers
+    try:
+        from app.services.events.dispatcher import reset_dispatcher
+        reset_dispatcher()
+    except ImportError:
+        pass
+
+
 @pytest.fixture()
 def pop_site(db_session):
     """Point of Presence for network tests."""

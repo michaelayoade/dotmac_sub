@@ -388,13 +388,17 @@ def require_permission(permission_key: str):
             .all()
         )
         if not permissions:
-            logger.warning(
-                "Permission check failed: permission record missing for %s (principal_type=%s principal_id=%s)",
+            # This indicates a code/config error - permission key isn't in database
+            logger.error(
+                "Permission check blocked: permission %r not configured "
+                "(seed missing or typo?). Principal: %s/%s",
                 permission_key,
                 auth.get("principal_type"),
                 auth.get("principal_id"),
             )
-            raise HTTPException(status_code=403, detail="Permission not found")
+            raise HTTPException(
+                status_code=403, detail=f"Permission '{permission_key}' not configured"
+            )
         if not has_permission(auth, db, permission_key):
             logger.warning(
                 "Permission check failed: forbidden for %s (principal_type=%s principal_id=%s roles=%s scopes=%s)",
@@ -438,7 +442,13 @@ def require_any_permission(*permission_keys: str):
             .all()
         )
         if not permissions:
-            raise HTTPException(status_code=403, detail="Permission not found")
+            logger.error(
+                "Permission check blocked: none of %s configured (seed missing?)",
+                list(permission_keys),
+            )
+            raise HTTPException(
+                status_code=403, detail="Required permissions not configured"
+            )
 
         permission_ids = [p.id for p in permissions]
 

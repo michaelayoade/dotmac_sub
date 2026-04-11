@@ -66,9 +66,40 @@ def _rotate_value(
     old_key: str,
     new_key: str,
 ) -> tuple[str | None, bool]:
+    """Rotate a credential value from old key to new key.
+
+    Returns (rotated_value, changed).
+
+    Handles edge cases:
+    - Value already encrypted with new key: returns unchanged
+    - Value not encrypted (no enc: prefix): returns unchanged
+    - Value corrupted/unrecoverable: logs warning, returns unchanged
+    """
     if not value:
         return value, False
-    plaintext = decrypt_credential_with_key(value, old_key)
+
+    # Skip values without enc: prefix (plain text or legacy format)
+    if not value.startswith("enc:"):
+        return value, False
+
+    # Try decrypting with old key first
+    try:
+        plaintext = decrypt_credential_with_key(value, old_key)
+    except ValueError:
+        # Old key didn't work - check if already encrypted with new key
+        try:
+            decrypt_credential_with_key(value, new_key)
+            # Successfully decrypted with new key - already rotated
+            logger.debug("Value already encrypted with new key, skipping")
+            return value, False
+        except ValueError:
+            # Neither key works - value is corrupted or encrypted with unknown key
+            logger.warning(
+                "Cannot decrypt value with either old or new key, skipping rotation"
+            )
+            return value, False
+
+    # Re-encrypt with new key
     rotated = encrypt_credential_with_key(plaintext, new_key)
     if rotated == value:
         return value, False
@@ -107,20 +138,9 @@ def _rotate_model_fields(
         row_changed = False
         for field in fields:
             current = getattr(row, field, None)
-            try:
-                rotated, changed = _rotate_value(
-                    current, old_key=old_key, new_key=new_key
-                )
-            except ValueError as exc:
-                logger.error(
-                    "Credential rotation failed for %s id=%s field=%s",
-                    model.__name__,
-                    _record_identity(row),
-                    field,
-                )
-                raise ValueError(
-                    f"Failed to rotate {model.__name__}.{field} for id={_record_identity(row)}"
-                ) from exc
+            rotated, changed = _rotate_value(
+                current, old_key=old_key, new_key=new_key
+            )
             if not changed:
                 continue
             max_length = column_lengths.get(field)
@@ -155,20 +175,8 @@ def _rotate_domain_settings(
     )
     for row in rows:
         current = str(row.value_text or "")
-        if not current.startswith(("enc:", "plain:")):
-            continue
-        try:
-            rotated, changed = _rotate_value(current, old_key=old_key, new_key=new_key)
-        except ValueError as exc:
-            logger.error(
-                "Credential rotation failed for DomainSetting id=%s key=%s.%s",
-                _record_identity(row),
-                row.domain.value,
-                row.key,
-            )
-            raise ValueError(
-                f"Failed to rotate DomainSetting {row.domain.value}.{row.key}"
-            ) from exc
+        # Note: _rotate_value now checks for enc: prefix internally
+        rotated, changed = _rotate_value(current, old_key=old_key, new_key=new_key)
         if not changed:
             continue
         row.value_text = rotated
@@ -192,19 +200,9 @@ def _rotate_integration_hooks(
         for key, value in auth_config.items():
             if key not in _INTEGRATION_HOOK_SECRET_KEYS or value is None:
                 continue
-            try:
-                rotated_value, value_changed = _rotate_value(
-                    str(value), old_key=old_key, new_key=new_key
-                )
-            except ValueError as exc:
-                logger.error(
-                    "Credential rotation failed for IntegrationHook id=%s auth_config.%s",
-                    _record_identity(hook),
-                    key,
-                )
-                raise ValueError(
-                    f"Failed to rotate IntegrationHook auth_config.{key} for id={_record_identity(hook)}"
-                ) from exc
+            rotated_value, value_changed = _rotate_value(
+                str(value), old_key=old_key, new_key=new_key
+            )
             if not value_changed:
                 continue
             rotated[key] = rotated_value

@@ -17,11 +17,14 @@ from app.schemas.settings import DomainSettingUpdate
 def read_json_list(
     db: Session, settings_service: Any, key: str
 ) -> list[dict[str, Any]]:
-    """Read a JSON list setting and return only dict rows."""
+    """Read a JSON list setting and return only dict rows.
+
+    Returns empty list if setting doesn't exist (common before first job runs).
+    """
     try:
         setting = settings_service.get_by_key(db, key)
-    except Exception as exc:
-        logger.warning("Failed to read job log %s: %s", key, exc)
+    except Exception:
+        # Setting may not exist before first job runs - this is normal
         return []
     if isinstance(setting.value_json, list):
         return [item for item in setting.value_json if isinstance(item, dict)]

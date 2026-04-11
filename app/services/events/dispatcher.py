@@ -280,6 +280,16 @@ def get_dispatcher() -> EventDispatcher:
     return _dispatcher
 
 
+def reset_dispatcher() -> None:
+    """Reset the global dispatcher for testing.
+
+    This clears any mocked or stale state from the dispatcher singleton.
+    Should only be called in test teardown, not in production code.
+    """
+    global _dispatcher
+    _dispatcher = None
+
+
 def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     """Initialize and register all event handlers."""
     from app.services.events.handlers.crm_sync import CrmSyncHandler

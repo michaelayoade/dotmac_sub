@@ -624,6 +624,7 @@ def is_error_output(output: str) -> bool:
 
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
     """Send a command to a Huawei shell, handling interactive {<cr>} prompts."""
+    logger.debug("OLT command: %r", command)
     channel.send(f"{command}\n")
     out = _read_until_prompt(channel, rf"{prompt}|<cr>", timeout_sec=12)
     if "<cr>" in out:
@@ -636,6 +637,7 @@ def _run_huawei_paged_cmd(
     channel: Channel, command: str, prompt: str = r"#\s*$", *, timeout_sec: int = 60
 ) -> str:
     """Send a command and handle pagination (---- More ----) prompts."""
+    logger.debug("OLT paged command: %r", command)
     channel.send(f"{command}\n")
     output_parts: list[str] = []
     pager_pattern = r"---- More ----|<cr>|Press any key"

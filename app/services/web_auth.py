@@ -57,10 +57,20 @@ def _set_refresh_cookie(
     )
 
 
+def _get_csrf_token(request: Request) -> str:
+    """Get CSRF token from request state, set by CSRF middleware."""
+    return getattr(request.state, "csrf_token", "")
+
+
 def login_page(request: Request, error: str | None = None, next_url: str | None = None):
     return templates.TemplateResponse(
         "auth/login.html",
-        {"request": request, "error": error, "next": next_url or ""},
+        {
+            "request": request,
+            "error": error,
+            "next": next_url or "",
+            "csrf_token": _get_csrf_token(request),
+        },
     )
 
 
@@ -133,7 +143,12 @@ def login_submit(
             error_msg = str(exc)
         return templates.TemplateResponse(
             "auth/login.html",
-            {"request": request, "error": error_msg, "next": next_url},
+            {
+                "request": request,
+                "error": error_msg,
+                "next": next_url,
+                "csrf_token": _get_csrf_token(request),
+            },
             status_code=401,
         )
 
@@ -144,7 +159,12 @@ def mfa_page(request: Request, next_url: str | None = None, error: str | None = 
         return RedirectResponse(url="/auth/login", status_code=303)
     return templates.TemplateResponse(
         "auth/mfa.html",
-        {"request": request, "error": error, "next": next_url or ""},
+        {
+            "request": request,
+            "error": error,
+            "next": next_url or "",
+            "csrf_token": _get_csrf_token(request),
+        },
     )
 
 
@@ -191,6 +211,7 @@ def mfa_submit(
                 "request": request,
                 "error": "Invalid verification code",
                 "next": next_url,
+                "csrf_token": _get_csrf_token(request),
             },
             status_code=401,
         )
@@ -199,7 +220,11 @@ def mfa_submit(
 def forgot_password_page(request: Request, success: bool = False):
     return templates.TemplateResponse(
         "auth/forgot-password.html",
-        {"request": request, "success": success},
+        {
+            "request": request,
+            "success": success,
+            "csrf_token": _get_csrf_token(request),
+        },
     )
 
 
@@ -210,7 +235,11 @@ def forgot_password_submit(request: Request, db: Session, email: str):
         logger.info("Password reset request failed for %s", email, exc_info=True)
     return templates.TemplateResponse(
         "auth/forgot-password.html",
-        {"request": request, "success": True},
+        {
+            "request": request,
+            "success": True,
+            "csrf_token": _get_csrf_token(request),
+        },
     )
 
 
@@ -228,6 +257,7 @@ def reset_password_page(
             "token": token,
             "error": error,
             "next_login": safe_next_login,
+            "csrf_token": _get_csrf_token(request),
         },
     )
 
@@ -249,6 +279,7 @@ def reset_password_submit(
                 "token": token,
                 "error": "Passwords do not match",
                 "next_login": safe_next_login,
+                "csrf_token": _get_csrf_token(request),
             },
             status_code=400,
         )
@@ -266,6 +297,7 @@ def reset_password_submit(
                 "token": token,
                 "error": "Invalid or expired reset link",
                 "next_login": safe_next_login,
+                "csrf_token": _get_csrf_token(request),
             },
             status_code=400,
         )

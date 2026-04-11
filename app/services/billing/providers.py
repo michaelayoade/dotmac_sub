@@ -260,7 +260,7 @@ class PaymentProviderEvents(ListResponseMixin):
             )
             db.add(payment)
             db.flush()
-            if payload.invoice_id:
+            if payload.invoice_id and invoice:
                 allocation = PaymentAllocation(
                     payment_id=payment.id,
                     invoice_id=payload.invoice_id,
@@ -271,7 +271,7 @@ class PaymentProviderEvents(ListResponseMixin):
                 from app.services.billing.payments import _create_payment_ledger_entry
 
                 _create_payment_ledger_entry(db, payment, invoice, payment.amount)
-        elif payment and payload.invoice_id and not payment.allocations:
+        elif payment and payload.invoice_id and invoice and not payment.allocations:
             allocation = PaymentAllocation(
                 payment_id=payment.id,
                 invoice_id=payload.invoice_id,

@@ -482,7 +482,14 @@ def _validate_payment_provider(db: Session, provider_id: str | None):
     """Validate that a payment provider exists and is active."""
     if not provider_id:
         return None
-    provider = get_by_id(db, PaymentProvider, provider_id)
+    try:
+        provider = get_by_id(db, PaymentProvider, provider_id)
+    except ValueError:
+        # Invalid UUID format (e.g., "provider-1" instead of a UUID)
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid provider_id format: {provider_id!r} is not a valid UUID",
+        )
     if not provider or not provider.is_active:
         raise HTTPException(status_code=404, detail="Payment provider not found")
     return provider

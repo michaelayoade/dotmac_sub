@@ -201,7 +201,13 @@ class NetworkOperations(ListResponseMixin):
         db.flush()
         extra = _operation_extra(op)
         extra["output_payload"] = output_payload
-        logger.info("Operation succeeded", extra=extra)
+        logger.info(
+            "Operation %s succeeded on %s %s",
+            op.operation_type.value,
+            op.target_type.value,
+            op.target_id,
+            extra=extra,
+        )
         return op
 
     @staticmethod
@@ -230,7 +236,16 @@ class NetworkOperations(ListResponseMixin):
         extra = _operation_extra(op)
         extra["error"] = error
         extra["output_payload"] = output_payload
-        log("Operation failed", extra=extra)
+        # Include key details in log message for text-based log viewers
+        error_preview = str(error)[:100] + ("..." if len(str(error)) > 100 else "")
+        log(
+            "Operation %s failed on %s %s: %s",
+            op.operation_type.value,
+            op.target_type.value,
+            op.target_id,
+            error_preview,
+            extra=extra,
+        )
         return op
 
     @staticmethod
@@ -247,7 +262,14 @@ class NetworkOperations(ListResponseMixin):
         db.flush()
         extra = _operation_extra(op)
         extra["waiting_reason"] = reason
-        logger.info("Operation waiting", extra=extra)
+        logger.info(
+            "Operation %s waiting on %s %s: %s",
+            op.operation_type.value,
+            op.target_type.value,
+            op.target_id,
+            reason,
+            extra=extra,
+        )
         return op
 
     @staticmethod
@@ -258,7 +280,13 @@ class NetworkOperations(ListResponseMixin):
         op.status = NetworkOperationStatus.canceled
         op.completed_at = datetime.now(UTC)
         db.flush()
-        logger.info("Operation canceled", extra=_operation_extra(op))
+        logger.info(
+            "Operation %s canceled on %s %s",
+            op.operation_type.value,
+            op.target_type.value,
+            op.target_id,
+            extra=_operation_extra(op),
+        )
         return op
 
     @staticmethod
