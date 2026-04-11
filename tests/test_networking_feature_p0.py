@@ -7,9 +7,11 @@ from uuid import uuid4
 
 import pytest
 from fastapi import HTTPException
+from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.datastructures import FormData
 from starlette.requests import Request
 
 from app.models.catalog import (
@@ -24,9 +26,9 @@ from app.models.network import (
     OltConfigBackup,
     OltConfigBackupType,
     OLTDevice,
-    OnuOnlineStatus,
     OntAssignment,
     OntUnit,
+    OnuOnlineStatus,
     PonPort,
 )
 from app.models.network_monitoring import (
@@ -57,7 +59,15 @@ from app.models.notification import (
 )
 from app.models.radius import RadiusClient, RadiusServer
 from app.models.subscriber import Address, AddressType, Subscriber
-from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice, Tr069Job, Tr069JobStatus
+from app.models.tr069 import (
+    Tr069AcsServer,
+    Tr069CpeDevice,
+    Tr069Event,
+    Tr069Job,
+    Tr069JobStatus,
+    Tr069Parameter,
+    Tr069Session,
+)
 from app.schemas.catalog import NasDeviceCreate
 from app.schemas.network import (
     CPEDeviceCreate,
@@ -81,8 +91,10 @@ from app.services import network_topology as network_topology_service
 from app.services import snmp_discovery as snmp_discovery_service
 from app.services import tr069 as tr069_service
 from app.services import web_network_core_devices as web_network_core_devices_service
-from app.services import web_network_core_devices_inventory as core_devices_inventory_service
 from app.services import web_network_core_devices_forms as core_devices_forms
+from app.services import (
+    web_network_core_devices_inventory as core_devices_inventory_service,
+)
 from app.services import web_network_core_devices_views as core_devices_views
 from app.services import web_network_core_runtime as core_runtime
 from app.services import web_network_cpes as web_network_cpes_service
@@ -91,12 +103,13 @@ from app.services import web_network_ip as web_network_ip_service
 from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.web_domains import network_home
 from app.services.credential_crypto import is_encrypted
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.cpe_tr069 import CpeTR069
 from app.services.network.ont_tr069 import OntTR069
 from app.web.admin import nas as nas_web
+from app.web_domains import network_home
 
 
 def test_validate_ipv4_address_rejects_invalid_octet():
@@ -1250,6 +1263,9 @@ def test_tr069_queue_device_job_creates_and_executes(
             is_active=True,
         ),
     )
+    device.genieacs_device_id = "112233-ONT-TEST-TR069-003"
+    db_session.commit()
+    db_session.refresh(device)
 
     def _fake_execute(db, job_id: str):
         job = db.get(Tr069Job, job_id)
@@ -1289,6 +1305,30 @@ def test_tr069_dashboard_data_decodes_huawei_hex_serial_for_display(
 
     assert len(data["unconfigured_devices"]) == 1
     assert data["unconfigured_devices"][0].display_serial_number == "HWTC858C4184"
+
+
+def test_tr069_dashboard_data_searches_decoded_huawei_hex_serial(
+    db_session, acs_server
+):
+    tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="4857544313EE6B84",
+            oui="485754",
+            product_class="HG8145X6",
+            is_active=True,
+        ),
+    )
+
+    data = web_network_tr069_service.tr069_dashboard_data(
+        db_session,
+        acs_server_id=str(acs_server.id),
+        search="HWTC13EE6B84",
+    )
+
+    assert len(data["devices"]) == 1
+    assert data["devices"][0].display_serial_number == "HWTC13EE6B84"
 
 
 def test_tr069_dashboard_data_handles_joinedload_assignments_without_500(
@@ -1419,9 +1459,7 @@ def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_na
     network_service.ont_assignments.delete(db_session, str(assignment.id))
 
     parked_cpe = db_session.scalars(
-        select(CPEDevice)
-        .where(CPEDevice.serial_number == "LINKED-PARKED-ONT")
-        .limit(1)
+        select(CPEDevice).where(CPEDevice.serial_number == "LINKED-PARKED-ONT").limit(1)
     ).first()
     assert parked_cpe is not None
 
@@ -1446,7 +1484,9 @@ def test_tr069_dashboard_linked_inventory_cpe_uses_device_label_not_inventory_na
     )
     assert linked.linked_cpe is not None
     assert linked.linked_cpe_display_label == "LINKED-PARKED-ONT"
-    assert all("Network Inventory" not in label for label in data["cpe_typeahead_labels"])
+    assert all(
+        "Network Inventory" not in label for label in data["cpe_typeahead_labels"]
+    )
 
 
 def test_link_tr069_device_to_cpe_rejects_missing_cpe(db_session, acs_server):
@@ -1493,9 +1533,7 @@ def test_link_tr069_device_to_cpe_rejects_parked_inventory_cpe(
     )
     network_service.ont_assignments.delete(db_session, str(assignment.id))
     parked_cpe = db_session.scalars(
-        select(CPEDevice)
-        .where(CPEDevice.serial_number == "REJECT-PARKED-ONT")
-        .limit(1)
+        select(CPEDevice).where(CPEDevice.serial_number == "REJECT-PARKED-ONT").limit(1)
     ).first()
     assert parked_cpe is not None
 
@@ -2589,7 +2627,9 @@ def test_ont_tr069_uses_cached_snapshot_when_live_fetch_fails(db_session, monkey
             "ethernet_ports": [{"index": 1, "Status": "Up"}],
             "lan_hosts": [{"HostName": "phone", "IPAddress": "192.168.1.10"}],
             "fetched_at": "2026-04-02T15:15:00+00:00",
-            "raw_device": {"Device": {"DeviceInfo": {"ModelName": {"_value": "EG8145V5"}}}},
+            "raw_device": {
+                "Device": {"DeviceInfo": {"ModelName": {"_value": "EG8145V5"}}}
+            },
         },
     )
     db_session.add(ont)
@@ -2612,6 +2652,301 @@ def test_ont_tr069_uses_cached_snapshot_when_live_fetch_fails(db_session, monkey
         "Device": {"DeviceInfo": {"ModelName": {"_value": "EG8145V5"}}}
     }
     assert "cached TR-069 snapshot" in (summary.error or "")
+
+
+def test_ont_device_info_modal_does_not_allow_serial_number_change(
+    db_session, subscriber
+):
+    olt = network_service.olt_devices.create(
+        db_session,
+        OLTDeviceCreate(name="OLT-LOCKED-SERIAL-002"),
+    )
+    pon = network_service.pon_ports.create(
+        db_session,
+        PonPortCreate(olt_id=olt.id, name="0/1/2"),
+    )
+    ont = OntUnit(
+        serial_number="ONT-LOCKED-SERIAL-002",
+        vendor="Huawei",
+        is_active=True,
+        olt_device_id=olt.id,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    network_service.ont_assignments.create(
+        db_session,
+        OntAssignmentCreate(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            account_id=subscriber.id,
+        ),
+    )
+
+    result = ont_web_forms_service.update_device_info_from_form(
+        db_session,
+        str(ont.id),
+        FormData(
+            [
+                ("serial_number", "ONT-TAMPERED-MODAL"),
+                ("vendor", "ZTE"),
+                ("model", "F670L"),
+                ("firmware_version", "V9"),
+            ]
+        ),
+    )
+
+    assert result.error is None
+    db_session.refresh(ont)
+    assert ont.serial_number == "ONT-LOCKED-SERIAL-002"
+    assert ont.vendor == "Huawei"
+    assert ont.model is None
+
+
+def test_ont_tr069_summary_includes_recent_informs(db_session, monkeypatch):
+    olt = OLTDevice(name="OLT-TR069-INFORMS", mgmt_ip="198.51.100.134")
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-TR069-INFORM-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        tr069_last_snapshot={"system": {}, "wan": {}, "lan": {}, "wireless": {}},
+    )
+    db_session.add(ont)
+    db_session.flush()
+    server = Tr069AcsServer(
+        name="Inform ACS",
+        cwmp_url="https://acs.test/cwmp",
+        cwmp_username="u",
+        cwmp_password="p",
+        connection_request_username="cu",
+        connection_request_password="cp",
+        base_url="https://acs.test",
+        is_active=True,
+    )
+    db_session.add(server)
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+    session = Tr069Session(
+        device_id=device.id,
+        event_type=Tr069Event.periodic,
+        started_at=datetime.now(UTC),
+        ended_at=datetime.now(UTC),
+        inform_payload={"event": "periodic", "parameter_count": 3},
+    )
+    db_session.add(session)
+    db_session.commit()
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(ont_tr069_module, "resolve_genieacs", lambda _db, _ont: None)
+
+    summary = OntTR069.get_device_summary(db_session, str(ont.id))
+
+    assert summary.available is True
+    assert len(summary.recent_informs) == 1
+    assert summary.recent_informs[0].inform_payload["parameter_count"] == 3
+
+
+def test_ont_tr069_summary_includes_cached_config_parameters(db_session, monkeypatch):
+    ont = OntUnit(serial_number="ONT-TR069-PARAM-001", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    server = Tr069AcsServer(
+        name="Parameter ACS",
+        cwmp_url="https://acs.test/cwmp",
+        cwmp_username="u",
+        cwmp_password="p",
+        connection_request_username="cu",
+        connection_request_password="cp",
+        base_url="https://acs.test",
+        is_active=True,
+    )
+    db_session.add(server)
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.flush()
+    db_session.add_all(
+        [
+            Tr069Parameter(
+                device_id=device.id,
+                name="Device.DeviceInfo.SoftwareVersion",
+                value="V1.2.3",
+                updated_at=datetime.now(UTC),
+            ),
+            Tr069Parameter(
+                device_id=device.id,
+                name="InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
+                value="subscriber001",
+                updated_at=datetime.now(UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(ont_tr069_module, "resolve_genieacs", lambda _db, _ont: None)
+
+    summary = OntTR069.get_device_summary(db_session, str(ont.id))
+
+    assert summary.cached_parameters["System"][0]["value"] == "V1.2.3"
+    assert summary.cached_parameters["WAN / ACS"][0]["value"] == "subscriber001"
+
+
+def test_ont_tr069_inform_wifi_data_renders_in_partial(db_session, monkeypatch):
+    ont = OntUnit(serial_number="ONT-TR069-WIFI-INFORM-001", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    server = Tr069AcsServer(
+        name="WiFi Inform ACS",
+        cwmp_url="https://acs.test/cwmp",
+        cwmp_username="u",
+        cwmp_password="p",
+        connection_request_username="cu",
+        connection_request_password="cp",
+        base_url="https://acs.test",
+        is_active=True,
+    )
+    db_session.add(server)
+    db_session.flush()
+    device = Tr069CpeDevice(
+        acs_server_id=server.id,
+        ont_unit_id=ont.id,
+        serial_number=ont.serial_number,
+        genieacs_device_id="00259E-EG8145V5-ONT-TR069-WIFI-INFORM-001",
+        is_active=True,
+    )
+    db_session.add(device)
+    db_session.commit()
+
+    result = tr069_service.receive_inform(
+        db_session,
+        serial_number=ont.serial_number,
+        device_id_raw=device.genieacs_device_id,
+        event=[{"EventCode": "2 PERIODIC"}],
+        raw_payload={
+            "parameters": {
+                "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "DotMac-Test",
+                "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations": "7",
+                "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries": "7",
+                "InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries": "11",
+            }
+        },
+    )
+    assert result["parameters"] == 4
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(ont_tr069_module, "resolve_genieacs", lambda _db, _ont: None)
+
+    summary = OntTR069.get_device_summary(db_session, str(ont.id))
+    assert summary.available is True
+    assert summary.recent_informs
+    assert summary.wireless["SSID"] == "DotMac-Test"
+    assert summary.wireless["Connected Clients"] == "7"
+    assert summary.lan["Connected Hosts"] == "11"
+    assert any(
+        param["name"] == "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID"
+        and param["value"] == "DotMac-Test"
+        for param in summary.cached_parameters["Wireless"]
+    )
+
+    templates = Jinja2Templates(directory="templates")
+    html = templates.env.get_template("admin/network/onts/_tr069_partial.html").render(
+        {"tr069": summary}
+    )
+
+    assert "Recent ACS Informs" in html
+    assert "Cached Config Parameters" in html
+    assert "WiFi Clients" in html
+    assert "DotMac-Test" in html
+    assert "Connected Clients" in html
+    assert "TotalAssociations" in html
+    assert "AssociatedDeviceNumberOfEntries" in html
+    assert ">7<" in html
+    assert "HostNumberOfEntries" in html
+    assert ">11<" in html
+
+
+def test_ont_tr069_live_acs_read_wifi_data_renders_in_partial(db_session, monkeypatch):
+    ont = OntUnit(serial_number="ONT-TR069-LIVE-WIFI-001", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+
+    class _FakeClient:
+        @staticmethod
+        def get_device(_device_id):
+            return {
+                "InternetGatewayDevice": {
+                    "LANDevice": {
+                        "1": {
+                            "WLANConfiguration": {
+                                "1": {
+                                    "SSID": {"_value": "DotMac-Live"},
+                                    "TotalAssociations": {"_value": "6"},
+                                }
+                            },
+                            "Hosts": {
+                                "HostNumberOfEntries": {"_value": "9"},
+                                "Host": {
+                                    "1": {
+                                        "HostName": {"_value": "phone"},
+                                        "IPAddress": {"_value": "192.168.1.20"},
+                                        "MACAddress": {"_value": "AA:BB:CC:DD:EE:01"},
+                                        "InterfaceType": {"_value": "802.11"},
+                                        "Active": {"_value": "1"},
+                                    }
+                                },
+                            },
+                        }
+                    }
+                }
+            }
+
+        @staticmethod
+        def extract_parameter_value(_device, _path):
+            return None
+
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    monkeypatch.setattr(
+        ont_tr069_module,
+        "resolve_genieacs",
+        lambda _db, _ont: (_FakeClient(), "live-device-id"),
+    )
+
+    summary = OntTR069.get_device_summary(db_session, str(ont.id))
+
+    assert summary.available is True
+    assert summary.source == "live"
+    assert summary.wireless["SSID"] == "DotMac-Live"
+    assert summary.wireless["Connected Clients"] == "6"
+    assert summary.lan["Connected Hosts"] == "9"
+    assert summary.lan_hosts[0]["HostName"] == "phone"
+
+    templates = Jinja2Templates(directory="templates")
+    html = templates.env.get_template("admin/network/onts/_tr069_partial.html").render(
+        {"tr069": summary}
+    )
+
+    assert "Live ACS Data" in html
+    assert "DotMac-Live" in html
+    assert "WiFi Clients" in html
+    assert ">6<" in html
+    assert "LAN Hosts" in html
+    assert ">1<" in html
+    assert "phone" in html
+    assert "Raw ACS Device Data" in html
 
 
 def test_build_cpe_identity_context_prefers_active_ont_mac(db_session, subscriber):

@@ -46,6 +46,7 @@ from app.schemas.catalog import (
 from app.services import catalog as catalog_service
 from app.services import settings_spec
 from app.services.audit_helpers import (
+    build_audit_activities,
     diff_dicts,
     log_audit_event,
     model_to_dict,
@@ -660,6 +661,98 @@ def offer_edit_form_data(
     offer_data["ip_block_size"] = metadata.get("ip_block_size") or ""
     offer_data["description"] = cleaned_description or ""
     return offer_data, offer_addon_links
+
+
+def get_offer_or_none(db: Session, offer_id: str) -> CatalogOffer | None:
+    """Return an offer for route-level 404 handling."""
+    try:
+        return catalog_service.offers.get(db=db, offer_id=offer_id)
+    except Exception:
+        return None
+
+
+def offer_detail_context(db: Session, offer_id: str) -> dict[str, object] | None:
+    """Build the offer detail page context, or None when missing."""
+    offer = get_offer_or_none(db, offer_id)
+    if offer is None:
+        return None
+
+    prices = catalog_service.offer_prices.list(
+        db=db,
+        offer_id=offer_id,
+        is_active=None,
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
+    )
+    subscriptions = catalog_service.subscriptions.list(
+        db=db,
+        subscriber_id=None,
+        offer_id=offer_id,
+        status=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=50,
+        offset=0,
+    )
+    plan_meta, cleaned_description = parse_offer_description_metadata(offer.description)
+    plan_kind = str(plan_meta.get("plan_kind") or PLAN_KIND_STANDARD)
+    fup_policy_rel = getattr(offer, "fup_policy", None)
+    if isinstance(fup_policy_rel, list):
+        fup_policy_obj = fup_policy_rel[0] if fup_policy_rel else None
+    else:
+        fup_policy_obj = fup_policy_rel
+
+    context: dict[str, object] = {
+        "offer": offer,
+        "offer_clean_description": cleaned_description,
+        "offer_plan_kind": plan_kind,
+        "offer_ip_block_size": plan_meta.get("ip_block_size"),
+        "fup_rules_count": len(getattr(fup_policy_obj, "rules", []) or []),
+        "fup_return_to": f"/admin/catalog/offers/{offer_id}#plan-fup",
+        "prices": prices,
+        "subscriptions": subscriptions,
+        "activities": build_audit_activities(
+            db, "catalog_offer", str(offer_id), limit=10
+        ),
+    }
+    context.update(get_offer_availability(db, str(offer.id)))
+    return context
+
+
+def offer_edit_form_context(
+    db: Session,
+    offer_id: str,
+) -> dict[str, object] | None:
+    """Build offer edit form context, or None when missing."""
+    offer = get_offer_or_none(db, offer_id)
+    if offer is None:
+        return None
+    offer_data, offer_addon_links = offer_edit_form_data(db, offer_id, offer)
+    context = offer_form_context(
+        db,
+        offer_data,
+        offer_addon_links=offer_addon_links,
+    )
+    context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
+    return context
+
+
+def offer_usage_graph_modal_context(
+    db: Session,
+    offer_id: str,
+    *,
+    period: str,
+) -> dict[str, object]:
+    """Build context for the offer usage graph modal."""
+    if period not in {"daily", "weekly", "monthly", "quarterly", "annual"}:
+        period = "monthly"
+    return {
+        "offer": get_offer_or_none(db, offer_id),
+        "offer_id": offer_id,
+        "graph": plan_usage_graph_data(db, offer_id, period=period),
+    }
 
 
 def create_offer_payload(offer: dict[str, object]) -> CatalogOfferCreate:

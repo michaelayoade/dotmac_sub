@@ -1,7 +1,6 @@
 """Admin usage dashboard web routes."""
 
 import logging
-from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -11,8 +10,6 @@ from starlette.datastructures import FormData
 
 from app.csrf import get_csrf_token
 from app.db import get_db
-from app.schemas.usage import UsageChargePostRequest, UsageRatingRunRequest
-from app.services import usage as usage_service
 from app.services import web_usage as web_usage_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data
@@ -149,9 +146,7 @@ def usage_charges_list(
 def usage_charge_post(request: Request, charge_id: str, db: Session = Depends(get_db)):
     """Post a single usage charge."""
     try:
-        usage_service.usage_charges.post(
-            db=db, charge_id=charge_id, payload=UsageChargePostRequest()
-        )
+        web_usage_service.post_usage_charge(db, charge_id=charge_id)
     except Exception:
         logger.exception("Failed to post usage charge %s", charge_id)
         return RedirectResponse(
@@ -169,13 +164,7 @@ def usage_charges_bulk_post(
     db: Session = Depends(get_db),
 ):
     """Bulk post staged charges."""
-    # FormData can include UploadFile items; this endpoint expects string IDs.
-    charge_ids = [
-        item.strip()
-        for item in form.getlist("charge_ids")
-        if isinstance(item, str) and item.strip()
-    ]
-    usage_service.usage_charges.bulk_post_by_ids(db=db, charge_ids=charge_ids)
+    web_usage_service.bulk_post_usage_charges(db, form=form)
     return RedirectResponse("/admin/catalog/usage/charges", status_code=303)
 
 
@@ -217,41 +206,8 @@ def rating_run_trigger(
     db: Session = Depends(get_db),
 ):
     """Trigger a new rating run."""
-    period_start_raw = form.get("period_start")
-    period_end_raw = form.get("period_end")
-    period_start_str = (
-        period_start_raw.strip() if isinstance(period_start_raw, str) else ""
-    )
-    period_end_str = period_end_raw.strip() if isinstance(period_end_raw, str) else ""
-    dry_run = form.get("dry_run") == "true"
-
-    period_start = None
-    period_end = None
-
-    if period_start_str:
-        try:
-            period_start = datetime.strptime(period_start_str, "%Y-%m-%d").replace(
-                tzinfo=UTC
-            )
-        except ValueError:
-            pass
-
-    if period_end_str:
-        try:
-            period_end = datetime.strptime(period_end_str, "%Y-%m-%d").replace(
-                tzinfo=UTC
-            )
-        except ValueError:
-            pass
-
     try:
-        payload = UsageRatingRunRequest(
-            period_start=period_start,
-            period_end=period_end,
-            dry_run=dry_run,
-        )
-        result = usage_service.usage_rating_runs.run(db=db, payload=payload)
-        # Store result in session or query params
+        result = web_usage_service.run_rating_from_form(db, form=form)
         return RedirectResponse(
             f"/admin/catalog/usage/rating?last_run_charges={result.charges_created}&last_run_scanned={result.subscriptions_scanned}",
             status_code=303,
@@ -266,32 +222,12 @@ def rating_run_trigger(
 @router.get("/rating/{run_id}", response_class=HTMLResponse)
 def rating_run_detail(request: Request, run_id: str, db: Session = Depends(get_db)):
     """View rating run details."""
-    try:
-        run = usage_service.usage_rating_runs.get(db=db, run_id=run_id)
-    except Exception:
+    detail = web_usage_service.rating_run_detail_context(db, run_id=run_id)
+    if detail is None:
         return RedirectResponse("/admin/catalog/usage/rating", status_code=303)
-
-    # Get charges created by this run (by period)
-    run_charges = usage_service.usage_charges.list(
-        db=db,
-        subscription_id=None,
-        subscriber_id=None,
-        status=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=100,
-        offset=0,
-        period_start=run.period_start,
-        period_end=run.period_end,
-    )
 
     context = _base_context(
         request, db, active_page="catalog-usage", usage_tab="rating"
     )
-    context.update(
-        {
-            "run": run,
-            "run_charges": run_charges,
-        }
-    )
+    context.update(detail)
     return templates.TemplateResponse("admin/catalog/usage/rating_detail.html", context)

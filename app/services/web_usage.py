@@ -17,6 +17,7 @@ from app.models.usage import (
     UsageRatingRunStatus,
     UsageRecord,
 )
+from app.schemas.usage import UsageChargePostRequest, UsageRatingRunRequest
 from app.services import catalog as catalog_service
 from app.services import settings_spec
 from app.services import usage as usage_service
@@ -244,4 +245,75 @@ def get_rating_runs_page_data(
         "total_pages": total_pages,
         "default_period_start": default_period_start.strftime("%Y-%m-%d"),
         "default_period_end": default_period_end.strftime("%Y-%m-%d"),
+    }
+
+
+def post_usage_charge(db: Session, *, charge_id: str) -> None:
+    """Post a single staged usage charge."""
+    usage_service.usage_charges.post(
+        db=db,
+        charge_id=charge_id,
+        payload=UsageChargePostRequest(),
+    )
+
+
+def parse_charge_ids(form) -> list[str]:
+    """Return selected charge IDs from a submitted bulk form."""
+    return [
+        item.strip()
+        for item in form.getlist("charge_ids")
+        if isinstance(item, str) and item.strip()
+    ]
+
+
+def bulk_post_usage_charges(db: Session, *, form) -> None:
+    """Post selected staged usage charges from form data."""
+    usage_service.usage_charges.bulk_post_by_ids(
+        db=db,
+        charge_ids=parse_charge_ids(form),
+    )
+
+
+def _parse_date_field(value: object) -> datetime | None:
+    raw = value.strip() if isinstance(value, str) else ""
+    if not raw:
+        return None
+    try:
+        return datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def run_rating_from_form(db: Session, *, form) -> object:
+    """Trigger a usage rating run from web form data."""
+    payload = UsageRatingRunRequest(
+        period_start=_parse_date_field(form.get("period_start")),
+        period_end=_parse_date_field(form.get("period_end")),
+        dry_run=form.get("dry_run") == "true",
+    )
+    return usage_service.usage_rating_runs.run(db=db, payload=payload)
+
+
+def rating_run_detail_context(db: Session, *, run_id: str) -> dict[str, object] | None:
+    """Return rating run detail context, or None when not found."""
+    try:
+        run = usage_service.usage_rating_runs.get(db=db, run_id=run_id)
+    except Exception:
+        return None
+
+    run_charges = usage_service.usage_charges.list(
+        db=db,
+        subscription_id=None,
+        subscriber_id=None,
+        status=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=100,
+        offset=0,
+        period_start=run.period_start,
+        period_end=run.period_end,
+    )
+    return {
+        "run": run,
+        "run_charges": run_charges,
     }

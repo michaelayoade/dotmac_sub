@@ -11,14 +11,18 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from time import monotonic
 
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
-from app.models.network import OntAssignment, OntUnit, PonPort
+from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus, PonPort
+from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.olt_web_audit import log_olt_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +30,37 @@ logger = logging.getLogger(__name__)
 def _is_serial_already_registered_message(message: str | None) -> bool:
     lowered = str(message or "").lower()
     return "sn already exists" in lowered or "serial already exists" in lowered
+
+
+def _resolve_authorized_autofind_candidate(
+    db: Session,
+    *,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+) -> tuple[bool, str]:
+    """Best-effort candidate cleanup after OLT authorization is verified."""
+    from app.services import (
+        web_network_ont_autofind as web_network_ont_autofind_service,
+    )
+
+    try:
+        web_network_ont_autofind_service.resolve_candidate_authorized(
+            db,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+        )
+        return True, "Marked the discovered ONT as authorized."
+    except (SQLAlchemyError, ValueError) as exc:
+        logger.warning(
+            "Failed to immediately resolve autofind candidate for %s on %s %s: %s",
+            serial_number,
+            olt_id,
+            fsp,
+            exc,
+        )
+        return False, f"Failed to mark discovered ONT as authorized: {exc}"
 
 
 @dataclass
@@ -105,11 +140,25 @@ def _build_authorization_failure(
 
 
 def authorize_autofind_ont(
-    db: Session, olt_id: str, fsp: str, serial_number: str
+    db: Session,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    *,
+    force_reauthorize: bool = False,
 ):
-    """Authorize an unregistered ONT on an OLT with a fail-fast workflow."""
-    from app.services import web_network_olts as web_network_olts_service
+    """Authorize an unregistered ONT on an OLT with a fail-fast workflow.
+
+    Args:
+        db: Database session
+        olt_id: UUID of the OLT
+        fsp: Frame/Slot/Port (e.g., "0/1/13")
+        serial_number: ONT serial number
+        force_reauthorize: If True, delete any existing registration of this
+            serial on the OLT before authorizing on the specified port.
+    """
     from app.services.network import olt_ssh as olt_ssh_service
+    from app.services.network import olt_ssh_ont as olt_ssh_ont_service
     from app.services.network.olt_write_reconciliation import verify_ont_authorized
     from app.services.web_network_ont_autofind import sync_olt_autofind_candidates
 
@@ -195,9 +244,57 @@ def authorize_autofind_ont(
             result.completed_authorization = completed_authorization
         return _finalize(result, failure_detail=message)
 
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return _fail("Authorize ONT on OLT", "OLT not found")
+
+    # Handle force reauthorize: delete existing registration first
+    if force_reauthorize:
+        force_started_at = monotonic()
+        find_ok, find_msg, existing = olt_ssh_ont_service.find_ont_by_serial(
+            olt, serial_number
+        )
+        if not find_ok:
+            return _fail(
+                "Find existing ONT registration",
+                f"Failed to search for existing registration: {find_msg}",
+                step_started_at=force_started_at,
+            )
+        if existing:
+            logger.info(
+                "Force reauthorize: deleting existing ONT registration serial=%s from %s port %s ont_id=%d",
+                serial_number,
+                olt.name,
+                existing.fsp,
+                existing.onu_id,
+            )
+            delete_ok, delete_msg = olt_ssh_ont_service.deauthorize_ont(
+                olt, existing.fsp, existing.onu_id
+            )
+            if not delete_ok:
+                return _fail(
+                    "Delete existing ONT registration",
+                    f"Failed to delete existing registration on {existing.fsp}: {delete_msg}",
+                    step_started_at=force_started_at,
+                )
+            _append_step(
+                "Delete existing ONT registration",
+                True,
+                f"Deleted existing registration from {existing.fsp} (ONT-ID {existing.onu_id})",
+                step_started_at=force_started_at,
+            )
+        else:
+            _append_step(
+                "Check existing ONT registration",
+                True,
+                "No existing registration found for this serial",
+                step_started_at=force_started_at,
+            )
+
+    # Track if we deleted an existing registration (skip autofind validation if so)
+    deleted_existing = any(
+        s.name == "Delete existing ONT registration" and s.success for s in steps
+    )
 
     validate_started_at = monotonic()
     matched_candidate = get_autofind_candidate_by_serial(
@@ -222,21 +319,34 @@ def authorize_autofind_ont(
             db, olt_id, serial_number, fsp=fsp
         )
         if matched_candidate is None:
-            logger.warning(
-                "ONT authorization validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s sync_message=%s sync_stats=%s failure_step=%s",
-                olt_id,
-                getattr(olt, "name", None),
-                fsp,
-                serial_number,
-                sync_message,
-                _sync_stats,
-                "Validate discovered ONT row",
-            )
-            return _fail(
-                "Validate discovered ONT row",
-                "The discovered ONT entry is no longer active for that port/serial after refreshing autofind data.",
-                step_started_at=validate_started_at,
-            )
+            # If we deleted an existing registration via force_reauthorize, skip autofind validation
+            # since the ONT was registered (not in autofind) and we just need to re-register it
+            if deleted_existing:
+                logger.info(
+                    "Skipping autofind validation after force delete - ONT was previously registered, not in autofind"
+                )
+                _append_step(
+                    "Skip autofind validation",
+                    True,
+                    "Skipped autofind validation - ONT was previously registered on OLT",
+                    step_started_at=validate_started_at,
+                )
+            else:
+                logger.warning(
+                    "ONT authorization validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s sync_message=%s sync_stats=%s failure_step=%s",
+                    olt_id,
+                    getattr(olt, "name", None),
+                    fsp,
+                    serial_number,
+                    sync_message,
+                    _sync_stats,
+                    "Validate discovered ONT row",
+                )
+                return _fail(
+                    "Validate discovered ONT row",
+                    "The discovered ONT entry is no longer active for that port/serial after refreshing autofind data.",
+                    step_started_at=validate_started_at,
+                )
     _append_step(
         "Validate discovered ONT row",
         True,
@@ -255,9 +365,7 @@ def authorize_autofind_ont(
     if not ok or ont_id is None:
         failure_message = msg
         if ok and ont_id is None:
-            failure_message = (
-                "ONT was authorized, but ONT-ID could not be determined from the OLT response."
-            )
+            failure_message = "ONT was authorized, but ONT-ID could not be determined from the OLT response."
             logger.warning(
                 "Could not determine ONT-ID for authorized serial %s on %s %s",
                 serial_number,
@@ -272,16 +380,18 @@ def authorize_autofind_ont(
                 serial_number=serial_number,
             )
             if duplicate_verification.success:
-                verified_ont_id = duplicate_verification.details.get("ont_id") if duplicate_verification.details else None
+                verified_ont_id = (
+                    duplicate_verification.details.get("ont_id")
+                    if duplicate_verification.details
+                    else None
+                )
                 ont_id = (
                     int(verified_ont_id)
                     if isinstance(verified_ont_id, int | str)
                     and str(verified_ont_id).isdigit()
                     else None
                 )
-                recovery_message = (
-                    "ONT serial was already registered on the OLT; reusing the existing registration."
-                )
+                recovery_message = "ONT serial was already registered on the OLT; reusing the existing registration."
                 if ont_id is not None:
                     recovery_message += f" Resolved ONT-ID {ont_id} on {fsp}."
                 else:
@@ -351,6 +461,11 @@ def authorize_autofind_ont(
         fsp=fsp,
         serial_number=serial_number,
         ont_id_on_olt=ont_id,
+        olt_run_state=(
+            str(verification.details.get("run_state") or "")
+            if verification.details
+            else None
+        ),
     )
     if ont_unit_id is None:
         return _fail(
@@ -368,6 +483,20 @@ def authorize_autofind_ont(
         step_started_at=ont_record_started_at,
     )
 
+    resolve_started_at = monotonic()
+    resolve_ok, resolve_msg = _resolve_authorized_autofind_candidate(
+        db,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
+    )
+    _append_step(
+        "Resolve autofind candidate",
+        resolve_ok,
+        resolve_msg,
+        step_started_at=resolve_started_at,
+    )
+
     queue_started_at = monotonic()
     if ont_id is None:
         return _fail(
@@ -378,15 +507,13 @@ def authorize_autofind_ont(
             status="warning",
             completed_authorization=True,
         )
-    queue_ok, queue_msg, follow_up_operation_id = (
-        queue_post_authorization_follow_up(
-            db,
-            ont_unit_id=ont_unit_id,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
-            ont_id_on_olt=ont_id,
-        )
+    queue_ok, queue_msg, follow_up_operation_id = queue_post_authorization_follow_up(
+        db,
+        ont_unit_id=ont_unit_id,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
+        ont_id_on_olt=ont_id,
     )
     if not queue_ok:
         return _fail(
@@ -419,6 +546,41 @@ def authorize_autofind_ont(
     )
 
 
+def authorize_autofind_ont_audited(
+    db: Session,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    *,
+    force_reauthorize: bool = False,
+    request: Request | None = None,
+) -> AuthorizationWorkflowResult:
+    result = authorize_autofind_ont(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+        force_reauthorize=force_reauthorize,
+    )
+    status = getattr(result, "status", "success" if result.success else "error")
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="authorize_ont",
+        entity_id=olt_id,
+        metadata={
+            "result": status,
+            "message": result.message,
+            "fsp": fsp,
+            "serial_number": serial_number,
+            "force_reauthorize": force_reauthorize,
+        },
+        status_code=200 if status in {"success", "warning"} else 500,
+        is_success=status == "success",
+    )
+    return result
+
+
 def run_post_authorization_follow_up(
     db: Session,
     *,
@@ -429,67 +591,64 @@ def run_post_authorization_follow_up(
     ont_id_on_olt: int,
 ) -> tuple[bool, str, list[dict[str, object]]]:
     """Run non-critical reconciliation after successful OLT authorization."""
-    from app.services import web_network_olts as web_network_olts_service
-    from app.services import (
-        web_network_ont_autofind as web_network_ont_autofind_service,
-    )
-
     steps: list[dict[str, object]] = []
 
     def _add_step(name: str, success: bool, message: str) -> None:
         steps.append({"name": name, "success": success, "message": message})
 
-    assignment_ok, assignment_msg = (
-        ensure_assignment_and_pon_port_for_authorized_ont(
-            db,
-            ont_unit_id=ont_unit_id,
-            olt_id=olt_id,
-            fsp=fsp,
-        )
+    assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
+        db,
+        ont_unit_id=ont_unit_id,
+        olt_id=olt_id,
+        fsp=fsp,
     )
     _add_step("Create or link assignment and PON port", assignment_ok, assignment_msg)
     if not assignment_ok:
         return False, assignment_msg, steps
 
-    sync_ok, sync_msg, _sync_stats = web_network_olts_service.sync_onts_from_olt_snmp(
+    from app.services.network.olt_targeted_sync import sync_authorized_ont_from_olt_snmp
+
+    sync_ok, sync_msg, _sync_stats = sync_authorized_ont_from_olt_snmp(
         db,
-        olt_id,
+        olt_id=olt_id,
+        ont_unit_id=ont_unit_id,
+        fsp=fsp,
+        ont_id_on_olt=ont_id_on_olt,
+        serial_number=serial_number,
     )
     _add_step("Sync this ONT from OLT SNMP", sync_ok, sync_msg)
     if not sync_ok:
         return False, sync_msg, steps
 
-    try:
-        web_network_ont_autofind_service.resolve_candidate_authorized(
-            db,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
-        )
-        resolve_ok = True
-        resolve_msg = "Marked the discovered ONT as authorized."
-    except (SQLAlchemyError, ValueError) as exc:
-        logger.warning(
-            "Failed to resolve autofind candidate for %s on %s %s: %s",
-            serial_number,
-            olt_id,
-            fsp,
-            exc,
-        )
-        resolve_ok = False
-        resolve_msg = f"Failed to mark discovered ONT as authorized: {exc}"
+    resolve_ok, resolve_msg = _resolve_authorized_autofind_candidate(
+        db,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
+    )
     _add_step("Resolve autofind candidate", resolve_ok, resolve_msg)
     if not resolve_ok:
         return False, resolve_msg, steps
 
     try:
-        olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+        olt = get_olt_or_none(db, olt_id)
         if olt is not None:
             from app.services.network.olt_ssh_ont import bind_tr069_server_profile
-
-            bind_ok, bind_msg = bind_tr069_server_profile(
-                olt, fsp, ont_id_on_olt, profile_id=1
+            from app.services.network.olt_tr069_admin import (
+                ensure_tr069_profile_for_linked_acs,
             )
+
+            profile_ok, profile_msg, profile_id = ensure_tr069_profile_for_linked_acs(
+                olt
+            )
+            _add_step("Verify DotMac ACS profile", profile_ok, profile_msg)
+            if profile_ok and profile_id is not None:
+                bind_ok, bind_msg = bind_tr069_server_profile(
+                    olt, fsp, ont_id_on_olt, profile_id=profile_id
+                )
+            else:
+                bind_ok = False
+                bind_msg = profile_msg
         else:
             bind_ok, bind_msg = False, "OLT not found for ACS bind."
     except (OSError, SQLAlchemyError) as exc:
@@ -499,6 +658,26 @@ def run_post_authorization_follow_up(
     _add_step("Bind DotMac ACS profile", bind_ok, bind_msg)
     if not bind_ok:
         return False, bind_msg, steps
+
+    try:
+        from app.services.network.ont_provision_steps import queue_wait_tr069_bootstrap
+
+        wait_result = queue_wait_tr069_bootstrap(db, ont_unit_id)
+        _add_step("Wait for ACS inform", True, wait_result.message)
+        logger.info(
+            "Queued TR-069 bootstrap wait after authorization: ont_id=%s serial=%s fsp=%s ont_id_on_olt=%s",
+            ont_unit_id,
+            serial_number,
+            fsp,
+            ont_id_on_olt,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to queue TR-069 bootstrap wait after authorization for ONT %s: %s",
+            ont_unit_id,
+            exc,
+        )
+        _add_step("Wait for ACS inform", False, f"Failed to queue ACS wait: {exc}")
 
     return True, "Post-authorization sync completed successfully.", steps
 
@@ -557,8 +736,10 @@ def queue_post_authorization_follow_up(
                     ),
                 )
             ).first()
-            return True, "Post-authorization sync is already in progress.", (
-                str(existing) if existing else None
+            return (
+                True,
+                "Post-authorization sync is already in progress.",
+                (str(existing) if existing else None),
             )
         raise
 
@@ -604,7 +785,11 @@ def queue_post_authorization_follow_up(
             str(op.id),
         )
 
-    return True, "Queued post-authorization sync and ACS bind in the background.", str(op.id)
+    return (
+        True,
+        "Queued post-authorization sync and ACS bind in the background.",
+        str(op.id),
+    )
 
 
 def get_autofind_candidate_by_serial(
@@ -644,12 +829,18 @@ def create_or_find_ont_for_authorized_serial(
     fsp: str,
     serial_number: str,
     ont_id_on_olt: int | None = None,
+    olt_run_state: str | None = None,
 ) -> tuple[str | None, str]:
     """Create or find an OntUnit for a just-authorized ONT serial."""
     from app.models.ont_autofind import OltAutofindCandidate
-    from app.services import web_network_olts as web_network_olts_service
 
     clean_serial = re.sub(r"[^A-Za-z0-9]", "", serial_number).upper()
+    olt = get_olt_or_none(db, olt_id)
+    observed_online_status = (
+        OnuOnlineStatus.online
+        if str(olt_run_state or "").strip().lower() == "online"
+        else None
+    )
 
     existing = db.scalars(
         select(OntUnit).where(
@@ -666,12 +857,19 @@ def create_or_find_ont_for_authorized_serial(
             if len(parts) == 3:
                 existing.board = f"{parts[0]}/{parts[1]}"
                 existing.port = parts[2]
+            if observed_online_status is not None:
+                existing.online_status = observed_online_status
+                existing.offline_reason = None
+                existing.last_seen_at = datetime.now(UTC)
+                existing.last_sync_source = "olt_ssh_readback"
+                existing.last_sync_at = datetime.now(UTC)
             if existing.tr069_acs_server_id is None:
-                olt = web_network_olts_service.get_olt_or_none(db, olt_id)
                 if olt is not None:
                     existing.tr069_acs_server_id = olt.tr069_acs_server_id
             db.commit()
-            return str(existing.id), f"Using existing ONT record {existing.serial_number}."
+            return str(
+                existing.id
+            ), f"Using existing ONT record {existing.serial_number}."
         except SQLAlchemyError as exc:
             db.rollback()
             return None, f"Failed to update existing ONT record: {exc}"
@@ -710,6 +908,12 @@ def create_or_find_ont_for_authorized_serial(
         board=board,
         port=port,
         is_active=True,
+        online_status=observed_online_status or OnuOnlineStatus.unknown,
+        offline_reason=None,
+        last_seen_at=datetime.now(UTC) if observed_online_status else None,
+        last_sync_source="olt_ssh_readback" if observed_online_status else None,
+        last_sync_at=datetime.now(UTC) if observed_online_status else None,
+        tr069_acs_server_id=getattr(olt, "tr069_acs_server_id", None) if olt else None,
         pon_type="gpon",
         name=display_serial,
     )
@@ -748,13 +952,11 @@ def ensure_ont_for_authorized_serial(
     )
     if ont_id is None:
         return None
-    ok, _assignment_msg = (
-        ensure_assignment_and_pon_port_for_authorized_ont(
-            db,
-            ont_unit_id=ont_id,
-            olt_id=olt_id,
-            fsp=fsp,
-        )
+    ok, _assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
+        db,
+        ont_unit_id=ont_id,
+        olt_id=olt_id,
+        fsp=fsp,
     )
     return ont_id if ok else None
 

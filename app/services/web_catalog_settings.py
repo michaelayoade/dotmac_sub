@@ -17,20 +17,34 @@ from sqlalchemy.orm import Session
 
 from app.models.catalog import (
     AddOn,
+    AddOnType,
     BillingCycle,
     DunningAction,
     PolicySet,
     PriceType,
     PriceUnit,
+    ProrationPolicy,
+    RefundPolicy,
     RegionZone,
     SlaProfile,
+    SuspensionAction,
     UsageAllowance,
 )
 from app.schemas.catalog import (
+    AddOnCreate,
     AddOnPriceCreate,
     AddOnPriceUpdate,
+    AddOnUpdate,
     PolicyDunningStepCreate,
     PolicyDunningStepUpdate,
+    PolicySetCreate,
+    PolicySetUpdate,
+    RegionZoneCreate,
+    RegionZoneUpdate,
+    SlaProfileCreate,
+    SlaProfileUpdate,
+    UsageAllowanceCreate,
+    UsageAllowanceUpdate,
 )
 from app.services import catalog as catalog_service
 from app.services.common import coerce_uuid
@@ -119,6 +133,81 @@ def list_region_zones_paginated(
     return PaginatedResult(items=list(items), total=total, total_pages=total_pages)
 
 
+def region_zone_form_defaults() -> dict[str, object]:
+    """Return blank defaults for the region-zone form."""
+    return {"name": "", "code": "", "description": "", "is_active": True}
+
+
+def region_zone_form_context(
+    db: Session,
+    *,
+    zone_id: str | None = None,
+) -> dict[str, object] | None:
+    """Return region-zone form context, or None when editing a missing zone."""
+    if zone_id is None:
+        return {
+            "zone": region_zone_form_defaults(),
+            "action_url": "/admin/catalog/settings/region-zones",
+        }
+    try:
+        zone_obj = catalog_service.region_zones.get(db=db, zone_id=zone_id)
+    except Exception:
+        return None
+    return {
+        "zone": {
+            "id": str(zone_obj.id),
+            "name": zone_obj.name,
+            "code": zone_obj.code or "",
+            "description": zone_obj.description or "",
+            "is_active": zone_obj.is_active,
+        },
+        "action_url": f"/admin/catalog/settings/region-zones/{zone_id}/edit",
+    }
+
+
+def parse_region_zone_form(form) -> dict[str, object]:
+    """Parse region-zone form fields into template-friendly values."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "name": form_str("name").strip(),
+        "code": form_str("code").strip(),
+        "description": form_str("description").strip(),
+        "is_active": form_str("is_active") == "true",
+    }
+
+
+def _region_zone_payload(values: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": values["name"],
+        "code": values["code"] or None,
+        "description": values["description"] or None,
+        "is_active": values["is_active"],
+    }
+
+
+def create_region_zone_from_form(db: Session, *, form) -> None:
+    """Validate and create a region zone from form data."""
+    values = parse_region_zone_form(form)
+    payload = RegionZoneCreate.model_validate(_region_zone_payload(values))
+    catalog_service.region_zones.create(db=db, payload=payload)
+
+
+def update_region_zone_from_form(db: Session, *, zone_id: str, form) -> None:
+    """Validate and update a region zone from form data."""
+    values = parse_region_zone_form(form)
+    payload = RegionZoneUpdate.model_validate(_region_zone_payload(values))
+    catalog_service.region_zones.update(db=db, zone_id=zone_id, payload=payload)
+
+
+def delete_region_zone(db: Session, *, zone_id: str) -> None:
+    """Deactivate a region zone."""
+    catalog_service.region_zones.delete(db=db, zone_id=zone_id)
+
+
 def list_usage_allowances_paginated(
     db: Session,
     *,
@@ -147,6 +236,111 @@ def list_usage_allowances_paginated(
         stmt.order_by(UsageAllowance.name.asc()).offset(offset).limit(per_page)
     ).all()
     return PaginatedResult(items=list(items), total=total, total_pages=total_pages)
+
+
+def usage_allowance_form_defaults() -> dict[str, object]:
+    """Return blank defaults for the usage-allowance form."""
+    return {
+        "name": "",
+        "included_gb": "",
+        "overage_rate": "",
+        "overage_cap_gb": "",
+        "throttle_rate_mbps": "",
+        "is_active": True,
+    }
+
+
+def usage_allowance_form_context(
+    db: Session,
+    *,
+    allowance_id: str | None = None,
+) -> dict[str, object] | None:
+    """Return usage-allowance form context, or None when missing."""
+    if allowance_id is None:
+        return {
+            "allowance": usage_allowance_form_defaults(),
+            "action_url": "/admin/catalog/settings/usage-allowances",
+        }
+    try:
+        obj = catalog_service.usage_allowances.get(
+            db=db,
+            allowance_id=allowance_id,
+        )
+    except Exception:
+        return None
+    return {
+        "allowance": {
+            "id": str(obj.id),
+            "name": obj.name,
+            "included_gb": obj.included_gb or "",
+            "overage_rate": obj.overage_rate or "",
+            "overage_cap_gb": obj.overage_cap_gb or "",
+            "throttle_rate_mbps": obj.throttle_rate_mbps or "",
+            "is_active": obj.is_active,
+        },
+        "action_url": (f"/admin/catalog/settings/usage-allowances/{allowance_id}/edit"),
+    }
+
+
+def parse_usage_allowance_form(form) -> dict[str, object]:
+    """Parse usage-allowance form fields into template-friendly values."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "name": form_str("name").strip(),
+        "included_gb": form_str("included_gb").strip(),
+        "overage_rate": form_str("overage_rate").strip(),
+        "overage_cap_gb": form_str("overage_cap_gb").strip(),
+        "throttle_rate_mbps": form_str("throttle_rate_mbps").strip(),
+        "is_active": form_str("is_active") == "true",
+    }
+
+
+def _optional_int(value: object) -> int | None:
+    raw = str(value or "").strip()
+    return int(raw) if raw else None
+
+
+def _usage_allowance_payload(values: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": values["name"],
+        "included_gb": _optional_int(values["included_gb"]),
+        "overage_rate": values["overage_rate"] or None,
+        "overage_cap_gb": _optional_int(values["overage_cap_gb"]),
+        "throttle_rate_mbps": _optional_int(values["throttle_rate_mbps"]),
+        "is_active": values["is_active"],
+    }
+
+
+def create_usage_allowance_from_form(db: Session, *, form) -> None:
+    """Validate and create a usage allowance from form data."""
+    values = parse_usage_allowance_form(form)
+    payload = UsageAllowanceCreate.model_validate(_usage_allowance_payload(values))
+    catalog_service.usage_allowances.create(db=db, payload=payload)
+
+
+def update_usage_allowance_from_form(
+    db: Session,
+    *,
+    allowance_id: str,
+    form,
+) -> None:
+    """Validate and update a usage allowance from form data."""
+    values = parse_usage_allowance_form(form)
+    payload = UsageAllowanceUpdate.model_validate(_usage_allowance_payload(values))
+    catalog_service.usage_allowances.update(
+        db=db,
+        allowance_id=allowance_id,
+        payload=payload,
+    )
+
+
+def delete_usage_allowance(db: Session, *, allowance_id: str) -> None:
+    """Deactivate a usage allowance."""
+    catalog_service.usage_allowances.delete(db=db, allowance_id=allowance_id)
 
 
 def list_sla_profiles_paginated(
@@ -179,6 +373,102 @@ def list_sla_profiles_paginated(
     return PaginatedResult(items=list(items), total=total, total_pages=total_pages)
 
 
+def sla_profile_form_defaults() -> dict[str, object]:
+    """Return blank defaults for the SLA-profile form."""
+    return {
+        "name": "",
+        "uptime_percent": "",
+        "response_time_hours": "",
+        "resolution_time_hours": "",
+        "credit_percent": "",
+        "notes": "",
+        "is_active": True,
+    }
+
+
+def sla_profile_form_context(
+    db: Session,
+    *,
+    profile_id: str | None = None,
+) -> dict[str, object] | None:
+    """Return SLA-profile form context, or None when missing."""
+    if profile_id is None:
+        return {
+            "profile": sla_profile_form_defaults(),
+            "action_url": "/admin/catalog/settings/sla-profiles",
+        }
+    try:
+        obj = catalog_service.sla_profiles.get(db=db, profile_id=profile_id)
+    except Exception:
+        return None
+    return {
+        "profile": {
+            "id": str(obj.id),
+            "name": obj.name,
+            "uptime_percent": obj.uptime_percent or "",
+            "response_time_hours": obj.response_time_hours or "",
+            "resolution_time_hours": obj.resolution_time_hours or "",
+            "credit_percent": obj.credit_percent or "",
+            "notes": obj.notes or "",
+            "is_active": obj.is_active,
+        },
+        "action_url": f"/admin/catalog/settings/sla-profiles/{profile_id}/edit",
+    }
+
+
+def parse_sla_profile_form(form) -> dict[str, object]:
+    """Parse SLA-profile form fields into template-friendly values."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "name": form_str("name").strip(),
+        "uptime_percent": form_str("uptime_percent").strip(),
+        "response_time_hours": form_str("response_time_hours").strip(),
+        "resolution_time_hours": form_str("resolution_time_hours").strip(),
+        "credit_percent": form_str("credit_percent").strip(),
+        "notes": form_str("notes").strip(),
+        "is_active": form_str("is_active") == "true",
+    }
+
+
+def _sla_profile_payload(values: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": values["name"],
+        "uptime_percent": values["uptime_percent"] or None,
+        "response_time_hours": _optional_int(values["response_time_hours"]),
+        "resolution_time_hours": _optional_int(values["resolution_time_hours"]),
+        "credit_percent": values["credit_percent"] or None,
+        "notes": values["notes"] or None,
+        "is_active": values["is_active"],
+    }
+
+
+def create_sla_profile_from_form(db: Session, *, form) -> None:
+    """Validate and create an SLA profile from form data."""
+    values = parse_sla_profile_form(form)
+    payload = SlaProfileCreate.model_validate(_sla_profile_payload(values))
+    catalog_service.sla_profiles.create(db=db, payload=payload)
+
+
+def update_sla_profile_from_form(db: Session, *, profile_id: str, form) -> None:
+    """Validate and update an SLA profile from form data."""
+    values = parse_sla_profile_form(form)
+    payload = SlaProfileUpdate.model_validate(_sla_profile_payload(values))
+    catalog_service.sla_profiles.update(
+        db=db,
+        profile_id=profile_id,
+        payload=payload,
+    )
+
+
+def delete_sla_profile(db: Session, *, profile_id: str) -> None:
+    """Deactivate an SLA profile."""
+    catalog_service.sla_profiles.delete(db=db, profile_id=profile_id)
+
+
 def list_policy_sets_paginated(
     db: Session,
     *,
@@ -207,6 +497,195 @@ def list_policy_sets_paginated(
         stmt.order_by(PolicySet.name.asc()).offset(offset).limit(per_page)
     ).all()
     return PaginatedResult(items=list(items), total=total, total_pages=total_pages)
+
+
+def policy_set_form_defaults() -> dict[str, object]:
+    """Return blank defaults for the policy-set form."""
+    return {
+        "name": "",
+        "proration_policy": "immediate",
+        "downgrade_policy": "next_cycle",
+        "trial_days": "",
+        "trial_card_required": False,
+        "grace_days": "",
+        "suspension_action": "suspend",
+        "refund_policy": "none",
+        "refund_window_days": "",
+        "is_active": True,
+        "dunning_steps": [],
+    }
+
+
+def policy_set_form_options() -> dict[str, list[str]]:
+    """Return enum option lists for policy-set forms."""
+    return {
+        "proration_policies": [item.value for item in ProrationPolicy],
+        "suspension_actions": [item.value for item in SuspensionAction],
+        "refund_policies": [item.value for item in RefundPolicy],
+        "dunning_actions": [item.value for item in DunningAction],
+    }
+
+
+def policy_set_form_context(
+    db: Session,
+    *,
+    policy_id: str | None = None,
+) -> dict[str, object] | None:
+    """Return policy-set form context, or None when editing a missing policy."""
+    if policy_id is None:
+        return {
+            "policy": policy_set_form_defaults(),
+            "action_url": "/admin/catalog/settings/policy-sets",
+            **policy_set_form_options(),
+        }
+    try:
+        obj = catalog_service.policy_sets.get(db=db, policy_id=policy_id)
+    except Exception:
+        return None
+
+    steps = catalog_service.policy_dunning_steps.list(
+        db=db,
+        policy_set_id=policy_id,
+        order_by="day_offset",
+        order_dir="asc",
+        limit=100,
+        offset=0,
+    )
+    return {
+        "policy": {
+            "id": str(obj.id),
+            "name": obj.name,
+            "proration_policy": obj.proration_policy.value
+            if obj.proration_policy
+            else "immediate",
+            "downgrade_policy": obj.downgrade_policy.value
+            if obj.downgrade_policy
+            else "next_cycle",
+            "trial_days": obj.trial_days or "",
+            "trial_card_required": obj.trial_card_required,
+            "grace_days": obj.grace_days or "",
+            "suspension_action": obj.suspension_action.value
+            if obj.suspension_action
+            else "suspend",
+            "refund_policy": obj.refund_policy.value if obj.refund_policy else "none",
+            "refund_window_days": obj.refund_window_days or "",
+            "is_active": obj.is_active,
+            "dunning_steps": [
+                {
+                    "id": str(step.id),
+                    "day_offset": step.day_offset,
+                    "action": step.action.value,
+                    "note": step.note or "",
+                }
+                for step in steps
+            ],
+        },
+        "action_url": f"/admin/catalog/settings/policy-sets/{policy_id}/edit",
+        **policy_set_form_options(),
+    }
+
+
+def parse_policy_dunning_steps_form(
+    form,
+    *,
+    include_ids: bool,
+) -> list[dict[str, str]]:
+    """Parse indexed dunning-step fields from the policy-set form."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    steps: list[dict[str, str]] = []
+    index = 0
+    while True:
+        day_value = form.get(f"dunning_steps[{index}][day_offset]")
+        if not isinstance(day_value, str):
+            break
+        action = form_str(f"dunning_steps[{index}][action]").strip()
+        note = form_str(f"dunning_steps[{index}][note]").strip()
+        if day_value.strip() and action:
+            step = {
+                "day_offset": day_value.strip(),
+                "action": action,
+                "note": note,
+            }
+            if include_ids:
+                step["id"] = form_str(f"dunning_steps[{index}][id]").strip()
+            steps.append(step)
+        index += 1
+    return steps
+
+
+def parse_policy_set_form(
+    form, *, include_dunning_ids: bool = False
+) -> dict[str, object]:
+    """Parse policy-set form fields into template-friendly values."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "name": form_str("name").strip(),
+        "proration_policy": form_str("proration_policy", "immediate").strip(),
+        "downgrade_policy": form_str("downgrade_policy", "next_cycle").strip(),
+        "trial_days": form_str("trial_days").strip(),
+        "trial_card_required": form_str("trial_card_required") == "true",
+        "grace_days": form_str("grace_days").strip(),
+        "suspension_action": form_str("suspension_action", "suspend").strip(),
+        "refund_policy": form_str("refund_policy", "none").strip(),
+        "refund_window_days": form_str("refund_window_days").strip(),
+        "is_active": form_str("is_active") == "true",
+        "dunning_steps": parse_policy_dunning_steps_form(
+            form,
+            include_ids=include_dunning_ids,
+        ),
+    }
+
+
+def _policy_set_payload(values: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": values["name"],
+        "proration_policy": ProrationPolicy(str(values["proration_policy"])),
+        "downgrade_policy": ProrationPolicy(str(values["downgrade_policy"])),
+        "trial_days": _optional_int(values["trial_days"]),
+        "trial_card_required": values["trial_card_required"],
+        "grace_days": _optional_int(values["grace_days"]),
+        "suspension_action": SuspensionAction(str(values["suspension_action"])),
+        "refund_policy": RefundPolicy(str(values["refund_policy"])),
+        "refund_window_days": _optional_int(values["refund_window_days"]),
+        "is_active": values["is_active"],
+    }
+
+
+def create_policy_set_from_form(db: Session, *, form) -> None:
+    """Validate and create a policy set with submitted dunning steps."""
+    values = parse_policy_set_form(form)
+    payload = PolicySetCreate.model_validate(_policy_set_payload(values))
+    created = catalog_service.policy_sets.create(db=db, payload=payload)
+    create_dunning_steps(
+        db,
+        str(created.id),
+        values["dunning_steps"],  # type: ignore[arg-type]
+    )
+
+
+def update_policy_set_from_form(db: Session, *, policy_id: str, form) -> None:
+    """Validate and update a policy set with submitted dunning steps."""
+    values = parse_policy_set_form(form, include_dunning_ids=True)
+    payload = PolicySetUpdate.model_validate(_policy_set_payload(values))
+    catalog_service.policy_sets.update(db=db, policy_id=policy_id, payload=payload)
+    sync_dunning_steps(
+        db,
+        policy_id,
+        values["dunning_steps"],  # type: ignore[arg-type]
+    )
+
+
+def delete_policy_set(db: Session, *, policy_id: str) -> None:
+    """Deactivate a policy set."""
+    catalog_service.policy_sets.delete(db=db, policy_id=policy_id)
 
 
 def list_add_ons_paginated(
@@ -241,6 +720,168 @@ def list_add_ons_paginated(
         stmt.order_by(AddOn.name.asc()).offset(offset).limit(per_page)
     ).all()
     return PaginatedResult(items=list(items), total=total, total_pages=total_pages)
+
+
+def add_on_form_defaults() -> dict[str, object]:
+    """Return blank defaults for the add-on form."""
+    return {
+        "name": "",
+        "addon_type": "custom",
+        "description": "",
+        "is_active": True,
+        "prices": [],
+    }
+
+
+def add_on_form_options() -> dict[str, list[str]]:
+    """Return enum option lists for add-on forms."""
+    return {
+        "addon_types": [item.value for item in AddOnType],
+        "price_types": [item.value for item in PriceType],
+        "billing_cycles": [item.value for item in BillingCycle],
+        "price_units": [item.value for item in PriceUnit],
+    }
+
+
+def add_on_form_context(
+    db: Session,
+    *,
+    addon_id: str | None = None,
+) -> dict[str, object] | None:
+    """Return add-on form context, or None when editing a missing add-on."""
+    if addon_id is None:
+        return {
+            "addon": add_on_form_defaults(),
+            "action_url": "/admin/catalog/settings/add-ons",
+            **add_on_form_options(),
+        }
+    try:
+        obj = catalog_service.add_ons.get(db=db, add_on_id=addon_id)
+    except Exception:
+        return None
+
+    prices = catalog_service.add_on_prices.list(
+        db=db,
+        add_on_id=addon_id,
+        is_active=None,
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
+    )
+    return {
+        "addon": {
+            "id": str(obj.id),
+            "name": obj.name,
+            "addon_type": obj.addon_type.value if obj.addon_type else "custom",
+            "description": obj.description or "",
+            "is_active": obj.is_active,
+            "prices": [
+                {
+                    "id": str(price.id),
+                    "price_type": price.price_type.value,
+                    "amount": str(price.amount),
+                    "currency": price.currency,
+                    "billing_cycle": price.billing_cycle.value
+                    if price.billing_cycle
+                    else "",
+                    "unit": price.unit.value if price.unit else "",
+                    "description": price.description or "",
+                }
+                for price in prices
+            ],
+        },
+        "action_url": f"/admin/catalog/settings/add-ons/{addon_id}/edit",
+        **add_on_form_options(),
+    }
+
+
+def parse_add_on_prices_form(form, *, include_ids: bool) -> list[dict[str, str]]:
+    """Parse indexed price fields from the add-on form."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    prices: list[dict[str, str]] = []
+    index = 0
+    while True:
+        amount = form.get(f"prices[{index}][amount]")
+        if not isinstance(amount, str):
+            break
+        price_type = form_str(f"prices[{index}][price_type]").strip()
+        currency = form_str(f"prices[{index}][currency]", "NGN").strip()
+        billing_cycle = form_str(f"prices[{index}][billing_cycle]").strip()
+        unit = form_str(f"prices[{index}][unit]").strip()
+        description = form_str(f"prices[{index}][description]").strip()
+        if amount.strip() and price_type:
+            price = {
+                "price_type": price_type,
+                "amount": amount.strip(),
+                "currency": currency,
+                "billing_cycle": billing_cycle,
+                "unit": unit,
+                "description": description,
+            }
+            if include_ids:
+                price["id"] = form_str(f"prices[{index}][id]").strip()
+            prices.append(price)
+        index += 1
+    return prices
+
+
+def parse_add_on_form(form, *, include_price_ids: bool = False) -> dict[str, object]:
+    """Parse add-on form fields into template-friendly values."""
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "name": form_str("name").strip(),
+        "addon_type": form_str("addon_type", "custom").strip(),
+        "description": form_str("description").strip(),
+        "is_active": form_str("is_active") == "true",
+        "prices": parse_add_on_prices_form(form, include_ids=include_price_ids),
+    }
+
+
+def _add_on_payload(values: dict[str, object]) -> dict[str, object]:
+    return {
+        "name": values["name"],
+        "addon_type": AddOnType(str(values["addon_type"])),
+        "description": values["description"] or None,
+        "is_active": values["is_active"],
+    }
+
+
+def create_add_on_from_form(db: Session, *, form) -> None:
+    """Validate and create an add-on with submitted prices."""
+    values = parse_add_on_form(form)
+    payload = AddOnCreate.model_validate(_add_on_payload(values))
+    created = catalog_service.add_ons.create(db=db, payload=payload)
+    create_addon_prices(
+        db,
+        str(created.id),
+        values["prices"],  # type: ignore[arg-type]
+    )
+
+
+def update_add_on_from_form(db: Session, *, addon_id: str, form) -> None:
+    """Validate and update an add-on with submitted prices."""
+    values = parse_add_on_form(form, include_price_ids=True)
+    payload = AddOnUpdate.model_validate(_add_on_payload(values))
+    catalog_service.add_ons.update(db=db, add_on_id=addon_id, payload=payload)
+    sync_addon_prices(
+        db,
+        addon_id,
+        values["prices"],  # type: ignore[arg-type]
+    )
+
+
+def delete_add_on(db: Session, *, addon_id: str) -> None:
+    """Deactivate an add-on."""
+    catalog_service.add_ons.delete(db=db, add_on_id=addon_id)
 
 
 # ---------------------------------------------------------------------------

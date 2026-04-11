@@ -16,6 +16,7 @@ from app.models.catalog import SubscriptionStatus
 from app.models.subscriber import SubscriberCategory
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
+from app.services import web_admin as web_admin_service
 from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
 from app.services import web_catalog_calculator as web_catalog_calculator_service
 from app.services import web_catalog_offers as web_catalog_offers_service
@@ -45,10 +46,7 @@ def _base_context(
 
 
 def _get_actor_id(request: Request) -> str | None:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    return str(current_user.get("subscriber_id")) if current_user else None
+    return web_admin_service.get_actor_id(request)
 
 
 def _customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
@@ -179,9 +177,8 @@ def catalog_offers_create_post(
 def catalog_offer_detail(
     request: Request, offer_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    try:
-        offer = catalog_service.offers.get(db=db, offer_id=offer_id)
-    except Exception:
+    detail_context = web_catalog_offers_service.offer_detail_context(db, offer_id)
+    if detail_context is None:
         context = _base_context(request, db, active_page="catalog")
         context.update({"message": "Offer not found"})
         return templates.TemplateResponse(
@@ -190,57 +187,9 @@ def catalog_offer_detail(
             status_code=404,
         )
 
-    prices = catalog_service.offer_prices.list(
-        db=db,
-        offer_id=offer_id,
-        is_active=None,
-        order_by="created_at",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-    )
-    subscriptions = catalog_service.subscriptions.list(
-        db=db,
-        subscriber_id=None,
-        offer_id=offer_id,
-        status=None,
-        order_by="created_at",
-        order_dir="desc",
-        limit=50,
-        offset=0,
-    )
-    plan_meta, cleaned_description = (
-        web_catalog_offers_service.parse_offer_description_metadata(offer.description)
-    )
-    plan_kind = str(
-        plan_meta.get("plan_kind") or web_catalog_offers_service.PLAN_KIND_STANDARD
-    )
-    ip_block_size = plan_meta.get("ip_block_size")
-    fup_policy_rel = getattr(offer, "fup_policy", None)
-    if isinstance(fup_policy_rel, list):
-        fup_policy_obj = fup_policy_rel[0] if fup_policy_rel else None
-    else:
-        fup_policy_obj = fup_policy_rel
-    fup_rules_count = len(getattr(fup_policy_obj, "rules", []) or [])
-
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        {
-            "offer": offer,
-            "offer_clean_description": cleaned_description,
-            "offer_plan_kind": plan_kind,
-            "offer_ip_block_size": ip_block_size,
-            "fup_rules_count": fup_rules_count,
-            "fup_return_to": f"/admin/catalog/offers/{offer_id}#plan-fup",
-            "prices": prices,
-            "subscriptions": subscriptions,
-            "activities": build_audit_activities(
-                db, "catalog_offer", str(offer_id), limit=10
-            ),
-        }
-    )
+    context.update(detail_context)
     context.update(web_fup_service.fup_context(request, db, offer_id))
-    context.update(web_catalog_offers_service.get_offer_availability(db, str(offer.id)))
     return templates.TemplateResponse("admin/catalog/offer_detail.html", context)
 
 
@@ -248,9 +197,8 @@ def catalog_offer_detail(
 def catalog_offer_edit(
     request: Request, offer_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    try:
-        offer = catalog_service.offers.get(db=db, offer_id=offer_id)
-    except Exception:
+    form_context = web_catalog_offers_service.offer_edit_form_context(db, offer_id)
+    if form_context is None:
         context = _base_context(request, db, active_page="catalog")
         context.update({"message": "Offer not found"})
         return templates.TemplateResponse(
@@ -259,16 +207,8 @@ def catalog_offer_edit(
             status_code=404,
         )
 
-    offer_data, offer_addon_links = web_catalog_offers_service.offer_edit_form_data(
-        db, offer_id, offer
-    )
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_catalog_offers_service.offer_form_context(
-            db, offer_data, offer_addon_links=offer_addon_links
-        )
-    )
-    context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
+    context.update(form_context)
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
@@ -279,9 +219,8 @@ def catalog_offer_edit_post(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    try:
-        existing_offer = catalog_service.offers.get(db=db, offer_id=offer_id)
-    except Exception:
+    existing_offer = web_catalog_offers_service.get_offer_or_none(db, offer_id)
+    if existing_offer is None:
         context = _base_context(request, db, active_page="catalog")
         context.update({"message": "Offer not found"})
         return templates.TemplateResponse(
@@ -480,22 +419,14 @@ def offer_usage_graph_modal(
     offer_id: str, request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Render the usage graph modal partial for HTMX."""
-    period = request.query_params.get("period", "monthly")
-    if period not in {"daily", "weekly", "monthly", "quarterly", "annual"}:
-        period = "monthly"
-    graph_data = web_catalog_offers_service.plan_usage_graph_data(
-        db, offer_id, period=period
+    context = {"request": request}
+    context.update(
+        web_catalog_offers_service.offer_usage_graph_modal_context(
+            db,
+            offer_id,
+            period=request.query_params.get("period", "monthly"),
+        )
     )
-    try:
-        offer = catalog_service.offers.get(db=db, offer_id=offer_id)
-    except Exception:
-        offer = None
-    context = {
-        "request": request,
-        "offer": offer,
-        "offer_id": offer_id,
-        "graph": graph_data,
-    }
     return templates.TemplateResponse("admin/catalog/_plan_graph_modal.html", context)
 
 

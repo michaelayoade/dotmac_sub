@@ -8,7 +8,6 @@ service functions in ``app.services.network.ont_provision_steps``.
 from __future__ import annotations
 
 import json
-import logging
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -16,21 +15,14 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.network import OntProvisioningProfile, OnuMode, WanMode
-from app.schemas.network import OntUnitUpdate
-from app.schemas.provisioning import ServiceOrderUpdate
-from app.services import network as network_service
-from app.services import provisioning as provisioning_service
 from app.services import web_admin as web_admin_service
-from app.services import web_network_olt_profiles as web_network_olt_profiles_service
-from app.services import web_network_onts as web_network_onts_service
+from app.services import (
+    web_network_onts_provisioning as web_onts_provisioning_service,
+)
 from app.services.auth_dependencies import require_permission
-from app.services.common import coerce_uuid
-from app.services.credential_crypto import encrypt_credential
 from app.services.network import ont_provision_steps as steps
-from app.services.network.ont_provision_steps import StepResult, validate_prerequisites
+from app.services.network.ont_provisioning.result import StepResult
 
-logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-provisioning"])
 
@@ -92,27 +84,17 @@ def _step_response(result: StepResult) -> JSONResponse:
     )
 
 
-def _resolve_service_order_id_for_ont(db: Session, ont_id: str) -> str | None:
-    return provisioning_service.resolve_service_order_id_for_ont(db, ont_id)
-
-
 def _record_ont_step_action(
     db: Session,
     request: Request,
     ont_id: str,
     result: StepResult,
 ) -> None:
-    """Record a provisioning step action against the active service order.
-
-    Currently logs only; ServiceOrderAction model is pending migration.
-    """
-    logger.info(
-        "ONT step %s for %s: success=%s waiting=%s — %s",
-        result.step_name,
-        ont_id,
-        result.success,
-        result.waiting,
-        result.message,
+    """Log an operator-triggered ONT provisioning step."""
+    web_onts_provisioning_service.record_ont_step_action(
+        db,
+        ont_id=ont_id,
+        result=result,
     )
 
 
@@ -122,36 +104,17 @@ def _update_service_order_execution_context_for_ont(
     step_name: str,
     values: dict[str, object],
 ) -> None:
-    service_order_id = _resolve_service_order_id_for_ont(db, ont_id)
-    if not service_order_id:
-        return
-    order = provisioning_service.service_orders.get(db, service_order_id)
-    execution_context = dict(getattr(order, "execution_context", None) or {})
-    ont_plan = dict(execution_context.get("ont_plan") or {})
-    ont_plan[step_name] = {
-        key: value for key, value in values.items() if value not in (None, "", [])
-    }
-    execution_context["ont_plan"] = ont_plan
-    provisioning_service.service_orders.update(
+    web_onts_provisioning_service.update_service_order_execution_context_for_ont(
         db,
-        service_order_id,
-        ServiceOrderUpdate(execution_context=execution_context),
+        ont_id=ont_id,
+        step_name=step_name,
+        values=values,
     )
 
 
 # ---------------------------------------------------------------------------
 # Read-only routes (preflight, preview, save settings)
 # ---------------------------------------------------------------------------
-
-
-def _get_profile_with_services(
-    db: Session, profile_id: str
-) -> OntProvisioningProfile | None:
-    """Fetch a provisioning profile by primary key."""
-    pid = coerce_uuid(profile_id)
-    if pid is None:
-        return None
-    return db.get(OntProvisioningProfile, str(pid))
 
 
 @router.get(
@@ -166,14 +129,16 @@ def ont_profile_preview(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: profile summary for the configure page."""
-    profile = _get_profile_with_services(db, profile_id)
-    if not profile:
+    preview_context = web_onts_provisioning_service.profile_preview_context(
+        db,
+        profile_id=profile_id,
+    )
+    if not preview_context:
         return HTMLResponse(
             '<p class="text-sm text-slate-500 dark:text-slate-400">Profile not found.</p>'
         )
     context = _base_context(request, db, active_page="onts")
-    context["profile"] = profile
-    context["wan_services"] = list(profile.wan_services)
+    context.update(preview_context)
     return templates.TemplateResponse(
         "admin/network/onts/_profile_preview.html", context
     )
@@ -192,20 +157,11 @@ def ont_provisioning_preview(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: Command preview for provisioning an ONT."""
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    olt = getattr(ont, "olt_device", None)
-    resolved_profile = web_network_onts_service.resolve_effective_provisioning_profile(
-        db, ont, olt
-    )
-    resolved_tr069_profile, _resolved_tr069_profile_error = (
-        web_network_onts_service.resolve_effective_tr069_profile_for_ont(db, ont)
-    )
-    profile_id = profile_id or (str(resolved_profile.id) if resolved_profile else "")
-    tr069_profile_id = tr069_profile_id or getattr(
-        resolved_tr069_profile, "profile_id", None
-    )
-    data = web_network_olt_profiles_service.command_preview_context(
-        db, ont_id, profile_id, tr069_olt_profile_id=tr069_profile_id
+    data = web_onts_provisioning_service.provisioning_preview_context(
+        db,
+        ont_id=ont_id,
+        profile_id=profile_id,
+        tr069_profile_id=tr069_profile_id,
     )
     context = _base_context(request, db, active_page="onts")
     context.update(data)
@@ -226,23 +182,11 @@ def ont_preflight_check(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Pre-flight validation for ONT provisioning. Returns JSON checklist."""
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    olt = getattr(ont, "olt_device", None)
-    resolved_profile = web_network_onts_service.resolve_effective_provisioning_profile(
-        db, ont, olt
-    )
-    resolved_tr069_profile, _resolved_tr069_profile_error = (
-        web_network_onts_service.resolve_effective_tr069_profile_for_ont(db, ont)
-    )
-    profile_id = profile_id or (str(resolved_profile.id) if resolved_profile else None)
-    tr069_profile_id = tr069_profile_id or getattr(
-        resolved_tr069_profile, "profile_id", None
-    )
-    result = validate_prerequisites(
+    result = web_onts_provisioning_service.preflight_result(
         db,
-        ont_id,
+        ont_id=ont_id,
         profile_id=profile_id,
-        tr069_olt_profile_id=tr069_profile_id,
+        tr069_profile_id=tr069_profile_id,
     )
     return JSONResponse(result)
 
@@ -262,53 +206,18 @@ def ont_save_provision_settings(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Persist provision-page WAN settings without starting provisioning."""
-    try:
-        network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    except Exception:
-        return JSONResponse(
-            status_code=404,
-            content={"success": False, "message": "ONT not found"},
-        )
-
-    onu_mode_value = (onu_mode or "").strip().lower() or None
-    wan_protocol_value = (wan_protocol or "").strip().lower() or None
-    pppoe_username_value = (pppoe_username or "").strip() or None
-    pppoe_password_value = (pppoe_password or "").strip() or None
-    wan_vlan_id_value = (wan_vlan_id or "").strip() or None
-
-    if onu_mode_value not in {None, OnuMode.routing.value, OnuMode.bridging.value}:
-        return JSONResponse(
-            status_code=422,
-            content={"success": False, "message": "Invalid ONU mode"},
-        )
-
-    wan_mode_value: str | None = None
-    if onu_mode_value == OnuMode.bridging.value:
-        wan_mode_value = "bridge"
-    elif wan_protocol_value == "pppoe":
-        wan_mode_value = WanMode.pppoe.value
-    elif wan_protocol_value == "dhcp":
-        wan_mode_value = WanMode.dhcp.value
-    elif wan_protocol_value == "static":
-        wan_mode_value = WanMode.static_ip.value
-    elif wan_protocol_value:
-        return JSONResponse(
-            status_code=422,
-            content={"success": False, "message": "Invalid WAN protocol"},
-        )
-
-    payload = OntUnitUpdate(
-        onu_mode=onu_mode_value,
-        wan_mode=wan_mode_value,
-        wan_vlan_id=coerce_uuid(wan_vlan_id_value),
-        pppoe_username=pppoe_username_value if wan_protocol_value == "pppoe" else None,
-        pppoe_password=encrypt_credential(pppoe_password_value)
-        if wan_protocol_value == "pppoe" and pppoe_password_value
-        else None,
+    result = web_onts_provisioning_service.save_provision_settings(
+        db,
+        ont_id=ont_id,
+        onu_mode=onu_mode,
+        wan_protocol=wan_protocol,
+        wan_vlan_id=wan_vlan_id,
+        pppoe_username=pppoe_username,
+        pppoe_password=pppoe_password,
     )
-    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
     return JSONResponse(
-        content={"success": True, "message": "Provision settings saved"}
+        status_code=result.status_code,
+        content=result.content,
     )
 
 

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import cast
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import func, inspect, or_, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -22,7 +23,7 @@ from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.models.support import Ticket, TicketStatus
 from app.schemas.auth import UserCredentialCreate
 from app.schemas.rbac import SubscriberRoleCreate
-from app.schemas.subscriber import SubscriberCreate
+from app.schemas.subscriber import ResellerCreate, ResellerUpdate, SubscriberCreate
 from app.services import auth as auth_service
 from app.services import rbac as rbac_service
 from app.services import subscriber as subscriber_service
@@ -38,6 +39,169 @@ RESOLVED_TICKET_STATUSES = {
     TicketStatus.canceled,
     TicketStatus.merged,
 }
+
+
+def _roles_for_form(db: Session) -> list[Role]:
+    return list(
+        rbac_service.roles.list(
+            db=db,
+            is_active=True,
+            order_by="name",
+            order_dir="asc",
+            limit=500,
+            offset=0,
+        )
+    )
+
+
+def list_page_context(
+    db: Session,
+    *,
+    page: int,
+    per_page: int,
+) -> dict[str, object]:
+    total = subscriber_service.resellers.count(db=db, is_active=True)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    safe_page = min(page, total_pages)
+    offset = (safe_page - 1) * per_page
+    resellers = subscriber_service.resellers.list(
+        db=db,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=per_page,
+        offset=offset,
+    )
+    return {
+        "resellers": resellers,
+        "reseller_subscriber_counts": count_subscribers_by_reseller_ids(
+            db,
+            [str(item.id) for item in resellers],
+        ),
+        "page": safe_page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+    }
+
+
+def new_form_context(db: Session) -> dict[str, object]:
+    return {
+        "reseller": None,
+        "action_url": "/admin/resellers",
+        "roles": _roles_for_form(db),
+    }
+
+
+def edit_form_context(db: Session, *, reseller_id: str) -> dict[str, object]:
+    reseller = subscriber_service.resellers.get(db=db, reseller_id=reseller_id)
+    return {
+        "reseller": reseller,
+        "action_url": f"/admin/resellers/{reseller.id}",
+    }
+
+
+def create_form_error_context(
+    db: Session,
+    *,
+    payload: dict[str, object],
+    error: str,
+) -> dict[str, object]:
+    return {
+        "reseller": payload,
+        "action_url": "/admin/resellers",
+        "roles": _roles_for_form(db),
+        "error": error,
+    }
+
+
+def update_form_error_context(
+    *,
+    reseller_id: str,
+    payload: dict[str, object],
+    error: str,
+) -> dict[str, object]:
+    payload.update({"id": reseller_id})
+    return {
+        "reseller": payload,
+        "action_url": f"/admin/resellers/{reseller_id}",
+        "error": error,
+    }
+
+
+def parse_reseller_payload(form) -> dict[str, object]:
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "name": form_str("name").strip(),
+        "code": form_str("code").strip() or None,
+        "contact_email": form_str("contact_email").strip() or None,
+        "contact_phone": form_str("contact_phone").strip() or None,
+        "notes": form_str("notes").strip() or None,
+        "is_active": bool(form.get("is_active")),
+    }
+
+
+def parse_create_user_payload(form) -> dict[str, str | None] | None:
+    if not bool(form.get("create_user")):
+        return None
+
+    def form_str(key: str, default: str = "") -> str:
+        value = form.get(key, default)
+        return value if isinstance(value, str) else default
+
+    return {
+        "first_name": form_str("user_first_name").strip(),
+        "last_name": form_str("user_last_name").strip(),
+        "email": form_str("user_email").strip(),
+        "username": form_str("user_email").strip() or None,
+        "role": form_str("user_role").strip() or None,
+    }
+
+
+def validate_create_user_payload(
+    user_payload: dict[str, str | None] | None,
+) -> str | None:
+    if not user_payload:
+        return None
+    missing = [
+        key
+        for key, value in user_payload.items()
+        if key not in {"role", "username"} and not value
+    ]
+    if missing:
+        return (
+            "Provide first name, last name, and email to create a reseller portal user."
+        )
+    return None
+
+
+def create_reseller_from_form(db: Session, form) -> Reseller:
+    payload = parse_reseller_payload(form)
+    try:
+        data = ResellerCreate.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            exc.errors()[0].get("msg", "Invalid reseller details.")
+        ) from exc
+    reseller = subscriber_service.resellers.create(db=db, payload=data)
+    user_payload = parse_create_user_payload(form)
+    if user_payload:
+        create_reseller_with_user(db, reseller=reseller, user_payload=user_payload)
+    return reseller
+
+
+def update_reseller_from_form(db: Session, *, reseller_id: str, form) -> None:
+    payload = parse_reseller_payload(form)
+    try:
+        data = ResellerUpdate.model_validate(payload)
+    except ValidationError as exc:
+        raise ValueError(
+            exc.errors()[0].get("msg", "Invalid reseller details.")
+        ) from exc
+    subscriber_service.resellers.update(db=db, reseller_id=reseller_id, payload=data)
 
 
 def _reseller_users_table_available(db: Session) -> bool:

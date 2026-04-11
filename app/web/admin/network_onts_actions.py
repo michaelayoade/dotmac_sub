@@ -3,34 +3,19 @@
 from __future__ import annotations
 
 import json
-import logging
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
-from app.services import network as network_service
 from app.services import web_admin as web_admin_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
-from app.services import web_network_onts as web_network_onts_service
-from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
-
-_logger = logging.getLogger(__name__)
-
-try:
-    from app.services.network.ont_config_snapshots import ont_config_snapshots
-except ImportError:
-    _logger.error(
-        "Failed to import ont_config_snapshots — config snapshot routes will be unavailable",
-        exc_info=True,
-    )
-    ont_config_snapshots = None  # type: ignore[assignment]
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -59,9 +44,7 @@ def _sanitize_header_message(message: str) -> str:
     'Invalid HTTP header value' errors from uvicorn/httptools.
     """
     # Remove control characters (0x00-0x1F, 0x7F) and non-ASCII
-    return "".join(
-        c for c in message if 0x20 <= ord(c) < 0x7F or c in ("\t",)
-    ).strip()
+    return "".join(c for c in message if 0x20 <= ord(c) < 0x7F or c in ("\t",)).strip()
 
 
 def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
@@ -79,37 +62,64 @@ def _action_json_response(
     success: bool,
     message: str,
     action: str,
+    waiting: bool = False,
     status_code: int | None = None,
     detail: str | None = None,
 ) -> JSONResponse:
     """Return a consistent JSON contract for ONT action requests."""
-    toast_type = "success" if success else "error"
-    phase = "succeeded" if success else "failed"
+    toast_type = "success" if success else ("info" if waiting else "error")
+    phase = "succeeded" if success else ("waiting" if waiting else "failed")
     return JSONResponse(
         {
-            "success": success,
+            "success": success or waiting,
             "message": message,
             "phase": phase,
+            "waiting": waiting,
             "operation": {
                 "action": action,
                 "phase": phase,
                 "detail": detail or message,
             },
         },
-        status_code=status_code if status_code is not None else (200 if success else 400),
+        status_code=status_code
+        if status_code is not None
+        else (200 if success else (202 if waiting else 400)),
         headers=_toast_headers(message, toast_type),
     )
 
 
-def _actor_context(request: Request) -> tuple[dict | None, str | None, str]:
-    current_user = web_admin_service.get_current_user(request)
-    actor_id = (
-        str(current_user.get("actor_id") or current_user.get("id"))
-        if current_user
-        else None
+def _lan_ports_partial_response(
+    request: Request,
+    db: Session,
+    ont_id: str,
+    *,
+    toast_message: str | None = None,
+    toast_type: str = "success",
+) -> HTMLResponse:
+    """Return the LAN ports controls partial with current port status."""
+    from app.services.network.ont_read import OntReadFacade
+
+    tr069_summary = OntReadFacade.get_tr069_summary(db, ont_id)
+    no_tr069 = not tr069_summary.get("available", False)
+    ethernet_ports = (
+        OntReadFacade.get_ethernet_ports(db, ont_id) if not no_tr069 else []
     )
-    actor_name = current_user.get("name", "unknown") if current_user else "system"
-    return current_user, actor_id, actor_name
+
+    context = {
+        "request": request,
+        "ont_id": ont_id,
+        "ethernet_ports": ethernet_ports,
+        "no_tr069": no_tr069,
+    }
+    response = templates.TemplateResponse(
+        "admin/network/onts/_lan_ports_controls.html", context
+    )
+    if toast_message:
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": toast_message, "type": toast_type}},
+            ensure_ascii=True,
+        )
+    return response
 
 
 @router.post(
@@ -119,23 +129,12 @@ def ont_reboot(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Send reboot command to ONT via GenieACS."""
-    current_user, actor_id, actor_name = _actor_context(request)
-    result = web_network_ont_actions_service.execute_reboot(
-        db, ont_id, initiated_by=actor_name
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="reboot",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"success": result.success, "message": result.message},
-    )
+    result = web_network_ont_actions_service.execute_reboot(db, ont_id, request=request)
     return _action_json_response(
         success=result.success,
         message=result.message,
         action="Reboot ONT",
+        waiting=result.waiting,
     )
 
 
@@ -147,21 +146,14 @@ def ont_refresh(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Force status refresh for ONT via GenieACS."""
-    result = web_network_ont_actions_service.execute_refresh(db, ont_id)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="refresh",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"success": result.success},
+    result = web_network_ont_actions_service.execute_refresh(
+        db, ont_id, request=request
     )
     return _action_json_response(
         success=result.success,
         message=result.message,
         action="Refresh ONT",
+        waiting=result.waiting,
     )
 
 
@@ -222,11 +214,11 @@ def ont_olt_side_config(
         if not content:
             continue
         parts.append(
-            f'<div>'
+            f"<div>"
             f'<h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 '
             f'dark:text-slate-400 mb-2">{label}</h4>'
             f'<pre class="whitespace-pre-wrap break-words text-xs font-mono '
-            f'text-emerald-800 dark:text-emerald-300 bg-slate-900 dark:bg-slate-950 '
+            f"text-emerald-800 dark:text-emerald-300 bg-slate-900 dark:bg-slate-950 "
             f'rounded-lg p-3 overflow-x-auto">{html_mod.escape(content)}</pre>'
             f"</div>"
         )
@@ -303,10 +295,7 @@ def ont_olt_status(
             badge_classes = _RUN_STATE_CLASSES.get(
                 run_state, _RUN_STATE_CLASSES["_default"]
             )
-            escaped_val = (
-                f'<span class="{badge_classes}">'
-                f"{escaped_val}</span>"
-            )
+            escaped_val = f'<span class="{badge_classes}">{escaped_val}</span>'
         html_rows.append(
             f"<tr>"
             f'<td class="py-1.5 pr-4 text-xs font-medium text-slate-500 '
@@ -335,26 +324,14 @@ def ont_return_to_inventory(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> Response:
     """Deactivate an ONT and reset it to reusable inventory state."""
-    try:
-        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    except HTTPException:
+    result = web_network_ont_actions_service.return_to_inventory_for_web(
+        db, ont_id, request=request
+    )
+    if not result.success and result.message == "ONT not found":
         return JSONResponse(
             {"success": False, "message": "ONT not found"},
             status_code=404,
             headers=_toast_headers("ONT not found", "error"),
-        )
-
-    result = web_network_ont_actions_service.return_to_inventory(db, ont_id)
-    if result.success:
-        _current_user, actor_id, _actor_name = _actor_context(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="return_to_inventory",
-            entity_type="ont",
-            entity_id=str(ont.id),
-            actor_id=actor_id,
-            metadata={"serial_number": ont.serial_number},
         )
 
     if result.success:
@@ -383,18 +360,8 @@ def ont_factory_reset(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Send factory reset command to ONT via GenieACS."""
-    _current_user, actor_id, actor_name = _actor_context(request)
     result = web_network_ont_actions_service.execute_factory_reset(
-        db, ont_id, initiated_by=actor_name
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="factory_reset",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"success": result.success, "message": result.message},
+        db, ont_id, request=request
     )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
@@ -422,22 +389,8 @@ def ont_apply_profile(
             headers=_toast_headers("No profile selected", "error"),
         )
 
-    from app.services.network.ont_profile_apply import apply_profile_to_ont
-
-    result = apply_profile_to_ont(db, ont_id, profile_id)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="apply_profile",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={
-            "profile_id": profile_id,
-            "success": result.success,
-            "fields_updated": result.fields_updated,
-        },
+    result = web_network_ont_actions_service.apply_profile(
+        db, ont_id, profile_id, request=request
     )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
@@ -466,18 +419,8 @@ def ont_firmware_upgrade(
             headers=_toast_headers("No firmware image selected", "error"),
         )
 
-    from app.services.network.ont_actions import OntActions
-
-    result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="firmware_upgrade",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"firmware_image_id": firmware_image_id, "success": result.success},
+    result = web_network_ont_actions_service.firmware_upgrade(
+        db, ont_id, firmware_image_id, request=request
     )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
@@ -502,16 +445,8 @@ def ont_set_wifi_ssid(
     # Also accept ssid from query params (used by TR-069 tab Alpine.js modal)
     if not ssid:
         ssid = request.query_params.get("ssid", "")
-    result = web_network_ont_actions_service.set_wifi_ssid(db, ont_id, ssid)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="set_wifi_ssid",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"success": result.success, "ssid": ssid},
+    result = web_network_ont_actions_service.set_wifi_ssid(
+        db, ont_id, ssid, request=request
     )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
@@ -533,16 +468,8 @@ def ont_set_wifi_password(
     password: str = Form(""),
 ) -> JSONResponse:
     """Set WiFi password on ONT via GenieACS TR-069."""
-    result = web_network_ont_actions_service.set_wifi_password(db, ont_id, password)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="set_wifi_password",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"success": result.success},
+    result = web_network_ont_actions_service.set_wifi_password(
+        db, ont_id, password, request=request
     )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
@@ -559,7 +486,7 @@ def ont_set_wifi_password(
 )
 def ont_toggle_lan_port(
     request: Request, ont_id: str, db: Session = Depends(get_db)
-) -> JSONResponse:
+) -> Response:
     """Toggle LAN port on ONT via GenieACS TR-069."""
     port_str = request.query_params.get("port", "1")
     enabled_str = request.query_params.get("enabled", "true")
@@ -568,21 +495,17 @@ def ont_toggle_lan_port(
     except ValueError:
         port = 1
     enabled = enabled_str.lower() in ("true", "1", "yes")
-    result = web_network_ont_actions_service.toggle_lan_port(db, ont_id, port, enabled)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="toggle_lan_port",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={
-            "success": result.success,
-            "port": port,
-            "enabled": enabled,
-        },
+    result = web_network_ont_actions_service.toggle_lan_port(
+        db, ont_id, port, enabled, request=request
     )
+    if request.headers.get("HX-Request"):
+        return _lan_ports_partial_response(
+            request,
+            db,
+            ont_id,
+            toast_message=result.message,
+            toast_type="success" if result.success else "error",
+        )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
     return JSONResponse(
@@ -600,25 +523,15 @@ def ont_set_lan_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
     """Set LAN IP/subnet on ONT via GenieACS TR-069."""
-    from app.services.network.ont_actions import OntActions
-
     form = parse_form_data_sync(request)
     lan_ip = _form_str(form, "lan_ip").strip() or None
     lan_subnet = _form_str(form, "lan_subnet").strip() or None
-    result = OntActions.set_lan_config(db, ont_id, lan_ip=lan_ip, lan_subnet=lan_subnet)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
+    result = web_network_ont_actions_service.set_lan_config(
+        db,
+        ont_id,
+        lan_ip=lan_ip,
+        lan_subnet=lan_subnet,
         request=request,
-        action="set_lan_config",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={
-            "success": result.success,
-            "lan_ip": lan_ip,
-            "lan_subnet": lan_subnet,
-        },
     )
     status_code = 200 if result.success else 400
     headers = _toast_headers(result.message, "success" if result.success else "error")
@@ -639,24 +552,11 @@ def ont_reveal_pppoe_password(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Decrypt and return the stored PPPoE password for verification."""
-    from app.models.network import OntUnit
-
-    ont = db.get(OntUnit, ont_id)
-    if not ont:
-        return JSONResponse({"password": ""}, status_code=404)
-
-    password = web_network_ont_actions_service.resolve_stored_pppoe_password(db, ont_id)
-
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="reveal_pppoe_password",
-        entity_type="ont",
-        entity_id=ont_id,
-        actor_id=actor_id,
-        metadata={"username": ont.pppoe_username or ""},
+    password, found = web_network_ont_actions_service.reveal_stored_pppoe_password(
+        db, ont_id, request=request
     )
+    if not found:
+        return JSONResponse({"password": ""}, status_code=404)
     return JSONResponse({"password": password})
 
 
@@ -672,29 +572,14 @@ def ont_set_pppoe_credentials(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Push PPPoE credentials to ONT via TR-069."""
-    _current_user, actor_id, actor_name = _actor_context(request)
     result = web_network_ont_actions_service.set_pppoe_credentials(
-        db, ont_id, username, password, initiated_by=actor_name
-    )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="set_pppoe_credentials",
-        entity_type="ont",
-        entity_id=str(ont_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if result.success else "error",
-            "message": result.message,
-            "username": username,
-        },
-        status_code=200 if result.success else 400,
-        is_success=result.success,
+        db, ont_id, username, password, request=request
     )
     return _action_json_response(
         success=result.success,
         message=result.message,
         action="Push PPPoE Credentials",
+        waiting=getattr(result, "waiting", False),
     )
 
 
@@ -711,23 +596,7 @@ def ont_ping_diagnostic(
 ) -> JSONResponse:
     """Run ping diagnostic from ONT via TR-069."""
     result = web_network_ont_actions_service.run_ping_diagnostic(
-        db, ont_id, host, count
-    )
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="ping_diagnostic",
-        entity_type="ont",
-        entity_id=str(ont_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if result.success else "error",
-            "host": host,
-            "count": count,
-        },
-        status_code=200 if result.success else 400,
-        is_success=result.success,
+        db, ont_id, host, count, request=request
     )
     return _action_json_response(
         success=result.success,
@@ -747,18 +616,8 @@ def ont_traceroute_diagnostic(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Run traceroute diagnostic from ONT via TR-069."""
-    result = web_network_ont_actions_service.run_traceroute_diagnostic(db, ont_id, host)
-    _current_user, actor_id, _actor_name = _actor_context(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="traceroute_diagnostic",
-        entity_type="ont",
-        entity_id=str(ont_id),
-        actor_id=actor_id,
-        metadata={"result": "success" if result.success else "error", "host": host},
-        status_code=200 if result.success else 400,
-        is_success=result.success,
+    result = web_network_ont_actions_service.run_traceroute_diagnostic(
+        db, ont_id, host, request=request
     )
     return _action_json_response(
         success=result.success,
@@ -777,9 +636,8 @@ def ont_enable_ipv6(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Enable IPv6 dual-stack on an ONT via TR-069."""
-    _current_user, _actor_id, actor_name = _actor_context(request)
     result = web_network_ont_actions_service.execute_enable_ipv6(
-        db, ont_id, initiated_by=actor_name
+        db, ont_id, request=request
     )
     return _action_json_response(
         success=result.success,
@@ -798,14 +656,14 @@ def ont_connection_request(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Send a TR-069 connection request to an ONT for on-demand management."""
-    from app.services.network.ont_action_network import send_connection_request_tracked
-
-    _current_user, _actor_id, actor_name = _actor_context(request)
-    result = send_connection_request_tracked(db, ont_id, initiated_by=actor_name)
+    result = web_network_ont_actions_service.execute_connection_request(
+        db, ont_id, request=request
+    )
     return _action_json_response(
         success=result.success,
         message=result.message,
         action="Connection Request",
+        waiting=result.waiting,
     )
 
 
@@ -969,24 +827,8 @@ def ont_iphost_config(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: Management IP config for ONT detail page."""
-    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    ok, msg, config = web_network_ont_actions_service.fetch_iphost_config(db, ont_id)
-    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
-    tr069_profiles, tr069_profiles_error = (
-        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
-    )
     context = _base_context(request, db, active_page="onts")
-    context.update(
-        {
-            "ont": ont,
-            "iphost_config": config,
-            "iphost_ok": ok,
-            "iphost_msg": msg,
-            "vlans": vlans,
-            "tr069_profiles": tr069_profiles,
-            "tr069_profiles_error": tr069_profiles_error,
-        }
-    )
+    context.update(web_network_ont_actions_service.iphost_config_context(db, ont_id))
     return templates.TemplateResponse("admin/network/onts/_mgmt_config.html", context)
 
 
@@ -1006,17 +848,15 @@ def ont_capture_config_snapshot(
     """Capture a new config snapshot from TR-069 and return updated list."""
     form = parse_form_data_sync(request)
     label = _form_str(form, "label").strip() or None
-    if ont_config_snapshots is None:
-        raise HTTPException(status_code=501, detail="Config snapshots not available")
-    error_msg = None
-    try:
-        ont_config_snapshots.capture(db, ont_id, label=label)
-    except HTTPException as exc:
-        error_msg = exc.detail
-    snapshots = ont_config_snapshots.list_for_ont(db, ont_id, limit=5)
+    snapshot_context, error_msg = (
+        web_network_ont_actions_service.capture_config_snapshot_list_context(
+            db,
+            ont_id=ont_id,
+            label=label,
+        )
+    )
     context = _base_context(request, db, active_page="onts")
-    context["ont_id"] = ont_id
-    context["config_snapshots"] = snapshots
+    context.update(snapshot_context)
     response = templates.TemplateResponse(
         "admin/network/onts/_config_snapshot_list.html", context
     )
@@ -1043,11 +883,14 @@ def ont_view_config_snapshot(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """View a single config snapshot detail in a slide-over."""
-    if ont_config_snapshots is None:
-        raise HTTPException(status_code=501, detail="Config snapshots not available")
-    snapshot = ont_config_snapshots.get(db, snapshot_id, ont_id=ont_id)
     context = _base_context(request, db, active_page="onts")
-    context["snapshot"] = snapshot
+    context.update(
+        web_network_ont_actions_service.config_snapshot_detail_context(
+            db,
+            ont_id=ont_id,
+            snapshot_id=snapshot_id,
+        )
+    )
     return templates.TemplateResponse(
         "admin/network/onts/_config_snapshot_detail.html", context
     )
@@ -1065,13 +908,14 @@ def ont_delete_config_snapshot(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Delete a config snapshot and return updated list."""
-    if ont_config_snapshots is None:
-        raise HTTPException(status_code=501, detail="Config snapshots not available")
-    ont_config_snapshots.delete(db, snapshot_id, ont_id=ont_id)
-    snapshots = ont_config_snapshots.list_for_ont(db, ont_id, limit=5)
     context = _base_context(request, db, active_page="onts")
-    context["ont_id"] = ont_id
-    context["config_snapshots"] = snapshots
+    context.update(
+        web_network_ont_actions_service.delete_config_snapshot_list_context(
+            db,
+            ont_id=ont_id,
+            snapshot_id=snapshot_id,
+        )
+    )
     return templates.TemplateResponse(
         "admin/network/onts/_config_snapshot_list.html", context
     )

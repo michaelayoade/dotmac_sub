@@ -3,14 +3,10 @@
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
-from app.schemas.subscriber import ResellerCreate, ResellerUpdate
-from app.services import rbac as rbac_service
-from app.services import subscriber as subscriber_service
 from app.services import web_admin_resellers as reseller_svc
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data
@@ -55,49 +51,15 @@ def resellers_list(
     per_page: int = Query(25, ge=10, le=200),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    total = subscriber_service.resellers.count(db=db, is_active=True)
-    total_pages = max(1, (total + per_page - 1) // per_page)
-    if page > total_pages:
-        page = total_pages
-    offset = (page - 1) * per_page
-    resellers = subscriber_service.resellers.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=per_page,
-        offset=offset,
-    )
-    reseller_subscriber_counts = reseller_svc.count_subscribers_by_reseller_ids(
-        db,
-        [str(item.id) for item in resellers],
-    )
     context = _base_context(request, db, active_page="resellers")
-    context.update(
-        {
-            "resellers": resellers,
-            "reseller_subscriber_counts": reseller_subscriber_counts,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-        }
-    )
+    context.update(reseller_svc.list_page_context(db, page=page, per_page=per_page))
     return templates.TemplateResponse("admin/resellers/index.html", context)
 
 
 @router.get("/new", response_class=HTMLResponse)
 def reseller_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     context = _base_context(request, db, active_page="resellers")
-    roles = rbac_service.roles.list(
-        db=db,
-        is_active=True,
-        order_by="name",
-        order_dir="asc",
-        limit=500,
-        offset=0,
-    )
-    context.update({"reseller": None, "action_url": "/admin/resellers", "roles": roles})
+    context.update(reseller_svc.new_form_context(db))
     return templates.TemplateResponse("admin/resellers/reseller_form.html", context)
 
 
@@ -105,14 +67,8 @@ def reseller_new(request: Request, db: Session = Depends(get_db)) -> HTMLRespons
 def reseller_edit(
     reseller_id: str, request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    reseller = subscriber_service.resellers.get(db=db, reseller_id=reseller_id)
     context = _base_context(request, db, active_page="resellers")
-    context.update(
-        {
-            "reseller": reseller,
-            "action_url": f"/admin/resellers/{reseller.id}",
-        }
-    )
+    context.update(reseller_svc.edit_form_context(db, reseller_id=reseller_id))
     return templates.TemplateResponse("admin/resellers/reseller_form.html", context)
 
 
@@ -126,100 +82,35 @@ def reseller_create(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    create_user = bool(form.get("create_user"))
-    payload = {
-        "name": _form_str(form, "name").strip(),
-        "code": _form_str(form, "code").strip() or None,
-        "contact_email": _form_str(form, "contact_email").strip() or None,
-        "contact_phone": _form_str(form, "contact_phone").strip() or None,
-        "notes": _form_str(form, "notes").strip() or None,
-        "is_active": bool(form.get("is_active")),
-    }
-    user_payload: dict[str, str | None] | None = None
-    if create_user:
-        user_payload = {
-            "first_name": _form_str(form, "user_first_name").strip(),
-            "last_name": _form_str(form, "user_last_name").strip(),
-            "email": _form_str(form, "user_email").strip(),
-            "username": (_form_str(form, "user_email").strip() or None),
-            "role": _form_str(form, "user_role").strip() or None,
-        }
-        missing = [
-            key
-            for key, value in user_payload.items()
-            if key not in {"role", "username"} and not value
-        ]
-        if missing:
-            context = _base_context(request, db, active_page="resellers")
-            roles = rbac_service.roles.list(
-                db=db,
-                is_active=True,
-                order_by="name",
-                order_dir="asc",
-                limit=500,
-                offset=0,
-            )
-            context.update(
-                {
-                    "reseller": payload,
-                    "action_url": "/admin/resellers",
-                    "roles": roles,
-                    "error": "Provide first name, last name, and email to create a reseller portal user.",
-                }
-            )
-            return templates.TemplateResponse(
-                "admin/resellers/reseller_form.html", context, status_code=400
-            )
-    try:
-        data = ResellerCreate.model_validate(payload)
-    except ValidationError as exc:
+    payload = reseller_svc.parse_reseller_payload(form)
+    user_payload = reseller_svc.parse_create_user_payload(form)
+    user_error = reseller_svc.validate_create_user_payload(user_payload)
+    if user_error:
         context = _base_context(request, db, active_page="resellers")
-        roles = rbac_service.roles.list(
-            db=db,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=500,
-            offset=0,
-        )
         context.update(
-            {
-                "reseller": payload,
-                "action_url": "/admin/resellers",
-                "roles": roles,
-                "error": exc.errors()[0].get("msg", "Invalid reseller details."),
-            }
+            reseller_svc.create_form_error_context(
+                db,
+                payload=payload,
+                error=user_error,
+            )
         )
         return templates.TemplateResponse(
             "admin/resellers/reseller_form.html", context, status_code=400
         )
-    reseller = subscriber_service.resellers.create(db=db, payload=data)
-    if user_payload:
-        try:
-            reseller_svc.create_reseller_with_user(
-                db, reseller=reseller, user_payload=user_payload
+    try:
+        reseller_svc.create_reseller_from_form(db, form)
+    except Exception as exc:
+        context = _base_context(request, db, active_page="resellers")
+        context.update(
+            reseller_svc.create_form_error_context(
+                db,
+                payload=payload,
+                error=str(exc) or "Unable to create reseller.",
             )
-        except Exception as exc:
-            context = _base_context(request, db, active_page="resellers")
-            roles = rbac_service.roles.list(
-                db=db,
-                is_active=True,
-                order_by="name",
-                order_dir="asc",
-                limit=500,
-                offset=0,
-            )
-            context.update(
-                {
-                    "reseller": payload,
-                    "action_url": "/admin/resellers",
-                    "roles": roles,
-                    "error": str(exc) or "Unable to create login user.",
-                }
-            )
-            return templates.TemplateResponse(
-                "admin/resellers/reseller_form.html", context, status_code=400
-            )
+        )
+        return templates.TemplateResponse(
+            "admin/resellers/reseller_form.html", context, status_code=400
+        )
     return RedirectResponse(url="/admin/resellers", status_code=303)
 
 
@@ -230,42 +121,17 @@ def reseller_update(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    payload = {
-        "name": _form_str(form, "name").strip(),
-        "code": _form_str(form, "code").strip() or None,
-        "contact_email": _form_str(form, "contact_email").strip() or None,
-        "contact_phone": _form_str(form, "contact_phone").strip() or None,
-        "notes": _form_str(form, "notes").strip() or None,
-        "is_active": bool(form.get("is_active")),
-    }
+    payload = reseller_svc.parse_reseller_payload(form)
     try:
-        data = ResellerUpdate.model_validate(payload)
-    except ValidationError as exc:
-        context = _base_context(request, db, active_page="resellers")
-        payload.update({"id": reseller_id})
-        context.update(
-            {
-                "reseller": payload,
-                "action_url": f"/admin/resellers/{reseller_id}",
-                "error": exc.errors()[0].get("msg", "Invalid reseller details."),
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/resellers/reseller_form.html", context, status_code=400
-        )
-    try:
-        subscriber_service.resellers.update(
-            db=db, reseller_id=reseller_id, payload=data
-        )
+        reseller_svc.update_reseller_from_form(db, reseller_id=reseller_id, form=form)
     except Exception as exc:
         context = _base_context(request, db, active_page="resellers")
-        payload.update({"id": reseller_id})
         context.update(
-            {
-                "reseller": payload,
-                "action_url": f"/admin/resellers/{reseller_id}",
-                "error": str(exc) or "Unable to update reseller.",
-            }
+            reseller_svc.update_form_error_context(
+                reseller_id=reseller_id,
+                payload=payload,
+                error=str(exc) or "Unable to update reseller.",
+            )
         )
         return templates.TemplateResponse(
             "admin/resellers/reseller_form.html", context, status_code=400

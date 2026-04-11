@@ -5,8 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntAssignment, OntProvisioningStatus, OntUnit
 from app.models.network_operation import (
@@ -14,6 +16,7 @@ from app.models.network_operation import (
     NetworkOperationType,
 )
 from app.services import network as network_service
+from app.services.audit_helpers import log_audit_event
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
@@ -21,6 +24,55 @@ from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 
 logger = logging.getLogger(__name__)
+
+
+def _current_user(request: Request | None) -> dict[str, Any] | None:
+    if request is None:
+        return None
+    from app.web.admin import get_current_user
+
+    return get_current_user(request)
+
+
+def actor_name_from_request(request: Request | None) -> str:
+    current_user = _current_user(request)
+    return str(current_user.get("name", "unknown")) if current_user else "system"
+
+
+def _actor_id_from_request(request: Request | None) -> str | None:
+    current_user = _current_user(request)
+    if not current_user:
+        return None
+    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    return str(value) if value else None
+
+
+def _log_action_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    action: str,
+    ont_id: object,
+    metadata: dict[str, object] | None = None,
+    status_code: int | None = None,
+    is_success: bool = True,
+) -> None:
+    if request is None:
+        return
+    kwargs: dict[str, object] = {}
+    if status_code is not None:
+        kwargs["status_code"] = status_code
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="ont",
+        entity_id=str(ont_id),
+        actor_id=_actor_id_from_request(request),
+        metadata=metadata,
+        is_success=is_success,
+        **kwargs,
+    )
 
 
 def _normalize_fsp(value: str | None) -> str | None:
@@ -59,9 +111,14 @@ def _resolve_return_olt_context(
 
 
 def execute_reboot(
-    db: Session, ont_id: str, *, initiated_by: str | None = None
+    db: Session,
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+    request: Request | None = None,
 ) -> ActionResult:
     """Execute reboot action with operation tracking."""
+    initiated_by = initiated_by or actor_name_from_request(request)
     result = run_tracked_action(
         db,
         NetworkOperationType.ont_reboot,
@@ -75,14 +132,18 @@ def execute_reboot(
     # Emit audit event for reboot operation
     if result.success:
         try:
-            ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+            ont = network_service.ont_units.get_including_inactive(
+                db=db, entity_id=ont_id
+            )
             emit_event(
                 db,
                 EventType.ont_rebooted,
                 {
                     "ont_id": ont_id,
                     "ont_serial": ont.serial_number if ont else None,
-                    "olt_id": str(ont.olt_device_id) if ont and ont.olt_device_id else None,
+                    "olt_id": str(ont.olt_device_id)
+                    if ont and ont.olt_device_id
+                    else None,
                     "method": "tr069",
                 },
                 actor=initiated_by or "system",
@@ -90,12 +151,29 @@ def execute_reboot(
         except Exception as e:
             logger.warning("Failed to emit ont_rebooted event: %s", e)
 
+    _log_action_audit(
+        db,
+        request=request,
+        action="reboot",
+        ont_id=ont_id,
+        metadata={"success": result.success, "message": result.message},
+    )
     return result
 
 
-def execute_refresh(db: Session, ont_id: str) -> ActionResult:
+def execute_refresh(
+    db: Session, ont_id: str, *, request: Request | None = None
+) -> ActionResult:
     """Execute status refresh and return result."""
-    return OntActions.refresh_status(db, ont_id)
+    result = OntActions.refresh_status(db, ont_id)
+    _log_action_audit(
+        db,
+        request=request,
+        action="refresh",
+        ont_id=ont_id,
+        metadata={"success": result.success},
+    )
+    return result
 
 
 def fetch_running_config(db: Session, ont_id: str) -> ActionResult:
@@ -104,9 +182,14 @@ def fetch_running_config(db: Session, ont_id: str) -> ActionResult:
 
 
 def execute_factory_reset(
-    db: Session, ont_id: str, *, initiated_by: str | None = None
+    db: Session,
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+    request: Request | None = None,
 ) -> ActionResult:
     """Execute factory reset with operation tracking."""
+    initiated_by = initiated_by or actor_name_from_request(request)
     result = run_tracked_action(
         db,
         NetworkOperationType.ont_factory_reset,
@@ -120,36 +203,110 @@ def execute_factory_reset(
     # Emit audit event for factory reset operation
     if result.success:
         try:
-            ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+            ont = network_service.ont_units.get_including_inactive(
+                db=db, entity_id=ont_id
+            )
             emit_event(
                 db,
                 EventType.ont_factory_reset,
                 {
                     "ont_id": ont_id,
                     "ont_serial": ont.serial_number if ont else None,
-                    "olt_id": str(ont.olt_device_id) if ont and ont.olt_device_id else None,
+                    "olt_id": str(ont.olt_device_id)
+                    if ont and ont.olt_device_id
+                    else None,
                 },
                 actor=initiated_by or "system",
             )
         except Exception as e:
             logger.warning("Failed to emit ont_factory_reset event: %s", e)
 
+    _log_action_audit(
+        db,
+        request=request,
+        action="factory_reset",
+        ont_id=ont_id,
+        metadata={"success": result.success, "message": result.message},
+    )
     return result
 
 
-def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
+def set_wifi_ssid(
+    db: Session, ont_id: str, ssid: str, *, request: Request | None = None
+) -> ActionResult:
     """Set WiFi SSID and return result."""
-    return OntActions.set_wifi_ssid(db, ont_id, ssid)
+    result = OntActions.set_wifi_ssid(db, ont_id, ssid)
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wifi_ssid",
+        ont_id=ont_id,
+        metadata={"success": result.success, "ssid": ssid},
+    )
+    return result
 
 
-def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
+def set_wifi_password(
+    db: Session, ont_id: str, password: str, *, request: Request | None = None
+) -> ActionResult:
     """Set WiFi password and return result."""
-    return OntActions.set_wifi_password(db, ont_id, password)
+    result = OntActions.set_wifi_password(db, ont_id, password)
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wifi_password",
+        ont_id=ont_id,
+        metadata={"success": result.success},
+    )
+    return result
 
 
-def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> ActionResult:
+def toggle_lan_port(
+    db: Session,
+    ont_id: str,
+    port: int,
+    enabled: bool,
+    *,
+    request: Request | None = None,
+) -> ActionResult:
     """Toggle a LAN port and return result."""
-    return OntActions.toggle_lan_port(db, ont_id, port, enabled)
+    result = OntActions.toggle_lan_port(db, ont_id, port, enabled)
+    _log_action_audit(
+        db,
+        request=request,
+        action="toggle_lan_port",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "port": port,
+            "enabled": enabled,
+        },
+    )
+    return result
+
+
+def set_lan_config(
+    db: Session,
+    ont_id: str,
+    *,
+    lan_ip: str | None = None,
+    lan_subnet: str | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Set LAN IP/subnet on ONT via GenieACS TR-069."""
+    result = OntActions.set_lan_config(db, ont_id, lan_ip=lan_ip, lan_subnet=lan_subnet)
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_lan_config",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "lan_ip": lan_ip,
+            "lan_subnet": lan_subnet,
+        },
+    )
+    return result
 
 
 def set_pppoe_credentials(
@@ -159,9 +316,11 @@ def set_pppoe_credentials(
     password: str,
     *,
     initiated_by: str | None = None,
+    request: Request | None = None,
 ) -> ActionResult:
     """Push PPPoE credentials to ONT via TR-069 with operation tracking."""
-    return run_tracked_action(
+    initiated_by = initiated_by or actor_name_from_request(request)
+    result = run_tracked_action(
         db,
         NetworkOperationType.ont_set_pppoe,
         NetworkOperationTargetType.ont,
@@ -170,26 +329,79 @@ def set_pppoe_credentials(
         correlation_key=f"ont_set_pppoe:{ont_id}",
         initiated_by=initiated_by,
     )
+    waiting = getattr(result, "waiting", False)
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_pppoe_credentials",
+        ont_id=ont_id,
+        metadata={
+            "result": "success"
+            if result.success
+            else ("waiting" if waiting else "error"),
+            "message": result.message,
+            "username": username,
+        },
+        status_code=200 if result.success else (202 if waiting else 500),
+        is_success=result.success or waiting,
+    )
+    return result
 
 
 def run_ping_diagnostic(
-    db: Session, ont_id: str, host: str, count: int = 4
+    db: Session,
+    ont_id: str,
+    host: str,
+    count: int = 4,
+    *,
+    request: Request | None = None,
 ) -> ActionResult:
     """Run ping diagnostic from ONT via TR-069."""
-    return OntActions.run_ping_diagnostic(db, ont_id, host, count)
+    result = OntActions.run_ping_diagnostic(db, ont_id, host, count)
+    _log_action_audit(
+        db,
+        request=request,
+        action="ping_diagnostic",
+        ont_id=ont_id,
+        metadata={
+            "result": "success" if result.success else "error",
+            "host": host,
+            "count": count,
+        },
+        status_code=200 if result.success else 500,
+        is_success=result.success,
+    )
+    return result
 
 
-def run_traceroute_diagnostic(db: Session, ont_id: str, host: str) -> ActionResult:
+def run_traceroute_diagnostic(
+    db: Session, ont_id: str, host: str, *, request: Request | None = None
+) -> ActionResult:
     """Run traceroute diagnostic from ONT via TR-069."""
-    return OntActions.run_traceroute_diagnostic(db, ont_id, host)
+    result = OntActions.run_traceroute_diagnostic(db, ont_id, host)
+    _log_action_audit(
+        db,
+        request=request,
+        action="traceroute_diagnostic",
+        ont_id=ont_id,
+        metadata={"result": "success" if result.success else "error", "host": host},
+        status_code=200 if result.success else 500,
+        is_success=result.success,
+    )
+    return result
 
 
 def execute_enable_ipv6(
-    db: Session, ont_id: str, *, initiated_by: str | None = None
+    db: Session,
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+    request: Request | None = None,
 ) -> ActionResult:
     """Enable IPv6 dual-stack on ONT with operation tracking."""
     from app.services.network.ont_action_network import enable_ipv6_on_wan
 
+    initiated_by = initiated_by or actor_name_from_request(request)
     return run_tracked_action(
         db,
         NetworkOperationType.ont_enable_ipv6,
@@ -279,12 +491,120 @@ def fetch_iphost_config(db: Session, ont_id: str) -> tuple[bool, str, dict[str, 
 def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool, str]:
     """Bind TR-069 server profile to ONT via OLT."""
     from app.services.network.olt_ssh_ont import bind_tr069_server_profile
+    from app.services.network.ont_provision_steps import queue_wait_tr069_bootstrap
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
-    return bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
+    ok, message = bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
+    if ok:
+        try:
+            wait_result = queue_wait_tr069_bootstrap(db, ont_id)
+            message = f"{message}; {wait_result.message}"
+        except Exception as exc:
+            logger.warning(
+                "Failed to queue TR-069 bootstrap wait after manual bind for ONT %s: %s",
+                ont_id,
+                exc,
+            )
+            message = f"{message}; failed to queue ACS inform wait: {exc}"
+    return ok, message
+
+
+def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    """Build management IP config context for the ONT detail partial."""
+    from app.services import web_network_onts as web_network_onts_service
+    from app.services.network import ont_web_forms as ont_web_forms_service
+
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    ok, msg, config = fetch_iphost_config(db, ont_id)
+    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
+    tr069_profiles, tr069_profiles_error = (
+        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    )
+    return {
+        "ont": ont,
+        "iphost_config": config,
+        "iphost_ok": ok,
+        "iphost_msg": msg,
+        "initial_iphost_form": ont_web_forms_service.initial_iphost_form(ont, config),
+        "vlans": vlans,
+        "tr069_profiles": tr069_profiles,
+        "tr069_profiles_error": tr069_profiles_error,
+    }
+
+
+def return_to_inventory_for_web(
+    db: Session,
+    ont_id: str,
+    *,
+    request: Request | None = None,
+) -> ActionResult:
+    """Return ONT to inventory with route-friendly not-found handling."""
+    try:
+        network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    except HTTPException:
+        return ActionResult(success=False, message="ONT not found")
+    return return_to_inventory(db, ont_id, request=request)
+
+
+def _config_snapshot_service():
+    try:
+        from app.services.network.ont_config_snapshots import ont_config_snapshots
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=501,
+            detail="Config snapshots not available",
+        ) from exc
+    return ont_config_snapshots
+
+
+def capture_config_snapshot_list_context(
+    db: Session,
+    *,
+    ont_id: str,
+    label: str | None,
+    limit: int = 5,
+) -> tuple[dict[str, object], str | None]:
+    """Capture a config snapshot and return refreshed list context plus error."""
+    snapshots_service = _config_snapshot_service()
+    error_msg: str | None = None
+    try:
+        snapshots_service.capture(db, ont_id, label=label)
+    except HTTPException as exc:
+        error_msg = str(exc.detail)
+    return {
+        "ont_id": ont_id,
+        "config_snapshots": snapshots_service.list_for_ont(db, ont_id, limit=limit),
+    }, error_msg
+
+
+def config_snapshot_detail_context(
+    db: Session,
+    *,
+    ont_id: str,
+    snapshot_id: str,
+) -> dict[str, object]:
+    """Return context for a single ONT config snapshot detail."""
+    snapshot = _config_snapshot_service().get(db, snapshot_id, ont_id=ont_id)
+    return {"snapshot": snapshot}
+
+
+def delete_config_snapshot_list_context(
+    db: Session,
+    *,
+    ont_id: str,
+    snapshot_id: str,
+    limit: int = 5,
+) -> dict[str, object]:
+    """Delete a config snapshot and return refreshed list context."""
+    snapshots_service = _config_snapshot_service()
+    snapshots_service.delete(db, snapshot_id, ont_id=ont_id)
+    return {
+        "ont_id": ont_id,
+        "config_snapshots": snapshots_service.list_for_ont(db, ont_id, limit=limit),
+    }
 
 
 def _cleanup_olt_state_for_return(
@@ -333,7 +653,11 @@ def _cleanup_olt_state_for_return(
 
 
 def return_to_inventory(
-    db: Session, ont_id: str, *, initiated_by: str | None = None
+    db: Session,
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+    request: Request | None = None,
 ) -> ActionResult:
     """Release an ONT from the OLT, close assignment, and clear service state."""
     from app.services.network.olt_ssh_ont import deauthorize_ont
@@ -342,6 +666,7 @@ def return_to_inventory(
         get_service_ports_for_ont,
     )
 
+    initiated_by = initiated_by or actor_name_from_request(request)
     ont, olt, fsp, olt_ont_id = _resolve_return_olt_context(db, ont_id)
     if ont is None:
         return ActionResult(success=False, message="ONT not found.")
@@ -365,8 +690,7 @@ def return_to_inventory(
             return ActionResult(
                 success=False,
                 message=(
-                    "Failed to remove OLT service-port "
-                    f"{service_port.index}: {msg}"
+                    f"Failed to remove OLT service-port {service_port.index}: {msg}"
                 ),
             )
         deleted_service_ports += 1
@@ -456,13 +780,71 @@ def return_to_inventory(
         if deleted_service_ports
         else ""
     )
-    return ActionResult(
+    result = ActionResult(
         success=True,
         message=(
             "ONT returned to inventory: "
             f"{service_port_msg}{assignment_msg}removed from OLT and service state cleared."
         ),
     )
+    _log_action_audit(
+        db,
+        request=request,
+        action="return_to_inventory",
+        ont_id=ont.id,
+        metadata={"serial_number": ont.serial_number},
+    )
+    return result
+
+
+def apply_profile(
+    db: Session, ont_id: str, profile_id: str, *, request: Request | None = None
+) -> Any:
+    """Apply a profile template and audit the explicit admin action."""
+    from app.services.network.ont_profile_apply import apply_profile_to_ont
+
+    result = apply_profile_to_ont(db, ont_id, profile_id)
+    _log_action_audit(
+        db,
+        request=request,
+        action="apply_profile",
+        ont_id=ont_id,
+        metadata={
+            "profile_id": profile_id,
+            "success": result.success,
+            "fields_updated": result.fields_updated,
+        },
+    )
+    return result
+
+
+def firmware_upgrade(
+    db: Session, ont_id: str, firmware_image_id: str, *, request: Request | None = None
+) -> ActionResult:
+    """Trigger firmware upgrade and audit the admin action."""
+    result = OntActions.firmware_upgrade(db, ont_id, firmware_image_id)
+    _log_action_audit(
+        db,
+        request=request,
+        action="firmware_upgrade",
+        ont_id=ont_id,
+        metadata={"firmware_image_id": firmware_image_id, "success": result.success},
+    )
+    return result
+
+
+def execute_connection_request(
+    db: Session,
+    ont_id: str,
+    *,
+    initiated_by: str | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Send a TR-069 connection request with operation tracking."""
+    from app.services.network.ont_action_network import send_connection_request_tracked
+
+    initiated_by = initiated_by or actor_name_from_request(request)
+    return send_connection_request_tracked(db, ont_id, initiated_by=initiated_by)
 
 
 def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
@@ -533,3 +915,22 @@ def resolve_stored_pppoe_password(db: Session, ont_id: str) -> str:
     except Exception:
         logger.warning("Failed to decrypt PPPoE password for ONT %s", ont_id)
         return ""
+
+
+def reveal_stored_pppoe_password(
+    db: Session, ont_id: str, *, request: Request | None = None
+) -> tuple[str, bool]:
+    """Return stored PPPoE password and audit the reveal action."""
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return "", False
+
+    password = resolve_stored_pppoe_password(db, ont_id)
+    _log_action_audit(
+        db,
+        request=request,
+        action="reveal_pppoe_password",
+        ont_id=ont_id,
+        metadata={"username": ont.pppoe_username or ""},
+    )
+    return password, True
