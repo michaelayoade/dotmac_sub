@@ -4,15 +4,27 @@ from __future__ import annotations
 
 import logging
 import os
+import shutil
+import subprocess  # nosec
 from datetime import UTC, datetime, timedelta
+from html import escape
 from typing import Any
 
 import httpx
 from sqlalchemy.orm import Session
 
+from app.services.audit_helpers import build_audit_activities_for_types
+
 logger = logging.getLogger(__name__)
 
 _VICTORIAMETRICS_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
+WG_BIN = shutil.which("wg") or "/usr/bin/wg"
+
+_TUNNEL_NAMES = {
+    "KX5kLfJ1uMzMHTdLbdMVXTdxgwoDm7FR/xTvTlh2Lyw=": "Abuja Core (Garki)",
+    "5EotB4DMlz9h89pRSmmSd2J0krVKRgdJsNzRx1ya5Gw=": "Lagos Medallion",
+    "6zaWZIeQkgLRhePeGB+UReEMqbCg+RG95HMTEMQ69Tk=": "Demo NAS (Karu)",
+}
 
 
 def active_monitoring_devices(db: Session) -> list:
@@ -45,8 +57,8 @@ def monitoring_page_data(
 
     # ONT status summaries and PON outage detection (Sprint 2)
     from app.services.network_monitoring import (
-        get_onu_status_summary,
         get_onu_olt_status_summary,
+        get_onu_status_summary,
         get_pon_outage_summary,
     )
 
@@ -71,6 +83,155 @@ def monitoring_page_data(
     data["device_health_total"] = len(data["device_health"])
 
     return data
+
+
+def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
+    """Queue non-blocking monitoring refresh tasks."""
+    try:
+        from app.celery_app import enqueue_celery_task
+
+        enqueue_celery_task(
+            "app.tasks.network_monitoring.refresh_core_device_ping",
+            correlation_id="monitoring_refresh:ping",
+            source="admin_network_monitoring",
+            request_id=request_id,
+        )
+        enqueue_celery_task(
+            "app.tasks.network_monitoring.refresh_core_device_snmp",
+            correlation_id="monitoring_refresh:snmp",
+            source="admin_network_monitoring",
+            request_id=request_id,
+        )
+    except Exception:
+        logger.debug("Could not dispatch monitoring refresh task")
+
+
+def monitoring_index_context(
+    db: Session,
+    *,
+    format_duration,
+    format_bps,
+    query: str | None = None,
+) -> dict[str, object]:
+    """Build the full monitoring dashboard context payload."""
+    data = monitoring_page_data(
+        db,
+        format_duration=format_duration,
+        format_bps=format_bps,
+        query=query,
+    )
+    data["vpn_tunnels"] = get_vpn_tunnel_status()
+    data["site_reachability"] = get_site_reachability(db)
+    data["activities"] = build_audit_activities_for_types(
+        db,
+        ["core_device", "network_device"],
+        limit=5,
+    )
+    return data
+
+
+def monitoring_kpi_context(
+    db: Session,
+    *,
+    format_duration,
+    format_bps,
+) -> dict[str, object]:
+    """Build context for the auto-refreshing monitoring KPI partial."""
+    from app.services.network_monitoring import (
+        NetworkDevices,
+        get_onu_olt_status_summary,
+        get_onu_status_summary,
+        get_pon_outage_summary,
+    )
+
+    stats = NetworkDevices.get_monitoring_dashboard_stats(
+        db, format_duration=format_duration, format_bps=format_bps
+    )
+    alarms_data = alarms_page_data(db, severity=None, status=None)
+    return {
+        "stats": stats.get("stats", {}),
+        "ont_service_summary": get_onu_status_summary(db),
+        "ont_olt_link_summary": get_onu_olt_status_summary(db),
+        "pon_outages": get_pon_outage_summary(db),
+        "alarms": alarms_data.get("alarms", []),
+        "vpn_tunnels": get_vpn_tunnel_status(),
+        "site_reachability": get_site_reachability(db),
+        "now": datetime.now(UTC),
+    }
+
+
+def get_vpn_tunnel_status() -> list[dict[str, object]]:
+    """Read WireGuard peer status from wg show."""
+    tunnels: list[dict[str, object]] = []
+    try:
+        result = subprocess.run(  # noqa: S603
+            [WG_BIN, "show", "wg0", "dump"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return []
+        lines = result.stdout.strip().split("\n")
+        for line in lines[1:]:
+            parts = line.split("\t")
+            if len(parts) < 8:
+                continue
+            pubkey = parts[0]
+            endpoint = parts[2] if parts[2] != "(none)" else None
+            handshake_ts = int(parts[4]) if parts[4] != "0" else 0
+            rx_bytes = int(parts[5])
+            tx_bytes = int(parts[6])
+
+            handshake_dt = (
+                datetime.fromtimestamp(handshake_ts, tz=UTC) if handshake_ts else None
+            )
+            stale = True
+            if handshake_dt:
+                stale = (datetime.now(UTC) - handshake_dt) > timedelta(minutes=3)
+
+            tunnels.append(
+                {
+                    "name": _TUNNEL_NAMES.get(pubkey, pubkey[:12] + "..."),
+                    "endpoint": endpoint,
+                    "handshake": handshake_dt,
+                    "handshake_ago": format_ago(handshake_dt)
+                    if handshake_dt
+                    else "never",
+                    "rx": format_bytes(rx_bytes),
+                    "tx": format_bytes(tx_bytes),
+                    "up": not stale and handshake_ts > 0,
+                    "stale": stale,
+                }
+            )
+    except FileNotFoundError:
+        logger.warning("WireGuard 'wg' command not found - VPN status unavailable")
+    except PermissionError:
+        logger.warning("Insufficient permissions to read WireGuard status")
+    except Exception as exc:
+        logger.warning("Failed to read WireGuard status: %s", exc)
+    return tunnels
+
+
+def format_ago(dt: datetime) -> str:
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    delta = datetime.now(UTC) - dt
+    if delta.total_seconds() < 60:
+        return f"{int(delta.total_seconds())}s ago"
+    if delta.total_seconds() < 3600:
+        return f"{int(delta.total_seconds() / 60)}m ago"
+    return f"{int(delta.total_seconds() / 3600)}h ago"
+
+
+def format_bytes(value: int) -> str:
+    if value >= 1_073_741_824:
+        return f"{value / 1_073_741_824:.1f} GB"
+    if value >= 1_048_576:
+        return f"{value / 1_048_576:.1f} MB"
+    if value >= 1024:
+        return f"{value / 1024:.0f} KB"
+    return f"{value} B"
 
 
 def alarms_page_data(
@@ -629,6 +790,13 @@ _MONITORING_BULK_ACTIONS = frozenset(
 )
 
 _MAX_BULK = 50
+_BULK_ACTION_LABELS: dict[str, str] = {
+    "enable_monitoring": "Enable Monitoring",
+    "disable_monitoring": "Disable Monitoring",
+    "enable_notifications": "Enable Notifications",
+    "disable_notifications": "Disable Notifications",
+    "deactivate": "Deactivate",
+}
 
 
 def execute_device_bulk_action(
@@ -718,3 +886,35 @@ def execute_device_bulk_action(
             }
 
     return {"succeeded": succeeded, "failed": failed, "skipped": skipped}
+
+
+def render_bulk_result(stats: dict[str, Any], action: str) -> str:
+    """Build the HTML snippet for the bulk action result banner."""
+    error = stats.get("error")
+    if error:
+        return (
+            '<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm'
+            " text-rose-700 dark:border-rose-800 dark:bg-rose-900/20"
+            f' dark:text-rose-400">{escape(str(error))}</div>'
+        )
+
+    label = escape(_BULK_ACTION_LABELS.get(action, action))
+    skipped_text = (
+        f", {stats['skipped']} skipped (max 50)" if stats.get("skipped") else ""
+    )
+    body = (
+        f"Bulk <strong>{label}</strong>: {stats['succeeded']} succeeded,"
+        f" {stats['failed']} failed{skipped_text}."
+    )
+
+    if stats["succeeded"] == 0 and stats["failed"] > 0:
+        return (
+            '<div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm'
+            " text-amber-700 dark:border-amber-800 dark:bg-amber-900/20"
+            f' dark:text-amber-400">{body}</div>'
+        )
+    return (
+        '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm'
+        " text-emerald-700 dark:border-emerald-800 dark:bg-emerald-900/20"
+        f' dark:text-emerald-400">{body}</div>'
+    )

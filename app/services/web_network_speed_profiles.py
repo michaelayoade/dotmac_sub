@@ -163,6 +163,11 @@ def validate_form(values: dict[str, object]) -> str | None:
     return None
 
 
+def ensure_profile_exists(db: Session, profile_id: str) -> None:
+    """Raise if the speed profile does not exist."""
+    speed_profiles.get(db, profile_id)
+
+
 def handle_create(db: Session, form_data: dict[str, object]) -> SpeedProfileDirection:
     """Create a speed profile from validated form values. Returns the direction."""
     direction_value = str(form_data["direction"])
@@ -204,3 +209,11 @@ def handle_update(
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
     return direction_enum
+
+
+def handle_delete(db: Session, profile_id: str) -> SpeedProfileDirection:
+    """Soft-delete a speed profile and return its direction."""
+    profile = speed_profiles.get(db, profile_id)
+    direction = profile.direction
+    speed_profiles.delete(db, profile_id)
+    return direction

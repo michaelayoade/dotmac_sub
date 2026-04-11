@@ -9,11 +9,16 @@ from app.schemas.scheduler import (
     ScheduledTaskUpdate,
 )
 from app.services import scheduler as scheduler_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/scheduler", tags=["scheduler"])
 
 
-@router.get("/tasks", response_model=ListResponse[ScheduledTaskRead])
+@router.get(
+    "/tasks",
+    response_model=ListResponse[ScheduledTaskRead],
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def list_scheduled_tasks(
     enabled: bool | None = None,
     order_by: str = Query(default="created_at"),
@@ -31,33 +36,54 @@ def list_scheduled_tasks(
     "/tasks",
     response_model=ScheduledTaskRead,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def create_scheduled_task(payload: ScheduledTaskCreate, db: Session = Depends(get_db)):
     return scheduler_service.scheduled_tasks.create(db, payload)
 
 
-@router.get("/tasks/{task_id}", response_model=ScheduledTaskRead)
+@router.get(
+    "/tasks/{task_id}",
+    response_model=ScheduledTaskRead,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def get_scheduled_task(task_id: str, db: Session = Depends(get_db)):
     return scheduler_service.scheduled_tasks.get(db, task_id)
 
 
-@router.patch("/tasks/{task_id}", response_model=ScheduledTaskRead)
+@router.patch(
+    "/tasks/{task_id}",
+    response_model=ScheduledTaskRead,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def update_scheduled_task(
     task_id: str, payload: ScheduledTaskUpdate, db: Session = Depends(get_db)
 ):
     return scheduler_service.scheduled_tasks.update(db, task_id, payload)
 
 
-@router.delete("/tasks/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/tasks/{task_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def delete_scheduled_task(task_id: str, db: Session = Depends(get_db)):
     scheduler_service.scheduled_tasks.delete(db, task_id)
 
 
-@router.post("/tasks/refresh", status_code=status.HTTP_200_OK)
+@router.post(
+    "/tasks/refresh",
+    status_code=status.HTTP_200_OK,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def refresh_schedule():
     return scheduler_service.refresh_schedule()
 
 
-@router.post("/tasks/{task_id}/enqueue", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/tasks/{task_id}/enqueue",
+    status_code=status.HTTP_202_ACCEPTED,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def enqueue_scheduled_task(task_id: str, db: Session = Depends(get_db)):
     return scheduler_service.enqueue_by_id(db, task_id)

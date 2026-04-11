@@ -10,10 +10,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_network_ont_provisioning_profiles as web_profile_service
 from app.services.auth_dependencies import require_permission
-from app.services.network.ont_provisioning_profiles import (
-    ont_provisioning_profiles,
-    wan_services,
-)
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -150,7 +146,7 @@ def provisioning_profile_delete(
     db: Session = Depends(get_db),
 ) -> Response:
     """Soft-delete a provisioning profile."""
-    ont_provisioning_profiles.delete(db, profile_id)
+    web_profile_service.handle_delete(db, profile_id)
     return RedirectResponse("/admin/network/provisioning-profiles", status_code=303)
 
 
@@ -197,7 +193,7 @@ def wan_service_delete(
     db: Session = Depends(get_db),
 ) -> Response:
     """Delete a WAN service from a profile."""
-    wan_services.delete(db, service_id)
+    web_profile_service.handle_wan_service_delete(db, service_id)
     return RedirectResponse(
         f"/admin/network/provisioning-profiles/{profile_id}/edit", status_code=303
     )

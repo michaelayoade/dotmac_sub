@@ -16,6 +16,9 @@ from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from app.models.billing import LedgerEntry, LedgerEntryType
+from app.models.notification import NotificationChannel, NotificationStatus
+from app.schemas.notification import NotificationCreate
+from app.services import notification as notification_service
 
 logger = logging.getLogger(__name__)
 
@@ -158,3 +161,90 @@ def render_statement_csv(
         )
 
     return output.getvalue()
+
+
+def account_statement_label(account) -> str:
+    category_value = getattr(getattr(account, "category", None), "value", None)
+    return (
+        account.account_number
+        or (account.company_name if category_value == "business" else "")
+        or f"Account {str(account.id)[:8]}"
+    )
+
+
+def render_account_statement_csv(
+    *,
+    account,
+    account_id: UUID,
+    date_range: StatementRange,
+    statement: dict[str, Any],
+) -> tuple[str, str]:
+    account_label = account_statement_label(account)
+    content = render_statement_csv(
+        account_label=account_label,
+        account_id=account_id,
+        date_range=date_range,
+        statement=statement,
+    )
+    filename = (
+        f"statement_{account_label.replace(' ', '_')}_"
+        f"{date_range.start_date.isoformat()}_{date_range.end_date.isoformat()}.csv"
+    )
+    return content, filename
+
+
+def queue_account_statement_email(
+    db: Session,
+    *,
+    account,
+    date_range: StatementRange,
+    statement: dict[str, Any],
+    recipient_email: str | None,
+) -> str:
+    to_email = (recipient_email or account.email or "").strip()
+    if not to_email:
+        raise HTTPException(
+            status_code=400, detail="No recipient email set for this account"
+        )
+    notification_service.notifications.create(
+        db,
+        NotificationCreate(
+            channel=NotificationChannel.email,
+            recipient=to_email,
+            status=NotificationStatus.queued,
+            subject=f"Account statement ({date_range.start_date.isoformat()} - {date_range.end_date.isoformat()})",
+            body=(
+                "Your account statement is ready.\n\n"
+                f"Period: {date_range.start_date.isoformat()} to {date_range.end_date.isoformat()}\n"
+                f"Opening balance: {statement['opening_balance']:.2f}\n"
+                f"Closing balance: {statement['closing_balance']:.2f}\n"
+                f"Transactions: {len(statement['rows'])}\n"
+            ),
+        ),
+    )
+    return to_email
+
+
+def build_and_queue_account_statement_email(
+    db: Session,
+    *,
+    account,
+    account_id: UUID,
+    start_date: str | None,
+    end_date: str | None,
+    recipient_email: str | None,
+) -> StatementRange:
+    date_range = parse_statement_range(start_date, end_date)
+    statement = build_account_statement(
+        db,
+        account_id=account_id,
+        date_range=date_range,
+    )
+    queue_account_statement_email(
+        db,
+        account=account,
+        date_range=date_range,
+        statement=statement,
+        recipient_email=recipient_email,
+    )
+    return date_range

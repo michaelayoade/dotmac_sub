@@ -8,9 +8,9 @@ from app.schemas.network import (
     FiberSegmentCreate,
     FiberSpliceClosureCreate,
     IpPoolCreate,
-    OLTDeviceCreate,
     OltCardCreate,
     OltCardPortCreate,
+    OLTDeviceCreate,
     OltShelfCreate,
     PonPortCreate,
     PonPortUpdate,
@@ -189,16 +189,12 @@ from app.schemas.network import (
     IpBlockCreate,
     IpBlockUpdate,
     IpPoolUpdate,
-    OltCardCreate,
-    OltCardPortCreate,
     OltCardPortUpdate,
     OltCardUpdate,
     OLTDeviceUpdate,
-    OltShelfCreate,
     OltShelfUpdate,
     OntUnitCreate,
     OntUnitUpdate,
-    PonPortUpdate,
     PortCreate,
     PortUpdate,
     PortVlanCreate,
@@ -818,7 +814,6 @@ class TestVlansCRUD:
         assert len(vlans) >= 2
 
 
-@pytest.mark.skip(reason="Service bug: IpBlocks.create adds ip_version to IpBlock model which doesn't have it")
 class TestIpBlocksCRUD:
     """Tests for IpBlocks CRUD operations."""
 

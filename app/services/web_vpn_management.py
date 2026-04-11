@@ -247,6 +247,94 @@ def build_unified_dashboard_data(
     }
 
 
+def normalize_protocol(protocol: str | None) -> str:
+    protocol_name = (protocol or "wireguard").strip().lower()
+    return protocol_name if protocol_name in {"wireguard", "openvpn"} else "wireguard"
+
+
+def build_dashboard_context(
+    db: Session,
+    *,
+    server_id: str | None,
+    protocol: str | None,
+    control_job_id: str | None,
+    success_message: str | None,
+) -> dict[str, Any]:
+    data = build_unified_dashboard_data(db, server_id=server_id)
+    return {
+        "protocol": normalize_protocol(protocol),
+        "server": data["wireguard"]["server"],
+        "servers": data["wireguard"]["servers_with_counts"],
+        "needs_setup": data["wireguard"]["needs_setup"],
+        "peers": data["wireguard"]["peers_read"],
+        "interface_status": data["wireguard"]["interface_status"],
+        "openvpn_clients": data["openvpn_clients"],
+        "openvpn_config": data["openvpn_config"],
+        "vpn_connections": data["connections"],
+        "vpn_summary": data["summary"],
+        "vpn_alerts": data["alerts"],
+        "control_job_id": control_job_id,
+        "success_message": success_message,
+    }
+
+
+def build_client_wizard_context(
+    db: Session,
+    *,
+    protocol: str | None,
+    server_id: str | None,
+    errors: list[str] | None = None,
+    result: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "protocol": normalize_protocol(protocol),
+        "servers": wg_service.wg_servers.list(db, limit=100),
+        "selected_server_id": server_id or "",
+        "errors": errors or [],
+        "result": result,
+        "openvpn_config": get_openvpn_server_config(db),
+    }
+
+
+def submit_client_wizard_context(
+    db: Session,
+    *,
+    protocol: str | None,
+    name: str,
+    server_id: str | None,
+    peer_address: str | None,
+    remote_host: str | None,
+    remote_port: int | None,
+    actor_id: str | None,
+    request,
+) -> dict[str, Any]:
+    selected_protocol = normalize_protocol(protocol)
+    errors: list[str] = []
+    result = None
+    try:
+        result = create_vpn_client(
+            db,
+            protocol=selected_protocol,
+            name=name.strip(),
+            server_id=server_id,
+            peer_address=(peer_address or "").strip() or None,
+            remote_host=(remote_host or "").strip() or None,
+            remote_port=remote_port,
+            actor_id=actor_id,
+            request=request,
+        )
+    except Exception as exc:
+        errors.append(str(exc))
+
+    return build_client_wizard_context(
+        db,
+        protocol=selected_protocol,
+        server_id=server_id,
+        errors=errors,
+        result=result,
+    )
+
+
 def _job_entries(db: Session) -> list[dict[str, Any]]:
     return job_log_store.read_json_list(
         db, domain_settings_service.network_settings, VPN_CONTROL_JOBS_KEY

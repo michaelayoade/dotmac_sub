@@ -80,9 +80,6 @@ from app.tasks.usage import import_radius_accounting, run_usage_rating
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
-    process_email_webhook,
-    process_meta_webhook,
-    process_whatsapp_webhook,
     retry_failed_deliveries,
 )
 from app.tasks.wireguard import (
@@ -93,9 +90,6 @@ from app.tasks.wireguard import (
 )
 from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
-)
-from app.tasks.wireguard import (
-    sync_peer_stats as sync_wireguard_peer_stats,
 )
 
 __all__ = [
@@ -121,7 +115,6 @@ __all__ = [
     "cleanup_wireguard_logs",
     "cleanup_wireguard_tokens",
     "wireguard_connection_report",
-    "sync_wireguard_peer_stats",
     "process_bandwidth_stream",
     "cleanup_bandwidth_hot_data",
     "aggregate_bandwidth_to_metrics",
@@ -140,9 +133,6 @@ __all__ = [
     "run_vpn_health_scan",
     "deliver_webhook",
     "retry_failed_deliveries",
-    "process_whatsapp_webhook",
-    "process_email_webhook",
-    "process_meta_webhook",
     "deliver_notification_queue",
     "detect_profile_drift",
     "auto_link_profiles",

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
+from uuid import UUID
 
 from sqlalchemy import func
 
@@ -16,6 +17,7 @@ from app.models.billing import (
 )
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
+from app.schemas.billing import PaymentProviderCreate, PaymentProviderUpdate
 from app.schemas.settings import DomainSettingUpdate
 from app.services import billing as billing_service
 from app.services import domain_settings as domain_settings_service
@@ -411,3 +413,46 @@ def edit_data(db: Session, *, provider_id: str) -> dict[str, object] | None:
         "provider": provider,
         "provider_types": supported_provider_type_values(),
     }
+
+
+def create_provider_from_form(
+    db: Session,
+    *,
+    name: str,
+    provider_type: str,
+    webhook_secret_ref: str | None,
+    notes: str | None,
+    is_active: str | None,
+):
+    payload = PaymentProviderCreate(
+        name=name.strip(),
+        provider_type=parse_supported_provider_type(provider_type),
+        webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,
+        notes=notes.strip() if notes else None,
+        is_active=is_active is not None,
+    )
+    return billing_service.payment_providers.create(db, payload)
+
+
+def update_provider_from_form(
+    db: Session,
+    *,
+    provider_id: UUID,
+    name: str,
+    provider_type: str,
+    webhook_secret_ref: str | None,
+    notes: str | None,
+    is_active: str | None,
+):
+    payload = PaymentProviderUpdate(
+        name=name.strip(),
+        provider_type=parse_supported_provider_type(provider_type),
+        webhook_secret_ref=webhook_secret_ref.strip() if webhook_secret_ref else None,
+        notes=notes.strip() if notes else None,
+        is_active=is_active is not None,
+    )
+    return billing_service.payment_providers.update(db, str(provider_id), payload)
+
+
+def deactivate_provider(db: Session, *, provider_id: UUID) -> None:
+    billing_service.payment_providers.delete(db, str(provider_id))

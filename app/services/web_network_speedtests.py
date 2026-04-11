@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.orm import Session, selectinload
+from starlette.requests import Request
 
 from app.models.catalog import CatalogOffer, Subscription
 from app.models.network_monitoring import (
@@ -15,9 +17,46 @@ from app.models.network_monitoring import (
     SpeedTestSource,
 )
 from app.models.subscriber import Subscriber
+from app.services.audit_helpers import log_audit_event
 from app.services.common import coerce_uuid, validate_enum
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class SpeedtestFormResult:
+    speedtest: SpeedTestResult | None = None
+    form_model: dict[str, object] | None = None
+    error: str | None = None
+
+
+def _actor_id_from_request(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    from app.services import web_admin as web_admin_service
+
+    return web_admin_service.get_actor_id(request)
+
+
+def _log_speedtest_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    action: str,
+    entity_id: object | None,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    if request is None:
+        return
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="speed_test",
+        entity_id=str(entity_id) if entity_id is not None else None,
+        actor_id=_actor_id_from_request(request),
+        metadata=metadata,
+    )
 
 
 def _parse_float(raw: object | None) -> float | None:
@@ -123,6 +162,37 @@ def create_speedtest(db: Session, values: dict[str, object]) -> SpeedTestResult:
     db.commit()
     db.refresh(item)
     return item
+
+
+def create_speedtest_from_values(
+    db: Session, values: dict[str, object], *, request: Request | None = None
+) -> SpeedtestFormResult:
+    error = validate_speedtest_values(values)
+    if error:
+        return SpeedtestFormResult(
+            form_model=speedtest_form_snapshot(values),
+            error=error,
+        )
+    try:
+        result = create_speedtest(db, values)
+    except Exception as exc:
+        return SpeedtestFormResult(
+            form_model=speedtest_form_snapshot(values),
+            error=str(exc),
+        )
+
+    _log_speedtest_audit(
+        db,
+        request=request,
+        action="create",
+        entity_id=result.id,
+        metadata={
+            "download_mbps": result.download_mbps,
+            "upload_mbps": result.upload_mbps,
+            "latency_ms": result.latency_ms,
+        },
+    )
+    return SpeedtestFormResult(speedtest=result)
 
 
 def create_customer_speedtest(
@@ -314,6 +384,118 @@ def clear_history(
     deleted = query.delete(synchronize_session=False)
     db.commit()
     return int(deleted)
+
+
+def parse_older_than_days(value: object | None) -> tuple[int | None, str | None]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None, None
+    try:
+        return max(0, int(raw)), None
+    except ValueError:
+        return None, "Invalid older-than days value"
+
+
+def clear_history_from_form(
+    db: Session,
+    *,
+    confirm_text: str,
+    older_than_days_raw: object | None,
+    request: Request | None = None,
+) -> tuple[int | None, str | None, int | None]:
+    parsed_days, error = parse_older_than_days(older_than_days_raw)
+    if error:
+        return None, error, parsed_days
+    try:
+        deleted = clear_history(
+            db,
+            confirm_text=confirm_text,
+            older_than_days=parsed_days,
+        )
+    except Exception as exc:
+        return None, str(exc), parsed_days
+
+    _log_speedtest_audit(
+        db,
+        request=request,
+        action="delete",
+        entity_id=None,
+        metadata={"deleted_rows": deleted, "older_than_days": parsed_days},
+    )
+    return deleted, None, parsed_days
+
+
+def list_page_data_safe(
+    db: Session,
+    *,
+    search: str | None = None,
+    subscriber_id: str | None = None,
+    network_device_id: str | None = None,
+    pop_site_id: str | None = None,
+    source: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+) -> tuple[dict[str, object], str | None]:
+    try:
+        return (
+            list_page_data(
+                db,
+                search=search,
+                subscriber_id=subscriber_id,
+                network_device_id=network_device_id,
+                pop_site_id=pop_site_id,
+                source=source,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            None,
+        )
+    except Exception as exc:
+        db.rollback()
+        fallback_error = str(exc)
+        if (
+            "speed_test_results" in fallback_error
+            and "does not exist" in fallback_error
+        ):
+            fallback_error = (
+                "Speed test tables are not available yet. "
+                "Run database migrations, then reload this page."
+            )
+        try:
+            reference_data = speedtest_form_reference_data(db)
+        except Exception:
+            db.rollback()
+            reference_data = {
+                "subscribers": [],
+                "subscriptions": [],
+                "devices": [],
+                "pop_sites": [],
+                "sources": [],
+            }
+        return (
+            {
+                "results": [],
+                "stats": {
+                    "total": 0,
+                    "avg_download": 0,
+                    "avg_upload": 0,
+                    "avg_latency": 0,
+                    "underperforming": 0,
+                },
+                "filters": {
+                    "search": str(search or "").strip(),
+                    "subscriber_id": str(subscriber_id or "").strip(),
+                    "network_device_id": str(network_device_id or "").strip(),
+                    "pop_site_id": str(pop_site_id or "").strip(),
+                    "source": str(source or "").strip(),
+                    "date_from": str(date_from or "").strip(),
+                    "date_to": str(date_to or "").strip(),
+                },
+                "invalid_filter_error": None,
+                **reference_data,
+            },
+            f"Failed to load speed tests: {fallback_error}",
+        )
 
 
 def list_page_data(

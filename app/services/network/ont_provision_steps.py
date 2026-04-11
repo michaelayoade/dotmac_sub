@@ -21,28 +21,29 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Mapping
-from dataclasses import asdict, dataclass, is_dataclass
-from datetime import datetime
-from decimal import Decimal
-from enum import Enum
-from typing import Any
-from uuid import UUID
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import (
-    OLTDevice,
-    OntAssignment,
-    OntProvisioningProfile,
-    OntUnit,
-    PonPort,
+from app.models.network import OntUnit
+from app.services.network.ont_provisioning.context import (
+    OltContext as OltContext,
 )
-from app.services.common import coerce_uuid
-from app.services.network.serial_utils import (
-    parse_ont_id_on_olt as _parse_ont_id_on_olt,
+from app.services.network.ont_provisioning.context import (
+    resolve_olt_context as resolve_olt_context,
 )
+from app.services.network.ont_provisioning.credentials import (
+    mask_credentials as mask_credentials,
+)
+from app.services.network.ont_provisioning.preflight import (
+    validate_prerequisites as validate_prerequisites,
+)
+from app.services.network.ont_provisioning.preview import (
+    preview_commands as preview_commands,
+)
+from app.services.network.ont_provisioning.profiles import (
+    resolve_profile as resolve_profile,
+)
+from app.services.network.ont_provisioning.result import StepResult as StepResult
 
 logger = logging.getLogger(__name__)
 
@@ -53,126 +54,6 @@ _TR069_TASK_READY_TIMEOUT_SEC = 45
 _TR069_TASK_READY_POLL_INTERVAL_SEC = 5
 _PPPOE_PUSH_MAX_ATTEMPTS = 3
 _PPPOE_PUSH_RETRY_DELAY_SEC = 10
-
-
-# ---------------------------------------------------------------------------
-# Result type
-# ---------------------------------------------------------------------------
-
-
-def _json_safe_step_data(value: Any) -> Any:
-    """Normalize StepResult data to JSON-safe primitives."""
-    if value is None or isinstance(value, (str, int, float, bool)):
-        return value
-    if isinstance(value, Enum):
-        return value.value
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, datetime):
-        return value.isoformat()
-    if is_dataclass(value) and not isinstance(value, type):
-        return _json_safe_step_data(asdict(value))
-    if hasattr(value, "model_dump") and callable(value.model_dump):
-        return _json_safe_step_data(value.model_dump())
-    if hasattr(value, "_asdict") and callable(value._asdict):
-        return _json_safe_step_data(value._asdict())
-    if isinstance(value, Mapping):
-        items = sorted(
-            ((str(key), item) for key, item in value.items()),
-            key=lambda pair: pair[0],
-        )
-        return {key: _json_safe_step_data(item) for key, item in items}
-    if isinstance(value, set):
-        normalized_items = [_json_safe_step_data(item) for item in value]
-        return sorted(normalized_items, key=lambda item: repr(item))
-    if isinstance(value, (list, tuple)):
-        return [_json_safe_step_data(item) for item in value]
-    return str(value)
-
-
-@dataclass
-class StepResult:
-    """Result of a single provisioning operation."""
-
-    step_name: str
-    success: bool
-    message: str
-    duration_ms: int = 0
-    critical: bool = True
-    skipped: bool = False
-    waiting: bool = False
-    data: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        if self.data is not None:
-            normalized = _json_safe_step_data(self.data)
-            self.data = (
-                normalized if isinstance(normalized, dict) else {"value": normalized}
-            )
-
-
-# ---------------------------------------------------------------------------
-# ONT → OLT context resolution (shared by all services)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class OltContext:
-    """Resolved ONT-to-OLT mapping needed for SSH operations."""
-
-    ont: OntUnit
-    olt: OLTDevice
-    fsp: str
-    olt_ont_id: int
-    assignment: OntAssignment | None = None
-
-
-def resolve_olt_context(db: Session, ont_id: str) -> tuple[OltContext | None, str]:
-    """Resolve ONT → OLT + FSP + ONT-ID for SSH operations.
-
-    Returns:
-        (context, error_message). Context is None on failure.
-    """
-    ont = db.get(OntUnit, ont_id)
-    if not ont:
-        return None, "ONT not found"
-
-    assignment: OntAssignment | None = None
-    for a in getattr(ont, "assignments", []):
-        if a.active:
-            assignment = a
-            break
-    if not assignment:
-        return None, "ONT has no active assignment"
-    if not assignment.pon_port_id:
-        return None, "Assignment has no PON port"
-
-    pon_port: PonPort | None = db.get(PonPort, str(assignment.pon_port_id))
-    if not pon_port:
-        return None, "PON port not found"
-
-    olt: OLTDevice | None = db.get(OLTDevice, str(pon_port.olt_id))
-    if not olt:
-        return None, "OLT not found"
-
-    board = ont.board or ""
-    port = ont.port or ""
-    if board and port:
-        fsp = f"{board}/{port}"
-    elif pon_port.name:
-        fsp = pon_port.name
-    else:
-        return None, "Cannot determine F/S/P"
-
-    olt_ont_id = _parse_ont_id_on_olt(ont.external_id)
-    if olt_ont_id is None:
-        return None, f"No usable ONT-ID in external_id ({ont.external_id!r})"
-
-    return OltContext(
-        ont=ont, olt=olt, fsp=fsp, olt_ont_id=olt_ont_id, assignment=assignment
-    ), ""
 
 
 # ---------------------------------------------------------------------------
@@ -195,29 +76,6 @@ def _record_step(db: Session, ont: OntUnit, step_name: str, result: StepResult) 
         result.duration_ms,
         result.message[:200],
     )
-
-
-# ---------------------------------------------------------------------------
-# Credential helpers
-# ---------------------------------------------------------------------------
-
-
-_CREDENTIAL_KEYWORDS = ("password", "secret", "Password")
-
-
-def mask_credentials(cmd: str) -> str:
-    """Mask credential values in OLT CLI command strings for safe logging."""
-    for kw in _CREDENTIAL_KEYWORDS:
-        idx = cmd.find(f" {kw} ")
-        if idx != -1:
-            prefix = cmd[: idx + len(kw) + 2]
-            rest = cmd[idx + len(kw) + 2 :]
-            next_space = rest.find(" ")
-            if next_space == -1:
-                cmd = prefix + "********"
-            else:
-                cmd = prefix + "********" + rest[next_space:]
-    return cmd
 
 
 def _is_existing_service_port_conflict(message: str) -> bool:
@@ -327,6 +185,7 @@ def configure_management_ip(
     *,
     vlan_id: int,
     ip_mode: str = "dhcp",
+    priority: int | None = None,
     ip_address: str | None = None,
     subnet: str | None = None,
     gateway: str | None = None,
@@ -351,7 +210,8 @@ def configure_management_ip(
         db,
         ont_id,
         mgmt_ip_mode=ip_mode,
-        mgmt_vlan_id=str(vlan_id),
+        mgmt_vlan_tag=vlan_id,
+        mgmt_priority=priority,
         mgmt_ip_address=ip_address,
         mgmt_subnet=subnet,
         mgmt_gateway=gateway,
@@ -469,10 +329,27 @@ def bind_tr069(
     if not ctx:
         return StepResult("bind_tr069", False, err)
 
+    logger.info(
+        "Provisioning TR-069 bind starting: ont_id=%s serial=%s olt=%s fsp=%s olt_ont_id=%s profile_id=%s",
+        ctx.ont.id,
+        ctx.ont.serial_number,
+        ctx.olt.name,
+        ctx.fsp,
+        ctx.olt_ont_id,
+        tr069_olt_profile_id,
+    )
     ok, msg = bind_tr069_server_profile(
         ctx.olt, ctx.fsp, ctx.olt_ont_id, tr069_olt_profile_id
     )
     ms = int((time.monotonic() - t0) * 1000)
+    logger.info(
+        "Provisioning TR-069 bind finished: ont_id=%s serial=%s success=%s duration_ms=%s message=%s",
+        ctx.ont.id,
+        ctx.ont.serial_number,
+        ok,
+        ms,
+        msg,
+    )
     result = StepResult("bind_tr069", ok, msg, ms)
     _record_step(db, ctx.ont, "bind_tr069", result)
     return result
@@ -506,21 +383,59 @@ def wait_tr069_bootstrap(
     try:
         from app.services.network._resolve import resolve_genieacs_with_reason
 
+        logger.info(
+            "TR-069 bootstrap wait started: ont_id=%s serial=%s timeout_sec=%s poll_interval_sec=%s",
+            ont.id,
+            ont.serial_number,
+            _BOOTSTRAP_TIMEOUT_SEC,
+            _BOOTSTRAP_POLL_INTERVAL_SEC,
+        )
         deadline = time.monotonic() + _BOOTSTRAP_TIMEOUT_SEC
+        attempt = 0
+        last_poll_error = ""
         while time.monotonic() < deadline:
-            resolved, reason = resolve_genieacs_with_reason(db, ont)
+            attempt += 1
+            try:
+                resolved, reason = resolve_genieacs_with_reason(db, ont)
+            except Exception as exc:
+                db.rollback()
+                last_poll_error = str(exc)
+                logger.warning(
+                    "TR-069 bootstrap wait poll error: ont_id=%s serial=%s attempt=%s error=%s",
+                    ont.id,
+                    ont.serial_number,
+                    attempt,
+                    exc,
+                )
+                time.sleep(_BOOTSTRAP_POLL_INTERVAL_SEC)
+                continue
             if resolved:
-                logger.info("TR-069 bootstrap complete for ONT %s", ont.serial_number)
+                _client, device_id = resolved
+                logger.info(
+                    "TR-069 bootstrap complete: ont_id=%s serial=%s genieacs_device_id=%s attempts=%s",
+                    ont.id,
+                    ont.serial_number,
+                    device_id,
+                    attempt,
+                )
                 ms = int((time.monotonic() - t0) * 1000)
                 result = StepResult(
                     "wait_tr069_bootstrap", True, "Device registered in ACS", ms
                 )
                 _record_step(db, ont, "wait_tr069_bootstrap", result)
                 return result
+            logger.info(
+                "TR-069 bootstrap wait poll miss: ont_id=%s serial=%s attempt=%s reason=%s",
+                ont.id,
+                ont.serial_number,
+                attempt,
+                reason,
+            )
             time.sleep(_BOOTSTRAP_POLL_INTERVAL_SEC)
 
         logger.warning(
-            "TR-069 bootstrap timeout for ONT %s after %ds",
+            "TR-069 bootstrap timeout: ont_id=%s serial=%s timeout_sec=%s",
+            ont.id,
             ont.serial_number,
             _BOOTSTRAP_TIMEOUT_SEC,
         )
@@ -528,13 +443,18 @@ def wait_tr069_bootstrap(
         result = StepResult(
             "wait_tr069_bootstrap",
             False,
-            f"Device not found in ACS after {_BOOTSTRAP_TIMEOUT_SEC}s",
+            (
+                f"Device not found in ACS after {_BOOTSTRAP_TIMEOUT_SEC}s"
+                if not last_poll_error
+                else f"Device not found in ACS after {_BOOTSTRAP_TIMEOUT_SEC}s; last poll error: {last_poll_error}"
+            ),
             ms,
         )
         _record_step(db, ont, "wait_tr069_bootstrap", result)
         return result
     except Exception as e:
         logger.error("Error during TR-069 bootstrap poll: %s", e)
+        db.rollback()
         ms = int((time.monotonic() - t0) * 1000)
         result = StepResult(
             "wait_tr069_bootstrap", False, f"Bootstrap poll error: {e}", ms
@@ -1036,384 +956,5 @@ def rollback_service_ports(
     return result
 
 
-# ---------------------------------------------------------------------------
-# Profile resolution
-# ---------------------------------------------------------------------------
-
-
-def resolve_profile(
-    db: Session,
-    ont: OntUnit,
-    profile_id: str | None = None,
-) -> OntProvisioningProfile | None:
-    """Resolve a provisioning profile for an ONT.
-
-    Priority: explicit profile_id > ONT's assigned profile > first active profile.
-    """
-    selected_id = profile_id or (
-        str(ont.provisioning_profile_id) if ont.provisioning_profile_id else None
-    )
-    if selected_id:
-        return db.get(OntProvisioningProfile, selected_id)
-    fallback = db.scalars(
-        select(OntProvisioningProfile).where(OntProvisioningProfile.is_active.is_(True))
-    ).first()
-    if fallback:
-        logger.warning(
-            "ONT %s has no assigned profile — falling back to '%s'",
-            ont.serial_number,
-            fallback.name,
-        )
-    return fallback
-
-
-def _profile_requires_tr069(profile: OntProvisioningProfile | None) -> bool:
-    """Check whether a profile's configuration requires TR-069."""
-    if profile is None:
-        return False
-    if getattr(profile, "cr_username", None) or getattr(profile, "cr_password", None):
-        return True
-    if getattr(getattr(profile, "ip_protocol", None), "value", None) == "dual_stack":
-        return True
-
-    wan_services = getattr(profile, "wan_services", []) or []
-    has_pppoe = any(
-        (
-            getattr(getattr(ws, "connection_type", None), "value", None)
-            or str(getattr(ws, "connection_type", "") or "")
-        )
-        == "pppoe"
-        for ws in wan_services
-        if getattr(ws, "is_active", True)
-    )
-    omci_vlan = getattr(profile, "pppoe_omci_vlan", None)
-    return has_pppoe and omci_vlan is None
-
-
-# ---------------------------------------------------------------------------
-# Preflight validation
-# ---------------------------------------------------------------------------
-
-
-def validate_prerequisites(
-    db: Session,
-    ont_id: str,
-    *,
-    profile_id: str | None = None,
-    tr069_olt_profile_id: int | None = None,
-) -> dict:
-    """Check all prerequisites before provisioning.
-
-    Returns a dict with:
-    - ready: bool — all checks pass
-    - checks: list of {name, status, message, can_auto_fix}
-    """
-    from app.models.catalog import (
-        AccessCredential,
-        Subscription,
-        SubscriptionStatus,
-    )
-
-    checks: list[dict] = []
-    ont = db.get(OntUnit, coerce_uuid(ont_id))
-    olt: OLTDevice | None = None
-    profile: OntProvisioningProfile | None = None
-
-    if not ont:
-        checks.append(
-            {
-                "name": "ONT exists",
-                "status": "fail",
-                "message": "ONT not found",
-                "can_auto_fix": False,
-            }
-        )
-        return {"ready": False, "checks": checks}
-    checks.append(
-        {
-            "name": "ONT exists",
-            "status": "ok",
-            "message": f"{ont.serial_number} ({ont.vendor or ''} {ont.model or ''})",
-            "can_auto_fix": False,
-        }
-    )
-
-    if ont.olt_device_id:
-        olt = db.get(OLTDevice, ont.olt_device_id)
-        checks.append(
-            {
-                "name": "OLT assigned",
-                "status": "ok",
-                "message": olt.name if olt else str(ont.olt_device_id),
-                "can_auto_fix": False,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "OLT assigned",
-                "status": "fail",
-                "message": "No OLT — assign ONT to an OLT first",
-                "can_auto_fix": False,
-            }
-        )
-
-    if ont.board and ont.port is not None:
-        checks.append(
-            {
-                "name": "OLT position (F/S/P)",
-                "status": "ok",
-                "message": f"{ont.board}/{ont.port}",
-                "can_auto_fix": False,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "OLT position (F/S/P)",
-                "status": "fail",
-                "message": "Board/port not set — discover from OLT or enter manually",
-                "can_auto_fix": False,
-            }
-        )
-
-    profile = resolve_profile(db, ont, profile_id)
-    if profile:
-        checks.append(
-            {
-                "name": "Provisioning profile",
-                "status": "ok",
-                "message": profile.name,
-                "can_auto_fix": False,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "Provisioning profile",
-                "status": "fail",
-                "message": "No profile — create one in Catalog → Provisioning Profiles",
-                "can_auto_fix": False,
-            }
-        )
-
-    if olt and olt.ssh_username and olt.ssh_password:
-        checks.append(
-            {
-                "name": "OLT SSH credentials",
-                "status": "ok",
-                "message": f"User: {olt.ssh_username}",
-                "can_auto_fix": False,
-            }
-        )
-    elif ont.olt_device_id:
-        checks.append(
-            {
-                "name": "OLT SSH credentials",
-                "status": "fail",
-                "message": "SSH not configured on OLT",
-                "can_auto_fix": False,
-            }
-        )
-
-    assignment = db.scalars(
-        select(OntAssignment).where(
-            OntAssignment.ont_unit_id == ont.id, OntAssignment.active.is_(True)
-        )
-    ).first()
-    if assignment and assignment.subscriber_id:
-        from app.models.subscriber import Subscriber
-
-        sub = db.get(Subscriber, assignment.subscriber_id)
-        sub_name = (
-            f"{sub.first_name or ''} {sub.last_name or ''}".strip()
-            if sub
-            else str(assignment.subscriber_id)
-        )
-        checks.append(
-            {
-                "name": "Subscriber assigned",
-                "status": "ok",
-                "message": sub_name,
-                "can_auto_fix": False,
-            }
-        )
-
-        active_sub = db.scalars(
-            select(Subscription).where(
-                Subscription.subscriber_id == assignment.subscriber_id,
-                Subscription.status == SubscriptionStatus.active,
-            )
-        ).first()
-        if active_sub:
-            checks.append(
-                {
-                    "name": "Active subscription",
-                    "status": "ok",
-                    "message": str(active_sub.id)[:8] + "...",
-                    "can_auto_fix": False,
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "name": "Active subscription",
-                    "status": "warn",
-                    "message": "No active subscription",
-                    "can_auto_fix": False,
-                }
-            )
-
-        cred = db.scalars(
-            select(AccessCredential).where(
-                AccessCredential.subscriber_id == assignment.subscriber_id,
-                AccessCredential.is_active.is_(True),
-            )
-        ).first()
-        if cred:
-            checks.append(
-                {
-                    "name": "PPPoE credential",
-                    "status": "ok",
-                    "message": cred.username,
-                    "can_auto_fix": False,
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "name": "PPPoE credential",
-                    "status": "warn",
-                    "message": "None — will auto-generate on activation",
-                    "can_auto_fix": True,
-                }
-            )
-    else:
-        checks.append(
-            {
-                "name": "Subscriber assigned",
-                "status": "warn",
-                "message": "No subscriber — provisioning will skip PPPoE",
-                "can_auto_fix": False,
-            }
-        )
-
-    acs_server_id = ont.tr069_acs_server_id
-    if not acs_server_id and olt is not None:
-        acs_server_id = getattr(olt, "tr069_acs_server_id", None)
-    if acs_server_id:
-        checks.append(
-            {
-                "name": "TR-069 ACS server",
-                "status": "ok",
-                "message": "Configured",
-                "can_auto_fix": False,
-            }
-        )
-    else:
-        checks.append(
-            {
-                "name": "TR-069 ACS server",
-                "status": "warn",
-                "message": "Not configured — TR-069 steps will be skipped",
-                "can_auto_fix": False,
-            }
-        )
-
-    profile_requires = _profile_requires_tr069(profile)
-    acs_enabled = bool(
-        getattr(ont, "tr069_acs_server_id", None)
-        or getattr(olt, "tr069_acs_server_id", None)
-    )
-    tr069_required = profile_requires or acs_enabled
-
-    if not tr069_required or tr069_olt_profile_id is not None:
-        tr069_status = "ok"
-        tr069_msg = "Configured"
-    elif profile_requires and not acs_enabled:
-        tr069_status = "fail"
-        tr069_msg = "Selected provisioning profile requires TR-069, but no ACS-enabled OLT or ONT is configured."
-    elif profile_requires:
-        tr069_status = "fail"
-        tr069_msg = "Selected provisioning profile requires a TR-069 OLT profile ID."
-    else:
-        tr069_status = "fail"
-        tr069_msg = (
-            "This ONT is on an ACS-enabled OLT. Provide a TR-069 OLT profile ID."
-        )
-    checks.append(
-        {
-            "name": "TR-069 OLT profile",
-            "status": tr069_status,
-            "message": tr069_msg,
-            "can_auto_fix": False,
-        }
-    )
-
-    ready = all(c["status"] != "fail" for c in checks)
-    return {"ready": ready, "checks": checks}
-
-
-# ---------------------------------------------------------------------------
-# Command preview (dry-run)
-# ---------------------------------------------------------------------------
-
-
-def preview_commands(
-    db: Session,
-    ont_id: str,
-    profile_id: str,
-    *,
-    tr069_olt_profile_id: int | None = None,
-) -> dict[str, Any]:
-    """Generate provisioning commands without executing them.
-
-    Returns:
-        Dict with keys: success, message, command_sets (list of OltCommandSet dicts).
-    """
-    from app.services.network.olt_command_gen import (
-        HuaweiCommandGenerator,
-        OntProvisioningContext,
-        build_spec_from_profile,
-    )
-
-    ctx, err = resolve_olt_context(db, ont_id)
-    if not ctx:
-        return {"success": False, "message": err, "command_sets": []}
-
-    profile = db.get(OntProvisioningProfile, profile_id)
-    if not profile:
-        return {"success": False, "message": "Profile not found", "command_sets": []}
-
-    fsp_parts = ctx.fsp.split("/")
-    if len(fsp_parts) < 3:
-        return {
-            "success": False,
-            "message": f"FSP '{ctx.fsp}' needs 3 segments (frame/slot/port)",
-            "command_sets": [],
-        }
-    prov_ctx = OntProvisioningContext(
-        frame=int(fsp_parts[0]),
-        slot=int(fsp_parts[1]),
-        port=int(fsp_parts[2]),
-        ont_id=ctx.olt_ont_id,
-        olt_name=ctx.olt.name,
-    )
-
-    spec = build_spec_from_profile(
-        profile, prov_ctx, tr069_profile_id=tr069_olt_profile_id
-    )
-    command_sets = HuaweiCommandGenerator.generate_full_provisioning(spec, prov_ctx)
-
-    return {
-        "success": True,
-        "message": f"Generated {sum(len(cs.commands) for cs in command_sets)} command(s)",
-        "command_sets": [
-            {
-                "step": cs.step,
-                "commands": [mask_credentials(c) for c in cs.commands],
-                "description": cs.description,
-            }
-            for cs in command_sets
-        ],
-    }
+# Profile resolution, preflight validation, and command preview live in
+# app.services.network.ont_provisioning.* and are imported above for compatibility.

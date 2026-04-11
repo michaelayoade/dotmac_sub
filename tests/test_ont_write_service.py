@@ -140,6 +140,38 @@ class TestUpdateManagementIp:
         assert mock_configure.call_args.args[1] == "0/1/3"
         assert mock_configure.call_args.args[2] == 5
 
+    @patch("app.services.network.ont_write._emit_ont_event")
+    @patch("app.services.network.ont_write._resolve_olt_context")
+    @patch("app.services.network.ont_write.get_ont_or_error")
+    @patch("app.services.network.olt_ssh_ont.configure_ont_iphost")
+    def test_accepts_management_vlan_tag_without_vlan_row(
+        self,
+        mock_configure,
+        mock_get,
+        mock_resolve,
+        mock_emit,
+    ):
+        ont = MagicMock(external_id="generic:5")
+        assignment = MagicMock()
+        assignment.pon_port = MagicMock(name="0/1/3")
+        assignment.pon_port.name = "0/1/3"
+        mock_get.return_value = (ont, None)
+        mock_resolve.return_value = (MagicMock(id=uuid.uuid4()), assignment, None)
+        mock_configure.return_value = (True, "ok")
+        db = MagicMock()
+        db.scalars.return_value.first.return_value = None
+
+        result = OntWriteService.update_management_ip(
+            db,
+            "ont-1",
+            mgmt_ip_mode="dhcp",
+            mgmt_vlan_tag=201,
+        )
+
+        assert result.success is True
+        assert mock_configure.call_args.kwargs["vlan_id"] == 201
+        assert "mgmt_vlan_id" not in ont.__dict__
+
 
 class TestUpdateServicePort:
     @patch("app.services.network.ont_write._emit_ont_event")

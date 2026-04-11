@@ -4,6 +4,7 @@ import json
 import logging
 from datetime import UTC, datetime
 from typing import Any, cast
+from urllib.parse import quote_plus
 from uuid import UUID
 
 from sqlalchemy import select
@@ -35,7 +36,8 @@ from app.schemas.catalog import (
 )
 from app.services import backup_alerts as backup_alerts_service
 from app.services import ping as ping_service
-from app.services.audit_helpers import diff_dicts, model_to_dict
+from app.services import web_admin as web_admin_service
+from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.nas._helpers import (
     RADIUS_REQUIRED_CONNECTION_TYPES,
     TEMPLATE_AUDIT_EXCLUDE_FIELDS,
@@ -53,6 +55,15 @@ from app.services.nas._helpers import (
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
+
+DEVICE_AUDIT_EXCLUDE_FIELDS = {
+    "ssh_password",
+    "api_password",
+    "radius_secret",
+    "api_key",
+    "ssh_key",
+    "snmp_community",
+}
 
 
 def build_nas_device_payload(
@@ -319,6 +330,231 @@ def build_nas_device_payload(
     return payload, []
 
 
+def create_nas_device_with_audit(db: Session, *, request, payload: NasDeviceCreate):
+    """Create a NAS device and record the admin audit event."""
+    from app.services.nas.devices import NasDevices
+
+    if not isinstance(payload, NasDeviceCreate):
+        raise ValueError("Invalid payload type: expected NasDeviceCreate")
+
+    device = NasDevices.create(db, payload)
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create",
+        entity_type="nas_device",
+        entity_id=str(device.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"name": device.name, "ip_address": device.ip_address},
+    )
+    return device
+
+
+def update_nas_device_with_audit(
+    db: Session,
+    *,
+    request,
+    device_id: str,
+    payload: NasDeviceUpdate,
+):
+    """Update a NAS device and record changed fields in the audit log."""
+    from app.services.nas.devices import NasDevices
+
+    if not isinstance(payload, NasDeviceUpdate):
+        raise ValueError("Invalid payload type: expected NasDeviceUpdate")
+
+    device = NasDevices.get(db, device_id)
+    before_snapshot = model_to_dict(device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS)
+    updated_device = NasDevices.update(db, device_id, payload)
+    after_snapshot = model_to_dict(updated_device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="nas_device",
+        entity_id=str(updated_device.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"changes": changes} if changes else None,
+    )
+    return updated_device
+
+
+def delete_nas_device_with_audit(db: Session, *, request, device_id: str) -> None:
+    """Delete a NAS device and record the admin audit event."""
+    from app.services.nas.devices import NasDevices
+
+    device = NasDevices.get(db, device_id)
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="delete",
+        entity_type="nas_device",
+        entity_id=str(device.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"name": device.name, "ip_address": device.ip_address},
+    )
+    NasDevices.delete(db, device_id)
+
+
+def ping_nas_device_and_touch_last_seen(
+    db: Session, *, device_id: str
+) -> dict[str, Any]:
+    """Ping a NAS device and update last-seen when reachable."""
+    from app.services.nas.devices import NasDevices
+
+    device = NasDevices.get(db, device_id)
+    ping_status = get_ping_status(device.ip_address or device.management_ip)
+    touched = False
+    if ping_status.get("state") == "reachable":
+        NasDevices.update_last_seen(db, device_id)
+        touched = True
+    return {"ping_status": ping_status, "last_seen_updated": touched}
+
+
+def live_bandwidth_redirect_url(db: Session, *, device_id: str) -> str:
+    """Return the admin redirect URL for NAS live bandwidth."""
+    from app.services.nas.devices import NasDevices
+
+    device = NasDevices.get(db, device_id)
+    if device.network_device_id:
+        return f"/admin/network/core-devices/{device.network_device_id}"
+    return (
+        f"/admin/network/nas/devices/{device_id}"
+        "?tab=information&api_test_status=error&api_test_message="
+        "No+linked+monitoring+device+for+live+bandwidth."
+    )
+
+
+def _exception_message(exc: Exception) -> str:
+    detail = getattr(exc, "detail", None)
+    return str(detail) if detail else str(exc)
+
+
+def _connection_rule_redirect_url(*, device_id: str, status: str, message: str) -> str:
+    return (
+        f"/admin/network/nas/devices/{device_id}?tab=connection-rules"
+        f"&rule_status={status}&rule_message={quote_plus(message)}"
+    )
+
+
+def create_connection_rule_redirect_url(
+    db: Session,
+    *,
+    device_id: str,
+    name: str,
+    connection_type: str | None,
+    ip_assignment_mode: str | None,
+    rate_limit_profile: str | None,
+    match_expression: str | None,
+    priority: int,
+    notes: str | None,
+) -> str:
+    """Create a NAS connection rule and return the admin redirect URL."""
+    from app.services.nas.connection_rules import create_connection_rule_for_device
+
+    try:
+        message = create_connection_rule_for_device(
+            db,
+            device_id=device_id,
+            name=name,
+            connection_type=connection_type or None,
+            ip_assignment_mode=ip_assignment_mode,
+            rate_limit_profile=rate_limit_profile,
+            match_expression=match_expression,
+            priority=priority,
+            notes=notes,
+        )
+        return _connection_rule_redirect_url(
+            device_id=device_id,
+            status="success",
+            message=message,
+        )
+    except Exception as exc:
+        return _connection_rule_redirect_url(
+            device_id=device_id,
+            status="error",
+            message=_exception_message(exc),
+        )
+
+
+def toggle_connection_rule_redirect_url(
+    db: Session,
+    *,
+    device_id: str,
+    rule_id: str,
+    is_active: str,
+) -> str:
+    """Toggle a NAS connection rule and return the admin redirect URL."""
+    from app.services.nas.connection_rules import toggle_connection_rule_for_device
+
+    try:
+        message = toggle_connection_rule_for_device(
+            db,
+            device_id=device_id,
+            rule_id=rule_id,
+            is_active_raw=is_active,
+        )
+        return _connection_rule_redirect_url(
+            device_id=device_id,
+            status="success",
+            message=message,
+        )
+    except Exception as exc:
+        return _connection_rule_redirect_url(
+            device_id=device_id,
+            status="error",
+            message=_exception_message(exc),
+        )
+
+
+def delete_connection_rule_redirect_url(
+    db: Session,
+    *,
+    device_id: str,
+    rule_id: str,
+) -> str:
+    """Delete a NAS connection rule and return the admin redirect URL."""
+    from app.services.nas.connection_rules import delete_connection_rule_for_device
+
+    try:
+        message = delete_connection_rule_for_device(
+            db,
+            device_id=device_id,
+            rule_id=rule_id,
+        )
+        return _connection_rule_redirect_url(
+            device_id=device_id,
+            status="success",
+            message=message,
+        )
+    except Exception as exc:
+        return _connection_rule_redirect_url(
+            device_id=device_id,
+            status="error",
+            message=_exception_message(exc),
+        )
+
+
+def mikrotik_api_test_redirect_url(db: Session, *, device_id: str) -> str:
+    """Run MikroTik API status refresh and return the admin redirect URL."""
+    from app.services.nas._mikrotik import refresh_mikrotik_status_for_device
+
+    try:
+        message = refresh_mikrotik_status_for_device(db, device_id=device_id)
+        status = "success"
+    except Exception as exc:
+        message = str(exc)
+        status = "error"
+    return (
+        f"/admin/network/nas/devices/{device_id}?tab=vendor-specific"
+        f"&api_test_status={status}&api_test_message={quote_plus(message)}"
+    )
+
+
 def build_provisioning_template_payload(
     *,
     form: dict[str, Any],
@@ -389,6 +625,33 @@ def create_provisioning_template_with_metadata(
     return template, {"name": template.name}
 
 
+def create_provisioning_template_with_audit(
+    db: Session,
+    *,
+    request,
+    payload: ProvisioningTemplateCreate,
+) -> ProvisioningTemplate:
+    """Create a provisioning template and record the admin audit event."""
+    if not isinstance(payload, ProvisioningTemplateCreate):
+        raise ValueError("Invalid payload type: expected ProvisioningTemplateCreate")
+
+    template, metadata = create_provisioning_template_with_metadata(
+        db,
+        payload=payload,
+    )
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create",
+        entity_type="nas_template",
+        entity_id=str(template.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata=metadata,
+    )
+    return template
+
+
 def update_provisioning_template_with_metadata(
     db: Session,
     *,
@@ -407,6 +670,88 @@ def update_provisioning_template_with_metadata(
     changes = diff_dicts(before_snapshot, after_snapshot)
     metadata = {"changes": changes} if changes else None
     return updated_template, metadata
+
+
+def update_provisioning_template_with_audit(
+    db: Session,
+    *,
+    request,
+    template_id: str,
+    payload: ProvisioningTemplateUpdate,
+) -> ProvisioningTemplate:
+    """Update a provisioning template and record the admin audit event."""
+    if not isinstance(payload, ProvisioningTemplateUpdate):
+        raise ValueError("Invalid payload type: expected ProvisioningTemplateUpdate")
+
+    updated_template, metadata = update_provisioning_template_with_metadata(
+        db,
+        template_id=template_id,
+        payload=payload,
+    )
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="nas_template",
+        entity_id=str(updated_template.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata=metadata,
+    )
+    return updated_template
+
+
+def delete_provisioning_template_with_audit(
+    db: Session,
+    *,
+    request,
+    template_id: str,
+) -> None:
+    """Delete a provisioning template and record the admin audit event."""
+    from app.services.nas.templates import ProvisioningTemplates
+
+    template = ProvisioningTemplates.get(db, template_id)
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="delete",
+        entity_type="nas_template",
+        entity_id=str(template.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={"name": template.name},
+    )
+    ProvisioningTemplates.delete(db, template_id)
+
+
+def enable_monitoring_redirect_url(db: Session, *, device_id: str) -> str:
+    """Enable monitoring for one NAS device and return the redirect URL."""
+    from app.services.monitoring_metrics import sync_nas_to_monitoring
+
+    try:
+        monitoring_device = sync_nas_to_monitoring(db, device_id)
+        db.commit()
+        notice = f"Monitoring enabled - device linked as {monitoring_device.name}"
+        return f"/admin/nas/{device_id}?notice={quote_plus(notice)}"
+    except Exception as exc:
+        db.rollback()
+        return f"/admin/nas/{device_id}?error={quote_plus(str(exc))}"
+
+
+def sync_all_monitoring_redirect_url(db: Session) -> str:
+    """Sync active NAS devices into monitoring and return the redirect URL."""
+    from app.services.monitoring_metrics import sync_all_nas_to_monitoring
+
+    try:
+        result = sync_all_nas_to_monitoring(db)
+        notice = (
+            f"Monitoring sync complete: {result['synced']} synced, "
+            f"{result['skipped']} skipped, {result['errors']} errors"
+        )
+        return f"/admin/nas?notice={quote_plus(notice)}"
+    except Exception as exc:
+        db.rollback()
+        return f"/admin/nas?error={quote_plus(str(exc))}"
 
 
 def build_nas_dashboard_data(
@@ -1085,6 +1430,42 @@ def trigger_backup_for_device(
         except Exception:
             db.rollback()
         return {"ok": False, "backup": None, "error": error_message}
+
+
+def trigger_backup_for_device_with_audit(
+    db: Session,
+    *,
+    request,
+    device_id: str,
+    triggered_by: str,
+) -> dict[str, Any]:
+    """Trigger NAS backup and audit successful manual triggers."""
+    result = trigger_backup_for_device(
+        db,
+        device_id=device_id,
+        triggered_by=triggered_by,
+    )
+    if not result["ok"]:
+        return result
+
+    backup = result["backup"]
+    if backup is None:
+        raise ValueError("Backup trigger succeeded but returned no backup record")
+
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="backup_triggered",
+        entity_type="nas_backup",
+        entity_id=str(backup.id),
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={
+            "nas_device_id": str(backup.nas_device_id),
+            "triggered_by": triggered_by,
+        },
+    )
+    return result
 
 
 def get_ping_status(host: str | None) -> dict[str, object]:

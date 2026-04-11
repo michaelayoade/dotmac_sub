@@ -142,6 +142,17 @@ def _sync_scheduled_task(
         db.commit()
 
 
+def _retire_scheduled_task(db, task_name: str) -> None:
+    tasks = db.query(ScheduledTask).filter(ScheduledTask.task_name == task_name).all()
+    changed = False
+    for task in tasks:
+        if task.enabled:
+            task.enabled = False
+            changed = True
+    if changed:
+        db.commit()
+
+
 def get_celery_config() -> dict:
     broker = None
     backend = None
@@ -644,36 +655,7 @@ def build_beat_schedule() -> dict:
             interval_seconds=max(olt_backup_hours * 3600, 3600),
         )
 
-        # SLA breach detection - runs every 30 minutes
-        sla_breach_enabled = _effective_bool(
-            session,
-            SettingDomain.workflow,
-            "sla_breach_detection_enabled",
-            "SLA_BREACH_DETECTION_ENABLED",
-            True,
-        )
-        sla_breach_interval_seconds = _resolve_int(
-            session,
-            SettingDomain.workflow,
-            "sla_breach_detection_interval_seconds",
-            1800,
-        )
-        sla_breach_min_interval = _resolve_int(
-            session,
-            SettingDomain.workflow,
-            "sla_breach_detection_min_interval",
-            60,
-        )
-        sla_breach_interval_seconds = max(
-            sla_breach_interval_seconds, sla_breach_min_interval
-        )
-        _sync_scheduled_task(
-            session,
-            name="sla_breach_detection",
-            task_name="app.tasks.workflow.detect_sla_breaches",
-            enabled=sla_breach_enabled,
-            interval_seconds=sla_breach_interval_seconds,
-        )
+        _retire_scheduled_task(session, "app.tasks.workflow.detect_sla_breaches")
 
         # WireGuard VPN maintenance tasks
         wg_log_cleanup_enabled = _effective_bool(
@@ -723,28 +705,7 @@ def build_beat_schedule() -> dict:
             interval_seconds=wg_token_cleanup_interval,
         )
 
-        # WireGuard peer stats sync - runs every 5 minutes
-        wg_stats_sync_enabled = _effective_bool(
-            session,
-            SettingDomain.network,
-            "wireguard_peer_stats_sync_enabled",
-            "WIREGUARD_PEER_STATS_SYNC_ENABLED",
-            True,
-        )
-        wg_stats_sync_interval = _resolve_int(
-            session,
-            SettingDomain.network,
-            "wireguard_peer_stats_sync_interval_seconds",
-            300,
-        )
-        wg_stats_sync_interval = max(wg_stats_sync_interval, 60)  # Min: 1 minute
-        _sync_scheduled_task(
-            session,
-            name="wireguard_peer_stats_sync",
-            task_name="app.tasks.wireguard.sync_peer_stats",
-            enabled=wg_stats_sync_enabled,
-            interval_seconds=wg_stats_sync_interval,
-        )
+        _retire_scheduled_task(session, "app.tasks.wireguard.sync_peer_stats")
 
         # TR-069 ACS device sync - syncs devices from GenieACS
         tr069_sync_enabled = _effective_bool(

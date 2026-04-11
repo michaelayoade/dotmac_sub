@@ -2333,23 +2333,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=300,
         label="WireGuard Token Cleanup Interval (seconds)",
     ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="wireguard_peer_stats_sync_enabled",
-        env_var="WIREGUARD_PEER_STATS_SYNC_ENABLED",
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="WireGuard Peer Stats Sync Enabled",
-    ),
-    SettingSpec(
-        domain=SettingDomain.network,
-        key="wireguard_peer_stats_sync_interval_seconds",
-        env_var="WIREGUARD_PEER_STATS_SYNC_INTERVAL_SECONDS",
-        value_type=SettingValueType.integer,
-        default=300,
-        min_value=60,
-        label="WireGuard Peer Stats Sync Interval (seconds)",
-    ),
     # -------------- VPN Server Defaults --------------
     SettingSpec(
         domain=SettingDomain.network,

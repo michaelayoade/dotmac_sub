@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Iterable
 from datetime import UTC, datetime
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network.olt_web_audit import log_olt_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +56,22 @@ def sync_olt_autofind_candidates(
     if not ok:
         return False, message, {}
 
+    stats = sync_olt_autofind_entries(db, olt_id=olt_id, entries=entries)
+    return True, message, stats
+
+
+def sync_olt_autofind_entries(
+    db: Session,
+    *,
+    olt_id: str,
+    entries: Iterable[object],
+) -> dict[str, int]:
+    """Persist OLT autofind entries already read from an OLT."""
+    olt = db.get(OLTDevice, olt_id)
+    if not olt:
+        return {}
+
+    entry_list = list(entries)
     now = datetime.now(UTC)
     active_entries = list(
         db.scalars(
@@ -71,16 +90,19 @@ def sync_olt_autofind_candidates(
     updated = 0
     resolved = 0
 
-    for entry in entries:
-        serial_number = str(entry.serial_number or "").strip()
-        key = (entry.fsp, _normalize_serial(serial_number))
+    for entry in entry_list:
+        serial_number = str(getattr(entry, "serial_number", "") or "").strip()
+        fsp = str(getattr(entry, "fsp", "") or "").strip()
+        if not fsp or not serial_number:
+            continue
+        key = (fsp, _normalize_serial(serial_number))
         seen_keys.add(key)
         candidate = by_key.get(key)
         if candidate is None:
             candidate = db.scalars(
                 select(OltAutofindCandidate).where(
                     OltAutofindCandidate.olt_id == olt.id,
-                    OltAutofindCandidate.fsp == entry.fsp,
+                    OltAutofindCandidate.fsp == fsp,
                     OltAutofindCandidate.serial_number == serial_number,
                 )
             ).first()
@@ -90,15 +112,15 @@ def sync_olt_autofind_candidates(
             candidate = OltAutofindCandidate(
                 olt_id=olt.id,
                 ont_unit_id=matched_ont.id if matched_ont else None,
-                fsp=entry.fsp,
+                fsp=fsp,
                 serial_number=serial_number,
-                serial_hex=entry.serial_hex,
-                vendor_id=entry.vendor_id,
-                model=entry.model,
-                software_version=entry.software_version,
-                mac=entry.mac,
-                equipment_sn=entry.equipment_sn,
-                autofind_time=entry.autofind_time,
+                serial_hex=getattr(entry, "serial_hex", None),
+                vendor_id=getattr(entry, "vendor_id", None),
+                model=getattr(entry, "model", None),
+                software_version=getattr(entry, "software_version", None),
+                mac=getattr(entry, "mac", None),
+                equipment_sn=getattr(entry, "equipment_sn", None),
+                autofind_time=getattr(entry, "autofind_time", None),
                 is_active=True,
                 first_seen_at=now,
                 last_seen_at=now,
@@ -109,13 +131,13 @@ def sync_olt_autofind_candidates(
             candidate.ont_unit_id = (
                 matched_ont.id if matched_ont else candidate.ont_unit_id
             )
-            candidate.serial_hex = entry.serial_hex
-            candidate.vendor_id = entry.vendor_id
-            candidate.model = entry.model
-            candidate.software_version = entry.software_version
-            candidate.mac = entry.mac
-            candidate.equipment_sn = entry.equipment_sn
-            candidate.autofind_time = entry.autofind_time
+            candidate.serial_hex = getattr(entry, "serial_hex", None)
+            candidate.vendor_id = getattr(entry, "vendor_id", None)
+            candidate.model = getattr(entry, "model", None)
+            candidate.software_version = getattr(entry, "software_version", None)
+            candidate.mac = getattr(entry, "mac", None)
+            candidate.equipment_sn = getattr(entry, "equipment_sn", None)
+            candidate.autofind_time = getattr(entry, "autofind_time", None)
             candidate.is_active = True
             candidate.resolution_reason = None
             candidate.resolved_at = None
@@ -132,13 +154,12 @@ def sync_olt_autofind_candidates(
         resolved += 1
 
     db.commit()
-    stats = {
-        "discovered": len(entries),
+    return {
+        "discovered": len(entry_list),
         "created": created,
         "updated": updated,
         "resolved": resolved,
     }
-    return True, message, stats
 
 
 def resolve_candidate_authorized(
@@ -202,6 +223,24 @@ def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
         },
     )
     return True, f"Restored autofind candidate {candidate.serial_number}"
+
+
+def restore_candidate_audited(
+    db: Session, *, candidate_id: str, request: Request | None = None
+) -> tuple[bool, str]:
+    ok, message = restore_candidate(db, candidate_id=candidate_id)
+    status = "success" if ok else "error"
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="restore_autofind_candidate",
+        entity_type="olt_autofind_candidate",
+        entity_id=candidate_id,
+        metadata={"result": status, "message": message},
+        status_code=200 if ok else 400,
+        is_success=ok,
+    )
+    return ok, message
 
 
 def build_unconfigured_onts_page_data(

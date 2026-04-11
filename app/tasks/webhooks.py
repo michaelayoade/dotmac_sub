@@ -218,21 +218,3 @@ def retry_failed_deliveries():
         raise
     finally:
         session.close()
-
-
-@celery_app.task(name="app.tasks.webhooks.process_whatsapp_webhook")
-def process_whatsapp_webhook(payload: dict):
-    """CRM messaging removed - no-op."""
-    logger.info("whatsapp_webhook_received_but_crm_removed")
-
-
-@celery_app.task(name="app.tasks.webhooks.process_email_webhook")
-def process_email_webhook(payload: dict):
-    """CRM messaging removed - no-op."""
-    logger.info("email_webhook_received_but_crm_removed")
-
-
-@celery_app.task(name="app.tasks.webhooks.process_meta_webhook")
-def process_meta_webhook(payload: dict):
-    """CRM messaging removed - no-op."""
-    logger.info("meta_webhook_received_but_crm_removed")

@@ -7,6 +7,7 @@ This module provides a client for interacting with the GenieACS NBI
 import json
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 from urllib.parse import quote
 
@@ -125,7 +126,7 @@ class GenieACSClient:
         return cast(list[dict[str, Any]], response.json())
 
     def get_device(self, device_id: str) -> dict[str, Any]:
-        """Get device by ID.
+        """Get device by ID through the portable GenieACS collection query API.
 
         Args:
             device_id: Device ID (format: OUI-ProductClass-SerialNumber)
@@ -136,26 +137,20 @@ class GenieACSClient:
         Raises:
             GenieACSError: If device not found or request fails
         """
-        encoded_id = quote(device_id, safe="")
-        try:
-            response = self._request("GET", f"/devices/{encoded_id}")
-            return cast(dict[str, Any], response.json())
-        except GenieACSMethodNotAllowedError:
-            # Some GenieACS deployments reject GET /devices/{id} but still support
-            # query-based lookup on /devices. Try both exact match and regex.
-            devices = self.list_devices(query={"_id": device_id})
+        devices = self.list_devices(query={"_id": device_id})
+        if devices:
+            return devices[0]
+
+        parts = device_id.rsplit("-", 1)
+        if len(parts) == 2:
+            serial_suffix = parts[1]
+            devices = self.list_devices(
+                query={"_id": {"$regex": f".*-{re.escape(serial_suffix)}$"}}
+            )
             if devices:
                 return devices[0]
-            # Try regex match on serial number suffix (device_id format: OUI-Class-Serial)
-            parts = device_id.rsplit("-", 1)
-            if len(parts) == 2:
-                serial_suffix = parts[1]
-                devices = self.list_devices(
-                    query={"_id": {"$regex": f".*-{serial_suffix}$"}}
-                )
-                if devices:
-                    return devices[0]
-            raise GenieACSError(f"Device not found: {device_id}")
+
+        raise GenieACSError(f"Device not found: {device_id}")
 
     def delete_device(self, device_id: str) -> None:
         """Delete device.
@@ -186,11 +181,48 @@ class GenieACSClient:
     # Task Operations
     # -------------------------------------------------------------------------
 
+    @staticmethod
+    def _task_signature(task: dict[str, Any]) -> tuple[object, ...]:
+        return (
+            task.get("name"),
+            tuple(task.get("parameterNames") or []),
+            tuple(tuple(item) for item in task.get("parameterValues") or []),
+            task.get("objectName"),
+            task.get("fileType"),
+            task.get("fileName"),
+        )
+
+    @staticmethod
+    def _task_parameter_names(task: dict[str, Any]) -> tuple[str, ...]:
+        if task.get("name") == "setParameterValues":
+            return tuple(
+                str(item[0])
+                for item in task.get("parameterValues") or []
+                if isinstance(item, list | tuple) and item
+            )
+        return tuple(str(item) for item in task.get("parameterNames") or [])
+
+    @staticmethod
+    def _parse_timestamp(value: object) -> datetime | None:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            parsed = datetime.fromisoformat(text)
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed
+
     def create_task(
         self,
         device_id: str,
         task: dict,
         connection_request: bool = True,
+        dedupe_pending: bool = True,
     ) -> dict:
         """Create a task for a device.
 
@@ -203,6 +235,37 @@ class GenieACSClient:
             Task result dict, may include 'connectionRequestError' if device
             was unreachable when connection_request=True
         """
+        if dedupe_pending:
+            signature = self._task_signature(task)
+            for pending_task in self.get_pending_tasks(device_id):
+                if not isinstance(pending_task, dict):
+                    continue
+                if (
+                    task.get("name") == "setParameterValues"
+                    and pending_task.get("name") == "setParameterValues"
+                    and self._task_parameter_names(pending_task)
+                    == self._task_parameter_names(task)
+                ):
+                    pending_id = str(pending_task.get("_id") or "").strip()
+                    if pending_id:
+                        logger.info(
+                            "Replacing pending GenieACS write task %s for %s",
+                            pending_id,
+                            device_id,
+                        )
+                        self.delete_task(pending_id)
+                    continue
+                if self._task_signature(pending_task) == signature:
+                    logger.info(
+                        "Reusing pending GenieACS task %s for %s (%s)",
+                        pending_task.get("_id"),
+                        device_id,
+                        task.get("name"),
+                    )
+                    result = dict(pending_task)
+                    result["alreadyPending"] = True
+                    return result
+
         encoded_id = quote(device_id, safe="")
         params = {"connection_request": str(connection_request).lower()}
 
@@ -399,7 +462,14 @@ class GenieACSClient:
         query = {"device": device_id}
         params = {"query": json.dumps(query)}
         response = self._request("GET", "/tasks", params=params)
-        return cast(list[dict[str, Any]], response.json())
+        data = response.json()
+        return cast(list[dict[str, Any]], data if isinstance(data, list) else [])
+
+    def list_tasks(self) -> list[dict[str, Any]]:
+        """List all pending ACS tasks."""
+        response = self._request("GET", "/tasks")
+        data = response.json()
+        return cast(list[dict[str, Any]], data if isinstance(data, list) else [])
 
     def delete_task(self, task_id: str) -> None:
         """Delete/cancel a task.
@@ -408,6 +478,47 @@ class GenieACSClient:
             task_id: Task ID
         """
         self._request("DELETE", f"/tasks/{task_id}")
+
+    def delete_stale_tasks(
+        self,
+        *,
+        older_than: timedelta,
+        dry_run: bool = False,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Delete pending tasks older than a cutoff.
+
+        Stale pending tasks slow down the next device inform because GenieACS
+        drains queued work when the CPE contacts the ACS.
+        """
+        cutoff = datetime.now(UTC) - older_than
+        tasks = self.get_pending_tasks(device_id) if device_id else self.list_tasks()
+        stale: list[dict[str, Any]] = []
+        for task in tasks:
+            timestamp = self._parse_timestamp(task.get("timestamp"))
+            if timestamp and timestamp < cutoff:
+                stale.append(task)
+
+        deleted = 0
+        errors: list[dict[str, str]] = []
+        if not dry_run:
+            for task in stale:
+                task_id = str(task.get("_id") or "").strip()
+                if not task_id:
+                    continue
+                try:
+                    self.delete_task(task_id)
+                    deleted += 1
+                except GenieACSError as exc:
+                    errors.append({"task_id": task_id, "error": str(exc)})
+
+        return {
+            "matched": len(stale),
+            "deleted": deleted,
+            "dry_run": dry_run,
+            "cutoff": cutoff.isoformat(),
+            "errors": errors,
+        }
 
     # -------------------------------------------------------------------------
     # Preset Operations

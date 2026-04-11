@@ -1,18 +1,18 @@
 {% extends "layouts/admin.html" %}
 
-{% block title %}{{ 'Edit' if ont else 'Add' }} ONT - Admin{% endblock %}
+{% block title %}Add ONT - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data='{{ {"useGps": (ont.use_gps if ont else false) | default(false)} | tojson }}'>
+<div class="space-y-6" x-data='{{ {"useGps": false} | tojson }}'>
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
                 <a href="/admin/network/onts" class="hover:text-primary-600">ONTs</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">{{ 'Edit' if ont else 'Add New' }}</span>
+                <span class="text-slate-900 dark:text-white">Add New</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ 'Edit ONT' if ont else 'Add ONT Device' }}</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">{{ 'Update ONT information' if ont else 'Register a new ONT in the network inventory' }}</p>
+            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Add ONT Device</h1>
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Register a new ONT in the network inventory</p>
         </div>
     </div>
 

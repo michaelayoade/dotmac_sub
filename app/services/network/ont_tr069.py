@@ -211,6 +211,8 @@ class TR069Summary:
     source: str = "live"
     fetched_at: datetime | None = None
     raw_device: dict[str, Any] | None = None
+    recent_informs: list[Any] = field(default_factory=list)
+    cached_parameters: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     error: str | None = None
 
 
@@ -412,7 +414,12 @@ class OntTR069:
                     "Showing cached TR-069 snapshot. "
                     "No live ACS device or server could be resolved."
                 )
+                OntTR069._attach_recent_informs(db, ont, cached_summary)
+                OntTR069._attach_cached_parameters(db, ont, cached_summary)
                 return cached_summary
+            stored_summary = OntTR069._summary_from_stored_records(db, ont)
+            if stored_summary:
+                return stored_summary
             return TR069Summary(
                 error="This device is not managed via TR-069. "
                 "No matching CPE device or ACS server was found."
@@ -426,7 +433,15 @@ class OntTR069:
             cached_summary = OntTR069._summary_from_snapshot(ont)
             if cached_summary:
                 cached_summary.error = f"Showing cached TR-069 snapshot. Live fetch failed: {e}"
+                OntTR069._attach_recent_informs(db, ont, cached_summary)
+                OntTR069._attach_cached_parameters(db, ont, cached_summary)
                 return cached_summary
+            stored_summary = OntTR069._summary_from_stored_records(db, ont)
+            if stored_summary:
+                stored_summary.error = (
+                    f"Showing cached TR-069 records. Live fetch failed: {e}"
+                )
+                return stored_summary
             return TR069Summary(error=f"Failed to fetch TR-069 data: {e}")
 
         ont_vendor = getattr(ont, "vendor", None)
@@ -498,7 +513,130 @@ class OntTR069:
         if persist_observed_runtime:
             OntTR069._persist_observed_runtime(db, ont, summary)
 
+        OntTR069._attach_recent_informs(db, ont, summary)
+        OntTR069._attach_cached_parameters(db, ont, summary)
         return summary
+
+    @staticmethod
+    def _summary_from_stored_records(
+        db: Session,
+        ont: OntUnit,
+    ) -> TR069Summary | None:
+        summary = TR069Summary(
+            available=True,
+            ont_id=str(ont.id),
+            source="cache",
+            fetched_at=getattr(ont, "tr069_last_snapshot_at", None)
+            or getattr(ont, "observed_runtime_updated_at", None),
+            error=(
+                "Showing cached TR-069 records. "
+                "No live ACS device or snapshot could be resolved."
+            ),
+        )
+        OntTR069._attach_recent_informs(db, ont, summary)
+        OntTR069._attach_cached_parameters(db, ont, summary)
+        if summary.recent_informs or summary.cached_parameters:
+            return summary
+        return None
+
+    @staticmethod
+    def _attach_recent_informs(
+        db: Session,
+        ont: OntUnit,
+        summary: TR069Summary,
+        *,
+        limit: int = 10,
+    ) -> None:
+        from app.models.tr069 import Tr069CpeDevice, Tr069Session
+
+        sessions = (
+            db.query(Tr069Session)
+            .join(Tr069CpeDevice, Tr069Session.device_id == Tr069CpeDevice.id)
+            .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+            .filter(Tr069CpeDevice.is_active.is_(True))
+            .order_by(Tr069Session.started_at.desc(), Tr069Session.created_at.desc())
+            .limit(limit)
+            .all()
+        )
+        summary.recent_informs = sessions
+
+    @staticmethod
+    def _parameter_group(name: str) -> str:
+        lowered = name.lower()
+        if ".wan" in lowered or ".ppp" in lowered or ".managementserver." in lowered:
+            return "WAN / ACS"
+        if ".wifi" in lowered or ".wlan" in lowered:
+            return "Wireless"
+        if ".lan" in lowered or ".dhcp" in lowered or ".hosts." in lowered:
+            return "LAN"
+        if ".ethernet." in lowered:
+            return "Ethernet"
+        if ".deviceinfo." in lowered or ".devicemanagement." in lowered:
+            return "System"
+        return "Other"
+
+    @staticmethod
+    def _attach_cached_parameters(
+        db: Session,
+        ont: OntUnit,
+        summary: TR069Summary,
+        *,
+        limit: int = 200,
+    ) -> None:
+        from app.models.tr069 import Tr069CpeDevice, Tr069Parameter
+
+        params = (
+            db.query(Tr069Parameter)
+            .join(Tr069CpeDevice, Tr069Parameter.device_id == Tr069CpeDevice.id)
+            .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+            .filter(Tr069CpeDevice.is_active.is_(True))
+            .order_by(Tr069Parameter.updated_at.desc(), Tr069Parameter.name.asc())
+            .limit(limit)
+            .all()
+        )
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for param in params:
+            group = OntTR069._parameter_group(param.name)
+            grouped.setdefault(group, []).append(
+                {
+                    "name": param.name,
+                    "value": param.value,
+                    "updated_at": param.updated_at,
+                }
+            )
+        summary.cached_parameters = grouped
+        OntTR069._populate_summary_from_cached_parameters(summary)
+
+    @staticmethod
+    def _set_missing(target: dict[str, Any], key: str, value: Any) -> None:
+        if value in (None, ""):
+            return
+        if target.get(key) in (None, ""):
+            target[key] = value
+
+    @staticmethod
+    def _populate_summary_from_cached_parameters(summary: TR069Summary) -> None:
+        """Backfill friendly summary fields from cached inform parameters."""
+        for parameters in summary.cached_parameters.values():
+            for param in parameters:
+                name = str(param.get("name") or "")
+                lowered = name.lower()
+                value = param.get("value")
+                if lowered.endswith(".ssid") and (
+                    ".wlanconfiguration." in lowered or ".wifi.ssid." in lowered
+                ):
+                    OntTR069._set_missing(summary.wireless, "SSID", value)
+                elif (
+                    lowered.endswith(".totalassociations")
+                    or lowered.endswith(".associateddevicenumberofentries")
+                ):
+                    OntTR069._set_missing(
+                        summary.wireless,
+                        "Connected Clients",
+                        value,
+                    )
+                elif lowered.endswith(".hostnumberofentries"):
+                    OntTR069._set_missing(summary.lan, "Connected Hosts", value)
 
     @staticmethod
     def _snapshot_payload(summary: TR069Summary) -> dict[str, Any]:

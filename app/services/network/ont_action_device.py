@@ -10,8 +10,10 @@ from app.services.genieacs import GenieACSError
 from app.services.network.ont_action_common import (
     ActionResult,
     DeviceConfig,
+    detect_data_model_root,
     get_ont_client_or_error,
     get_ont_strict_or_error,
+    persist_data_model_root,
 )
 
 logger = logging.getLogger(__name__)
@@ -48,6 +50,50 @@ _WIFI_PARAMS = [
     "Device.WiFi.Radio.1.OperatingStandards",
 ]
 
+_RUNTIME_REFRESH_PARAMS = {
+    "Device": [
+        "Device.DeviceInfo.SerialNumber",
+        "Device.DeviceInfo.SoftwareVersion",
+        "Device.DeviceInfo.HardwareVersion",
+        "Device.DeviceInfo.UpTime",
+        "Device.ManagementServer.ConnectionRequestURL",
+        "Device.ManagementServer.PeriodicInformEnable",
+        "Device.ManagementServer.PeriodicInformInterval",
+        "Device.PPP.Interface.1.Status",
+        "Device.PPP.Interface.1.ConnectionStatus",
+        "Device.PPP.Interface.1.Username",
+        "Device.IP.Interface.1.Status",
+        "Device.IP.Interface.1.IPv4Address.1.IPAddress",
+        "Device.Hosts.HostNumberOfEntries",
+        "Device.WiFi.SSID.1.SSID",
+        "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries",
+        "Device.Ethernet.Interface.1.Status",
+        "Device.Ethernet.Interface.2.Status",
+        "Device.Ethernet.Interface.3.Status",
+        "Device.Ethernet.Interface.4.Status",
+    ],
+    "InternetGatewayDevice": [
+        "InternetGatewayDevice.DeviceInfo.SerialNumber",
+        "InternetGatewayDevice.DeviceInfo.SoftwareVersion",
+        "InternetGatewayDevice.DeviceInfo.HardwareVersion",
+        "InternetGatewayDevice.DeviceInfo.UpTime",
+        "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
+        "InternetGatewayDevice.ManagementServer.PeriodicInformEnable",
+        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval",
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus",
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus",
+        "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress",
+        "InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries",
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations",
+        "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.1.Status",
+        "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.2.Status",
+        "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.3.Status",
+        "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.4.Status",
+    ],
+}
+
 
 def reboot(db: Session, ont_id: str) -> ActionResult:
     resolved, error = get_ont_client_or_error(db, ont_id)
@@ -77,7 +123,13 @@ def refresh_status(db: Session, ont_id: str) -> ActionResult:
         return ActionResult(success=False, message="ONT resolution failed.")
     ont, client, device_id = resolved
     try:
-        result = client.refresh_object(device_id, "Device.", connection_request=True)
+        root = detect_data_model_root(db, ont, client, device_id)
+        persist_data_model_root(ont, root)
+        result = client.get_parameter_values(
+            device_id,
+            _RUNTIME_REFRESH_PARAMS.get(root, _RUNTIME_REFRESH_PARAMS["Device"]),
+            connection_request=True,
+        )
         logger.info("Refresh sent to ONT %s (device %s)", ont.serial_number, device_id)
         return ActionResult(
             success=True,

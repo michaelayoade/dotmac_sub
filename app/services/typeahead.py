@@ -364,15 +364,6 @@ def pop_sites_response(db: Session, query: str, limit: int) -> dict:
     return list_response(pop_sites(db, query, limit), limit, 0)
 
 
-def vendors(db: Session, query: str, limit: int) -> list[dict]:
-    """Search vendors - module removed."""
-    return []
-
-
-def vendors_response(db: Session, query: str, limit: int) -> dict:
-    return list_response([], limit, 0)
-
-
 def resellers(db: Session, query: str, limit: int) -> list[dict]:
     """Search reseller accounts by name."""
     term = (query or "").strip()

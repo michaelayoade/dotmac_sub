@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import logging
+from collections import Counter
+
+from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice
+from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_ssh import ServicePortEntry
 
 logger = logging.getLogger(__name__)
@@ -21,6 +25,55 @@ def get_service_ports_for_ont(
         return False, msg, []
     filtered = [p for p in all_ports if p.ont_id == ont_id]
     return True, f"Found {len(filtered)} service-port(s) for ONT {ont_id}", filtered
+
+
+def clone_service_ports(
+    db: Session, olt_id: str, fsp: str, ont_id: int
+) -> tuple[bool, str]:
+    """Clone service-ports for an ONT using a reference ONT on the same port."""
+    from app.services.network import olt_ssh as core
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found"
+
+    ok, msg, entries = core.get_service_ports(olt, fsp)
+    if not ok or not entries:
+        return False, f"Cannot read service-ports: {msg}"
+
+    ont_counts = Counter(e.ont_id for e in entries)
+    if not ont_counts:
+        return False, "No existing service-ports to learn from"
+
+    new_ont_ports = [e for e in entries if e.ont_id == ont_id]
+    if new_ont_ports:
+        return True, f"ONT {ont_id} already has {len(new_ont_ports)} service-port(s)"
+
+    reference_ont_id = None
+    for candidate_ont_id, _count in ont_counts.most_common():
+        if candidate_ont_id != ont_id:
+            reference_ont_id = candidate_ont_id
+            break
+    if reference_ont_id is None:
+        return False, "No reference ONT found to learn service-port pattern from"
+
+    reference_ports = [e for e in entries if e.ont_id == reference_ont_id]
+    logger.info(
+        "Learning service-port pattern from ONT %d (%d ports) for new ONT %d on %s",
+        reference_ont_id,
+        len(reference_ports),
+        ont_id,
+        fsp,
+    )
+
+    return core.create_service_ports(olt, fsp, ont_id, reference_ports)
+
+
+def provision_ont_service_ports(
+    db: Session, olt_id: str, fsp: str, ont_id: int
+) -> tuple[bool, str]:
+    """Compatibility alias for explicit service-port cloning."""
+    return clone_service_ports(db, olt_id, fsp, ont_id)
 
 
 def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:

@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import inspect
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.network_monitoring import (
     DnsThreatAction,
@@ -17,9 +19,46 @@ from app.models.network_monitoring import (
     PopSite,
 )
 from app.models.subscriber import Subscriber
+from app.services.audit_helpers import log_audit_event
 from app.services.common import coerce_uuid, validate_enum
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DnsThreatFormResult:
+    event: DnsThreatEvent | None = None
+    form_model: dict[str, object] | None = None
+    error: str | None = None
+
+
+def _actor_id_from_request(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    from app.services import web_admin as web_admin_service
+
+    return web_admin_service.get_actor_id(request)
+
+
+def _log_dns_threat_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    action: str,
+    entity_id: object,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    if request is None:
+        return
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="dns_threat",
+        entity_id=str(entity_id),
+        actor_id=_actor_id_from_request(request),
+        metadata=metadata,
+    )
 
 
 def _dns_threat_table_exists(db: Session) -> bool:
@@ -115,6 +154,31 @@ def create_event(db: Session, values: dict[str, object]) -> DnsThreatEvent:
     db.commit()
     db.refresh(event)
     return event
+
+
+def create_event_from_values(
+    db: Session, values: dict[str, object], *, request: Request | None = None
+) -> DnsThreatFormResult:
+    error = validate_event_values(values)
+    if error:
+        return DnsThreatFormResult(form_model=dict(values), error=error)
+    try:
+        event = create_event(db, values)
+    except Exception as exc:
+        return DnsThreatFormResult(form_model=dict(values), error=str(exc))
+
+    _log_dns_threat_audit(
+        db,
+        request=request,
+        action="create",
+        entity_id=event.id,
+        metadata={
+            "queried_domain": event.queried_domain,
+            "severity": event.severity.value,
+            "action": event.action.value,
+        },
+    )
+    return DnsThreatFormResult(event=event)
 
 
 def list_page_data(

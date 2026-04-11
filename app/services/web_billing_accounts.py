@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Subscriber, SubscriberCategory, SubscriberStatus
 from app.schemas.subscriber import SubscriberAccountCreate, SubscriberUpdate
 from app.services import billing as billing_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
-from app.services.audit_helpers import build_changes_metadata
+from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +91,60 @@ def build_account_form_data(db, *, customer_ref: str | None) -> dict[str, object
     }
 
 
+def customer_ref_for_account(account: Subscriber) -> str:
+    return (
+        f"business:{account.id}"
+        if account.category == SubscriberCategory.business
+        else f"person:{account.id}"
+    )
+
+
+def build_new_account_form_context(
+    db,
+    *,
+    customer_ref: str | None,
+    selected_subscriber_id: str | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    context = {
+        "action_url": "/admin/billing/accounts",
+        "form_title": "New Billing Account",
+        "submit_label": "Create Account",
+        **build_account_form_data(db, customer_ref=customer_ref),
+    }
+    if selected_subscriber_id:
+        context["selected_subscriber_id"] = selected_subscriber_id
+    if error:
+        context["error"] = error
+    return context
+
+
+def build_edit_account_form_context(
+    db,
+    *,
+    account_id: str,
+    reseller_id: str | None = None,
+    tax_rate_id: str | None = None,
+    error: str | None = None,
+) -> dict[str, object]:
+    account = subscriber_service.accounts.get(db, account_id)
+    context = {
+        "action_url": f"/admin/billing/accounts/{account_id}/edit",
+        "form_title": "Edit Billing Account",
+        "submit_label": "Update Account",
+        "account": account,
+        "selected_subscriber_id": str(account.id),
+        "selected_reseller_id": reseller_id
+        or (str(account.reseller_id) if account.reseller_id else ""),
+        "selected_tax_rate_id": tax_rate_id
+        or (str(account.tax_rate_id) if account.tax_rate_id else ""),
+        **build_account_form_data(db, customer_ref=customer_ref_for_account(account)),
+    }
+    if error:
+        context["error"] = error
+    return context
+
+
 def create_account_from_form(
     db,
     *,
@@ -169,6 +223,43 @@ def create_account_from_form_with_metadata(
     return account, resolved_subscriber_id, metadata
 
 
+def create_account_from_form_web(
+    db,
+    *,
+    request,
+    actor_id: str | None,
+    subscriber_id: str | None,
+    customer_ref: str | None,
+    reseller_id: str | None,
+    tax_rate_id: str | None,
+    account_number: str | None,
+    status: str | None,
+    notes: str | None,
+):
+    account, selected_subscriber_id, metadata_payload = (
+        create_account_from_form_with_metadata(
+            db,
+            subscriber_id=subscriber_id,
+            customer_ref=customer_ref,
+            reseller_id=reseller_id,
+            tax_rate_id=tax_rate_id,
+            account_number=account_number,
+            status=status,
+            notes=notes,
+        )
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create",
+        entity_type="subscriber_account",
+        entity_id=str(account.id),
+        actor_id=actor_id,
+        metadata=metadata_payload,
+    )
+    return account, selected_subscriber_id
+
+
 def update_account_from_form(
     db,
     *,
@@ -223,6 +314,39 @@ def update_account_from_form_with_metadata(
     after = subscriber_service.accounts.get(db, account_id)
     metadata = build_changes_metadata(before, after)
     return account, metadata
+
+
+def update_account_from_form_web(
+    db,
+    *,
+    request,
+    actor_id: str | None,
+    account_id: str,
+    reseller_id: str | None,
+    tax_rate_id: str | None,
+    account_number: str | None,
+    status: str | None,
+    notes: str | None,
+):
+    account, metadata_payload = update_account_from_form_with_metadata(
+        db,
+        account_id=account_id,
+        reseller_id=reseller_id,
+        tax_rate_id=tax_rate_id,
+        account_number=account_number,
+        status=status,
+        notes=notes,
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="subscriber_account",
+        entity_id=account_id,
+        actor_id=actor_id,
+        metadata=metadata_payload,
+    )
+    return account
 
 
 def build_account_detail_data(db, *, account_id: str) -> dict[str, object]:

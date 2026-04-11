@@ -1,4 +1,3 @@
-import pytest
 from datetime import UTC, datetime, timedelta
 
 from app.services.network.olt_polling import (
@@ -305,7 +304,6 @@ def test_fsp_hint_from_huawei_packed_index_decodes_frame_slot_port() -> None:
     assert _fsp_hint_from_index("4194320384.3") == "0/4/0"
 
 
-@pytest.mark.skip(reason="Requires PostgreSQL for proper relationship loading")
 def test_poll_sfp_modules_scopes_to_olt_and_uses_port_number_keys(
     db_session, monkeypatch
 ) -> None:
@@ -345,8 +343,8 @@ def test_poll_sfp_modules_scopes_to_olt_and_uses_port_number_keys(
 
     def _fake_walk(_host, oid, _community, timeout=20):
         if oid.endswith(".9"):
-            return ["1.3.6.1.x.3 = INTEGER: -1950"]
-        return ["1.3.6.1.x.3 = INTEGER: -2050"]
+            return [f"{oid}.3 = INTEGER: -1950"]
+        return [f"{oid}.3 = INTEGER: -2050"]
 
     monkeypatch.setattr("app.services.network.olt_polling._run_olt_snmpwalk", _fake_walk)
 

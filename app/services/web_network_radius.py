@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 from typing import Any, cast
 
+from fastapi import Request
+from pydantic import ValidationError
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
 
@@ -26,10 +29,62 @@ from app.schemas.radius import (
 )
 from app.services import catalog as catalog_service
 from app.services import radius as radius_service
-from app.services.audit_helpers import diff_dicts, model_to_dict
+from app.services.audit_helpers import (
+    build_audit_activities_for_types,
+    diff_dicts,
+    log_audit_event,
+    model_to_dict,
+)
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
+
+RADIUS_CLIENT_EXCLUDE_FIELDS = {"shared_secret_hash"}
+
+
+@dataclass
+class RadiusFormResult:
+    success: bool
+    form_context: dict[str, object] | None = None
+    error: str | None = None
+    not_found_message: str | None = None
+
+
+def _actor_id_from_request(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    if not current_user:
+        return None
+    subscriber_id = current_user.get("subscriber_id")
+    return str(subscriber_id) if subscriber_id else None
+
+
+def _log_radius_audit_event(
+    db: Session,
+    request: Request,
+    *,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    metadata: dict[str, object] | None,
+) -> None:
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        actor_id=_actor_id_from_request(request),
+        metadata=metadata,
+    )
+
+
+def _validation_error_message(exc: ValidationError) -> str:
+    errors = exc.errors()
+    if errors:
+        return str(errors[0].get("msg") or "Please correct the highlighted fields.")
+    return "Please correct the highlighted fields."
 
 
 def active_servers(db: Session) -> list[RadiusServer]:
@@ -246,9 +301,343 @@ def radius_page_data(db) -> dict[str, object]:
         "clients": clients,
         "recent_sessions": recent_sessions,
         "recent_errors": recent_errors,
+        "activities": build_audit_activities_for_types(
+            db,
+            ["radius_server", "radius_client", "radius_profile"],
+            limit=10,
+        ),
         "total_online": db.scalar(select(func.count(RadiusActiveSession.id))) or 0,
         "total_errors": db.scalar(select(func.count(RadiusAuthError.id))) or 0,
     }
+
+
+def import_credentials_notice(db: Session) -> str:
+    result = radius_service.import_access_credentials_from_external_radius(db)
+    return (
+        "Imported RADIUS credentials: "
+        f"scanned {result['scanned']}, created {result['created']}, "
+        f"updated {result['updated']}, unmatched {result['unmatched']}, "
+        f"conflicts {result['conflicts']}."
+    )
+
+
+def server_new_form_data() -> dict[str, object]:
+    return {
+        "server": None,
+        "action_url": "/admin/network/radius/servers",
+    }
+
+
+def server_edit_form_data(db: Session, server_id: str) -> dict[str, object] | None:
+    try:
+        server = radius_service.radius_servers.get(db=db, server_id=server_id)
+    except Exception:
+        return None
+    return {
+        "server": server,
+        "action_url": f"/admin/network/radius/servers/{server_id}",
+    }
+
+
+def server_create_form_context(
+    values: dict[str, object], *, error: str | None = None
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "server": server_create_form_data(values),
+        "action_url": "/admin/network/radius/servers",
+    }
+    if error:
+        context["error"] = error
+    return context
+
+
+def server_update_form_context(
+    values: dict[str, object],
+    *,
+    current_server,
+    server_id: str,
+    error: str | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "server": server_form_data(values, current_server=current_server),
+        "action_url": f"/admin/network/radius/servers/{server_id}",
+    }
+    if error:
+        context["error"] = error
+    return context
+
+
+def create_server_from_form(
+    request: Request,
+    db: Session,
+    form,
+) -> RadiusFormResult:
+    values = parse_server_form(form)
+    error = validate_server_form(values)
+    payload = None
+    if not error:
+        payload, error = build_server_create_payload(values)
+
+    if error:
+        return RadiusFormResult(
+            success=False,
+            form_context=server_create_form_context(values, error=error),
+            error=error,
+        )
+
+    try:
+        if payload is None:
+            raise ValueError("Please correct the highlighted fields.")
+        server = radius_service.radius_servers.create(db=db, payload=payload)
+        _log_radius_audit_event(
+            db,
+            request,
+            action="create",
+            entity_type="radius_server",
+            entity_id=str(server.id),
+            metadata={"name": server.name, "host": server.host},
+        )
+        return RadiusFormResult(success=True)
+    except ValidationError as exc:
+        error = _validation_error_message(exc)
+    except Exception as exc:
+        error = str(exc)
+
+    return RadiusFormResult(
+        success=False,
+        form_context=server_create_form_context(
+            values, error=error or "Please correct the highlighted fields."
+        ),
+        error=error,
+    )
+
+
+def update_server_from_form(
+    request: Request,
+    db: Session,
+    *,
+    server_id: str,
+    form,
+) -> RadiusFormResult:
+    try:
+        server = radius_service.radius_servers.get(db=db, server_id=server_id)
+    except Exception:
+        return RadiusFormResult(
+            success=False, not_found_message="RADIUS server not found"
+        )
+
+    before_snapshot = model_to_dict(server)
+    values = parse_server_form(form)
+    error = validate_server_form(values)
+    payload = None
+    if not error:
+        payload, error = build_server_payload(values, current_server=server)
+
+    if error:
+        return RadiusFormResult(
+            success=False,
+            form_context=server_update_form_context(
+                values,
+                current_server=server,
+                server_id=server_id,
+                error=error,
+            ),
+            error=error,
+        )
+
+    try:
+        if payload is None:
+            raise ValueError("Please correct the highlighted fields.")
+        updated_server = radius_service.radius_servers.update(
+            db=db,
+            server_id=server_id,
+            payload=payload,
+        )
+        changes = diff_dicts(before_snapshot, model_to_dict(updated_server))
+        _log_radius_audit_event(
+            db,
+            request,
+            action="update",
+            entity_type="radius_server",
+            entity_id=str(updated_server.id),
+            metadata={"changes": changes} if changes else None,
+        )
+        return RadiusFormResult(success=True)
+    except ValidationError as exc:
+        error = _validation_error_message(exc)
+    except Exception as exc:
+        error = str(exc)
+
+    return RadiusFormResult(
+        success=False,
+        form_context=server_update_form_context(
+            values,
+            current_server=server,
+            server_id=server_id,
+            error=error or "Please correct the highlighted fields.",
+        ),
+        error=error,
+    )
+
+
+def client_create_form_context(
+    db: Session, values: dict[str, object], *, error: str | None = None
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "client": client_form_data(values),
+        "servers": active_servers(db),
+        "action_url": "/admin/network/radius/clients",
+    }
+    if error:
+        context["error"] = error
+    return context
+
+
+def client_update_form_context(
+    db: Session,
+    values: dict[str, object],
+    *,
+    client_id: str,
+    error: str | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "client": client_form_data(values, client_id=client_id),
+        "servers": active_servers(db),
+        "action_url": f"/admin/network/radius/clients/{client_id}",
+    }
+    if error:
+        context["error"] = error
+    return context
+
+
+def client_new_form_data(db: Session) -> dict[str, object]:
+    return {
+        "client": None,
+        "servers": active_servers(db),
+        "action_url": "/admin/network/radius/clients",
+    }
+
+
+def client_edit_form_data(db: Session, client_id: str) -> dict[str, object] | None:
+    try:
+        client = radius_service.radius_clients.get(db=db, client_id=client_id)
+    except Exception:
+        return None
+    return {
+        "client": client,
+        "servers": active_servers(db),
+        "action_url": f"/admin/network/radius/clients/{client_id}",
+    }
+
+
+def create_client_from_form(
+    request: Request,
+    db: Session,
+    form,
+) -> RadiusFormResult:
+    values = parse_client_form(form)
+    error = validate_client_form(values, require_secret=True)
+    if error:
+        return RadiusFormResult(
+            success=False,
+            form_context=client_create_form_context(db, values, error=error),
+            error=error,
+        )
+
+    try:
+        client = radius_service.radius_clients.create(
+            db=db,
+            payload=build_client_create_payload(values),
+        )
+        _log_radius_audit_event(
+            db,
+            request,
+            action="create",
+            entity_type="radius_client",
+            entity_id=str(client.id),
+            metadata={
+                "client_ip": client.client_ip,
+                "server_id": str(client.server_id),
+            },
+        )
+        return RadiusFormResult(success=True)
+    except ValidationError as exc:
+        error = _validation_error_message(exc)
+    except Exception as exc:
+        error = str(exc)
+
+    return RadiusFormResult(
+        success=False,
+        form_context=client_create_form_context(
+            db, values, error=error or "Please correct the highlighted fields."
+        ),
+        error=error,
+    )
+
+
+def update_client_from_form(
+    request: Request,
+    db: Session,
+    *,
+    client_id: str,
+    form,
+) -> RadiusFormResult:
+    try:
+        client = radius_service.radius_clients.get(db=db, client_id=client_id)
+    except Exception:
+        return RadiusFormResult(
+            success=False, not_found_message="RADIUS client not found"
+        )
+
+    before_snapshot = model_to_dict(client, exclude=RADIUS_CLIENT_EXCLUDE_FIELDS)
+    values = parse_client_form(form)
+    error = validate_client_form(values, require_secret=False)
+    if error:
+        return RadiusFormResult(
+            success=False,
+            form_context=client_update_form_context(
+                db,
+                values,
+                client_id=str(client.id),
+                error=error,
+            ),
+            error=error,
+        )
+
+    try:
+        updated_client = radius_service.radius_clients.update(
+            db=db,
+            client_id=client_id,
+            payload=build_client_update_payload(values),
+        )
+        after_snapshot = model_to_dict(
+            updated_client, exclude=RADIUS_CLIENT_EXCLUDE_FIELDS
+        )
+        changes = diff_dicts(before_snapshot, after_snapshot)
+        _log_radius_audit_event(
+            db,
+            request,
+            action="update",
+            entity_type="radius_client",
+            entity_id=str(updated_client.id),
+            metadata={"changes": changes} if changes else None,
+        )
+        return RadiusFormResult(success=True)
+    except ValidationError as exc:
+        error = _validation_error_message(exc)
+    except Exception as exc:
+        error = str(exc)
+
+    return RadiusFormResult(
+        success=False,
+        form_context=client_update_form_context(
+            db,
+            values,
+            client_id=str(client.id),
+            error=error or "Please correct the highlighted fields.",
+        ),
+        error=error,
+    )
 
 
 def active_sessions_page_data(
@@ -430,6 +819,72 @@ def create_profile(db, profile_data: dict[str, object], attributes: list[dict]):
     return profile, metadata
 
 
+def profile_form_context(
+    profile_data: dict[str, object],
+    attributes: list[dict],
+    *,
+    action_url: str,
+    error: str | None = None,
+) -> dict[str, object]:
+    context: dict[str, object] = {
+        "profile": profile_data,
+        "attributes": attributes,
+        "vendors": profile_vendors(),
+        "connection_types": profile_connection_types(),
+        "action_url": action_url,
+    }
+    if error:
+        context["error"] = error
+    return context
+
+
+def create_profile_from_form(
+    request: Request,
+    db: Session,
+    form,
+) -> RadiusFormResult:
+    profile_data, attributes, error = parse_profile_form(form)
+    action_url = "/admin/network/radius/profiles"
+    if error:
+        return RadiusFormResult(
+            success=False,
+            form_context=profile_form_context(
+                profile_data,
+                attributes,
+                action_url=action_url,
+                error=error,
+            ),
+            error=error,
+        )
+
+    try:
+        profile, metadata = create_profile(db, profile_data, attributes)
+        _log_radius_audit_event(
+            db,
+            request,
+            action="create",
+            entity_type="radius_profile",
+            entity_id=str(profile.id),
+            metadata=metadata,
+        )
+        return RadiusFormResult(success=True)
+    except ValidationError as exc:
+        error = _validation_error_message(exc)
+    except Exception as exc:
+        error = str(exc)
+
+    return RadiusFormResult(
+        success=False,
+        form_context=profile_form_context(
+            profile_data,
+            attributes,
+            action_url=action_url,
+            error=error or "Please correct the highlighted fields.",
+        ),
+        error=error,
+    )
+
+
 def update_profile(
     db,
     *,
@@ -470,6 +925,65 @@ def update_profile(
         changes["attributes"] = {"from": before_attr_count, "to": after_attr_count}
     metadata = {"changes": changes} if changes else None
     return updated_profile, metadata
+
+
+def update_profile_from_form(
+    request: Request,
+    db: Session,
+    *,
+    profile_id: str,
+    form,
+) -> RadiusFormResult:
+    if not profile_edit_form_data(db, profile_id):
+        return RadiusFormResult(
+            success=False, not_found_message="RADIUS profile not found"
+        )
+
+    profile_data, attributes, error = parse_profile_form(form)
+    action_url = f"/admin/network/radius/profiles/{profile_id}"
+    if error:
+        return RadiusFormResult(
+            success=False,
+            form_context=profile_form_context(
+                profile_data,
+                attributes,
+                action_url=action_url,
+                error=error,
+            ),
+            error=error,
+        )
+
+    try:
+        updated_profile, metadata = update_profile(
+            db=db,
+            profile_id=profile_id,
+            profile_data=profile_data,
+            attributes=attributes,
+        )
+        _log_radius_audit_event(
+            db,
+            request,
+            action="update",
+            entity_type="radius_profile",
+            entity_id=str(updated_profile.id),
+            metadata=metadata,
+        )
+        return RadiusFormResult(success=True)
+    except ValidationError as exc:
+        error = _validation_error_message(exc)
+    except Exception as exc:
+        error = str(exc)
+
+    return RadiusFormResult(
+        success=False,
+        form_context=profile_form_context(
+            profile_data,
+            attributes,
+            action_url=action_url,
+            error=error or "Please correct the highlighted fields.",
+        ),
+        error=error,
+    )
 
 
 def build_client_create_payload(values: dict[str, object]) -> RadiusClientCreate:

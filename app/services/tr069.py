@@ -1,8 +1,9 @@
 import logging
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice
@@ -40,6 +41,7 @@ from app.services.network.ont_status import (
     resolve_acs_online_window_minutes_for_model,
     resolve_ont_status_snapshot,
 )
+from app.services.network.serial_utils import search_candidates
 from app.services.response import ListResponseMixin
 
 _ACS_CREDENTIAL_FIELDS = ("cwmp_password", "connection_request_password")
@@ -86,6 +88,300 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
     for token in ("-", " ", ":", ".", "_", "/"):
         expr = func.replace(expr, token, "")
     return expr
+
+
+def _json_safe(value: Any) -> Any:
+    """Return a JSON-column-safe representation without losing structure."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe(item) for item in value]
+    return value
+
+
+def _first_text(*values: object | None, max_len: int | None = None) -> str | None:
+    for value in values:
+        if value is None:
+            continue
+        text = str(value).strip()
+        if not text:
+            continue
+        return text[:max_len] if max_len else text
+    return None
+
+
+def _payload_lookup(payload: dict[str, Any], *keys: str) -> Any:
+    """Case-insensitive top-level lookup for mixed ACS webhook shapes."""
+    if not isinstance(payload, dict):
+        return None
+    wanted = {key.lower() for key in keys}
+    for key, value in payload.items():
+        if str(key).lower() in wanted:
+            return value
+    return None
+
+
+def _extract_serial_from_device_id(device_id_raw: str | None) -> str | None:
+    device_id_str = (device_id_raw or "").strip()
+    if not device_id_str:
+        return None
+    parts = device_id_str.split("-", 2)
+    if len(parts) == 3:
+        return parts[2].strip() or None
+    return None
+
+
+def _normalize_event_value(event: Any) -> tuple[str, Any]:
+    """Convert common CWMP/GenieACS event shapes into our enum token."""
+    raw_event = event
+    if isinstance(event, list):
+        labels: list[str] = []
+        for item in event:
+            if isinstance(item, dict):
+                code = _first_text(
+                    item.get("EventCode"),
+                    item.get("event_code"),
+                    item.get("code"),
+                    item.get("_value"),
+                )
+                if code:
+                    labels.append(code)
+            else:
+                text = _first_text(item)
+                if text:
+                    labels.append(text)
+        event_text = " ".join(labels) if labels else "periodic"
+    elif isinstance(event, dict):
+        event_text = _first_text(
+            event.get("EventCode"),
+            event.get("event_code"),
+            event.get("code"),
+            event.get("_value"),
+            event,
+        ) or "periodic"
+    else:
+        event_text = _first_text(event) or "periodic"
+
+    normalized = event_text.strip().lower().replace("-", "_")
+    if "0 bootstrap" in normalized or normalized == "bootstrap":
+        return "bootstrap", raw_event
+    if "1 boot" in normalized or normalized == "boot":
+        return "boot", raw_event
+    if "2 periodic" in normalized or normalized == "periodic":
+        return "periodic", raw_event
+    if "4 value change" in normalized or "value_change" in normalized:
+        return "value_change", raw_event
+    if "6 connection request" in normalized or "connection_request" in normalized:
+        return "connection_request", raw_event
+    if "7 transfer complete" in normalized or "transfer_complete" in normalized:
+        return "transfer_complete", raw_event
+    if (
+        "8 diagnostics complete" in normalized
+        or "diagnostics_complete" in normalized
+    ):
+        return "diagnostics_complete", raw_event
+    return normalized or "periodic", raw_event
+
+
+def _parameter_value(value: Any) -> str | None:
+    if isinstance(value, dict):
+        if "_value" in value:
+            value = value.get("_value")
+        elif "value" in value:
+            value = value.get("value")
+        elif "Value" in value:
+            value = value.get("Value")
+    if value is None:
+        return None
+    if isinstance(value, (dict, list, tuple)):
+        return str(_json_safe(value))
+    return str(value)
+
+
+def _collect_parameters_from_mapping(
+    source: dict[str, Any],
+    output: dict[str, str | None],
+) -> None:
+    for name, value in source.items():
+        key = str(name).strip()
+        if not key or len(key) > 255:
+            continue
+        if not (
+            key.startswith("Device.")
+            or key.startswith("InternetGatewayDevice.")
+            or key.startswith("X_")
+        ):
+            continue
+        output[key[:255]] = _parameter_value(value)
+
+
+def _extract_inform_parameters(raw_payload: dict[str, Any] | None) -> dict[str, str | None]:
+    """Extract reported parameter values from common inform webhook formats."""
+    if not isinstance(raw_payload, dict):
+        return {}
+    params: dict[str, str | None] = {}
+
+    for key in ("parameters", "Parameters", "params", "parameter_values"):
+        value = raw_payload.get(key)
+        if isinstance(value, dict):
+            _collect_parameters_from_mapping(value, params)
+
+    parameter_list = raw_payload.get("ParameterList") or raw_payload.get(
+        "parameter_list"
+    )
+    if isinstance(parameter_list, list):
+        for item in parameter_list:
+            if not isinstance(item, dict):
+                continue
+            name = _first_text(item.get("Name"), item.get("name"), max_len=255)
+            if name:
+                params[name] = _parameter_value(
+                    item.get("Value", item.get("value", item.get("_value")))
+                )
+    elif isinstance(parameter_list, dict):
+        _collect_parameters_from_mapping(parameter_list, params)
+
+    _collect_parameters_from_mapping(raw_payload, params)
+    return params
+
+
+def _upsert_inform_parameters(
+    db: Session,
+    *,
+    device: Tr069CpeDevice,
+    parameters: dict[str, str | None],
+    updated_at: datetime,
+) -> int:
+    if not parameters:
+        return 0
+    names = list(parameters.keys())
+    existing = {
+        param.name: param
+        for param in db.query(Tr069Parameter)
+        .filter(Tr069Parameter.device_id == device.id)
+        .filter(Tr069Parameter.name.in_(names))
+        .all()
+    }
+    changed = 0
+    for name, value in parameters.items():
+        param = existing.get(name)
+        if param:
+            param.value = value
+            param.updated_at = updated_at
+        else:
+            db.add(
+                Tr069Parameter(
+                    device_id=device.id,
+                    name=name,
+                    value=value,
+                    updated_at=updated_at,
+                )
+            )
+        changed += 1
+    return changed
+
+
+def _resolve_default_acs_server(db: Session) -> Tr069AcsServer | None:
+    from app.models.domain_settings import SettingDomain
+    from app.services import settings_spec
+
+    default_server_id = settings_spec.resolve_value(
+        db,
+        SettingDomain.tr069,
+        "default_acs_server_id",
+    )
+    if default_server_id:
+        server = db.get(Tr069AcsServer, str(default_server_id))
+        if server and server.is_active:
+            return server
+    return (
+        db.query(Tr069AcsServer)
+        .filter(Tr069AcsServer.is_active.is_(True))
+        .order_by(Tr069AcsServer.created_at.asc())
+        .first()
+    )
+
+
+def _find_matching_ont_for_serial(db: Session, serial: str | None):
+    if not serial:
+        return None
+    from app.models.network import OntUnit
+
+    normalized_candidates = [
+        normalize_tr069_serial(candidate) for candidate in search_candidates(serial)
+    ]
+    normalized_candidates = [candidate for candidate in normalized_candidates if candidate]
+    if not normalized_candidates:
+        return None
+    return (
+        db.query(OntUnit)
+        .filter(OntUnit.is_active.is_(True))
+        .filter(_normalized_serial_expr(OntUnit.serial_number).in_(normalized_candidates))
+        .first()
+    )
+
+
+def _resolve_device_for_inform(
+    db: Session,
+    *,
+    serial: str | None,
+    device_id_raw: str | None,
+    acs_server_id: str | None,
+    oui: str | None,
+    product_class: str | None,
+) -> Tr069CpeDevice | None:
+    device_id_str = (device_id_raw or "").strip()
+    normalized_candidates = [
+        normalize_tr069_serial(candidate) for candidate in search_candidates(serial)
+    ]
+    normalized_candidates = [candidate for candidate in normalized_candidates if candidate]
+
+    query = db.query(Tr069CpeDevice).filter(Tr069CpeDevice.is_active.is_(True))
+    if acs_server_id:
+        query = query.filter(Tr069CpeDevice.acs_server_id == acs_server_id)
+
+    if device_id_str:
+        found = query.filter(Tr069CpeDevice.genieacs_device_id == device_id_str).first()
+        if found:
+            return found
+
+    if serial:
+        found = query.filter(Tr069CpeDevice.serial_number == serial).first()
+        if found:
+            return found
+
+    if normalized_candidates:
+        found = query.filter(
+            _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(
+                normalized_candidates
+            )
+        ).first()
+        if found:
+            return found
+
+    server = db.get(Tr069AcsServer, str(acs_server_id)) if acs_server_id else None
+    if not server:
+        server = _resolve_default_acs_server(db)
+    if not server:
+        return None
+
+    device = Tr069CpeDevice(
+        acs_server_id=server.id,
+        serial_number=_first_text(serial, max_len=120),
+        oui=_first_text(oui, max_len=8),
+        product_class=_first_text(product_class, max_len=120),
+        genieacs_device_id=_first_text(device_id_str, max_len=255),
+        is_active=True,
+    )
+    db.add(device)
+
+    ont = _find_matching_ont_for_serial(db, serial)
+    if ont:
+        link_tr069_device_to_ont(db, device, ont, acs_server_id=server.id)
+
+    return device
 
 
 def _validate_target_cpe_device(
@@ -172,6 +468,10 @@ def link_tr069_device_to_ont(
     )
     for other in other_links:
         other.ont_unit_id = None
+        if device.genieacs_device_id and not other.genieacs_device_id:
+            if device.cpe_device_id is None and other.cpe_device_id is not None:
+                device.cpe_device_id = other.cpe_device_id
+            other.is_active = False
     if other_links:
         db.flush()
 
@@ -325,6 +625,133 @@ class CpeDevices(ListResponseMixin):
             or CpeDevices._clip_text(parsed_serial, 120)
         )
         return oui, product_class, serial_number
+
+    @staticmethod
+    def _find_inactive_device_for_ont(
+        db: Session,
+        *,
+        acs_server_id: str,
+        ont,  # type: ignore[no-untyped-def]
+    ) -> Tr069CpeDevice | None:
+        serial_candidates = [
+            normalize_tr069_serial(candidate)
+            for candidate in search_candidates(getattr(ont, "serial_number", None))
+        ]
+        serial_candidates = [candidate for candidate in serial_candidates if candidate]
+
+        query = (
+            db.query(Tr069CpeDevice)
+            .filter(Tr069CpeDevice.acs_server_id == acs_server_id)
+            .filter(Tr069CpeDevice.is_active.is_(False))
+            .filter(
+                or_(
+                    Tr069CpeDevice.ont_unit_id == ont.id,
+                    (
+                        _normalized_serial_expr(Tr069CpeDevice.serial_number).in_(
+                            serial_candidates
+                        )
+                        if serial_candidates
+                        else False
+                    ),
+                )
+            )
+            .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
+        )
+        return query.first()
+
+    @staticmethod
+    def ensure_local_ont_devices(db: Session, acs_server_id: str) -> dict[str, int]:
+        """Ensure local ONTs assigned to an ACS have active TR-069 rows.
+
+        GenieACS only returns devices it knows about. This pass keeps local ONTs
+        visible in TR-069 management even before a first inform, or after an
+        inactive placeholder exists for an offline device.
+        """
+        server = db.get(Tr069AcsServer, acs_server_id)
+        if not server:
+            raise HTTPException(status_code=404, detail="ACS server not found")
+
+        from app.models.network import OLTDevice, OntUnit
+
+        onts = (
+            db.query(OntUnit)
+            .outerjoin(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+            .filter(OntUnit.is_active.is_(True))
+            .filter(
+                or_(
+                    OntUnit.tr069_acs_server_id == server.id,
+                    and_(
+                        OntUnit.tr069_acs_server_id.is_(None),
+                        OLTDevice.tr069_acs_server_id == server.id,
+                    ),
+                )
+            )
+            .all()
+        )
+
+        created = 0
+        reactivated = 0
+        linked = 0
+        for ont in onts:
+            active_device = (
+                db.query(Tr069CpeDevice)
+                .filter(Tr069CpeDevice.ont_unit_id == ont.id)
+                .filter(Tr069CpeDevice.is_active.is_(True))
+                .first()
+            )
+            if active_device:
+                if active_device.acs_server_id != server.id:
+                    active_device.acs_server_id = server.id
+                    linked += 1
+                sync_ont_acs_server(db, ont, server.id)
+                continue
+
+            device = CpeDevices._find_inactive_device_for_ont(
+                db,
+                acs_server_id=str(server.id),
+                ont=ont,
+            )
+            if device:
+                device.is_active = True
+                device.serial_number = (ont.serial_number or device.serial_number)[:120]
+                reactivated += 1
+            else:
+                device = Tr069CpeDevice(
+                    acs_server_id=server.id,
+                    serial_number=(ont.serial_number or "")[:120],
+                    is_active=True,
+                )
+                db.add(device)
+                created += 1
+
+            link_tr069_device_to_ont(
+                db,
+                device,
+                ont,
+                acs_server_id=server.id,
+            )
+            linked += 1
+            apply_status_snapshot(
+                ont,
+                resolve_ont_status_snapshot(
+                    olt_status=getattr(ont, "online_status", None),
+                    acs_last_inform_at=device.last_inform_at,
+                    managed=True,
+                    online_window_minutes=(
+                        resolve_acs_online_window_minutes_for_model(ont)
+                    ),
+                ),
+            )
+
+        if created or reactivated or linked:
+            db.commit()
+
+        return {
+            "local_onts_checked": len(onts),
+            "local_created": created,
+            "local_reactivated": reactivated,
+            "local_linked": linked,
+        }
 
     @staticmethod
     def create(db: Session, payload: Tr069CpeDeviceCreate):
@@ -646,17 +1073,22 @@ class CpeDevices(ListResponseMixin):
             logger.warning("Auto-link ONTs after sync failed: %s", e)
             db.rollback()
 
+        local_ensure = CpeDevices.ensure_local_ont_devices(db, str(server.id))
+
         logger.info(
-            "GenieACS sync: created=%d, updated=%d, auto_linked=%d",
+            "GenieACS sync: created=%d, updated=%d, auto_linked=%d, local_created=%d, local_reactivated=%d",
             created,
             updated,
             auto_linked,
+            local_ensure["local_created"],
+            local_ensure["local_reactivated"],
         )
         return {
             "created": created,
             "updated": updated,
             "total": len(devices),
             "auto_linked": auto_linked,
+            **local_ensure,
         }
 
 
@@ -880,10 +1312,11 @@ class Jobs(ListResponseMixin):
         try:
             client = GenieACSClient(server.base_url)
 
-            # Build GenieACS device ID
-            genieacs_device_id = client.build_device_id(
-                device.oui or "", device.product_class or "", device.serial_number or ""
-            )
+            genieacs_device_id = str(device.genieacs_device_id or "").strip()
+            if not genieacs_device_id:
+                raise GenieACSError(
+                    "TR-069 device has not informed to ACS yet; GenieACS device id is missing."
+                )
 
             # Build task based on command
             task = {"name": job.command}
@@ -1016,43 +1449,73 @@ def receive_inform(
     *,
     serial_number: str | None,
     device_id_raw: str | None,
-    event: str,
+    event: Any,
+    raw_payload: dict[str, Any] | None = None,
+    request_id: str | None = None,
+    remote_addr: str | None = None,
+    headers: dict[str, Any] | None = None,
+    oui: str | None = None,
+    product_class: str | None = None,
+    acs_server_id: str | None = None,
 ) -> dict:
     """Process a GenieACS inform webhook callback.
 
-    Looks up the CPE device by serial number, updates its last_inform_at
-    timestamp, and creates a session record.
+    Resolves or creates the local CPE device, updates last_inform_at, stores
+    the full inform payload on a session, and upserts any reported parameters.
     """
     from app.models.tr069 import Tr069Event
 
-    serial = (serial_number or "").strip()
+    payload = dict(raw_payload or {})
+    serial = _first_text(
+        serial_number,
+        _payload_lookup(payload, "serial", "serialNumber", "serial_number"),
+        max_len=120,
+    )
     device_id_str = (device_id_raw or "").strip()
-    event_str = (event or "periodic").strip().lower()
-
+    if not device_id_str:
+        device_id_str = _first_text(
+            _payload_lookup(payload, "device_id", "deviceId", "_id"),
+            max_len=255,
+        ) or ""
     if not serial and device_id_str:
-        parts = device_id_str.split("-", 2)
-        if len(parts) == 3:
-            serial = parts[2]
+        serial = _extract_serial_from_device_id(device_id_str)
 
     if not serial:
         return {"status": "ignored", "reason": "no serial number"}
 
-    from sqlalchemy import select
-
-    device = db.scalars(
-        select(Tr069CpeDevice)
-        .where(
-            Tr069CpeDevice.serial_number == serial,
-            Tr069CpeDevice.is_active.is_(True),
+    event_candidate = event
+    if event_candidate in (None, "", "periodic"):
+        event_candidate = (
+            _payload_lookup(payload, "event", "events", "Event", "EventList")
+            or event_candidate
         )
-        .limit(1)
-    ).first()
+    event_str, raw_event = _normalize_event_value(event_candidate)
 
+    device = _resolve_device_for_inform(
+        db,
+        serial=serial,
+        device_id_raw=device_id_str,
+        acs_server_id=acs_server_id,
+        oui=_first_text(oui, _payload_lookup(payload, "oui", "OUI"), max_len=8),
+        product_class=_first_text(
+            product_class,
+            _payload_lookup(payload, "product_class", "productClass", "ProductClass"),
+            max_len=120,
+        ),
+    )
     if not device:
         logger.debug("Inform received for unknown serial: %s", serial)
-        return {"status": "ignored", "reason": "unknown device"}
+        return {"status": "ignored", "reason": "unknown device or ACS server"}
 
     now = datetime.now(UTC)
+    if serial and not device.serial_number:
+        device.serial_number = serial[:120]
+    if device_id_str and not device.genieacs_device_id:
+        device.genieacs_device_id = device_id_str[:255]
+    if oui and not device.oui:
+        device.oui = oui[:8]
+    if product_class and not device.product_class:
+        device.product_class = product_class[:120]
     device.last_inform_at = now
     if device.ont_unit_id:
         from app.models.network import OntUnit
@@ -1081,16 +1544,33 @@ def receive_inform(
         "diagnostics_complete": Tr069Event.diagnostics_complete,
     }
     event_type = event_map.get(event_str, Tr069Event.periodic)
+    db.flush()
+    parameters = _extract_inform_parameters(payload)
+    parameter_count = _upsert_inform_parameters(
+        db,
+        device=device,
+        parameters=parameters,
+        updated_at=now,
+    )
 
     session = Tr069Session(
         device_id=device.id,
         event_type=event_type,
+        request_id=_first_text(request_id, max_len=120),
         started_at=now,
         ended_at=now,
         inform_payload={
-            "serial_number": serial_number,
-            "device_id": device_id_raw,
-            "event": event,
+            "serial_number": serial,
+            "device_id": device_id_str or None,
+            "event": event_str,
+            "raw_event": _json_safe(raw_event),
+            "raw_payload": _json_safe(payload),
+            "request": {
+                "request_id": request_id,
+                "remote_addr": remote_addr,
+                "headers": _json_safe(headers or {}),
+            },
+            "parameter_count": parameter_count,
         },
     )
     db.add(session)
@@ -1102,7 +1582,13 @@ def receive_inform(
         event_str,
         device.id,
     )
-    return {"status": "ok", "device_id": str(device.id), "event": event_str}
+    return {
+        "status": "ok",
+        "device_id": str(device.id),
+        "event": event_str,
+        "parameters": parameter_count,
+        "session_id": str(session.id),
+    }
 
 
 # -----------------------------------------------------------------------------
@@ -1462,59 +1948,117 @@ def _build_runtime_collection_provision() -> str:
     return '''// DotMac Runtime Data Collection Provision
 // Collects operational parameters for dashboard display
 
-const now = Date.now();
-
-// Detect data model by checking which root exists
-let root = "Device";
-try {
-  const dm = declare("Device.DeviceInfo.Manufacturer", {value: 1});
-  if (!dm.value || dm.value[0] === undefined) {
-    root = "InternetGatewayDevice";
+function read(path) {
+  try {
+    declare(path, {value: 1});
+  } catch (e) {
+    log("DotMac runtime collect skipped " + path + ": " + e.message);
   }
-} catch (e) {
-  root = "InternetGatewayDevice";
 }
 
-// System info
-declare(root + ".DeviceInfo.SerialNumber", {value: 1});
-declare(root + ".DeviceInfo.SoftwareVersion", {value: 1});
-declare(root + ".DeviceInfo.UpTime", {value: 1});
-declare(root + ".DeviceInfo.MemoryStatus.Total", {value: 1});
-declare(root + ".DeviceInfo.MemoryStatus.Free", {value: 1});
+const paths = [
+  // TR-098 / InternetGatewayDevice system info
+  "InternetGatewayDevice.DeviceInfo.SerialNumber",
+  "InternetGatewayDevice.DeviceInfo.SoftwareVersion",
+  "InternetGatewayDevice.DeviceInfo.HardwareVersion",
+  "InternetGatewayDevice.DeviceInfo.UpTime",
+  "InternetGatewayDevice.DeviceInfo.MemoryStatus.Total",
+  "InternetGatewayDevice.DeviceInfo.MemoryStatus.Free",
+  "InternetGatewayDevice.ManagementServer.ConnectionRequestURL",
 
-// WAN connection status - PPPoE
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.MACAddress", {value: 1});
+  // TR-098 WAN status
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionStatus",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ConnectionType",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.ExternalIPAddress",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Username",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.MACAddress",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DNSServers",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.DefaultGateway",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANPPPConnection.1.Uptime",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DNSServers",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DefaultGateway",
+  "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.Uptime",
 
-// WAN connection status - DHCP/Static IP
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionStatus", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress", {value: 1});
-declare(root + ".WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.MACAddress", {value: 1});
+  // TR-098 LAN, hosts, WiFi
+  "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
+  "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MinAddress",
+  "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MaxAddress",
+  "InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries",
+  "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+  "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+  "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Channel",
+  "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.TotalAssociations",
+  "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Standard",
+  "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType",
 
-// LAN configuration
-declare(root + ".LANDevice.1.LANHostConfigManagement.DHCPServerEnable", {value: 1});
-declare(root + ".LANDevice.1.LANHostConfigManagement.MinAddress", {value: 1});
-declare(root + ".LANDevice.1.LANHostConfigManagement.MaxAddress", {value: 1});
-declare(root + ".LANDevice.1.Hosts.HostNumberOfEntries", {value: 1});
+  // TR-181 / Device system info
+  "Device.DeviceInfo.SerialNumber",
+  "Device.DeviceInfo.SoftwareVersion",
+  "Device.DeviceInfo.HardwareVersion",
+  "Device.DeviceInfo.UpTime",
+  "Device.DeviceInfo.MemoryStatus.Total",
+  "Device.DeviceInfo.MemoryStatus.Free",
+  "Device.DeviceInfo.ProcessStatus.CPUUsage",
+  "Device.ManagementServer.ConnectionRequestURL",
 
-// WiFi configuration and clients
-declare(root + ".LANDevice.1.WLANConfiguration.1.Enable", {value: 1});
-declare(root + ".LANDevice.1.WLANConfiguration.1.SSID", {value: 1});
-declare(root + ".LANDevice.1.WLANConfiguration.1.Channel", {value: 1});
-declare(root + ".LANDevice.1.WLANConfiguration.1.TotalAssociations", {value: 1});
-declare(root + ".LANDevice.1.WLANConfiguration.1.Standard", {value: 1});
-declare(root + ".LANDevice.1.WLANConfiguration.1.BeaconType", {value: 1});
+  // TR-181 WAN status
+  "Device.PPP.Interface.1.Status",
+  "Device.PPP.Interface.1.ConnectionStatus",
+  "Device.PPP.Interface.1.Username",
+  "Device.IP.Interface.1.Status",
+  "Device.IP.Interface.1.IPv4Address.1.IPAddress",
+  "Device.DHCPv4.Client.1.IPAddress",
+  "Device.DNS.Client.Server.1.DNSServer",
+  "Device.Routing.Router.1.IPv4Forwarding.1.GatewayIPAddress",
 
-// Ethernet port status
-declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.1.Status", {value: 1});
-declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.1.MACAddress", {value: 1});
-declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.2.Status", {value: 1});
-declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.3.Status", {value: 1});
-declare(root + ".LANDevice.1.LANEthernetInterfaceConfig.4.Status", {value: 1});
+  // TR-181 LAN, hosts, WiFi
+  "Device.IP.Interface.2.IPv4Address.1.IPAddress",
+  "Device.IP.Interface.2.IPv4Address.1.SubnetMask",
+  "Device.DHCPv4.Server.Enable",
+  "Device.DHCPv4.Server.Pool.1.MinAddress",
+  "Device.DHCPv4.Server.Pool.1.MaxAddress",
+  "Device.Hosts.HostNumberOfEntries",
+  "Device.WiFi.SSID.1.Enable",
+  "Device.WiFi.SSID.1.SSID",
+  "Device.WiFi.Radio.1.Channel",
+  "Device.WiFi.Radio.1.OperatingStandards",
+  "Device.WiFi.AccessPoint.1.Security.ModeEnabled",
+  "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries"
+];
+
+for (let i = 1; i <= 8; i++) {
+  paths.push("InternetGatewayDevice.LANDevice.1.Hosts.Host." + i + ".HostName");
+  paths.push("InternetGatewayDevice.LANDevice.1.Hosts.Host." + i + ".IPAddress");
+  paths.push("InternetGatewayDevice.LANDevice.1.Hosts.Host." + i + ".MACAddress");
+  paths.push("InternetGatewayDevice.LANDevice.1.Hosts.Host." + i + ".InterfaceType");
+  paths.push("InternetGatewayDevice.LANDevice.1.Hosts.Host." + i + ".Active");
+  paths.push("Device.Hosts.Host." + i + ".HostName");
+  paths.push("Device.Hosts.Host." + i + ".IPAddress");
+  paths.push("Device.Hosts.Host." + i + ".MACAddress");
+  paths.push("Device.Hosts.Host." + i + ".InterfaceType");
+  paths.push("Device.Hosts.Host." + i + ".Active");
+}
+
+for (let i = 1; i <= 4; i++) {
+  paths.push("InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig." + i + ".Enable");
+  paths.push("InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig." + i + ".Status");
+  paths.push("InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig." + i + ".MaxBitRate");
+  paths.push("InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig." + i + ".DuplexMode");
+  paths.push("InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig." + i + ".MACAddress");
+  paths.push("Device.Ethernet.Interface." + i + ".Enable");
+  paths.push("Device.Ethernet.Interface." + i + ".Status");
+  paths.push("Device.Ethernet.Interface." + i + ".MaxBitRate");
+  paths.push("Device.Ethernet.Interface." + i + ".DuplexMode");
+  paths.push("Device.Ethernet.Interface." + i + ".MACAddress");
+}
+
+for (const path of paths) {
+  read(path);
+}
 '''
 
 

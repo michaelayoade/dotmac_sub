@@ -55,6 +55,31 @@ def build_form_data(**kwargs) -> dict[str, object]:
     return dict(kwargs)
 
 
+def build_form_context(
+    db: Session,
+    *,
+    server_id: UUID | None = None,
+    server: WireGuardServer | None = None,
+    errors: list[str] | None = None,
+    form_data: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build context for the WireGuard server form."""
+    from app.services import wireguard as wg_service
+
+    resolved_server = server
+    if resolved_server is None and server_id is not None:
+        resolved_server = wg_service.wg_servers.get(db, server_id)
+
+    context: dict[str, object] = {
+        "server": resolved_server,
+        "errors": errors or [],
+        "vpn_defaults": get_vpn_defaults(db),
+    }
+    if form_data is not None:
+        context["form_data"] = form_data
+    return context
+
+
 def create_payload(
     *,
     name: str,

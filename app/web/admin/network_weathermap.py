@@ -6,7 +6,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import network_topology as topology_service
+from app.services import web_network_topology as web_topology_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -40,21 +40,9 @@ def network_topology(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Network topology visualization page."""
-    graph = topology_service.list_nodes_and_edges(
-        db,
-        topology_group=group,
-        pop_site_id=site,
-        include_utilization=True,
-    )
-    form_options = topology_service.get_form_options(db)
     context = _base_context(request, db, active_page="topology")
     context.update(
-        {
-            "graph": graph,
-            "form_options": form_options,
-            "selected_group": group or "",
-            "selected_site": site or "",
-        }
+        web_topology_service.topology_page_context(db, group=group, site=site)
     )
     return templates.TemplateResponse("admin/network/topology/index.html", context)
 
@@ -74,15 +62,13 @@ def network_weathermap_redirect() -> RedirectResponse:
     dependencies=[Depends(require_permission("network:write"))],
 )
 def topology_link_new(request: Request, db: Session = Depends(get_db)):
-    form_options = topology_service.get_form_options(db)
     context = _base_context(request, db, active_page="topology")
     context.update(
-        {
-            "link": None,
-            "action_url": "/admin/network/topology/links/new",
-            "error": None,
-            **form_options,
-        }
+        web_topology_service.link_form_context(
+            db,
+            link=None,
+            action_url="/admin/network/topology/links/new",
+        )
     )
     return templates.TemplateResponse("admin/network/topology/link_form.html", context)
 
@@ -94,20 +80,19 @@ def topology_link_new(request: Request, db: Session = Depends(get_db)):
 )
 def topology_link_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    data = _parse_link_form(form)
+    data = web_topology_service.parse_link_form(form)
     try:
-        topology_service.topology_links.create(db, data=data)
+        web_topology_service.create_link(db, data=data)
         return RedirectResponse(url="/admin/network/topology", status_code=303)
     except (ValueError, Exception) as exc:
-        form_options = topology_service.get_form_options(db)
         context = _base_context(request, db, active_page="topology")
         context.update(
-            {
-                "link": data,
-                "action_url": "/admin/network/topology/links/new",
-                "error": str(exc),
-                **form_options,
-            }
+            web_topology_service.link_form_context(
+                db,
+                link=data,
+                action_url="/admin/network/topology/links/new",
+                error=str(exc),
+            )
         )
         return templates.TemplateResponse(
             "admin/network/topology/link_form.html", context
@@ -120,17 +105,8 @@ def topology_link_create(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:write"))],
 )
 def topology_link_edit(request: Request, link_id: str, db: Session = Depends(get_db)):
-    link = topology_service.topology_links.get(db, link_id)
-    form_options = topology_service.get_form_options(db)
     context = _base_context(request, db, active_page="topology")
-    context.update(
-        {
-            "link": link,
-            "action_url": f"/admin/network/topology/links/{link_id}/edit",
-            "error": None,
-            **form_options,
-        }
-    )
+    context.update(web_topology_service.link_edit_context(db, link_id))
     return templates.TemplateResponse("admin/network/topology/link_form.html", context)
 
 
@@ -141,21 +117,19 @@ def topology_link_edit(request: Request, link_id: str, db: Session = Depends(get
 )
 def topology_link_update(request: Request, link_id: str, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    data = _parse_link_form(form)
+    data = web_topology_service.parse_link_form(form)
     try:
-        topology_service.topology_links.update(db, link_id, data=data)
+        web_topology_service.update_link(db, link_id, data=data)
         return RedirectResponse(url="/admin/network/topology", status_code=303)
     except (ValueError, Exception) as exc:
-        link = topology_service.topology_links.get(db, link_id)
-        form_options = topology_service.get_form_options(db)
         context = _base_context(request, db, active_page="topology")
         context.update(
-            {
-                "link": link,
-                "action_url": f"/admin/network/topology/links/{link_id}/edit",
-                "error": str(exc),
-                **form_options,
-            }
+            web_topology_service.link_form_context(
+                db,
+                link=data,
+                action_url=f"/admin/network/topology/links/{link_id}/edit",
+                error=str(exc),
+            )
         )
         return templates.TemplateResponse(
             "admin/network/topology/link_form.html", context
@@ -169,7 +143,7 @@ def topology_link_update(request: Request, link_id: str, db: Session = Depends(g
 def topology_link_delete(
     link_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    topology_service.topology_links.delete(db, link_id)
+    web_topology_service.delete_link(db, link_id)
     return RedirectResponse(url="/admin/network/topology", status_code=303)
 
 
@@ -183,7 +157,7 @@ def topology_link_delete(
 )
 def topology_device_interfaces(device_id: str, db: Session = Depends(get_db)):
     """Return interfaces for a device (populates dropdowns via HTMX/JS)."""
-    return topology_service.get_device_interfaces(db, device_id)
+    return web_topology_service.get_device_interfaces(db, device_id)
 
 
 @router.get(
@@ -193,7 +167,7 @@ def topology_device_interfaces(device_id: str, db: Session = Depends(get_db)):
 )
 def topology_node_summary(device_id: str, db: Session = Depends(get_db)):
     """Return node summary for drilldown panel."""
-    return topology_service.node_summary(db, device_id)
+    return web_topology_service.node_summary(db, device_id)
 
 
 @router.get(
@@ -205,24 +179,4 @@ def topology_graph_data(
     group: str | None = None, site: str | None = None, db: Session = Depends(get_db)
 ):
     """Return full graph data as JSON (for D3 refresh without full page reload)."""
-    return topology_service.list_nodes_and_edges(
-        db, topology_group=group, pop_site_id=site
-    )
-
-
-def _parse_link_form(form) -> dict:
-    return {
-        "source_device_id": str(form.get("source_device_id") or "").strip(),
-        "source_interface_id": str(form.get("source_interface_id") or "").strip()
-        or None,
-        "target_device_id": str(form.get("target_device_id") or "").strip(),
-        "target_interface_id": str(form.get("target_interface_id") or "").strip()
-        or None,
-        "link_role": str(form.get("link_role") or "unknown").strip(),
-        "medium": str(form.get("medium") or "unknown").strip(),
-        "capacity_bps": str(form.get("capacity_bps") or "").strip() or None,
-        "bundle_key": str(form.get("bundle_key") or "").strip() or None,
-        "topology_group": str(form.get("topology_group") or "").strip() or None,
-        "admin_status": str(form.get("admin_status") or "enabled").strip(),
-        "notes": str(form.get("notes") or "").strip() or None,
-    }
+    return web_topology_service.graph_data(db, group=group, site=site)

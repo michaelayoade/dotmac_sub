@@ -1,7 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge, card, data_table, table_head, empty_state, animation_styles %}
 
-{% block title %}{{ display_serial_number or ont.serial_number }} - ONT - Admin{% endblock %}
+{% block title %}{{ display_serial_label }} - ONT - Admin{% endblock %}
 
 {% block content %}
 <div class="space-y-6"
@@ -33,7 +33,7 @@
             <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             <a href="/admin/network/onts" class="hover:text-blue-600 dark:hover:text-blue-400">ONTs</a>
             <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <span class="font-medium text-slate-700 dark:text-slate-200">{{ display_serial_number or ont.serial_number }}</span>
+            <span class="font-medium text-slate-700 dark:text-slate-200">{{ display_serial_label }}</span>
         </nav>
 
         {# Main Header Card #}
@@ -62,7 +62,7 @@
                             </div>
                             {% endif %}
                             <div>
-                                <h1 class="text-xl font-semibold tracking-tight text-slate-900 dark:text-white lg:text-2xl">{{ display_serial_number or ont.serial_number }}</h1>
+                                <h1 class="text-xl font-semibold tracking-tight text-slate-900 dark:text-white lg:text-2xl">{{ display_serial_label }}</h1>
                                 <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">
                                     {{ ont.vendor or 'Unknown' }} {{ ont.model or '' }}
                                     {% if ont.firmware_version %}<span class="ml-1 font-mono text-xs text-slate-400 dark:text-slate-500">v{{ ont.firmware_version }}</span>{% endif %}
@@ -140,10 +140,14 @@
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
                             Mode
                         </button>
-                        <a href="/admin/network/onts/{{ ont.id }}/edit" class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-all hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:focus:ring-offset-slate-800">
+                        <button type="button"
+                                hx-get="/admin/network/onts/{{ ont.id }}/location-details"
+                                hx-target="#modal-container"
+                                hx-swap="innerHTML"
+                                class="flex-1 inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition-all hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:focus:ring-offset-slate-800">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                            Edit
-                        </a>
+                            Location
+                        </button>
                     </div>
                 </div>
             </div>
@@ -543,7 +547,7 @@
                 currentBoard: {{ (ont.board or "") | tojson }},
                 currentPort: {{ (ont.port or "") | tojson }},
                 currentGponChannel: {{ ((ont.gpon_channel.value if ont.gpon_channel and ont.gpon_channel.value is defined else ont.gpon_channel) or "gpon") | tojson }},
-                currentSerialNumber: {{ (ont.serial_number or "") | tojson }},
+                currentSerialNumber: {{ (display_serial_label or "") | tojson }},
                 currentVendor: {{ (ont.vendor or "") | tojson }},
                 currentModel: {{ (ont.model or "") | tojson }},
                 currentFirmware: {{ (ont.firmware_version or "") | tojson }},
@@ -944,31 +948,12 @@
 
                 {# Device Information #}
                 {% set device_info_actions = none %}
-                {% if preview_mode %}
-                {% set device_info_actions %}
-                <button type="button"
-                        @click="openDeviceInfoModal()"
-                        class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
-                    Update
-                </button>
-                {% endset %}
-                {% else %}
-                {% set device_info_actions %}
-                <button type="button"
-                        hx-get="/admin/network/onts/{{ ont.id }}/device-info"
-                        hx-target="#modal-container"
-                        hx-swap="innerHTML"
-                        class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">
-                    Update
-                </button>
-                {% endset %}
-                {% endif %}
                 {% call card("Device Information", color="blue", actions=device_info_actions) %}
                 <div class="space-y-4">
                     <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Serial Number</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" {% if preview_mode %}x-text="currentSerialNumber || '-'"{% endif %}>{{ display_serial_number or ont.serial_number }}</dd>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono" {% if preview_mode %}x-text="currentSerialNumber || '-'"{% endif %}>{{ display_serial_label }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Vendor</dt>
@@ -1239,7 +1224,7 @@
                         </div>
                         <div>
                             <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONT</p>
-                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ display_serial_number or ont.serial_number }}</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ display_serial_label }}</p>
                         </div>
                     </div>
                 </div>
@@ -1307,7 +1292,7 @@
                     <div class="flex items-center gap-3 ml-4 border-l-2 border-blue-300 pl-4 dark:border-blue-700">
                         <div>
                             <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">ONT</p>
-                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ display_serial_number or ont.serial_number }}</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ display_serial_label }}</p>
                         </div>
                     </div>
                 </div>
@@ -1382,10 +1367,14 @@
                         <div class="space-y-4 p-4">
                             {# Quick Actions #}
                             <div class="space-y-2">
-                                <a href="/admin/network/onts/{{ ont.id }}/edit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 transition-colors">
+                                <button type="button"
+                                        hx-get="/admin/network/onts/{{ ont.id }}/location-details"
+                                        hx-target="#modal-container"
+                                        hx-swap="innerHTML"
+                                        class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 transition-colors">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                                    Edit Device
-                                </a>
+                                    Location Details
+                                </button>
                                 {% if not assignment %}
                                 <a href="/admin/network/onts/{{ ont.id }}/assign" class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors">
                                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>

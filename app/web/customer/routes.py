@@ -1,9 +1,7 @@
 """Customer portal web routes."""
 
-import asyncio
-import json
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import datetime
 from uuid import UUID
 
 import anyio
@@ -13,17 +11,18 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Resp
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from app.db import SessionLocal, get_db
-from app.models.bandwidth import BandwidthSample
-from app.models.catalog import Subscription
+from app.db import get_db
 from app.services import crm_portal, customer_portal
+from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import web_network_speedtests as web_network_speedtests_service
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import (
-    get_restricted_dashboard_context,
+    emit_customer_event,
+    get_dashboard_template_context,
     is_subscriber_restricted,
+    resolve_allowed_subscriber_ids,
+    resolve_customer_subscription,
 )
-from app.services.metrics_store import get_metrics_store
 from app.web.customer.auth import get_current_customer_from_request
 from app.web.customer.branding import get_customer_templates
 
@@ -31,87 +30,17 @@ templates = get_customer_templates()
 router = APIRouter(prefix="/portal", tags=["web-customer"])
 
 logger = logging.getLogger(__name__)
-
-
-def _emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
-    """Emit a customer portal event (non-blocking)."""
-    try:
-        from app.services.events import emit_event
-        from app.services.events.types import EventType
-
-        event_type = getattr(EventType, event_name, None)
-        if event_type:
-            emit_event(db, event_type, payload, actor="customer")
-    except Exception as e:
-        logger.warning("Failed to emit customer event %s: %s", event_name, e)
-
-
-def _resolve_customer_subscription(db: Session, customer: dict) -> Subscription | None:
-    account_id, session_subscription_id = customer_portal.resolve_customer_account(
-        customer, db
-    )
-    account_id_str = str(account_id) if account_id else None
-
-    if session_subscription_id:
-        subscription = db.get(Subscription, session_subscription_id)
-        if subscription and (
-            not account_id_str or str(subscription.subscriber_id) == account_id_str
-        ):
-            return subscription
-
-    if not account_id_str:
-        return None
-
-    try:
-        return bandwidth_samples.get_user_active_subscription(
-            db, {"account_id": account_id_str}
-        )
-    except HTTPException:
-        return None
-
-
-def _resolve_subscriber_id(customer: dict) -> str:
-    """Extract subscriber_id from customer session for CRM lookups."""
-    return str(
-        customer.get("subscriber_id")
-        or customer.get("session", {}).get("subscriber_id", "")
-    )
-
-
-def _resolve_allowed_subscriber_ids(customer: dict, db: Session) -> list[str]:
-    """Resolve all customer-visible subscriber/account IDs for CRM access checks."""
-    allowed = customer_portal.get_allowed_account_ids(customer, db)
-    if allowed:
-        return [str(item) for item in allowed if item]
-    fallback = _resolve_subscriber_id(customer)
-    return [fallback] if fallback else []
+_emit_customer_event = emit_customer_event
 
 
 def _render_dashboard(
     request: Request, db: Session, customer: dict, next_url: str
 ) -> Response:
     """Render full or restricted dashboard based on subscriber status."""
-    subscriber_id = customer.get("subscriber_id")
-    if subscriber_id and is_subscriber_restricted(db, subscriber_id):
-        ctx = get_restricted_dashboard_context(db, customer)
-        return templates.TemplateResponse(
-            "customer/dashboard/restricted.html",
-            {
-                "request": request,
-                "customer": customer,
-                **ctx,
-                "active_page": "dashboard",
-            },
-        )
-    dashboard_context = customer_portal.get_dashboard_context(db, customer)
+    template_name, context = get_dashboard_template_context(db, customer)
     return templates.TemplateResponse(
-        "customer/dashboard/index.html",
-        {
-            "request": request,
-            "customer": customer,
-            **dashboard_context,
-            "active_page": "dashboard",
-        },
+        template_name,
+        {"request": request, **context},
     )
 
 
@@ -147,7 +76,7 @@ def customer_support(
             url="/portal/auth/login?next=/portal/support", status_code=303
         )
 
-    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.tickets_list_context(request, db, customer, subscriber_ids)
     return templates.TemplateResponse("customer/support/index.html", context)
 
@@ -193,7 +122,7 @@ def customer_support_create(
     if result["success"]:
         ticket = result["ticket"]
         ticket_id = ticket.get("id", "")
-        _emit_customer_event(
+        emit_customer_event(
             db,
             "customer_ticket_created",
             {
@@ -229,7 +158,7 @@ def customer_support_detail(
             url="/portal/auth/login?next=/portal/support", status_code=303
         )
 
-    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.ticket_detail_context(
         request, db, customer, subscriber_ids, ticket_id
     )
@@ -247,7 +176,7 @@ def customer_support_add_comment(
     if not customer:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
-    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     result = crm_portal.handle_ticket_comment(
         db, customer, subscriber_ids, ticket_id, body
     )
@@ -279,7 +208,7 @@ def customer_work_orders(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/work-orders", status_code=303
         )
-    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_orders_list_context(request, db, customer, subscriber_ids)
     return templates.TemplateResponse("customer/work-orders/index.html", context)
 
@@ -296,7 +225,7 @@ def customer_work_order_detail(
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/work-orders", status_code=303
         )
-    subscriber_ids = _resolve_allowed_subscriber_ids(customer, db)
+    subscriber_ids = resolve_allowed_subscriber_ids(customer, db)
     context = crm_portal.work_order_detail_context(
         request, db, customer, subscriber_ids, work_order_id
     )
@@ -494,7 +423,7 @@ def customer_bandwidth_series(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    subscription = _resolve_customer_subscription(db, customer)
+    subscription = resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse({"data": [], "total": 0, "source": "postgres"})
 
@@ -518,7 +447,7 @@ def customer_bandwidth_stats(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    subscription = _resolve_customer_subscription(db, customer)
+    subscription = resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse(
             {
@@ -549,73 +478,16 @@ def customer_bandwidth_live(
     customer = get_current_customer_from_request(request, db)
     if not customer:
         return JSONResponse({"detail": "Unauthorized"}, status_code=401)
-    subscription = _resolve_customer_subscription(db, customer)
+    subscription = resolve_customer_subscription(db, customer)
     if not subscription:
         return JSONResponse({"detail": "No active subscription found"}, status_code=404)
 
-    subscription_id = subscription.id
-
-    async def event_generator():
-        metrics_store = get_metrics_store()
-
-        while True:
-            if await request.is_disconnected():
-                break
-
-            current = {"rx_bps": 0.0, "tx_bps": 0.0}
-            try:
-                current = await metrics_store.get_current_bandwidth(
-                    str(subscription_id)
-                )
-            except Exception:
-                logger.debug(
-                    "Failed to fetch current bandwidth for subscription %s",
-                    subscription_id,
-                    exc_info=True,
-                )
-
-            try:
-                if current.get("rx_bps", 0) <= 0 and current.get("tx_bps", 0) <= 0:
-                    sse_db = SessionLocal()
-                    try:
-                        cutoff = datetime.now(UTC) - timedelta(minutes=2)
-                        latest_sample = (
-                            sse_db.query(BandwidthSample)
-                            .filter(
-                                BandwidthSample.subscription_id == subscription_id,
-                                BandwidthSample.sample_at >= cutoff,
-                            )
-                            .order_by(BandwidthSample.sample_at.desc())
-                            .first()
-                        )
-                        if latest_sample:
-                            current = {
-                                "rx_bps": float(latest_sample.rx_bps or 0),
-                                "tx_bps": float(latest_sample.tx_bps or 0),
-                            }
-                    finally:
-                        sse_db.close()
-            except Exception:
-                logger.debug(
-                    "Failed to enrich SSE bandwidth stream for subscription %s",
-                    subscription_id,
-                    exc_info=True,
-                )
-
-            now = datetime.now(UTC)
-            yield {
-                "event": "bandwidth",
-                "data": json.dumps(
-                    {
-                        "timestamp": now.isoformat(),
-                        "rx_bps": float(current.get("rx_bps", 0) or 0),
-                        "tx_bps": float(current.get("tx_bps", 0) or 0),
-                    }
-                ),
-            }
-            await asyncio.sleep(1)
-
-    return EventSourceResponse(event_generator())
+    return EventSourceResponse(
+        customer_portal_bandwidth_service.live_bandwidth_events(
+            subscription_id=subscription.id,
+            is_disconnected=request.is_disconnected,
+        )
+    )
 
 
 @router.get("/speedtest", response_class=HTMLResponse)

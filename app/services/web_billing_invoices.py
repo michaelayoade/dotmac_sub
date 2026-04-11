@@ -32,7 +32,9 @@ from app.services.audit_helpers import (
     build_changes_metadata,
     extract_changes,
     format_changes,
+    log_audit_event,
 )
+from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
 PROFORMA_TAG = "[PROFORMA]"
@@ -295,9 +297,9 @@ def create_invoice_from_form(
     line_items_json: str | None,
     issue_immediately: str | None,
     send_notification: str | None,
-    parse_uuid,
-    parse_datetime,
-    parse_decimal,
+    parse_uuid=parse_uuid,
+    parse_datetime=parse_datetime,
+    parse_decimal=parse_decimal,
 ) -> tuple[Invoice, str | None]:
     """Process invoice-create web form and return created invoice."""
     resolved_account_id = account_id
@@ -373,8 +375,8 @@ def update_invoice_from_form(
     memo: str | None,
     proforma_invoice: str | None,
     line_items_json: str | None,
-    parse_uuid,
-    parse_datetime,
+    parse_uuid=parse_uuid,
+    parse_datetime=parse_datetime,
 ) -> tuple[Invoice, dict[str, object] | None]:
     """Process invoice-update web form and return updated invoice + audit metadata."""
     before = billing_service.invoices.get(db=db, invoice_id=invoice_id)
@@ -406,6 +408,126 @@ def update_invoice_from_form(
     return after, metadata_payload
 
 
+def create_invoice_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    account_id: str | None,
+    customer_ref: str | None,
+    invoice_number: str | None,
+    status: str | None,
+    currency: str,
+    issued_at: str | None,
+    due_at: str | None,
+    memo: str | None,
+    proforma_invoice: str | None,
+    line_description: list[str],
+    line_quantity: list[str],
+    line_unit_price: list[str],
+    line_tax_rate_id: list[str],
+    line_items_json: str | None,
+    issue_immediately: str | None,
+    send_notification: str | None,
+) -> tuple[Invoice, str | None]:
+    invoice, resolved_account_id = create_invoice_from_form(
+        db,
+        account_id=account_id,
+        customer_ref=customer_ref,
+        invoice_number=invoice_number,
+        status=status,
+        currency=currency,
+        issued_at=issued_at,
+        due_at=due_at,
+        memo=memo,
+        proforma_invoice=proforma_invoice,
+        line_description=line_description,
+        line_quantity=line_quantity,
+        line_unit_price=line_unit_price,
+        line_tax_rate_id=line_tax_rate_id,
+        line_items_json=line_items_json,
+        issue_immediately=issue_immediately,
+        send_notification=send_notification,
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create",
+        entity_type="invoice",
+        entity_id=str(invoice.id),
+        actor_id=actor_id,
+        metadata={"invoice_number": invoice.invoice_number},
+    )
+    return invoice, resolved_account_id
+
+
+def update_invoice_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+    account_id: str | None,
+    invoice_number: str | None,
+    status: str | None,
+    currency: str,
+    issued_at: str | None,
+    due_at: str | None,
+    memo: str | None,
+    proforma_invoice: str | None,
+    line_items_json: str | None,
+) -> Invoice:
+    invoice, metadata_payload = update_invoice_from_form(
+        db,
+        invoice_id=invoice_id,
+        account_id=account_id,
+        invoice_number=invoice_number,
+        status=status,
+        currency=currency,
+        issued_at=issued_at,
+        due_at=due_at,
+        memo=memo,
+        proforma_invoice=proforma_invoice,
+        line_items_json=line_items_json,
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        actor_id=actor_id,
+        metadata=metadata_payload,
+    )
+    return invoice
+
+
+def generate_invoice_from_subscription_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    subscriber_id: str,
+    subscription_id: str,
+) -> Invoice:
+    from app.services.billing.invoices import Invoices
+
+    invoice = Invoices.create_for_subscription(db, subscriber_id, subscription_id)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="generate_from_subscription",
+        entity_type="invoice",
+        entity_id=str(invoice.id),
+        actor_id=actor_id,
+        metadata={
+            "invoice_number": invoice.invoice_number,
+            "subscription_id": subscription_id,
+        },
+    )
+    return invoice
+
+
 def apply_credit_note_to_invoice(
     db: Session,
     *,
@@ -434,8 +556,8 @@ def create_invoice_line_from_form(
     quantity: str,
     unit_price: str,
     tax_rate_id: str | None,
-    parse_uuid,
-    parse_decimal,
+    parse_uuid=parse_uuid,
+    parse_decimal=parse_decimal,
 ) -> None:
     """Create invoice line from raw web form values."""
     payload = InvoiceLineCreate(
@@ -602,3 +724,94 @@ def load_invoice_detail_data(
         "pdf_export": pdf_export,
         "is_proforma": is_proforma_invoice(invoice),
     }
+
+
+def convert_proforma_to_final_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+) -> Invoice:
+    converted = convert_proforma_to_final(db, invoice_id=invoice_id)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="convert",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        actor_id=actor_id,
+        metadata={
+            "from": "proforma",
+            "to": "final",
+            "invoice_number": converted.invoice_number,
+        },
+    )
+    return converted
+
+
+def apply_credit_note_to_invoice_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+    credit_note_id: str,
+    amount: str | None,
+    memo: str | None,
+) -> dict[str, object] | None:
+    metadata_payload = apply_credit_note_to_invoice(
+        db,
+        invoice_id=invoice_id,
+        credit_note_id=credit_note_id,
+        amount=parse_decimal(amount, "amount") if amount else None,
+        memo=memo.strip() if memo else None,
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="apply",
+        entity_type="credit_note",
+        entity_id=str(credit_note_id),
+        actor_id=actor_id,
+        metadata=metadata_payload,
+    )
+    return metadata_payload
+
+
+def send_invoice_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+) -> Invoice | None:
+    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id)
+    if invoice:
+        maybe_send_invoice_notification(db, invoice=invoice, send_notification="1")
+    log_audit_event(
+        db=db,
+        request=request,
+        action="send",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        actor_id=actor_id,
+    )
+    return invoice
+
+
+def void_invoice_web(
+    db: Session,
+    *,
+    request,
+    actor_id: str | None,
+    invoice_id: str,
+) -> None:
+    log_audit_event(
+        db=db,
+        request=request,
+        action="void",
+        entity_type="invoice",
+        entity_id=invoice_id,
+        actor_id=actor_id,
+    )

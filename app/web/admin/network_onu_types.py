@@ -10,7 +10,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_network_onu_types as web_onu_types_service
 from app.services.auth_dependencies import require_permission
-from app.services.network.onu_types import onu_types
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -146,5 +145,5 @@ def onu_type_delete(
     db: Session = Depends(get_db),
 ) -> Response:
     """Soft-delete an ONU type."""
-    onu_types.delete(db, onu_type_id)
+    web_onu_types_service.handle_delete(db, onu_type_id)
     return RedirectResponse("/admin/network/onu-types", status_code=303)

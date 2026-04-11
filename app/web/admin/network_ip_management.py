@@ -1,7 +1,5 @@
 """Admin network IP management and VLAN web routes."""
 
-from urllib.parse import quote_plus
-
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -9,12 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_ip as web_network_ip_service
+from app.services import web_network_ip_actions as web_network_ip_actions_service
 from app.services import web_network_vlans as web_network_vlans_service
-from app.services.audit_helpers import (
-    build_audit_activities,
-    build_audit_activities_for_types,
-    log_audit_event,
-)
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -66,7 +60,7 @@ def ip_management(
             **state,
             "notice": notice,
             "warning": warning,
-            "activities": build_audit_activities_for_types(
+            "activities": web_network_ip_actions_service.activity_for_types(
                 db,
                 ["ip_pool", "ip_block"],
                 limit=5,
@@ -81,36 +75,9 @@ def ip_management(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def reconcile_ip_pool_memberships(request: Request, db: Session = Depends(get_db)):
-    result = web_network_ip_service.reconcile_ipv4_pool_memberships(db)
-    notice = (
-        "Reconciled IPv4 address pool membership: "
-        f"{result['updated']} updated, {result['unchanged']} unchanged."
-    )
-    warning_parts: list[str] = []
-    if result["unmatched"]:
-        warning_parts.append(
-            f"{result['unmatched']} address(es) did not match any configured pool"
-        )
-    if result["conflicts"]:
-        warning_parts.append(
-            f"{result['conflicts']} address(es) matched multiple pools"
-        )
-    if result["invalid"]:
-        warning_parts.append(f"{result['invalid']} invalid address row(s)")
-    redirect_url = f"/admin/network/ip-management?notice={quote_plus(notice)}"
-    if warning_parts:
-        redirect_url += f"&warning={quote_plus('. '.join(warning_parts))}"
-    current_user = getattr(request.state, "auth", None)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="reconcile",
-        entity_type="ip_pool",
-        entity_id=None,
-        actor_id=str(current_user.get("sub"))
-        if isinstance(current_user, dict) and current_user.get("sub")
-        else None,
-        metadata=result,
+    redirect_url = web_network_ip_actions_service.reconcile_ipv4_pool_memberships_redirect(
+        request,
+        db,
     )
     return RedirectResponse(url=redirect_url, status_code=303)
 
@@ -241,53 +208,18 @@ def ip_blocks_redirect():
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ip_block_create(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    block_data = web_network_ip_service.parse_ip_block_form(form)
-    error = web_network_ip_service.validate_ip_block_values(block_data)
-
-    if error:
-        context = _base_context(
-            request, db, active_page="ip-management", active_menu="ip-address"
-        )
-        context.update(
-            {
-                "block": block_data,
-                "pools": web_network_ip_service.list_active_ip_pools(db),
-                "action_url": "/admin/network/ip-management/blocks",
-                "error": error,
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/network/ip-management/block_form.html", context
-        )
-
-    block, error = web_network_ip_service.create_ip_block(db, block_data)
-    if not error and block is not None:
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create",
-            entity_type="ip_block",
-            entity_id=str(block.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"cidr": block.cidr, "pool_id": str(block.pool_id)},
-        )
-        return RedirectResponse("/admin/network/ip-management", status_code=303)
+    result = web_network_ip_actions_service.create_ip_block_from_form(
+        request,
+        db,
+        parse_form_data_sync(request),
+    )
+    if result.success:
+        return RedirectResponse(result.redirect_url or "/admin/network/ip-management", status_code=303)
 
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
-    context.update(
-        {
-            "block": block_data,
-            "pools": web_network_ip_service.list_active_ip_pools(db),
-            "action_url": "/admin/network/ip-management/blocks",
-            "error": error or "Please correct the highlighted fields.",
-        }
-    )
+    context.update(result.form_context or {})
     return templates.TemplateResponse(
         "admin/network/ip-management/block_form.html", context
     )
@@ -299,52 +231,18 @@ def ip_block_create(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ip_pool_create(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    pool_values = web_network_ip_service.parse_ip_pool_form(form)
-    error = web_network_ip_service.validate_ip_pool_values(pool_values)
-    pool_data = web_network_ip_service.pool_form_snapshot(pool_values)
-
-    if error:
-        context = _base_context(
-            request, db, active_page="ip-management", active_menu="ip-address"
-        )
-        context.update(
-            {
-                "pool": pool_data,
-                "action_url": "/admin/network/ip-management/pools",
-                "error": error,
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/network/ip-management/pool_form.html", context
-        )
-
-    pool, error = web_network_ip_service.create_ip_pool(db, pool_values)
-    if not error and pool is not None:
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create",
-            entity_type="ip_pool",
-            entity_id=str(pool.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"name": pool.name, "cidr": pool.cidr},
-        )
-        return RedirectResponse("/admin/network/ip-management", status_code=303)
+    result = web_network_ip_actions_service.create_ip_pool_from_form(
+        request,
+        db,
+        parse_form_data_sync(request),
+    )
+    if result.success:
+        return RedirectResponse(result.redirect_url or "/admin/network/ip-management", status_code=303)
 
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
-    context.update(
-        {
-            "pool": pool_data,
-            "action_url": "/admin/network/ip-management/pools",
-            "error": error or "Please correct the highlighted fields.",
-        }
-    )
+    context.update(result.form_context or {})
     return templates.TemplateResponse(
         "admin/network/ip-management/pool_form.html", context
     )
@@ -364,7 +262,9 @@ def ip_pool_detail(request: Request, pool_id: str, db: Session = Depends(get_db)
             status_code=404,
         )
     state["pool"]
-    activities = build_audit_activities(db, "ip_pool", str(pool_id))
+    activities = web_network_ip_actions_service.activity_for_entity(
+        db, "ip_pool", str(pool_id)
+    )
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
@@ -408,69 +308,28 @@ def ip_pool_edit(request: Request, pool_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ip_pool_update(request: Request, pool_id: str, db: Session = Depends(get_db)):
-    pool = web_network_ip_service.get_ip_pool_for_edit(db, pool_id=pool_id)
-    if pool is None:
-        return templates.TemplateResponse(
-            "admin/errors/404.html",
-            {"request": request, "message": "IP Pool not found"},
-            status_code=404,
-        )
-
-    form = parse_form_data_sync(request)
-    pool_values = web_network_ip_service.parse_ip_pool_form(form)
-    error = web_network_ip_service.validate_ip_pool_values(pool_values)
-    pool_data = web_network_ip_service.pool_form_snapshot(
-        pool_values, pool_id=str(pool.id)
-    )
-
-    if error:
-        context = _base_context(
-            request, db, active_page="ip-management", active_menu="ip-address"
-        )
-        context.update(
-            {
-                "pool": pool_data,
-                "action_url": f"/admin/network/ip-management/pools/{pool_id}",
-                "error": error,
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/network/ip-management/pool_form.html", context
-        )
-
-    _, changes, error = web_network_ip_service.update_ip_pool(
+    result = web_network_ip_actions_service.update_ip_pool_from_form(
+        request,
         db,
         pool_id=pool_id,
-        values=pool_values,
+        form=parse_form_data_sync(request),
     )
-    if not error:
-        metadata_payload = {"changes": changes} if changes else None
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update",
-            entity_type="ip_pool",
-            entity_id=str(pool_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata_payload,
+    if result.not_found_message:
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": result.not_found_message},
+            status_code=404,
         )
+    if result.success:
         return RedirectResponse(
-            f"/admin/network/ip-management/pools/{pool_id}", status_code=303
+            result.redirect_url or f"/admin/network/ip-management/pools/{pool_id}",
+            status_code=303,
         )
 
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
-    context.update(
-        {
-            "pool": pool_data,
-            "action_url": f"/admin/network/ip-management/pools/{pool_id}",
-            "error": error or "Please correct the highlighted fields.",
-        }
-    )
+    context.update(result.form_context or {})
     return templates.TemplateResponse(
         "admin/network/ip-management/pool_form.html", context
     )
@@ -506,7 +365,7 @@ def ip_assignments_list(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
-            "activities": build_audit_activities_for_types(
+            "activities": web_network_ip_actions_service.activity_for_types(
                 db,
                 ["ip_pool", "ip_block"],
                 limit=5,
@@ -562,7 +421,7 @@ def ipv4_addresses_list(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
-            "activities": build_audit_activities_for_types(
+            "activities": web_network_ip_actions_service.activity_for_types(
                 db,
                 ["ip_pool", "ip_block"],
                 limit=5,
@@ -713,76 +572,29 @@ def ipv4_assignment_form(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ipv4_assignment_submit(request: Request, db: Session = Depends(get_db)):
-    form = parse_form_data_sync(request)
-    pool_id = str(form.get("pool_id") or "").strip()
-    block_id = str(form.get("block_id") or "").strip() or None
-    ip_address = str(form.get("ip_address") or "").strip()
-    subscriber_id = str(form.get("subscriber_id") or "").strip()
-    subscription_id = str(form.get("subscription_id") or "").strip() or None
-    return_to = (
-        str(form.get("return_to") or "").strip()
-        or f"/admin/network/ip-management/ipv4-networks/{pool_id}"
-    )
-
-    state = web_network_ip_service.build_ipv4_assignment_form_data(
+    result = web_network_ip_actions_service.assign_ipv4_address_from_form(
+        request,
         db,
-        pool_id=pool_id,
-        ip_address=ip_address,
-        block_id=block_id,
+        parse_form_data_sync(request),
     )
-    if state is None:
+    if result.not_found_message:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": "IPv4 address not found for this range"},
+            {"request": request, "message": result.not_found_message},
             status_code=404,
         )
+    if result.success:
+        return RedirectResponse(result.redirect_url or "/admin/network/ip-management", status_code=303)
 
-    try:
-        result = web_network_ip_service.assign_ipv4_address(
-            db,
-            pool_id=pool_id,
-            ip_address=ip_address,
-            subscriber_id=subscriber_id,
-            subscription_id=subscription_id,
-            block_id=block_id,
-        )
-    except Exception as exc:
+    if result.form_context:
         context = _base_context(
             request, db, active_page="ipv4-networks", active_menu="ip-address"
         )
-        context.update(
-            {
-                **state,
-                "return_to": return_to,
-                "action_url": "/admin/network/ip-management/ipv4-assign",
-                "error": str(exc),
-                "subscriber_id": subscriber_id or state.get("subscriber_id"),
-                "subscription_id": subscription_id or state.get("subscription_id"),
-            }
-        )
+        context.update(result.form_context)
         return templates.TemplateResponse(
             "admin/network/ip-management/ipv4_assignment_form.html", context
         )
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="reassign" if result.get("reassigned") else "assign",
-        entity_type="ip_assignment",
-        entity_id=str(getattr(result.get("assignment"), "id", "") or ""),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "pool_id": pool_id,
-            "block_id": block_id,
-            "ip_address": ip_address,
-            "subscriber_id": subscriber_id,
-            "subscription_id": subscription_id,
-        },
-    )
-    return RedirectResponse(return_to, status_code=303)
+    return RedirectResponse("/admin/network/ip-management", status_code=303)
 
 
 @router.get(
@@ -800,7 +612,7 @@ def ipv6_addresses_list(request: Request, db: Session = Depends(get_db)):
     context.update(
         {
             **state,
-            "activities": build_audit_activities_for_types(
+            "activities": web_network_ip_actions_service.activity_for_types(
                 db,
                 ["ip_pool", "ip_block"],
                 limit=5,
@@ -885,79 +697,21 @@ def ipv6_network_new(request: Request, db: Session = Depends(get_db)):
 )
 def ipv6_network_create(request: Request, db: Session = Depends(get_db)):
     """Create IPv6 network prefix from dedicated form."""
-    form = parse_form_data_sync(request)
-    pool_values = web_network_ip_service.parse_ipv6_network_form(form)
-    error = web_network_ip_service.validate_ip_pool_values(pool_values)
-
-    if error:
-        context = _base_context(
-            request, db, active_page="ipv6-networks", active_menu="ip-address"
-        )
-        context.update(
-            {
-                "form_values": {
-                    "title": str(form.get("title") or ""),
-                    "network": str(form.get("network") or ""),
-                    "prefix_length": str(form.get("prefix_length") or "64"),
-                    "comment": str(form.get("comment") or ""),
-                    "location": str(form.get("location") or ""),
-                    "category": str(form.get("category") or "Dev"),
-                    "network_type": str(form.get("network_type") or "EndNet"),
-                    "usage_type": str(form.get("usage_type") or "Static"),
-                    "router": str(form.get("router") or ""),
-                    "gateway": str(form.get("gateway") or ""),
-                    "dns_primary": str(form.get("dns_primary") or ""),
-                    "dns_secondary": str(form.get("dns_secondary") or ""),
-                    "is_active": form.get("is_active") == "true",
-                },
-                "error": error,
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/network/ip-management/ipv6_network_form.html", context
-        )
-
-    pool, error = web_network_ip_service.create_ip_pool(db, pool_values)
-    if not error and pool is not None:
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create",
-            entity_type="ip_pool",
-            entity_id=str(pool.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"name": pool.name, "cidr": pool.cidr, "ip_version": "ipv6"},
-        )
+    result = web_network_ip_actions_service.create_ipv6_network_from_form(
+        request,
+        db,
+        parse_form_data_sync(request),
+    )
+    if result.success:
         return RedirectResponse(
-            "/admin/network/ip-management/ipv6-networks", status_code=303
+            result.redirect_url or "/admin/network/ip-management/ipv6-networks",
+            status_code=303,
         )
 
     context = _base_context(
         request, db, active_page="ipv6-networks", active_menu="ip-address"
     )
-    context.update(
-        {
-            "form_values": {
-                "title": str(form.get("title") or ""),
-                "network": str(form.get("network") or ""),
-                "prefix_length": str(form.get("prefix_length") or "64"),
-                "comment": str(form.get("comment") or ""),
-                "location": str(form.get("location") or ""),
-                "category": str(form.get("category") or "Dev"),
-                "network_type": str(form.get("network_type") or "EndNet"),
-                "usage_type": str(form.get("usage_type") or "Static"),
-                "router": str(form.get("router") or ""),
-                "gateway": str(form.get("gateway") or ""),
-                "dns_primary": str(form.get("dns_primary") or ""),
-                "dns_secondary": str(form.get("dns_secondary") or ""),
-                "is_active": form.get("is_active") == "true",
-            },
-            "error": error or "Please correct the highlighted fields.",
-        }
-    )
+    context.update(result.form_context or {})
     return templates.TemplateResponse(
         "admin/network/ip-management/ipv6_network_form.html", context
     )
@@ -1022,7 +776,9 @@ def vlan_detail(request: Request, vlan_id: str, db: Session = Depends(get_db)):
             status_code=404,
         )
 
-    activities = build_audit_activities(db, "vlan", str(vlan_id))
+    activities = web_network_ip_actions_service.activity_for_entity(
+        db, "vlan", str(vlan_id)
+    )
     context = _base_context(request, db, active_page="vlans")
     context.update({**state, "activities": activities})
     return templates.TemplateResponse("admin/network/vlans/detail.html", context)

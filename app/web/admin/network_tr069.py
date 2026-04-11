@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_method_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -91,7 +90,9 @@ def tr069_acs_create(request: Request, db: Session = Depends(get_db)):
         return templates.TemplateResponse("admin/network/tr069/acs_form.html", context)
 
     try:
-        server = web_network_tr069_service.create_acs_server(db, values)
+        server = web_network_tr069_service.create_acs_server(
+            db, values, request=request
+        )
     except Exception as exc:
         context = _base_context(request, db, active_page="tr069")
         context.update(
@@ -103,22 +104,6 @@ def tr069_acs_create(request: Request, db: Session = Depends(get_db)):
         )
         return templates.TemplateResponse("admin/network/tr069/acs_form.html", context)
 
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="tr069_acs_server",
-        entity_id=str(server.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "name": server.name,
-            "base_url": server.base_url,
-            "cwmp_url": server.cwmp_url,
-        },
-    )
     return RedirectResponse(
         "/admin/network/tr069?status=success&message=ACS%20server%20created",
         status_code=303,
@@ -168,7 +153,7 @@ def tr069_acs_update(request: Request, acs_id: str, db: Session = Depends(get_db
 
     try:
         server = web_network_tr069_service.update_acs_server(
-            db, acs_id=acs_id, values=values
+            db, acs_id=acs_id, values=values, request=request
         )
     except Exception as exc:
         context = _base_context(request, db, active_page="tr069")
@@ -183,22 +168,6 @@ def tr069_acs_update(request: Request, acs_id: str, db: Session = Depends(get_db
         )
         return templates.TemplateResponse("admin/network/tr069/acs_form.html", context)
 
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="tr069_acs_server",
-        entity_id=str(server.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "name": server.name,
-            "base_url": server.base_url,
-            "cwmp_url": server.cwmp_url,
-        },
-    )
     return RedirectResponse(
         "/admin/network/tr069?status=success&message=ACS%20server%20updated",
         status_code=303,
@@ -261,8 +230,6 @@ def tr069_push_enforcement_preset(
     This creates a provision and preset in GenieACS that enforces this
     ACS server's URL on every device inform (bootstrap, boot, periodic).
     """
-    from app.services.tr069 import push_acs_enforcement_preset
-
     form = parse_form_data_sync(request)
     on_bootstrap = str(form.get("on_bootstrap", "1")).strip() in ("1", "true", "on")
     on_boot = str(form.get("on_boot", "1")).strip() in ("1", "true", "on")
@@ -270,29 +237,14 @@ def tr069_push_enforcement_preset(
     precondition = str(form.get("precondition") or "").strip()
 
     try:
-        result = push_acs_enforcement_preset(
+        result = web_network_tr069_service.push_acs_enforcement_preset(
             db,
             acs_id,
             on_bootstrap=on_bootstrap,
             on_boot=on_boot,
             on_periodic=on_periodic,
             precondition=precondition,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="create_enforcement_preset",
-            entity_type="tr069_acs_server",
-            entity_id=acs_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "preset_id": result.get("preset_id"),
-                "provision_id": result.get("provision_id"),
-                "cwmp_url": result.get("cwmp_url"),
-            },
         )
         message = quote_plus(
             f"ACS enforcement preset created: {result.get('preset_id')}"
@@ -314,25 +266,9 @@ def tr069_remove_enforcement_preset(
     acs_id: str, request: Request, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Remove ACS enforcement preset from GenieACS."""
-    from app.services.tr069 import remove_acs_enforcement_preset
-
     try:
-        result = remove_acs_enforcement_preset(db, acs_id)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="remove_enforcement_preset",
-            entity_type="tr069_acs_server",
-            entity_id=acs_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "preset_id": result.get("preset_id"),
-                "provision_id": result.get("provision_id"),
-                "removed": result.get("removed"),
-            },
+        result = web_network_tr069_service.remove_acs_enforcement_preset(
+            db, acs_id, request=request
         )
         message = quote_plus("ACS enforcement preset removed")
         return RedirectResponse(
@@ -372,24 +308,9 @@ def tr069_push_runtime_preset(
     This creates a provision and preset that collects operational parameters
     (WiFi clients, WAN status, PPPoE status, LAN mode) on device inform.
     """
-    from app.services.tr069 import push_runtime_collection_preset
-
     try:
-        result = push_runtime_collection_preset(db, acs_id)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create_runtime_preset",
-            entity_type="tr069_acs_server",
-            entity_id=acs_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "preset_id": result.get("preset_id"),
-                "provision_id": result.get("provision_id"),
-            },
+        result = web_network_tr069_service.push_runtime_collection_preset(
+            db, acs_id, request=request
         )
         message = quote_plus(
             f"Runtime collection preset created: {result.get('preset_id')}"
@@ -442,23 +363,7 @@ def tr069_create_ont(
         ont, created = web_network_tr069_service.create_ont_from_tr069_device(
             db,
             tr069_device_id=device_id,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="create",
-            entity_type="ont",
-            entity_id=str(ont.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "source": "tr069_device",
-                "tr069_device_id": device_id,
-                "created_new": created,
-                "serial_number": ont.serial_number,
-            },
         )
         return RedirectResponse(
             f"/admin/network/onts/{ont.id}?notice={quote_plus('ONT created from TR-069 device' if created else 'Existing ONT opened from TR-069 match')}",
@@ -512,21 +417,7 @@ def tr069_config_push(
             tr069_device_id=device_id,
             action_key=action_key,
             value=value,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="config_push",
-            entity_type="tr069_device",
-            entity_id=device_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "config_action": action_key,
-                "job_id": str(job.id),
-            },
         )
         message = quote_plus(f"Config pushed: {job.name}")
         return RedirectResponse(
@@ -557,22 +448,7 @@ def tr069_firmware_update(
             tr069_device_id=device_id,
             firmware_url=firmware_url,
             filename=filename,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="firmware_update",
-            entity_type="tr069_device",
-            entity_id=device_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "firmware_url": firmware_url,
-                "filename": filename,
-                "job_id": str(job.id),
-            },
         )
         message = quote_plus(f"Firmware update queued: {job.name}")
         return RedirectResponse(
@@ -607,25 +483,11 @@ def tr069_bulk_action(
             raise ValueError("No action selected")
 
         task_id = web_network_tr069_service.queue_bulk_action(
+            db,
             device_ids=device_ids,
             action=action,
             params=None,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="bulk_action",
-            entity_type="tr069_devices",
-            entity_id=task_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "action": action,
-                "device_count": len(device_ids),
-                "task_id": task_id,
-            },
         )
         message = quote_plus(f"Bulk {action} queued for {len(device_ids)} device(s)")
         return RedirectResponse(
@@ -666,24 +528,7 @@ def tr069_nat_forward(
             internal_port=internal_port,
             protocol=protocol,
             description=description,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="nat_port_forward",
-            entity_type="tr069_device",
-            entity_id=device_id,
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "external_port": external_port,
-                "internal_ip": internal_ip,
-                "internal_port": internal_port,
-                "protocol": protocol,
-                "job_id": str(job.id),
-            },
         )
         message = quote_plus(f"NAT forward rule queued: {external_port} → {internal_ip}:{internal_port}")
         return RedirectResponse(

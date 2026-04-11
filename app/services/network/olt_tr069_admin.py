@@ -11,15 +11,20 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any
-from urllib.parse import urlparse
 
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.domain_settings import SettingDomain
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.models.tr069 import Tr069AcsServer
 from app.services import settings_spec
+from app.services.credential_crypto import decrypt_credential
+from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.network.tr069_profile_matching import match_tr069_profile
 
 logger = logging.getLogger(__name__)
 
@@ -76,79 +81,17 @@ def apply_default_acs_server(
         values["tr069_acs_server_id"] = str(server.id)
 
 
-def normalize_acs_url(value: str | None) -> str:
-    """Normalize ACS URLs for profile matching."""
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    scheme = (parsed.scheme or "").lower()
-    netloc = (parsed.netloc or "").lower()
-    path = (parsed.path or "").rstrip("/")
-    if scheme and netloc:
-        return f"{scheme}://{netloc}{path}"
-    return raw.rstrip("/").lower()
-
-
-def acs_host(value: str | None) -> str:
-    """Extract the ACS host from a URL or raw host string."""
-    raw = str(value or "").strip()
-    if not raw:
-        return ""
-    parsed = urlparse(raw)
-    host = parsed.hostname or ""
-    if host:
-        return host.lower()
-    return raw.split("//", 1)[-1].split(":", 1)[0].split("/", 1)[0].lower()
-
-
-def match_tr069_profile(
-    profiles: list[Any],
-    *,
-    acs_url: str,
-    acs_username: str = "",
-) -> Any | None:
-    """Find the OLT TR-069 profile that best matches the target ACS."""
-    normalized_url = normalize_acs_url(acs_url)
-    target_host = acs_host(acs_url)
-    normalized_username = str(acs_username or "").strip()
-
-    for profile in profiles:
-        profile_url = normalize_acs_url(getattr(profile, "acs_url", None))
-        if not profile_url or profile_url != normalized_url:
-            continue
-        profile_username = str(getattr(profile, "acs_username", "") or "").strip()
-        if not normalized_username or not profile_username:
-            return profile
-        if profile_username == normalized_username:
-            return profile
-
-    if target_host:
-        for profile in profiles:
-            profile_url = normalize_acs_url(getattr(profile, "acs_url", None))
-            if profile_url and acs_host(profile_url) == target_host:
-                return profile
-
-    for profile in profiles:
-        if "dotmac" in str(getattr(profile, "name", "") or "").lower():
-            return profile
-    return None
-
-
 def linked_acs_profile_payload(olt: OLTDevice) -> dict[str, str] | None:
     """Build the ACS payload used to create or match an OLT TR-069 profile."""
-    from app.services import web_network_olts as web_network_olts_service
-
     server = getattr(olt, "tr069_acs_server", None)
     if not server or not server.cwmp_url:
         return None
-    password = (
-        web_network_olts_service.decrypt_credential(server.cwmp_password)
-        if server.cwmp_password
-        else ""
-    )
+    password = decrypt_credential(server.cwmp_password) if server.cwmp_password else ""
+    raw_name = str(getattr(server, "name", "") or "ACS")
+    profile_suffix = re.sub(r"[^A-Za-z0-9 ._-]+", " ", raw_name).strip()
+    profile_suffix = re.sub(r"\s+", " ", profile_suffix) or "ACS"
     return {
-        "profile_name": "DotMac-ACS",
+        "profile_name": f"ACS {profile_suffix[:48]}",
         "acs_url": server.cwmp_url,
         "username": server.cwmp_username or "",
         "password": password or "",
@@ -159,16 +102,30 @@ def ensure_tr069_profile_for_linked_acs(
     olt: OLTDevice,
 ) -> tuple[bool, str, int | None]:
     """Create or verify the TR-069 profile that matches the linked ACS."""
-    from app.services import web_network_olts as web_network_olts_service
-
     payload = linked_acs_profile_payload(olt)
     if payload is None:
+        logger.warning(
+            "TR-069 profile ensure skipped: olt=%s olt_id=%s reason=no_linked_acs",
+            olt.name,
+            olt.id,
+        )
         return False, "No linked TR-069 ACS server is configured for this OLT", None
 
-    ok, msg, profiles = web_network_olts_service.olt_ssh_service.get_tr069_server_profiles(
-        olt
+    logger.info(
+        "TR-069 profile ensure requested: olt=%s olt_id=%s acs_url=%s username_set=%s",
+        olt.name,
+        olt.id,
+        payload["acs_url"],
+        bool(payload["username"]),
     )
+    ok, msg, profiles = olt_ssh_service.get_tr069_server_profiles(olt)
     if not ok:
+        logger.warning(
+            "TR-069 profile ensure failed while reading profiles: olt=%s olt_id=%s message=%s",
+            olt.name,
+            olt.id,
+            msg,
+        )
         return False, msg, None
 
     existing = match_tr069_profile(
@@ -177,27 +134,51 @@ def ensure_tr069_profile_for_linked_acs(
         acs_username=payload["username"],
     )
     if existing is not None:
+        logger.info(
+            "TR-069 profile ensure matched existing profile: olt=%s olt_id=%s profile_id=%s profile_name=%s",
+            olt.name,
+            olt.id,
+            existing.profile_id,
+            existing.name,
+        )
         return (
             True,
             f"TR-069 profile already exists: {existing.name} (ID {existing.profile_id})",
             existing.profile_id,
         )
 
-    ok, msg = web_network_olts_service.olt_ssh_service.create_tr069_server_profile(
+    logger.info(
+        "TR-069 profile ensure creating profile: olt=%s olt_id=%s profile_name=%s",
+        olt.name,
+        olt.id,
+        payload["profile_name"],
+    )
+    ok, msg = olt_ssh_service.create_tr069_server_profile(
         olt,
         profile_name=payload["profile_name"],
         acs_url=payload["acs_url"],
         username=payload["username"],
         password=payload["password"],
-        inform_interval=300,
+        inform_interval=getattr(olt.tr069_acs_server, "periodic_inform_interval", 300)
+        or 300,
     )
     if not ok:
+        logger.warning(
+            "TR-069 profile ensure create failed: olt=%s olt_id=%s message=%s",
+            olt.name,
+            olt.id,
+            msg,
+        )
         return False, msg, None
 
-    ok, msg, profiles = web_network_olts_service.olt_ssh_service.get_tr069_server_profiles(
-        olt
-    )
+    ok, msg, profiles = olt_ssh_service.get_tr069_server_profiles(olt)
     if not ok:
+        logger.warning(
+            "TR-069 profile ensure failed while verifying created profile: olt=%s olt_id=%s message=%s",
+            olt.name,
+            olt.id,
+            msg,
+        )
         return False, msg, None
 
     existing = match_tr069_profile(
@@ -206,13 +187,54 @@ def ensure_tr069_profile_for_linked_acs(
         acs_username=payload["username"],
     )
     if existing is None:
+        logger.warning(
+            "TR-069 profile ensure created profile but could not verify it: olt=%s olt_id=%s profile_name=%s",
+            olt.name,
+            olt.id,
+            payload["profile_name"],
+        )
         return False, "Profile created but could not be verified on the OLT", None
+    logger.info(
+        "TR-069 profile ensure created and verified profile: olt=%s olt_id=%s profile_id=%s profile_name=%s",
+        olt.name,
+        olt.id,
+        existing.profile_id,
+        existing.name,
+    )
     return True, msg, existing.profile_id
+
+
+def ensure_tr069_profile_for_linked_acs_audited(
+    db: Session,
+    olt: OLTDevice,
+    *,
+    request: Request | None = None,
+) -> tuple[bool, str, int | None]:
+    ok, message, profile_id = ensure_tr069_profile_for_linked_acs(olt)
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="init_tr069",
+        entity_id=olt.id,
+        metadata={"success": ok, "message": message},
+    )
+    return ok, message, profile_id
+
+
+def ensure_tr069_profile_for_olt_audited(
+    db: Session,
+    olt_id: str,
+    *,
+    request: Request | None = None,
+) -> tuple[bool, str, int | None]:
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", None
+    return ensure_tr069_profile_for_linked_acs_audited(db, olt, request=request)
 
 
 def queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     """Push ACS ManagementServer parameters to all active ONTs under an OLT."""
-    from app.services import web_network_olts as web_network_olts_service
     from app.services.network._resolve import resolve_genieacs_with_reason
 
     stats = {
@@ -252,7 +274,7 @@ def queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
             server.cwmp_username
         )
     if server.cwmp_password:
-        password = web_network_olts_service.decrypt_credential(server.cwmp_password)
+        password = decrypt_credential(server.cwmp_password)
         if password:
             acs_params["Device.ManagementServer.Password"] = password
             acs_params["InternetGatewayDevice.ManagementServer.Password"] = password
@@ -299,15 +321,11 @@ def get_tr069_profiles_context(
     db: Session, olt_id: str
 ) -> tuple[bool, str, list[dict[str, Any]], dict[str, Any]]:
     """Read TR-069 server profiles from an OLT and prepare template context."""
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found", [], {}
 
-    ok, message, profiles = web_network_olts_service.olt_ssh_service.get_tr069_server_profiles(
-        olt
-    )
+    ok, message, profiles = olt_ssh_service.get_tr069_server_profiles(olt)
     profiles_data = [
         {
             "profile_id": profile.profile_id,
@@ -379,9 +397,7 @@ def handle_create_tr069_profile(
     inform_interval: int = 300,
 ) -> tuple[bool, str]:
     """Validate and create a TR-069 server profile on an OLT."""
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found"
 
@@ -392,11 +408,9 @@ def handle_create_tr069_profile(
         acs_url = str(acs.cwmp_url or "").strip()
         username = username or str(acs.cwmp_username or "").strip()
         if not password and acs.cwmp_password:
-            password = (
-                web_network_olts_service.decrypt_credential(acs.cwmp_password) or ""
-            )
+            password = decrypt_credential(acs.cwmp_password) or ""
 
-    return web_network_olts_service.olt_ssh_service.create_tr069_server_profile(
+    return olt_ssh_service.create_tr069_server_profile(
         olt,
         profile_name=profile_name,
         acs_url=acs_url,
@@ -406,6 +420,38 @@ def handle_create_tr069_profile(
     )
 
 
+def handle_create_tr069_profile_audited(
+    db: Session,
+    olt_id: str,
+    *,
+    profile_name: str,
+    acs_url: str,
+    username: str = "",
+    password: str = "",
+    inform_interval: int = 300,
+    request: Request | None = None,
+) -> tuple[bool, str]:
+    ok, message = handle_create_tr069_profile(
+        db,
+        olt_id,
+        profile_name=profile_name,
+        acs_url=acs_url,
+        username=username,
+        password=password,
+        inform_interval=inform_interval,
+    )
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="create_tr069_profile",
+        entity_id=olt_id,
+        metadata={"result": "success" if ok else "error", "profile_name": profile_name},
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message
+
+
 def handle_rebind_tr069_profiles(
     db: Session,
     olt_id: str,
@@ -413,9 +459,7 @@ def handle_rebind_tr069_profiles(
     target_profile_id: int,
 ) -> dict[str, int | list[str]]:
     """Rebind selected ONTs to a TR-069 server profile."""
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return {"rebound": 0, "failed": 1, "errors": ["OLT not found"]}
 
@@ -444,13 +488,65 @@ def handle_rebind_tr069_profiles(
             continue
 
         fsp = f"{board}/{port}"
-        ok, msg = web_network_olts_service.olt_ssh_service.bind_tr069_server_profile(
+        ok, msg = olt_ssh_service.bind_tr069_server_profile(
             olt, fsp, onu_index, target_profile_id
         )
         if ok:
             rebound += 1
+            try:
+                from app.services.network.ont_provision_steps import (
+                    queue_wait_tr069_bootstrap,
+                )
+
+                wait_result = queue_wait_tr069_bootstrap(db, str(ont.id))
+                logger.info(
+                    "Queued TR-069 bootstrap wait after OLT rebind: olt_id=%s ont_id=%s serial=%s message=%s",
+                    olt_id,
+                    ont.id,
+                    ont.serial_number,
+                    wait_result.message,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to queue TR-069 bootstrap wait after OLT rebind: olt_id=%s ont_id=%s serial=%s error=%s",
+                    olt_id,
+                    ont.id,
+                    ont.serial_number,
+                    exc,
+                )
         else:
             failed += 1
             errors_list.append(f"ONT {ont.serial_number}: {msg}")
 
     return {"rebound": rebound, "failed": failed, "errors": errors_list}
+
+
+def handle_rebind_tr069_profiles_audited(
+    db: Session,
+    olt_id: str,
+    ont_ids: list[str],
+    target_profile_id: int,
+    *,
+    request: Request | None = None,
+) -> dict[str, int | list[str]]:
+    stats = handle_rebind_tr069_profiles(db, olt_id, ont_ids, target_profile_id)
+    rebound_val = stats.get("rebound", 0)
+    failed_val = stats.get("failed", 0)
+    rebound = rebound_val if isinstance(rebound_val, int) else 0
+    failed = failed_val if isinstance(failed_val, int) else 0
+    ok = rebound > 0
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="rebind_tr069_profiles",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "rebound": rebound,
+            "failed": failed,
+            "target_profile_id": target_profile_id,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return stats

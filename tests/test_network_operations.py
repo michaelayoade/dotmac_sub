@@ -699,10 +699,17 @@ class TestTrackedOperationContextManager:
 class _FakeResult:
     """Minimal ActionResult stand-in for testing."""
 
-    def __init__(self, success: bool, message: str = "", data: object = None):
+    def __init__(
+        self,
+        success: bool,
+        message: str = "",
+        data: object = None,
+        waiting: bool = False,
+    ):
         self.success = success
         self.message = message
         self.data = data
+        self.waiting = waiting
 
 
 class TestRunTrackedAction:
@@ -744,6 +751,31 @@ class TestRunTrackedAction:
         assert ops[0].status == NetworkOperationStatus.failed
         assert ops[0].error == "Device unreachable"
 
+    def test_waiting_path(self, db_session):
+        """Action returning waiting=True marks operation as waiting."""
+        target_id = _make_target_id()
+        result = run_tracked_action(
+            db_session,
+            NetworkOperationType.ont_set_pppoe,
+            NetworkOperationTargetType.ont,
+            target_id,
+            lambda: _FakeResult(
+                success=False,
+                message="Waiting for first inform.",
+                data={"waiting_reason": "next_inform"},
+                waiting=True,
+            ),
+        )
+        assert result.success is False
+        assert result.waiting is True
+
+        ops = network_operations.list_for_device(
+            db_session, NetworkOperationTargetType.ont, target_id
+        )
+        assert len(ops) == 1
+        assert ops[0].status == NetworkOperationStatus.waiting
+        assert ops[0].waiting_reason == "next_inform"
+
     def test_409_conflict_returns_failure(self, db_session):
         """Duplicate correlation key returns ActionResult(success=False)."""
         target_id = _make_target_id()
@@ -767,6 +799,36 @@ class TestRunTrackedAction:
         )
         assert result.success is False
         assert "already in progress" in result.message
+
+    def test_waiting_duplicate_returns_waiting_result(self, db_session):
+        """Duplicate waiting operation keeps callers in the waiting state."""
+        target_id = _make_target_id()
+        op = network_operations.start(
+            db_session,
+            NetworkOperationType.ont_set_pppoe,
+            NetworkOperationTargetType.ont,
+            target_id,
+            correlation_key="test_waiting_duplicate",
+        )
+        network_operations.mark_waiting(db_session, str(op.id), "next_inform")
+        db_session.flush()
+
+        result = run_tracked_action(
+            db_session,
+            NetworkOperationType.ont_set_pppoe,
+            NetworkOperationTargetType.ont,
+            target_id,
+            lambda: _FakeResult(success=True),
+            correlation_key="test_waiting_duplicate",
+        )
+
+        assert result.success is False
+        assert result.waiting is True
+        assert result.data == {
+            "operation_id": str(op.id),
+            "waiting_reason": "next_inform",
+        }
+        assert "waiting for the ONT to inform ACS" in result.message
 
     def test_exception_path(self, db_session):
         """Action raising exception marks op as failed and re-raises."""

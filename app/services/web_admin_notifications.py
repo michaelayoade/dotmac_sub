@@ -46,6 +46,7 @@ def notifications_menu(request: Request, db: Session):
             offset=0,
         )
     return templates.TemplateResponse(
+        request,
         "admin/partials/notifications_menu.html",
         {"request": request, "notifications": notifications},
     )

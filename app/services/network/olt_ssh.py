@@ -28,6 +28,10 @@ from app.services.network.olt_validators import (
     validate_subnet_mask,
     validate_vlan_id,
 )
+from app.services.network.tr069_profile_matching import (
+    match_tr069_profile,
+    normalize_acs_url,
+)
 
 # TextFSM-based parsers (preferred)
 try:
@@ -162,33 +166,131 @@ _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
 
 
+def _safe_profile_name(name: str | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 ._-]+", " ", str(name or "ACS")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return (cleaned or "ACS")[:48]
+
+
+def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
+    server = None
+    try:
+        server = getattr(olt, "tr069_acs_server", None)
+    except Exception:
+        server = None
+
+    if server is None and getattr(olt, "tr069_acs_server_id", None):
+        try:
+            from app.db import SessionLocal
+            from app.models.tr069 import Tr069AcsServer
+
+            with SessionLocal() as db:
+                server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
+                if server is None:
+                    return None
+                password = (
+                    decrypt_credential(server.cwmp_password)
+                    if server.cwmp_password
+                    else ""
+                )
+                return {
+                    "name": server.name,
+                    "acs_url": server.cwmp_url or "",
+                    "username": server.cwmp_username or "",
+                    "password": password or "",
+                    "inform_interval": server.periodic_inform_interval or 300,
+                }
+        except Exception as exc:
+            logger.warning("Failed to load linked ACS for OLT %s: %s", olt.name, exc)
+            return None
+
+    if server is None or not getattr(server, "cwmp_url", None):
+        return None
+    password = (
+        decrypt_credential(server.cwmp_password)
+        if getattr(server, "cwmp_password", None)
+        else ""
+    )
+    return {
+        "name": getattr(server, "name", "ACS"),
+        "acs_url": server.cwmp_url or "",
+        "username": server.cwmp_username or "",
+        "password": password or "",
+        "inform_interval": getattr(server, "periodic_inform_interval", None) or 300,
+    }
+
+
 def _auto_bind_tr069_after_authorize(
     olt: OLTDevice, fsp: str, ont_id: int | None
 ) -> None:
-    """Best-effort: bind newly authorized ONT to DotMac-ACS TR-069 profile.
+    """Best-effort: bind a newly authorized ONT to the OLT's linked ACS profile.
 
-    Called after successful ONT authorization. Silently skips if no
-    DotMac-ACS profile exists or if binding fails.
+    Called after successful ONT authorization. Skips when the OLT has no linked
+    ACS, and creates the OLT profile if the linked ACS profile does not exist.
     """
     if ont_id is None:
         return
     try:
+        payload = _load_linked_acs_payload(olt)
+        if payload is None or not str(payload.get("acs_url") or "").strip():
+            logger.info("Skipping TR-069 auto-bind for OLT %s: no linked ACS", olt.name)
+            return
+
         ok, _msg, profiles = get_tr069_server_profiles(olt)
         if not ok:
             return
-        dotmac_id = None
-        for p in profiles:
-            if "dotmac" in p.name.lower() or "10.10.41.1" in (p.acs_url or ""):
-                dotmac_id = p.profile_id
-                break
-        if dotmac_id is None:
+        target_url = normalize_acs_url(str(payload["acs_url"]))
+        target_username = str(payload.get("username") or "").strip()
+        profile = match_tr069_profile(
+            profiles,
+            acs_url=str(payload["acs_url"]),
+            acs_username=target_username,
+        )
+        profile_id = profile.profile_id if profile else None
+
+        if profile_id is None:
+            profile_name = f"ACS {_safe_profile_name(str(payload.get('name') or ''))}"
+            ok, msg = create_tr069_server_profile(
+                olt,
+                profile_name=profile_name,
+                acs_url=str(payload["acs_url"]),
+                username=target_username,
+                password=str(payload.get("password") or ""),
+                inform_interval=int(payload.get("inform_interval") or 300),
+            )
+            if not ok:
+                logger.warning(
+                    "Auto-create TR-069 profile failed for OLT %s: %s",
+                    olt.name,
+                    msg,
+                )
+                return
+            ok, _msg, profiles = get_tr069_server_profiles(olt)
+            if not ok:
+                return
+            profile = match_tr069_profile(
+                profiles,
+                acs_url=str(payload["acs_url"]),
+                acs_username=target_username,
+            )
+            profile_id = profile.profile_id if profile else None
+        if profile_id is None:
+            logger.warning(
+                "Could not resolve TR-069 profile for linked ACS %s on OLT %s",
+                target_url,
+                olt.name,
+            )
             return
+
         ok, msg = bind_tr069_server_profile(
-            olt, fsp=fsp, ont_id=ont_id, profile_id=dotmac_id
+            olt, fsp=fsp, ont_id=ont_id, profile_id=profile_id
         )
         if ok:
             logger.info(
-                "Auto-bound ONT %d on %s to TR-069 profile %d", ont_id, fsp, dotmac_id
+                "Auto-bound ONT %d on %s to TR-069 profile %d",
+                ont_id,
+                fsp,
+                profile_id,
             )
         else:
             logger.warning(
@@ -386,14 +488,20 @@ def authorize_ont(
         olt: The OLT device to connect to.
         fsp: Frame/Slot/Port string, e.g. "0/2/1".
         serial_number: ONT serial in vendor format, e.g. "HWTC-7D4733C3".
-        line_profile_id: Optional OLT line profile ID (defaults to 1).
-        service_profile_id: Optional OLT service profile ID (defaults to 1).
+        line_profile_id: OLT-local line profile ID resolved before authorization.
+        service_profile_id: OLT-local service profile ID resolved before authorization.
 
     Returns:
         Tuple of (success, message, assigned_ont_id).
     """
-    line_pid = line_profile_id if line_profile_id is not None else 1
-    srv_pid = service_profile_id if service_profile_id is not None else 1
+    if line_profile_id is None or service_profile_id is None:
+        return (
+            False,
+            "OLT authorization profiles were not resolved; refusing to use static profile defaults.",
+            None,
+        )
+    line_pid = line_profile_id
+    srv_pid = service_profile_id
     ok, err = _validate_fsp(fsp)
     if not ok:
         return False, err, None
@@ -457,7 +565,7 @@ def authorize_ont(
                 olt.name,
                 fsp,
             )
-            # Auto-bind to DotMac-ACS TR-069 profile if it exists
+            # Auto-bind to the OLT's linked ACS TR-069 profile if configured.
             _auto_bind_tr069_after_authorize(olt, fsp, ont_id)
 
             message = f"ONT {serial_number} authorized on port {fsp}"
@@ -640,7 +748,7 @@ def _run_huawei_paged_cmd(
     logger.debug("OLT paged command: %r", command)
     channel.send(f"{command}\n")
     output_parts: list[str] = []
-    pager_pattern = r"---- More ----|<cr>|Press any key"
+    pager_pattern = r"---- More(?:\s*\([^)]*\)\s*)?----|<cr>|Press any key"
     combined_pattern = rf"{prompt}|{pager_pattern}"
 
     while True:
@@ -648,7 +756,7 @@ def _run_huawei_paged_cmd(
         output_parts.append(chunk)
 
         # Check if we hit a pager prompt
-        if "---- More ----" in chunk or "Press any key" in chunk:
+        if "---- More" in chunk or "Press any key" in chunk:
             channel.send(" ")  # Send space to continue
             continue
         elif "<cr>" in chunk:

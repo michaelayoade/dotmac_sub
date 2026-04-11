@@ -13,25 +13,11 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.catalog import BillingCycle
-from app.services import subscriber as subscriber_service
-from app.services import (
-    web_billing_invoice_actions as web_billing_invoice_actions_service,
-)
 from app.services import web_billing_invoice_batch as web_billing_invoice_batch_service
 from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
-
-
-def _parse_billing_cycle(value: str | None) -> BillingCycle | None:
-    if not value:
-        return None
-    try:
-        return BillingCycle(value)
-    except ValueError as exc:
-        raise ValueError("Invalid billing cycle") from exc
 
 
 @router.post(
@@ -49,7 +35,6 @@ def invoice_generate_batch(
         db,
         billing_cycle=billing_cycle,
         billing_date=billing_date,
-        parse_cycle_fn=_parse_billing_cycle,
     )
     return HTMLResponse(
         '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
@@ -71,7 +56,6 @@ def invoice_batch_retry(
     note = web_billing_invoice_batch_service.retry_batch_run(
         db,
         run_id=run_id,
-        parse_cycle_fn=_parse_billing_cycle,
     )
     query = urlencode({"note": note})
     return RedirectResponse(
@@ -91,20 +75,7 @@ def invoice_batch(
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    today = web_billing_invoice_actions_service.batch_today_str()
-    recent_runs = web_billing_invoice_batch_service.list_recent_runs(db, limit=25)
-    schedule_config = web_billing_invoice_batch_service.get_billing_run_schedule(db)
-    active_resellers = subscriber_service.resellers.list(
-        db=db,
-        is_active=True,
-        order_by="created_at",
-        order_dir="asc",
-        limit=500,
-        offset=0,
-    )
-    partner_options = [
-        {"id": str(item.id), "name": item.name} for item in active_resellers
-    ]
+    state = web_billing_invoice_batch_service.build_batch_page_state(db, note=note)
     return templates.TemplateResponse(
         "admin/billing/invoice_batch.html",
         {
@@ -113,11 +84,7 @@ def invoice_batch(
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
-            "today": today,
-            "recent_runs": recent_runs,
-            "note": note,
-            "schedule_config": schedule_config,
-            "schedule_partner_options": partner_options,
+            **state,
         },
     )
 
@@ -230,7 +197,6 @@ def invoice_generate_batch_preview(
             billing_cycle=billing_cycle,
             billing_date=billing_date,
             separate_by_partner=bool(separate_by_partner),
-            parse_cycle_fn=_parse_billing_cycle,
         )
         return JSONResponse(payload)
     except Exception as exc:

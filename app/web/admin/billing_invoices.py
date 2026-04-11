@@ -13,31 +13,20 @@ from app.services import web_billing_invoice_cache as web_billing_invoice_cache_
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_billing_overview as web_billing_overview_service
-from app.services.audit_helpers import (
-    log_audit_event,
-)
 from app.services.auth_dependencies import require_permission
-from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
-def _placeholder_context(request: Request, db: Session, title: str, active_page: str):
-    from app.web.admin import get_current_user, get_sidebar_stats
+def _actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
 
-    return {
-        "request": request,
-        "active_page": active_page,
-        "active_menu": "billing",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-        "page_title": title,
-        "heading": title,
-        "description": f"{title} management will appear here.",
-        "empty_title": f"No {title.lower()} yet",
-        "empty_message": "Billing configuration will appear once it is enabled.",
-    }
+    current_user = get_current_user(request)
+    if not current_user:
+        return None
+    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    return str(value) if value else None
 
 
 @router.get(
@@ -308,29 +297,26 @@ def invoice_create(
     db: Session = Depends(get_db),
 ):
     try:
-        invoice, resolved_account_id = (
-            web_billing_invoices_service.create_invoice_from_form(
-                db,
-                account_id=account_id,
-                customer_ref=customer_ref,
-                invoice_number=invoice_number,
-                status=status,
-                currency=currency,
-                issued_at=issued_at,
-                due_at=due_at,
-                memo=memo,
-                proforma_invoice=proforma_invoice,
-                line_description=line_description,
-                line_quantity=line_quantity,
-                line_unit_price=line_unit_price,
-                line_tax_rate_id=line_tax_rate_id,
-                line_items_json=line_items_json,
-                issue_immediately=issue_immediately,
-                send_notification=send_notification,
-                parse_uuid=parse_uuid,
-                parse_datetime=parse_datetime,
-                parse_decimal=parse_decimal,
-            )
+        invoice, resolved_account_id = web_billing_invoices_service.create_invoice_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            account_id=account_id,
+            customer_ref=customer_ref,
+            invoice_number=invoice_number,
+            status=status,
+            currency=currency,
+            issued_at=issued_at,
+            due_at=due_at,
+            memo=memo,
+            proforma_invoice=proforma_invoice,
+            line_description=line_description,
+            line_quantity=line_quantity,
+            line_unit_price=line_unit_price,
+            line_tax_rate_id=line_tax_rate_id,
+            line_items_json=line_items_json,
+            issue_immediately=issue_immediately,
+            send_notification=send_notification,
         )
     except Exception as exc:
         state = web_billing_invoice_forms_service.new_form_state(
@@ -355,18 +341,6 @@ def invoice_create(
             },
             status_code=400,
         )
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="invoice",
-        entity_id=str(invoice.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"invoice_number": invoice.invoice_number},
-    )
     return RedirectResponse(
         url=f"/admin/billing/invoices/{invoice.id}", status_code=303
     )
@@ -384,13 +358,16 @@ def invoice_generate_from_subscription(
     db: Session = Depends(get_db),
 ):
     """Generate an invoice with line items auto-populated from a subscription's offer."""
-    from app.services.billing.invoices import Invoices
-    from app.web.admin import get_current_user
-
     try:
-        invoice = Invoices.create_for_subscription(db, subscriber_id, subscription_id)
+        invoice = web_billing_invoices_service.generate_invoice_from_subscription_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
+        )
     except Exception as exc:
-        from app.web.admin import get_sidebar_stats
+        from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
             "admin/billing/invoices.html",
@@ -404,20 +381,6 @@ def invoice_generate_from_subscription(
             },
             status_code=400,
         )
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="generate_from_subscription",
-        entity_type="invoice",
-        entity_id=str(invoice.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "invoice_number": invoice.invoice_number,
-            "subscription_id": subscription_id,
-        },
-    )
     return RedirectResponse(
         url=f"/admin/billing/invoices/{invoice.id}", status_code=303
     )
@@ -477,8 +440,10 @@ def invoice_update(
     db: Session = Depends(get_db),
 ):
     try:
-        _, metadata_payload = web_billing_invoices_service.update_invoice_from_form(
+        web_billing_invoices_service.update_invoice_web(
             db,
+            request=request,
+            actor_id=_actor_id(request),
             invoice_id=str(invoice_id),
             account_id=account_id,
             invoice_number=invoice_number,
@@ -489,20 +454,6 @@ def invoice_update(
             memo=memo,
             proforma_invoice=proforma_invoice,
             line_items_json=line_items_json,
-            parse_uuid=parse_uuid,
-            parse_datetime=parse_datetime,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update",
-            entity_type="invoice",
-            entity_id=str(invoice_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata_payload,
         )
     except Exception as exc:
         state = web_billing_invoice_forms_service.edit_form_state(

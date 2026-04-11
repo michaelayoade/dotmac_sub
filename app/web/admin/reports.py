@@ -9,6 +9,7 @@ from app.db import get_db
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
 from app.services.audit_helpers import recent_activity_for_paths
+from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/reports", tags=["web-admin-reports"])
@@ -178,7 +179,11 @@ def reports_hub(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/reports/hub.html", context)
 
 
-@router.get("/revenue", response_class=HTMLResponse)
+@router.get(
+    "/revenue",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:read"))],
+)
 def reports_revenue(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -212,7 +217,11 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
     )
 
 
-@router.get("/subscribers", response_class=HTMLResponse)
+@router.get(
+    "/subscribers",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
 def reports_subscribers(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -280,7 +289,11 @@ def reports_churn_export(days: int | None = None, db: Session = Depends(get_db))
     )
 
 
-@router.get("/network", response_class=HTMLResponse)
+@router.get(
+    "/network",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
 def reports_network(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -319,7 +332,11 @@ def reports_network_export(hours: int | None = None, db: Session = Depends(get_d
     )
 
 
-@router.get("/technician", response_class=HTMLResponse)
+@router.get(
+    "/technician",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("provisioning:read"))],
+)
 def reports_technician(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 

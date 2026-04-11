@@ -9,10 +9,10 @@ from sqlalchemy.orm import Session
 
 from app.csrf import get_csrf_token
 from app.db import get_db
+from app.services import web_admin as web_admin_service
 from app.services import web_vpn_management as web_vpn_management_service
 from app.services import web_vpn_peers as web_vpn_peers_service
 from app.services import web_vpn_servers as web_vpn_servers_service
-from app.services import wireguard as wg_service
 from app.services.auth_dependencies import require_method_permission
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 
@@ -59,10 +59,7 @@ def wireguard_legacy_redirect(path: str) -> RedirectResponse:
 
 
 def _get_actor_id(request: Request) -> str | None:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    return str(current_user.get("subscriber_id")) if current_user else None
+    return web_admin_service.get_actor_id(request)
 
 
 # ============== WireGuard Dashboard ==============
@@ -77,10 +74,6 @@ def vpn_index(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Unified VPN dashboard for WireGuard and OpenVPN management."""
-    data = web_vpn_management_service.build_unified_dashboard_data(
-        db, server_id=server_id
-    )
-
     if web_vpn_management_service.should_schedule_health_scan(db):
         from app.celery_app import enqueue_celery_task
 
@@ -96,21 +89,13 @@ def vpn_index(
         "admin/network/vpn/index.html",
         {
             **_base_context(request, db, "vpn"),
-            "protocol": protocol
-            if protocol in {"wireguard", "openvpn"}
-            else "wireguard",
-            "server": data["wireguard"]["server"],
-            "servers": data["wireguard"]["servers_with_counts"],
-            "needs_setup": data["wireguard"]["needs_setup"],
-            "peers": data["wireguard"]["peers_read"],
-            "interface_status": data["wireguard"]["interface_status"],
-            "openvpn_clients": data["openvpn_clients"],
-            "openvpn_config": data["openvpn_config"],
-            "vpn_connections": data["connections"],
-            "vpn_summary": data["summary"],
-            "vpn_alerts": data["alerts"],
-            "control_job_id": control_job_id,
-            "success_message": request.query_params.get("success"),
+            **web_vpn_management_service.build_dashboard_context(
+                db,
+                server_id=server_id,
+                protocol=protocol,
+                control_job_id=control_job_id,
+                success_message=request.query_params.get("success"),
+            ),
         },
     )
 
@@ -121,14 +106,11 @@ def vpn_index(
 @router.get("/servers/new", response_class=HTMLResponse)
 def server_form_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     """New WireGuard server form."""
-    vpn_defaults = web_vpn_servers_service.get_vpn_defaults(db)
     return templates.TemplateResponse(
         "admin/network/vpn/server_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": None,
-            "errors": [],
-            "vpn_defaults": vpn_defaults,
+            **web_vpn_servers_service.build_form_context(db),
         },
     )
 
@@ -188,34 +170,34 @@ def server_create(
     if not errors:
         return RedirectResponse(url="/admin/network/vpn", status_code=303)
 
-    vpn_defaults = web_vpn_servers_service.get_vpn_defaults(db)
     return templates.TemplateResponse(
         "admin/network/vpn/server_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": None,
-            "errors": errors,
-            "vpn_defaults": vpn_defaults,
-            "form_data": web_vpn_servers_service.build_form_data(
-                name=name,
-                description=description,
-                listen_port=listen_port,
-                public_host=public_host,
-                public_port=public_port,
-                vpn_address=vpn_address,
-                vpn_address_v6=vpn_address_v6,
-                mtu=mtu,
-                dns_servers=dns_servers,
-                vpn_routes=vpn_routes,
-                is_active=is_active,
-                interface_name=interface_name,
-                auto_deploy=auto_deploy,
-                router_enabled=router_enabled,
-                router_host=router_host,
-                router_api_port=router_api_port,
-                router_username=router_username,
-                router_interface_name=router_interface_name,
-                router_api_ssl=router_api_ssl,
+            **web_vpn_servers_service.build_form_context(
+                db,
+                errors=errors,
+                form_data=web_vpn_servers_service.build_form_data(
+                    name=name,
+                    description=description,
+                    listen_port=listen_port,
+                    public_host=public_host,
+                    public_port=public_port,
+                    vpn_address=vpn_address,
+                    vpn_address_v6=vpn_address_v6,
+                    mtu=mtu,
+                    dns_servers=dns_servers,
+                    vpn_routes=vpn_routes,
+                    is_active=is_active,
+                    interface_name=interface_name,
+                    auto_deploy=auto_deploy,
+                    router_enabled=router_enabled,
+                    router_host=router_host,
+                    router_api_port=router_api_port,
+                    router_username=router_username,
+                    router_interface_name=router_interface_name,
+                    router_api_ssl=router_api_ssl,
+                ),
             ),
         },
     )
@@ -226,16 +208,11 @@ def server_form_edit(
     server_id: UUID, request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Edit WireGuard server form."""
-    server = wg_service.wg_servers.get(db, server_id)
-    vpn_defaults = web_vpn_servers_service.get_vpn_defaults(db)
-
     return templates.TemplateResponse(
         "admin/network/vpn/server_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": server,
-            "errors": [],
-            "vpn_defaults": vpn_defaults,
+            **web_vpn_servers_service.build_form_context(db, server_id=server_id),
         },
     )
 
@@ -297,34 +274,35 @@ def server_update(
     if not errors:
         return RedirectResponse(url="/admin/network/vpn", status_code=303)
 
-    vpn_defaults = web_vpn_servers_service.get_vpn_defaults(db)
     return templates.TemplateResponse(
         "admin/network/vpn/server_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": server,
-            "errors": errors,
-            "vpn_defaults": vpn_defaults,
-            "form_data": web_vpn_servers_service.build_form_data(
-                name=name,
-                description=description,
-                listen_port=listen_port,
-                public_host=public_host,
-                public_port=public_port,
-                vpn_address=vpn_address,
-                vpn_address_v6=vpn_address_v6,
-                mtu=mtu,
-                dns_servers=dns_servers,
-                vpn_routes=vpn_routes,
-                is_active=is_active,
-                interface_name=interface_name,
-                auto_deploy=auto_deploy,
-                router_enabled=router_enabled,
-                router_host=router_host,
-                router_api_port=router_api_port,
-                router_username=router_username,
-                router_interface_name=router_interface_name,
-                router_api_ssl=router_api_ssl,
+            **web_vpn_servers_service.build_form_context(
+                db,
+                server=server,
+                errors=errors,
+                form_data=web_vpn_servers_service.build_form_data(
+                    name=name,
+                    description=description,
+                    listen_port=listen_port,
+                    public_host=public_host,
+                    public_port=public_port,
+                    vpn_address=vpn_address,
+                    vpn_address_v6=vpn_address_v6,
+                    mtu=mtu,
+                    dns_servers=dns_servers,
+                    vpn_routes=vpn_routes,
+                    is_active=is_active,
+                    interface_name=interface_name,
+                    auto_deploy=auto_deploy,
+                    router_enabled=router_enabled,
+                    router_host=router_host,
+                    router_api_port=router_api_port,
+                    router_username=router_username,
+                    router_interface_name=router_interface_name,
+                    router_api_ssl=router_api_ssl,
+                ),
             ),
         },
     )
@@ -397,15 +375,11 @@ def peer_form_new(
     server_id: UUID, request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """New WireGuard peer form."""
-    server = wg_service.wg_servers.get(db, server_id)
-
     return templates.TemplateResponse(
         "admin/network/vpn/peer_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": server,
-            "peer": None,
-            "errors": [],
+            **web_vpn_peers_service.build_form_context(db, server_id=server_id),
         },
     )
 
@@ -448,23 +422,24 @@ def peer_create(
             status_code=303,
         )
 
-    server = wg_service.wg_servers.get(db, server_id)
     return templates.TemplateResponse(
         "admin/network/vpn/peer_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": server,
-            "peer": None,
-            "errors": errors,
-            "form_data": web_vpn_peers_service.build_form_data(
-                name=name,
-                description=description,
-                peer_address=peer_address,
-                peer_address_v6=peer_address_v6,
-                persistent_keepalive=persistent_keepalive,
-                known_subnets=known_subnets,
-                lan_subnets=lan_subnets,
-                notes=notes,
+            **web_vpn_peers_service.build_form_context(
+                db,
+                server_id=server_id,
+                errors=errors,
+                form_data=web_vpn_peers_service.build_form_data(
+                    name=name,
+                    description=description,
+                    peer_address=peer_address,
+                    peer_address_v6=peer_address_v6,
+                    persistent_keepalive=persistent_keepalive,
+                    known_subnets=known_subnets,
+                    lan_subnets=lan_subnets,
+                    notes=notes,
+                ),
             ),
         },
     )
@@ -496,16 +471,11 @@ def peer_form_edit(
     peer_id: UUID, request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Edit WireGuard peer form."""
-    peer = wg_service.wg_peers.get(db, peer_id)
-    server = wg_service.wg_servers.get(db, peer.server_id)
-
     return templates.TemplateResponse(
         "admin/network/vpn/peer_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": server,
-            "peer": peer,
-            "errors": [],
+            **web_vpn_peers_service.build_form_context(db, peer_id=peer_id),
         },
     )
 
@@ -552,18 +522,21 @@ def peer_update(
         "admin/network/vpn/peer_form.html",
         {
             **_base_context(request, db, "vpn"),
-            "server": server,
-            "peer": peer,
-            "errors": errors,
-            "form_data": web_vpn_peers_service.build_form_data(
-                name=name,
-                description=description,
-                peer_address=peer_address,
-                peer_address_v6=peer_address_v6,
-                persistent_keepalive=persistent_keepalive,
-                known_subnets=known_subnets,
-                lan_subnets=lan_subnets,
-                notes=notes,
+            **web_vpn_peers_service.build_form_context(
+                db,
+                peer=peer,
+                server=server,
+                errors=errors,
+                form_data=web_vpn_peers_service.build_form_data(
+                    name=name,
+                    description=description,
+                    peer_address=peer_address,
+                    peer_address_v6=peer_address_v6,
+                    persistent_keepalive=persistent_keepalive,
+                    known_subnets=known_subnets,
+                    lan_subnets=lan_subnets,
+                    notes=notes,
+                ),
             ),
         },
     )
@@ -685,19 +658,15 @@ def vpn_client_wizard_form(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Render Add VPN Client wizard for WireGuard/OpenVPN."""
-    servers = wg_service.wg_servers.list(db, limit=100)
     return templates.TemplateResponse(
         "admin/network/vpn/client_wizard.html",
         {
             **_base_context(request, db, "vpn"),
-            "protocol": protocol
-            if protocol in {"wireguard", "openvpn"}
-            else "wireguard",
-            "servers": servers,
-            "selected_server_id": server_id or "",
-            "errors": [],
-            "result": None,
-            "openvpn_config": web_vpn_management_service.get_openvpn_server_config(db),
+            **web_vpn_management_service.build_client_wizard_context(
+                db,
+                protocol=protocol,
+                server_id=server_id,
+            ),
         },
     )
 
@@ -714,37 +683,20 @@ def vpn_client_wizard_submit(
     remote_port: int | None = Form(None),
 ) -> HTMLResponse:
     """Create VPN client and generate configuration output."""
-    servers = wg_service.wg_servers.list(db, limit=100)
-    selected_protocol = (
-        protocol if protocol in {"wireguard", "openvpn"} else "wireguard"
-    )
-    errors: list[str] = []
-    result = None
-
-    try:
-        result = web_vpn_management_service.create_vpn_client(
-            db,
-            protocol=selected_protocol,
-            name=name.strip(),
-            server_id=server_id,
-            peer_address=(peer_address or "").strip() or None,
-            remote_host=(remote_host or "").strip() or None,
-            remote_port=remote_port,
-            actor_id=_get_actor_id(request),
-            request=request,
-        )
-    except Exception as exc:
-        errors.append(str(exc))
-
     return templates.TemplateResponse(
         "admin/network/vpn/client_wizard.html",
         {
             **_base_context(request, db, "vpn"),
-            "protocol": selected_protocol,
-            "servers": servers,
-            "selected_server_id": server_id or "",
-            "errors": errors,
-            "result": result,
-            "openvpn_config": web_vpn_management_service.get_openvpn_server_config(db),
+            **web_vpn_management_service.submit_client_wizard_context(
+                db,
+                protocol=protocol,
+                name=name,
+                server_id=server_id,
+                peer_address=peer_address,
+                remote_host=remote_host,
+                remote_port=remote_port,
+                actor_id=_get_actor_id(request),
+                request=request,
+            ),
         },
     )

@@ -22,7 +22,7 @@ from app.services import billing as billing_service
 from app.services import settings_spec
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
-from app.services.audit_helpers import build_changes_metadata
+from app.services.audit_helpers import build_changes_metadata, log_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -721,6 +721,59 @@ def build_import_result_payload(
     }
 
 
+def process_payment_import_payload(
+    db: Session,
+    body: dict,
+) -> dict[str, object]:
+    """Validate and import payment rows from a web JSON payload."""
+    payments_data = body.get("payments", [])
+    handler = body.get("handler")
+
+    if not payments_data:
+        return {"message": "No payments to import", "status_code": 400}
+
+    default_currency = resolve_default_currency(db)
+    normalized_rows = normalize_import_rows(payments_data, handler)
+    payment_source = body.get("payment_source")
+    payment_method_type = body.get("payment_method_type")
+    file_name = body.get("file_name")
+    pair_inactive_customers = bool(body.get("pair_inactive_customers", True))
+    row_count = len(normalized_rows)
+    total_amount = Decimal("0")
+    for row in normalized_rows:
+        try:
+            total_amount += Decimal(str(row.get("amount", 0) or 0))
+        except (TypeError, ValueError, InvalidOperation):
+            continue
+
+    imported_count, errors = import_payments(
+        db,
+        normalized_rows,
+        default_currency,
+        payment_source=payment_source,
+        payment_method_type=payment_method_type,
+        pair_inactive_customers=pair_inactive_customers,
+    )
+    return {
+        "payload": build_import_result_payload(
+            imported_count=imported_count,
+            errors=errors,
+        ),
+        "audit_metadata": {
+            "imported": imported_count,
+            "errors": len(errors),
+            "payment_source": payment_source,
+            "payment_method_type": payment_method_type,
+            "file_name": file_name,
+            "row_count": row_count,
+            "total_amount": float(total_amount),
+            "pair_inactive_customers": pair_inactive_customers,
+            "handler": handler,
+        },
+        "status_code": 200,
+    }
+
+
 def list_payment_import_history(
     db: Session, *, limit: int = 20
 ) -> list[dict[str, object]]:
@@ -907,6 +960,48 @@ def process_payment_create(
     }
 
 
+def _actor_id(request) -> str | None:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    return str(current_user.get("subscriber_id")) if current_user else None
+
+
+def process_payment_create_with_audit(
+    db: Session,
+    request,
+    *,
+    account_id: str | None,
+    amount: str,
+    currency: str,
+    status: str | None,
+    invoice_id: str | None,
+    collection_account_id: str | None,
+    memo: str | None,
+) -> dict[str, object]:
+    result = process_payment_create(
+        db,
+        account_id=account_id,
+        amount=amount,
+        currency=currency,
+        status=status,
+        invoice_id=invoice_id,
+        collection_account_id=collection_account_id,
+        memo=memo,
+    )
+    payment = cast(Payment, result["payment"])
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create",
+        entity_type="payment",
+        entity_id=str(payment.id),
+        actor_id=_actor_id(request),
+        metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
+    )
+    return result
+
+
 def process_payment_update(
     db: Session,
     *,
@@ -967,3 +1062,58 @@ def process_payment_update(
         "after": after,
         "audit_metadata": build_changes_metadata(before, after),
     }
+
+
+def process_payment_update_with_audit(
+    db: Session,
+    request,
+    *,
+    payment_id: str,
+    account_id: str | None,
+    amount: str,
+    currency: str,
+    status: str | None,
+    invoice_id: str | None,
+    payment_method_id: str | None,
+    memo: str | None,
+) -> dict[str, object]:
+    result = process_payment_update(
+        db,
+        payment_id=payment_id,
+        account_id=account_id,
+        amount=amount,
+        currency=currency,
+        status=status,
+        invoice_id=invoice_id,
+        payment_method_id=payment_method_id,
+        memo=memo,
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action="update",
+        entity_type="payment",
+        entity_id=payment_id,
+        actor_id=_actor_id(request),
+        metadata=cast(dict[str, object] | None, result.get("audit_metadata")),
+    )
+    return result
+
+
+def process_payment_import_payload_with_audit(
+    db: Session,
+    request,
+    body: dict,
+) -> dict[str, object]:
+    result = process_payment_import_payload(db, body)
+    if int(result.get("status_code", 200)) == 200:
+        log_audit_event(
+            db=db,
+            request=request,
+            action="import",
+            entity_type="payment",
+            entity_id="bulk",
+            actor_id=_actor_id(request),
+            metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
+        )
+    return result

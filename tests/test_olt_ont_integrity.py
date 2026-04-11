@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from app.schemas.network import OltCardCreate, OltShelfCreate, OLTDeviceCreate, PonPortCreate
+from app.services.network.ont_serials import looks_synthetic_ont_serial
 from app.services import network as network_service
 
 
@@ -32,3 +33,11 @@ def test_manual_pon_port_create_rejects_card_from_other_olt(db_session):
         assert exc.detail == "OLT card does not belong to the selected OLT"
     else:
         raise AssertionError("Expected HTTPException for mismatched OLT card")
+
+
+def test_generated_snmp_ont_serials_are_synthetic():
+    assert looks_synthetic_ont_serial("HW-86BF78E7-04104-2604111358482263")
+    assert looks_synthetic_ont_serial("ZT-86BF78E7-04104")
+    assert looks_synthetic_ont_serial("NK-86BF78E7-04104")
+    assert looks_synthetic_ont_serial("OLT-86BF78E7-04104")
+    assert not looks_synthetic_ont_serial("HWTC08D90492")

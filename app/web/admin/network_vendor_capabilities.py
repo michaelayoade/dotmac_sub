@@ -10,10 +10,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_network_vendor_capabilities as web_vc_service
 from app.services.auth_dependencies import require_permission
-from app.services.network.vendor_capabilities import (
-    tr069_parameter_maps,
-    vendor_capabilities,
-)
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -142,7 +138,7 @@ def vendor_capability_delete(
     db: Session = Depends(get_db),
 ) -> Response:
     """Soft-delete a vendor model capability."""
-    vendor_capabilities.delete(db, capability_id)
+    web_vc_service.handle_delete(db, capability_id)
     return RedirectResponse("/admin/network/vendor-capabilities", status_code=303)
 
 
@@ -189,7 +185,7 @@ def param_map_delete(
     db: Session = Depends(get_db),
 ) -> Response:
     """Delete a TR-069 parameter map entry."""
-    tr069_parameter_maps.delete(db, param_map_id)
+    web_vc_service.handle_param_map_delete(db, param_map_id)
     return RedirectResponse(
         f"/admin/network/vendor-capabilities/{capability_id}/edit", status_code=303
     )

@@ -1,45 +1,36 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card, action_button, status_badge, row_action, empty_state, filter_select, icon_plus, icon_view, icon_edit, icon_cpu, icon_check_circle, icon_warning, icon_server, icon_users, animation_styles %}
+{% from "components/ui/macros.html" import page_header, stats_card, action_button, status_badge, row_action, empty_state, filter_bar, filter_select, search_input, icon_plus, icon_view, icon_edit, icon_cpu, icon_check_circle, icon_warning, icon_server, icon_users, animation_styles %}
 
 {% block title %}ONT Fleet - Admin{% endblock %}
 
 {% block content %}
-{{ ambient_background("blue", "indigo") }}
-
-<div class="relative space-y-8" x-data='{
+<div class="relative space-y-4" x-data='{
     view: "{{ filters.view or 'list' }}",
     filtersOpen: {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.vendor %}true{% else %}false{% endif %}
 }'>
-    {# Page Header #}
-    <div>
-        <a href="/admin/network" class="inline-flex items-center gap-1 text-sm font-medium text-blue-600 transition-colors hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
-            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
-            </svg>
-            Back to Network
-        </a>
-    </div>
     {% call page_header(
         title="ONT Fleet",
-        subtitle="Inventory, diagnostics, and manual operations for optical network terminals",
+        subtitle="Inventory, signal triage, and activation queue",
         icon=icon_cpu(),
         color="blue",
         color2="indigo",
         breadcrumbs=[{"label": "Network", "href": "/admin/network"}, {"label": "ONT Fleet"}]
     ) %}
-        <div class="flex items-center gap-2">
-            {# View toggle: List vs Diagnostics #}
-            <div class="flex items-center rounded-lg border border-slate-200 bg-white/80 dark:border-slate-600 dark:bg-slate-700/80" role="group" aria-label="View mode">
-                <button @click="view = 'list'" :class="view === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600'" class="rounded-l-lg px-3 py-2 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1" aria-label="List view" :aria-pressed="view === 'list'">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 10h16M4 14h16M4 18h16"/></svg>
+        <div class="flex flex-wrap items-center gap-2">
+            {# View toggle: List, Diagnostics, Unconfigured #}
+            <div class="flex items-center rounded-lg border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-800" role="group" aria-label="View mode">
+                <button @click="view = 'list'" :class="view === 'list' ? 'bg-blue-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'" class="rounded-l-lg px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1" :aria-pressed="view === 'list'">
+                    List
                 </button>
-                <button @click="view = 'diagnostics'" :class="view === 'diagnostics' ? 'bg-amber-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600'" class="rounded-r-lg px-3 py-2 text-xs font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1" aria-label="Diagnostics view" :aria-pressed="view === 'diagnostics'">
-                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                <button @click="view = 'diagnostics'" :class="view === 'diagnostics' ? 'bg-amber-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'" class="px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-1" :aria-pressed="view === 'diagnostics'">
+                    Diagnostics
+                </button>
+                <button @click="view = 'unconfigured'" :class="view === 'unconfigured' ? 'bg-emerald-600 text-white' : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700'" class="rounded-r-lg px-3 py-2 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1" :aria-pressed="view === 'unconfigured'">
+                    Unconfigured
                 </button>
             </div>
             <a href="/admin/network/tr069?only_unlinked=true"
-               class="inline-flex items-center gap-2 rounded-xl border border-sky-300 bg-sky-50 px-4 py-2.5 text-sm font-medium text-sky-700 hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 6h14M5 18h14"/></svg>
+               class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
                 Import From TR-069
             </a>
             {{ action_button("Add ONT", "/admin/network/onts/new", icon_plus(), "primary", "blue", "indigo") }}
@@ -47,34 +38,23 @@
     {% endcall %}
 
     {# Stats Overview #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 animate-fade-in-up" style="animation-delay: 50ms;">
+    {% if message %}
+    <div class="rounded-xl border px-4 py-3 text-sm {% if status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-300{% else %}border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300{% endif %}">
+        {{ message }}
+    </div>
+    {% endif %}
+
+    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-6">
         {{ stats_card("Total ONTs", stats.total_onts, icon=icon_cpu(), color="blue", color2="indigo") }}
         {{ stats_card("Online", stats.online_count, icon=icon_check_circle(), color="emerald", color2="teal") }}
         {{ stats_card("Offline", stats.offline_count, icon=icon_server(), color="rose", color2="pink") }}
         {{ stats_card("Low Signal", stats.low_signal_count, icon=icon_warning(), color="amber", color2="orange") }}
         {{ stats_card("CPE Inventory", stats.total_cpes, icon=icon_users(), color="slate", color2="gray") }}
+        {{ stats_card("Unconfigured", unconfigured_stats.active_candidates, color="emerald", color2="teal") }}
     </div>
-
-    {# ── Quick filters ── #}
-    {% if stats.offline_count > 0 or stats.low_signal_count > 0 %}
-    <div class="flex flex-wrap gap-2">
-        {% if stats.offline_count > 0 %}
-        <a href="/admin/network/onts?view=list&online_status=offline" class="inline-flex items-center gap-1.5 rounded-full border border-rose-200 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 transition hover:-translate-y-0.5 dark:border-rose-900/40 dark:bg-rose-900/20 dark:text-rose-300">
-            <span class="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
-            {{ stats.offline_count }} Offline
-        </a>
-        {% endif %}
-        {% if stats.low_signal_count > 0 %}
-        <a href="/admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc" class="inline-flex items-center gap-1.5 rounded-full border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 transition hover:-translate-y-0.5 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-300">
-            <span class="h-1.5 w-1.5 rounded-full bg-amber-500"></span>
-            {{ stats.low_signal_count }} Low Signal
-        </a>
-        {% endif %}
-    </div>
-    {% endif %}
 
     {# ═══════════════ Filter Bar ═══════════════ #}
-    <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 75ms;">
+    <div x-show="view !== 'unconfigured'" x-cloak class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="GET" action="/admin/network/onts" id="ont-filter-form">
             <input type="hidden" name="view" :value="view">
             <input type="hidden" name="pon_port_id" value="{{ filters.pon_port_id }}">
@@ -115,6 +95,15 @@
                     <option value="good" {% if filters.signal_quality == 'good' %}selected{% endif %}>Good</option>
                     <option value="warning" {% if filters.signal_quality == 'warning' %}selected{% endif %}>Warning</option>
                     <option value="critical" {% if filters.signal_quality == 'critical' %}selected{% endif %}>Critical</option>
+                </select>
+
+                {# Rows per page #}
+                <select name="per_page" onchange="this.form.submit()"
+                        class="rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-900 transition-all focus:border-blue-500 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 dark:border-slate-600 dark:bg-slate-700/50 dark:text-white"
+                        aria-label="Rows per page">
+                    {% for size in [25, 50, 100, 200, 500] %}
+                    <option value="{{ size }}" {% if pagination.per_page == size %}selected{% endif %}>{{ size }} rows</option>
+                    {% endfor %}
                 </select>
 
                 {# Expand filters toggle #}
@@ -179,28 +168,169 @@
         </form>
     </div>
 
+    {# ═══════════════ Unconfigured ONTs View ═══════════════ #}
+    <div x-show="view === 'unconfigured'" x-cloak class="space-y-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Unconfigured ONTs</h2>
+                <p class="text-sm text-slate-500 dark:text-slate-400">Cached autofind results across active OLTs.</p>
+            </div>
+            <form method="POST" action="/admin/network/unconfigured-onts/scan">
+                {% include "components/forms/csrf_input.html" %}
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-emerald-700">
+                    <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.357 15m13.062 0H15"/></svg>
+                    Scan Now
+                </button>
+            </form>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <span><span class="text-slate-500 dark:text-slate-400">Active</span> <strong class="text-emerald-700 dark:text-emerald-300">{{ unconfigured_stats.active_candidates }}</strong></span>
+            <span><span class="text-slate-500 dark:text-slate-400">History</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.history_candidates }}</strong></span>
+            <span><span class="text-slate-500 dark:text-slate-400">OLTs</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.olts_with_candidates }}</strong></span>
+            <span><span class="text-slate-500 dark:text-slate-400">Last seen</span> <strong class="text-slate-900 dark:text-white">{{ unconfigured_stats.last_seen_at.strftime('%Y-%m-%d %H:%M') if unconfigured_stats.last_seen_at else '-' }}</strong></span>
+        </div>
+
+        {% call filter_bar() %}
+            <form method="GET" action="/admin/network/onts" class="grid gap-4 grid-cols-2 lg:grid-cols-8">
+                <input type="hidden" name="view" value="unconfigured">
+                <div class="col-span-1 lg:col-span-2">
+                    {% set candidate_view_options = [
+                        {"value": "active", "label": "Active only"},
+                        {"value": "history", "label": "History only"},
+                        {"value": "all", "label": "Active + history"}
+                    ] %}
+                    {{ filter_select("candidate_view", candidate_view_options, value=unconfigured_selected_view or "active", label="View", color="emerald") }}
+                </div>
+                <div class="col-span-1 lg:col-span-2">
+                    {% set resolution_options = [
+                        {"value": "", "label": "All"},
+                        {"value": "authorized", "label": "Authorized"},
+                        {"value": "disappeared", "label": "Disappeared"}
+                    ] %}
+                    {{ filter_select("resolution", resolution_options, value=unconfigured_selected_resolution or "", label="History Status", color="emerald") }}
+                </div>
+                <div class="col-span-2 lg:col-span-2">
+                    <label class="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Search</label>
+                    {{ search_input(name="search", value=filters.search or "", placeholder="Serial, OLT, port, model, MAC...", color="emerald") }}
+                </div>
+                <div class="col-span-1 lg:col-span-1">
+                    {% set unconfigured_olt_options = [{"value": "", "label": "All OLTs"}] %}
+                    {% for olt in unconfigured_olts %}
+                        {% set _ = unconfigured_olt_options.append({"value": olt.id|string, "label": olt.name}) %}
+                    {% endfor %}
+                    {{ filter_select("olt_id", unconfigured_olt_options, value=filters.olt_id or "", label="OLT", color="emerald") }}
+                </div>
+                <div class="col-span-1 lg:col-span-1 flex items-end gap-2">
+                    <button type="submit" class="rounded-lg bg-emerald-600 px-3 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 min-h-[44px]">
+                        Filter
+                    </button>
+                    <a href="/admin/network/onts?view=unconfigured" class="rounded-lg px-3 py-2.5 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-700 min-h-[44px] flex items-center">Reset</a>
+                </div>
+            </form>
+        {% endcall %}
+
+        {% if unconfigured_entries %}
+        <div class="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                    <thead class="bg-slate-50 dark:bg-slate-900/40">
+                        <tr>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT</th>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Port</th>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial</th>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Model</th>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">MAC</th>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">State</th>
+                            <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Seen</th>
+                            <th class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                        {% for entry in unconfigured_entries %}
+                        <tr class="hover:bg-slate-50/50 dark:hover:bg-slate-700/20">
+                            <td class="px-3 py-2 text-sm text-slate-900 dark:text-white">{{ entry.olt_name }}</td>
+                            <td class="px-3 py-2 font-mono text-sm text-slate-700 dark:text-slate-300">{{ entry.fsp }}</td>
+                            <td class="px-3 py-2">
+                                <div class="text-sm font-medium font-mono text-slate-900 dark:text-white">{{ entry.serial_number }}</div>
+                                {% if entry.vendor_id %}<div class="text-xs text-slate-500 dark:text-slate-400">{{ entry.vendor_id }}</div>{% endif %}
+                            </td>
+                            <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
+                                <div>{{ entry.model or '-' }}</div>
+                                <div class="text-xs text-slate-500 dark:text-slate-400">{{ entry.software_version or '-' }}</div>
+                            </td>
+                            <td class="px-3 py-2 font-mono text-sm text-slate-700 dark:text-slate-300">{{ entry.mac or '-' }}</td>
+                            <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
+                                {% if entry.is_active %}
+                                {{ status_badge("Active", "online", pulse=True) }}
+                                {% elif entry.resolution_reason == 'authorized' %}
+                                {{ status_badge("Authorized", "active") }}
+                                {% elif entry.resolution_reason == 'disappeared' %}
+                                {{ status_badge("Disappeared", "warning") }}
+                                {% else %}
+                                {{ status_badge("Inactive", "draft") }}
+                                {% endif %}
+                            </td>
+                            <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
+                                <div>First: {% if entry.first_seen_at %}{{ entry.first_seen_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
+                                <div class="text-xs text-slate-500 dark:text-slate-400">Last: {% if entry.last_seen_at %}{{ entry.last_seen_at.strftime('%Y-%m-%d %H:%M') }}{% else %}-{% endif %}</div>
+                            </td>
+                            <td class="px-3 py-2 text-right">
+                                {% if entry.is_active %}
+                                <form method="POST" action="/admin/network/olts/{{ entry.olt_id }}/authorize-ont" class="inline-flex items-center gap-2" x-data="{ force: false }">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="fsp" value="{{ entry.fsp }}">
+                                    <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
+                                    <input type="hidden" name="return_to" value="/admin/network/onts?view=unconfigured">
+                                    <input type="hidden" name="force_reauthorize" :value="force ? 'true' : ''">
+                                    <label class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400 cursor-pointer whitespace-nowrap" title="Delete existing registration first">
+                                        <input type="checkbox" x-model="force" class="h-3.5 w-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800">
+                                        Force
+                                    </label>
+                                    <button type="submit" :onclick="force ? 'return confirm(\'Force re-authorize {{ entry.serial_number }}? This will DELETE any existing registration.\')' : 'return confirm(\'Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}?\')'" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md focus-visible:ring-2 focus-visible:ring-offset-2" :class="force ? 'bg-amber-600 hover:bg-amber-700 focus-visible:ring-amber-500' : 'bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-emerald-500'">
+                                        <span x-show="!force">Authorize</span>
+                                        <span x-show="force" x-cloak>Force</span>
+                                    </button>
+                                </form>
+                                {% elif entry.resolution_reason == 'disappeared' %}
+                                <form method="POST" action="/admin/network/unconfigured-onts/{{ entry.id }}/restore" class="inline">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <button type="submit" onclick="return confirm('Restore ONT {{ entry.serial_number }} to active state?')" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+                                        Restore
+                                    </button>
+                                </form>
+                                {% else %}
+                                <span class="text-xs text-slate-500 dark:text-slate-400">{{ entry.resolution_reason or 'inactive' }}</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% else %}
+        {{ empty_state("No Matching ONTs", "No autofind candidates matched the current filters. Adjust the view or run Scan Now.") }}
+        {% endif %}
+    </div>
+
     {# ═══════════════ List View ═══════════════ #}
     <div x-show="view === 'list'" x-cloak>
         {# ONTs Table #}
-        <div class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800" style="animation-delay: 100ms;">
-            <div class="flex items-center justify-between border-b border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-900/40 dark:to-indigo-900/30">
-                        <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                    </div>
-                    <div>
-                        <h2 class="font-semibold text-slate-900 dark:text-white">ONT Inventory</h2>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">
-                            Showing {{ onts|length }} of {{ pagination.total }} ONT{{ 's' if pagination.total != 1 else '' }} in the current operational queue
-                        </p>
-                    </div>
+        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <div>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">ONT Inventory</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">
+                        Showing {{ onts|length }} of {{ pagination.total }} ONT{{ 's' if pagination.total != 1 else '' }}
+                    </p>
                 </div>
             </div>
 
             {# Bulk Action Bar #}
             <div x-data="{ selected: [], bulkAction: '', firmwareImageId: '' }" id="bulk-container">
                 <div x-show="selected.length > 0" x-transition
-                     class="flex items-center gap-3 border-b border-blue-200 bg-blue-50 px-6 py-3 dark:border-blue-800 dark:bg-blue-900/20">
+                     class="flex flex-wrap items-center gap-3 border-b border-blue-200 bg-blue-50 px-4 py-2 dark:border-blue-800 dark:bg-blue-900/20">
                     <span class="text-sm font-medium text-blue-700 dark:text-blue-300" x-text="selected.length + ' selected'"></span>
                     <select x-model="bulkAction"
                         class="rounded-lg border border-blue-300 bg-white px-3 py-1.5 text-sm text-slate-700 focus:border-blue-500 focus:ring-blue-500 dark:border-blue-600 dark:bg-slate-800 dark:text-slate-300">
@@ -242,57 +372,47 @@
                     </form>
                     <button @click="selected = []" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">Clear</button>
                 </div>
-                <div id="bulk-result" class="px-6"></div>
+                <div id="bulk-result" class="px-4"></div>
 
             <div class="overflow-x-auto">
                 <table class="min-w-full">
                     <thead>
-                        <tr class="border-b border-slate-100 bg-gradient-to-r from-slate-50 to-slate-100/50 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
-                            <th scope="col" class="w-10 px-3 py-3">
+                        <tr class="border-b border-slate-100 bg-slate-50 dark:border-slate-700/50 dark:bg-slate-900/40">
+                            <th scope="col" class="w-10 px-3 py-2">
                                 <input type="checkbox" @change="selected = $event.target.checked ? [...document.querySelectorAll('.ont-checkbox')].map(el => el.value) : []"
                                     class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                                     aria-label="Select all ONTs">
                             </th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
-                            <th scope="col" class="hidden lg:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Hex Serial</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Subscriber / Customer</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Signal</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Last Seen</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT / PON</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Online</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Signal</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Last Seen</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Status</th>
+                            <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for ont in onts %}
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
-                        <tr class="group transition-all hover:bg-gradient-to-r hover:from-blue-50/50 hover:to-indigo-50/30 dark:hover:from-blue-900/10 dark:hover:to-indigo-900/5">
-                            <td class="w-10 px-3 py-4">
+                        <tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/20">
+                            <td class="w-10 px-3 py-2">
                                 <input type="checkbox" class="ont-checkbox h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
                                     value="{{ ont.id }}"
-                                    aria-label="Select ONT {{ ont.serial_number }}"
+                                    aria-label="Select ONT {{ serial_display_by_ont_id.get(ont.id | string) or '-' }}"
                                     @change="$event.target.checked ? selected.push('{{ ont.id }}') : (selected = selected.filter(id => id !== '{{ ont.id }}'))">
                             </td>
-                            <td class="px-6 py-4">
-                                <div class="flex items-center gap-3">
-                                    <div class="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 shadow-md shadow-blue-500/25">
-                                        <svg class="h-5 w-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
-                                    </div>
-                                    {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else ont.serial_number %}
-                                    <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400 max-w-[120px] sm:max-w-none truncate inline-block" title="{{ serial_display or ont.serial_number or '-' }}">{{ serial_display or ont.serial_number or '-' }}</a>
-                                </div>
-                            </td>
-                            <td class="hidden lg:table-cell px-4 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2">
+                                {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else "" %}
+                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400 max-w-[150px] truncate inline-block" title="{{ serial_display or '-' }}">{{ serial_display or '-' }}</a>
                                 {% set hex_serial = hex_serial_by_ont_id.get(ont.id | string) if hex_serial_by_ont_id else none %}
                                 {% if hex_serial %}
-                                <span class="font-mono text-xs text-slate-500 dark:text-slate-400 select-all" title="Hex serial for OLT search">{{ hex_serial }}</span>
-                                {% else %}
-                                <span class="text-xs text-slate-400">-</span>
+                                <div class="font-mono text-xs text-slate-500 dark:text-slate-400 select-all" title="Hex serial for OLT search">{{ hex_serial }}</div>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ai.get("olt_name") %}
                                 <a href="/admin/network/olts/{{ ai.olt_id }}" class="text-sm font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">{{ ai.olt_name }}</a>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ ai.pon_port_display or ai.pon_port_name or '-' }}</p>
@@ -300,7 +420,7 @@
                                 <span class="text-xs text-slate-400">Unassigned</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ai.get("subscriber_name") %}
                                     {% if ai.get("subscriber_customer_url") %}
                                     <a href="{{ ai.subscriber_customer_url }}" class="text-sm font-medium text-slate-900 hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ ai.subscriber_name }}</a>
@@ -311,7 +431,7 @@
                                 <span class="text-xs text-slate-400"></span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if sd.get("status_display") and sd.status_display != "Unknown" %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
                                     {% if sd.status_display == "Online" %}
@@ -328,7 +448,7 @@
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ont.olt_rx_signal_dbm is not none %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium font-mono tabular-nums {{ sd.get('quality_class', 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300') }}">
                                     {{ "%.1f"|format(ont.olt_rx_signal_dbm) }} dBm
@@ -337,7 +457,7 @@
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ont.last_seen_at %}
                                 <span class="text-xs text-slate-600 dark:text-slate-400" title="{{ ont.last_seen_at.strftime('%Y-%m-%d %H:%M:%S') if ont.last_seen_at else '' }}">
                                     {{ ont.last_seen_at.strftime('%b %d, %H:%M') if ont.last_seen_at else '-' }}
@@ -346,13 +466,12 @@
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {{ status_badge("Active" if ont.is_active else "Inactive", "active" if ont.is_active else "inactive", pulse=ont.is_active) }}
                             </td>
-                            <td class="px-6 py-4 whitespace-nowrap text-right">
-                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            <td class="px-3 py-2 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1">
                                     {{ row_action("/admin/network/onts/" ~ ont.id, icon_view(), "View details", "blue") }}
-                                    {{ row_action("/admin/network/onts/" ~ ont.id ~ "/edit", icon_edit(), "Edit ONT", "slate") }}
                                 </div>
                             </td>
                         </tr>
@@ -365,7 +484,7 @@
                             color2="indigo",
                             action_label="Add ONT",
                             action_href="/admin/network/onts/new",
-                            colspan=8
+                            colspan=9
                         ) }}
                         {% endfor %}
                     </tbody>
@@ -374,20 +493,20 @@
 
             {# Pagination #}
             {% if pagination.total_pages > 1 %}
-            <div class="flex items-center justify-between border-t border-slate-200/60 px-6 py-4 dark:border-slate-700/60">
+            <div class="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
                 <p class="text-sm text-slate-600 dark:text-slate-400">
                     Page {{ pagination.page }} of {{ pagination.total_pages }}
                 </p>
                 <div class="flex items-center gap-2">
                     {% if pagination.has_prev %}
-                    <a href="/admin/network/onts?view=list&page={{ pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="/admin/network/onts?view=list&page={{ pagination.page - 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if pagination.has_next %}
-                    <a href="/admin/network/onts?view=list&page={{ pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
+                    <a href="/admin/network/onts?view=list&page={{ pagination.page + 1 }}&per_page={{ pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by={{ filters.order_by }}&order_dir={{ filters.order_dir }}"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
@@ -402,27 +521,22 @@
 
     {# ═══════════════ Diagnostics View ═══════════════ #}
     <div x-show="view === 'diagnostics'" x-cloak>
-        <div class="animate-fade-in-up rounded-2xl border border-amber-200/60 bg-white shadow-sm dark:border-amber-700/40 dark:bg-slate-800" style="animation-delay: 100ms;">
-            <div class="flex items-center justify-between border-b border-amber-200/60 px-6 py-4 dark:border-amber-700/40">
-                <div class="flex items-center gap-3">
-                    <div class="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-amber-100 to-orange-100 dark:from-amber-900/40 dark:to-orange-900/30">
-                        <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                    </div>
-                    <div>
-                        <h2 class="font-semibold text-slate-900 dark:text-white">Signal Diagnostics</h2>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">Dedicated triage queue sorted by worst optical signal first</p>
-                    </div>
+        <div class="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 px-4 py-3 dark:border-slate-700">
+                <div>
+                    <h2 class="font-semibold text-slate-900 dark:text-white">Signal Diagnostics</h2>
+                    <p class="text-xs text-slate-500 dark:text-slate-400">Worst optical signal first</p>
                 </div>
                 <div class="flex items-center gap-2">
-                    <a href="/admin/network/onts?view=diagnostics&signal_quality=critical&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&per_page={{ diagnostics_pagination.per_page }}&signal_quality=critical&order_by=signal&order_dir=asc"
                        class="inline-flex items-center rounded-lg bg-rose-100 px-3 py-1.5 text-xs font-medium text-rose-700 transition-colors hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
                         Critical Only
                     </a>
-                    <a href="/admin/network/onts?view=diagnostics&signal_quality=warning&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&per_page={{ diagnostics_pagination.per_page }}&signal_quality=warning&order_by=signal&order_dir=asc"
                        class="inline-flex items-center rounded-lg bg-amber-100 px-3 py-1.5 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400 dark:hover:bg-amber-900/50">
                         Warning+
                     </a>
-                    <a href="/admin/network/onts?view=diagnostics&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&per_page={{ diagnostics_pagination.per_page }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center rounded-lg bg-slate-100 px-3 py-1.5 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         All
                     </a>
@@ -431,37 +545,31 @@
             <div class="overflow-x-auto">
                 <table class="min-w-full">
                     <thead>
-                        <tr class="border-b border-slate-100 bg-gradient-to-r from-amber-50/50 to-orange-50/30 dark:border-slate-700/50 dark:from-slate-800/80 dark:to-slate-800/50">
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Serial Number</th>
-                            <th scope="col" class="hidden lg:table-cell px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Hex Serial</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT / PON</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">OLT Rx</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">ONU Rx</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Quality</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Distance</th>
-                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Online</th>
-                            <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+                        <tr class="border-b border-slate-100 bg-slate-50 dark:border-slate-700/50 dark:bg-slate-900/40">
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Serial</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT / PON</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT Rx</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">ONU Rx</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Quality</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Distance</th>
+                            <th scope="col" class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Online</th>
+                            <th scope="col" class="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Actions</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                         {% for ont in diagnostics_onts %}
                         {% set sd = signal_data.get(ont.id | string, {}) %}
                         {% set ai = assignment_info.get(ont.id | string, {}) %}
-                        <tr class="group transition-all hover:bg-gradient-to-r hover:from-amber-50/50 hover:to-orange-50/30 dark:hover:from-amber-900/10 dark:hover:to-orange-900/5">
-                            <td class="px-6 py-3">
-                                {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else ont.serial_number %}
-                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ serial_display or ont.serial_number or '-' }}</a>
-                                <p class="text-xs text-slate-500 dark:text-slate-400">{{ ont.vendor or '' }} {{ ont.model or '' }}</p>
-                            </td>
-                            <td class="hidden lg:table-cell px-4 py-3 whitespace-nowrap">
+                        <tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/20">
+                            <td class="px-3 py-2">
+                                {% set serial_display = serial_display_by_ont_id.get(ont.id | string) if serial_display_by_ont_id else "" %}
+                                <a href="/admin/network/onts/{{ ont.id }}" class="font-mono text-sm font-semibold text-slate-900 transition-colors hover:text-blue-600 dark:text-white dark:hover:text-blue-400">{{ serial_display or '-' }}</a>
                                 {% set hex_serial = hex_serial_by_ont_id.get(ont.id | string) if hex_serial_by_ont_id else none %}
                                 {% if hex_serial %}
-                                <span class="font-mono text-xs text-slate-500 dark:text-slate-400 select-all">{{ hex_serial }}</span>
-                                {% else %}
-                                <span class="text-xs text-slate-400">-</span>
+                                <div class="font-mono text-xs text-slate-500 dark:text-slate-400 select-all">{{ hex_serial }}</div>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ai.get("olt_name") %}
                                 <span class="text-sm text-slate-900 dark:text-white">{{ ai.olt_name }}</span>
                                 <p class="text-xs text-slate-500 dark:text-slate-400">{{ ai.pon_port_name or '-' }}</p>
@@ -469,7 +577,7 @@
                                 <span class="text-xs text-slate-400">-</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ont.olt_rx_signal_dbm is not none %}
                                 <span class="font-mono text-sm tabular-nums {{ sd.get('quality_class', 'text-slate-600 dark:text-slate-300') }} inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium">
                                     {{ "%.1f"|format(ont.olt_rx_signal_dbm) }} dBm
@@ -478,14 +586,14 @@
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ont.onu_rx_signal_dbm is not none %}
                                 <span class="font-mono text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ "%.1f"|format(ont.onu_rx_signal_dbm) }} dBm</span>
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% set q = sd.get('quality', 'unknown') %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.get('quality_class', 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300') }}">
                                     {% if q == 'critical' %}
@@ -498,14 +606,14 @@
                                     {{ q | title }}
                                 </span>
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if ont.distance_meters is not none %}
                                 <span class="font-mono text-sm tabular-nums text-slate-700 dark:text-slate-300">{{ ont.distance_meters }} m</span>
                                 {% else %}
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap">
+                            <td class="px-3 py-2 whitespace-nowrap">
                                 {% if sd.get("status_display") and sd.status_display != "Unknown" %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
                                     {% if sd.status_display == "Online" %}
@@ -519,8 +627,8 @@
                                 <span class="text-xs text-slate-400">—</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-3 whitespace-nowrap text-right">
-                                <div class="flex items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                            <td class="px-3 py-2 whitespace-nowrap text-right">
+                                <div class="flex items-center justify-end gap-1">
                                     {{ row_action("/admin/network/onts/" ~ ont.id, icon_view(), "View details", "blue") }}
                                 </div>
                             </td>
@@ -541,20 +649,20 @@
 
             {# Pagination (same as list view) #}
             {% if diagnostics_pagination.total_pages > 1 %}
-            <div class="flex items-center justify-between border-t border-amber-200/60 px-6 py-4 dark:border-amber-700/40">
+            <div class="flex items-center justify-between border-t border-slate-200 px-4 py-3 dark:border-slate-700">
                 <p class="text-sm text-slate-600 dark:text-slate-400">
                     Page {{ diagnostics_pagination.page }} of {{ diagnostics_pagination.total_pages }}
                 </p>
                 <div class="flex items-center gap-2">
                     {% if diagnostics_pagination.has_prev %}
-                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page - 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page - 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
                         Previous
                     </a>
                     {% endif %}
                     {% if diagnostics_pagination.has_next %}
-                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page + 1 }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
+                    <a href="/admin/network/onts?view=diagnostics&page={{ diagnostics_pagination.page + 1 }}&per_page={{ diagnostics_pagination.per_page }}&search={{ filters.search }}&olt_id={{ filters.olt_id }}&pon_port_id={{ filters.pon_port_id }}&pon_hint={{ filters.pon_hint }}&zone_id={{ filters.zone_id }}&online_status={{ filters.online_status }}&signal_quality={{ filters.signal_quality }}&vendor={{ filters.vendor }}&status={{ status_filter }}&order_by=signal&order_dir=asc"
                        class="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
                         Next
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>

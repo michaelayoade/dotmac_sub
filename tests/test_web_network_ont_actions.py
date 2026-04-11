@@ -6,8 +6,8 @@ from sqlalchemy import select
 
 from app.models.event_store import EventStore
 from app.models.network import (
-    CPEDevice,
     ConfigMethod,
+    CPEDevice,
     DeviceStatus,
     IpProtocol,
     MgmtIpMode,
@@ -20,6 +20,7 @@ from app.models.network import (
 )
 from app.schemas.network import OntAssignmentCreate
 from app.services import network as network_service
+from app.services.network.ont_action_common import get_ont_client_or_error
 from app.services.web_network_ont_actions import return_to_inventory
 
 
@@ -115,6 +116,29 @@ def test_return_to_inventory_releases_ont_on_olt_and_marks_inventory_inactive(
     assert cpe.status == DeviceStatus.inactive
     assert cpe.subscriber_id != subscriber.id
     assert cpe.service_address_id is None
+
+
+def test_tr069_resolution_waits_for_first_inform(db_session, monkeypatch):
+    ont = OntUnit(serial_number="WAIT-ACS-001", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+    db_session.refresh(ont)
+
+    monkeypatch.setattr(
+        "app.services.network.ont_action_common.resolve_genieacs_with_reason",
+        lambda *_args: (
+            None,
+            "No TR-069 device found in GenieACS for ONT serial 'WAIT-ACS-001'.",
+        ),
+    )
+
+    resolved, error = get_ont_client_or_error(db_session, str(ont.id))
+
+    assert resolved is None
+    assert error is not None
+    assert error.waiting is True
+    assert error.data == {"waiting_reason": "next_inform", "serial": "WAIT-ACS-001"}
+    assert "waiting for its first GenieACS inform" in error.message
 
 
 def test_return_to_inventory_keeps_local_state_when_olt_delete_fails(

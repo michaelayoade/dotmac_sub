@@ -3,50 +3,29 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.billing import InvoicePdfExport
-from app.services import billing as billing_service
-from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import (
     web_billing_invoice_actions as web_billing_invoice_actions_service,
 )
 from app.services import web_billing_invoices as web_billing_invoices_service
-from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
-from app.services.file_storage import build_content_disposition
-from app.services.object_storage import ObjectNotFoundError
-from app.validators.forms import parse_decimal, parse_uuid
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
-def _invoice_pdf_response(
-    db: Session,
-    latest_export,
-    invoice,
-):
-    try:
-        stream = billing_invoice_pdf_service.stream_export(db, latest_export)
-    except ObjectNotFoundError:
-        return None
+def _actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
 
-    headers = {
-        "Content-Disposition": build_content_disposition(
-            billing_invoice_pdf_service.download_filename(invoice)
-        )
-    }
-    if stream.content_length is not None:
-        headers["Content-Length"] = str(stream.content_length)
-    return StreamingResponse(
-        stream.chunks,
-        media_type=stream.content_type or "application/pdf",
-        headers=headers,
-    )
+    current_user = get_current_user(request)
+    if not current_user:
+        return None
+    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    return str(value) if value else None
 
 
 @router.post(
@@ -59,25 +38,11 @@ def invoice_convert_proforma(
     invoice_id: UUID,
     db: Session = Depends(get_db),
 ):
-    converted = web_billing_invoices_service.convert_proforma_to_final(
+    web_billing_invoices_service.convert_proforma_to_final_web(
         db,
-        invoice_id=str(invoice_id),
-    )
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
         request=request,
-        action="convert",
-        entity_type="invoice",
-        entity_id=str(invoice_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "from": "proforma",
-            "to": "final",
-            "invoice_number": converted.invoice_number,
-        },
+        actor_id=_actor_id(request),
+        invoice_id=str(invoice_id),
     )
     return RedirectResponse(
         url=f"/admin/billing/invoices/{invoice_id}", status_code=303
@@ -142,8 +107,6 @@ def invoice_line_create(
             quantity=quantity,
             unit_price=unit_price,
             tax_rate_id=tax_rate_id,
-            parse_uuid=parse_uuid,
-            parse_decimal=parse_decimal,
         )
     except Exception as exc:
         detail_data = web_billing_invoices_service.load_invoice_detail_data(
@@ -182,24 +145,14 @@ def invoice_apply_credit(
     db: Session = Depends(get_db),
 ):
     try:
-        metadata_payload = web_billing_invoices_service.apply_credit_note_to_invoice(
+        web_billing_invoices_service.apply_credit_note_to_invoice_web(
             db,
+            request=request,
+            actor_id=_actor_id(request),
             invoice_id=str(invoice_id),
             credit_note_id=credit_note_id,
-            amount=parse_decimal(amount, "amount") if amount else None,
-            memo=memo.strip() if memo else None,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="apply",
-            entity_type="credit_note",
-            entity_id=str(credit_note_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata_payload,
+            amount=amount,
+            memo=memo,
         )
     except Exception as exc:
         detail_data = web_billing_invoices_service.load_invoice_detail_data(
@@ -230,61 +183,39 @@ def invoice_apply_credit(
     dependencies=[Depends(require_permission("billing:invoice:read"))],
 )
 def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
-    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-    if not invoice:
+    response, invoice_found = (
+        web_billing_invoice_actions_service.cached_invoice_pdf_response(
+            db, invoice_id=invoice_id
+        )
+    )
+    if not invoice_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Invoice not found"},
             status_code=404,
         )
+    if response is not None:
+        return response
 
-    db.expire_all()
-    latest_export = billing_invoice_pdf_service.get_latest_export(
+    export = web_billing_invoice_actions_service.generate_invoice_pdf_export(
         db,
-        invoice_id=str(invoice_id),
-    )
-    latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(
-        db, latest_export
-    )
-    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
-        billing_invoice_pdf_service.record_cache_hit(db)
-        response = _invoice_pdf_response(db, latest_export, invoice)
-        if response is not None:
-            return response
-    billing_invoice_pdf_service.record_cache_miss(db)
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    actor_id = current_user.get("subscriber_id")
-    export: InvoicePdfExport | None = billing_invoice_pdf_service.generate_export_now(
-        db,
-        invoice_id=str(invoice_id),
-        requested_by_id=str(actor_id) if actor_id else None,
-        force_new=False,
+        invoice_id=invoice_id,
+        requested_by_id=_actor_id(request),
     )
 
-    db.expire_all()
-    export = db.get(type(export), export.id) if export else None
     if export is None:
         return RedirectResponse(
             url=f"/admin/billing/invoices/{invoice_id}?pdf=queued",
             status_code=303,
         )
-    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, export):
-        response = _invoice_pdf_response(db, export, invoice)
-        if response is not None:
-            return response
-
-    notice = "queued"
-    status_value = export.status.value
-    if status_value == "processing":
-        notice = "processing"
-    elif status_value == "failed":
-        notice = "failed"
+    response = web_billing_invoice_actions_service.generated_pdf_response(
+        db, invoice_id=invoice_id, export=export
+    )
+    if response is not None:
+        return response
 
     return RedirectResponse(
-        url=f"/admin/billing/invoices/{invoice_id}?pdf_notice={notice}",
+        url=f"/admin/billing/invoices/{invoice_id}?pdf_notice={web_billing_invoice_actions_service.pdf_notice_for_export(export)}",
         status_code=303,
     )
 
@@ -297,28 +228,19 @@ def invoice_pdf(request: Request, invoice_id: UUID, db: Session = Depends(get_db
 def invoice_pdf_download(
     request: Request, invoice_id: UUID, db: Session = Depends(get_db)
 ):
-    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-    if not invoice:
+    response, invoice_found = (
+        web_billing_invoice_actions_service.cached_invoice_pdf_response(
+            db, invoice_id=invoice_id
+        )
+    )
+    if not invoice_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Invoice not found"},
             status_code=404,
         )
-
-    db.expire_all()
-    latest_export = billing_invoice_pdf_service.get_latest_export(
-        db,
-        invoice_id=str(invoice_id),
-    )
-    latest_export = billing_invoice_pdf_service.maybe_finalize_stalled_export(
-        db, latest_export
-    )
-    if billing_invoice_pdf_service.is_export_cache_valid(db, invoice, latest_export):
-        billing_invoice_pdf_service.record_cache_hit(db)
-        response = _invoice_pdf_response(db, latest_export, invoice)
-        if response is not None:
-            return response
-    billing_invoice_pdf_service.record_cache_miss(db)
+    if response is not None:
+        return response
     return invoice_pdf(request=request, invoice_id=invoice_id, db=db)
 
 
@@ -331,14 +253,10 @@ def invoice_pdf_regenerate(
     invoice_id: UUID,
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    actor_id = current_user.get("subscriber_id")
-    billing_invoice_pdf_service.regenerate_invoice_cache(
+    web_billing_invoice_actions_service.regenerate_invoice_pdf(
         db,
-        invoice_id=str(invoice_id),
-        requested_by_id=str(actor_id) if actor_id else None,
+        invoice_id=invoice_id,
+        requested_by_id=_actor_id(request),
     )
     return RedirectResponse(
         url=f"/admin/billing/invoices/{invoice_id}?pdf_notice=queued",
@@ -352,23 +270,11 @@ def invoice_pdf_regenerate(
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def invoice_send(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-    if invoice:
-        web_billing_invoices_service.maybe_send_invoice_notification(
-            db,
-            invoice=invoice,
-            send_notification="1",
-        )
-    log_audit_event(
-        db=db,
+    web_billing_invoices_service.send_invoice_web(
+        db,
         request=request,
-        action="send",
-        entity_type="invoice",
-        entity_id=str(invoice_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        actor_id=_actor_id(request),
+        invoice_id=str(invoice_id),
     )
     return HTMLResponse(web_billing_invoice_actions_service.send_message(invoice_id))
 
@@ -393,15 +299,10 @@ def invoice_send_and_return(
     dependencies=[Depends(require_permission("billing:invoice:delete"))],
 )
 def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
+    web_billing_invoices_service.void_invoice_web(
+        db,
         request=request,
-        action="void",
-        entity_type="invoice",
-        entity_id=str(invoice_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        actor_id=_actor_id(request),
+        invoice_id=str(invoice_id),
     )
     return HTMLResponse(web_billing_invoice_actions_service.void_message(invoice_id))

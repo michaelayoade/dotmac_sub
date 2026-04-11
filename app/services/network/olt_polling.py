@@ -1066,6 +1066,9 @@ def poll_sfp_modules(
         if rx_val is not None:
             sfp.rx_power_dbm = rx_val
 
+    if updated_count:
+        db.flush()
+
     return {
         "discovered": len(tx_raw) + len(rx_raw),
         "updated": updated_count,

@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, joinedload
+from starlette.requests import Request
 
 from app.models.network import CPEDevice, OntAssignment, OntUnit
 from app.models.tr069 import Tr069CpeDevice, Tr069Job, Tr069JobStatus
@@ -19,11 +20,12 @@ from app.schemas.tr069 import (
     Tr069JobCreate,
 )
 from app.services import network as network_service
-from app.services.network import cpe as cpe_service
 from app.services import tr069 as tr069_service
 from app.services.common import coerce_uuid
 from app.services.genieacs import GenieACSClient, GenieACSError, normalize_tr069_serial
+from app.services.network import cpe as cpe_service
 from app.services.network._common import decode_huawei_hex_serial
+from app.services.tr069_web_audit import log_tr069_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -230,15 +232,36 @@ def acs_form_snapshot_from_model(server) -> dict[str, object]:
     }
 
 
-def create_acs_server(db: Session, values: dict[str, object]):
+def create_acs_server(
+    db: Session, values: dict[str, object], *, request: Request | None = None
+):
     connection_error = validate_acs_connection(values)
     if connection_error:
         raise ValueError(connection_error)
     payload = Tr069AcsServerCreate.model_validate(values)
-    return tr069_service.acs_servers.create(db=db, payload=payload)
+    server = tr069_service.acs_servers.create(db=db, payload=payload)
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="create",
+        entity_type="tr069_acs_server",
+        entity_id=server.id,
+        metadata={
+            "name": server.name,
+            "base_url": server.base_url,
+            "cwmp_url": server.cwmp_url,
+        },
+    )
+    return server
 
 
-def update_acs_server(db: Session, *, acs_id: str, values: dict[str, object]):
+def update_acs_server(
+    db: Session,
+    *,
+    acs_id: str,
+    values: dict[str, object],
+    request: Request | None = None,
+):
     existing = get_acs_server(db, acs_id=acs_id)
     if not str(values.get("cwmp_password") or "").strip():
         values["cwmp_password"] = existing.cwmp_password
@@ -248,17 +271,46 @@ def update_acs_server(db: Session, *, acs_id: str, values: dict[str, object]):
     if connection_error:
         raise ValueError(connection_error)
     payload = Tr069AcsServerUpdate.model_validate(values)
-    return tr069_service.acs_servers.update(db=db, server_id=acs_id, payload=payload)
+    server = tr069_service.acs_servers.update(db=db, server_id=acs_id, payload=payload)
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="update",
+        entity_type="tr069_acs_server",
+        entity_id=server.id,
+        metadata={
+            "name": server.name,
+            "base_url": server.base_url,
+            "cwmp_url": server.cwmp_url,
+        },
+    )
+    return server
 
 
 def get_acs_server(db: Session, *, acs_id: str):
     return tr069_service.acs_servers.get(db=db, server_id=acs_id)
 
 
+def _device_registered_in_acs(device: Tr069CpeDevice) -> bool:
+    return bool(str(getattr(device, "genieacs_device_id", "") or "").strip())
+
+
+def _require_registered_device(device: Tr069CpeDevice) -> None:
+    if not _device_registered_in_acs(device):
+        raise ValueError(
+            "This TR-069 row is expected locally but has not registered in GenieACS yet."
+        )
+
+
 def queue_device_job(db: Session, *, tr069_device_id: str, action: str):
     selected = _JOB_ACTIONS.get(action)
     if selected is None:
         raise ValueError("Unsupported TR-069 action.")
+
+    device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
+    if not device:
+        raise ValueError("TR-069 device not found")
+    _require_registered_device(device)
 
     payload = Tr069JobCreate(
         device_id=coerce_uuid(tr069_device_id),
@@ -291,6 +343,23 @@ def _display_serial_number(value: str | None) -> str | None:
     if not serial:
         return None
     return decode_huawei_hex_serial(serial) or serial
+
+
+def _serial_search_values(value: str | None) -> list[str]:
+    serial = str(value or "").strip()
+    if not serial:
+        return []
+    values = [serial]
+    display_serial = _display_serial_number(serial)
+    if display_serial and display_serial not in values:
+        values.append(display_serial)
+    normalized = normalize_tr069_serial(serial)
+    if normalized and normalized not in values:
+        values.append(normalized)
+    normalized_display = normalize_tr069_serial(display_serial)
+    if normalized_display and normalized_display not in values:
+        values.append(normalized_display)
+    return values
 
 
 def tr069_dashboard_data(
@@ -362,8 +431,8 @@ def tr069_dashboard_data(
             for item in devices
             if search_q
             in " ".join(
-                [
-                    str(item.serial_number or ""),
+                _serial_search_values(item.serial_number)
+                + [
                     str(item.oui or ""),
                     str(item.product_class or ""),
                     str(item.connection_request_url or ""),
@@ -411,6 +480,13 @@ def tr069_dashboard_data(
         }
 
     for device in devices:
+        device.is_registered_in_acs = _device_registered_in_acs(device)
+        if device.is_registered_in_acs:
+            device.registration_state_label = "Registered"
+        elif device.ont_unit_id:
+            device.registration_state_label = "Expected"
+        else:
+            device.registration_state_label = "Unmatched"
         device.linked_cpe = (
             cpe_by_id.get(str(device.cpe_device_id)) if device.cpe_device_id else None
         )
@@ -470,6 +546,19 @@ def tr069_dashboard_data(
 
     now = datetime.now(UTC)
     seen_window = now - timedelta(hours=24)
+    registered_devices = [
+        item for item in devices if getattr(item, "is_registered_in_acs", False)
+    ]
+    expected_devices = [
+        item
+        for item in devices
+        if not getattr(item, "is_registered_in_acs", False) and item.ont_unit_id
+    ]
+    unmatched_devices = [
+        item
+        for item in devices
+        if not getattr(item, "is_registered_in_acs", False) and not item.ont_unit_id
+    ]
 
     def _seen_recently(item: Tr069CpeDevice) -> bool:
         informed_at = item.last_inform_at
@@ -496,6 +585,9 @@ def tr069_dashboard_data(
         "stats": {
             "servers": len(servers),
             "devices": len(devices),
+            "registered": len(registered_devices),
+            "expected": len(expected_devices),
+            "unmatched": len(unmatched_devices),
             "unlinked": len(unconfigured_devices),
             "configured": len(configured_devices),
             "unconfigured": len(unconfigured_devices),
@@ -518,7 +610,7 @@ def sync_server(db: Session, *, acs_server_id: str) -> dict[str, int]:
 
 
 def create_ont_from_tr069_device(
-    db: Session, *, tr069_device_id: str
+    db: Session, *, tr069_device_id: str, request: Request | None = None
 ) -> tuple[OntUnit, bool]:
     """Create or resolve an ONT inventory record from a synced TR-069 device.
 
@@ -550,6 +642,19 @@ def create_ont_from_tr069_device(
         )
         db.commit()
         db.refresh(existing)
+        log_tr069_audit_event(
+            db,
+            request=request,
+            action="create",
+            entity_type="ont",
+            entity_id=existing.id,
+            metadata={
+                "source": "tr069_device",
+                "tr069_device_id": tr069_device_id,
+                "created_new": False,
+                "serial_number": existing.serial_number,
+            },
+        )
         return existing, False
 
     payload = OntUnitCreate(
@@ -571,6 +676,19 @@ def create_ont_from_tr069_device(
     )
     db.commit()
     db.refresh(ont)
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="create",
+        entity_type="ont",
+        entity_id=ont.id,
+        metadata={
+            "source": "tr069_device",
+            "tr069_device_id": tr069_device_id,
+            "created_new": True,
+            "serial_number": ont.serial_number,
+        },
+    )
     return ont, True
 
 
@@ -585,6 +703,7 @@ def create_config_push_job(
     tr069_device_id: str,
     action_key: str,
     value: str,
+    request: Request | None = None,
 ) -> Tr069Job:
     """Create a config push job (setParameterValues) for a TR-069 device.
 
@@ -604,6 +723,7 @@ def create_config_push_job(
     device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
     if not device:
         raise ValueError("TR-069 device not found")
+    _require_registered_device(device)
 
     # Build parameter values - try TR-181 path first, fallback to TR-098
     # Device. paths are TR-181, InternetGatewayDevice. paths are TR-098
@@ -632,7 +752,19 @@ def create_config_push_job(
     job = tr069_service.jobs.create(db=db, payload=payload)
 
     # Execute immediately
-    return tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    executed = tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="config_push",
+        entity_type="tr069_device",
+        entity_id=tr069_device_id,
+        metadata={
+            "config_action": action_key,
+            "job_id": str(executed.id),
+        },
+    )
+    return executed
 
 
 def create_firmware_download_job(
@@ -641,6 +773,7 @@ def create_firmware_download_job(
     tr069_device_id: str,
     firmware_url: str,
     filename: str | None = None,
+    request: Request | None = None,
 ) -> Tr069Job:
     """Create a firmware download job for a TR-069 device.
 
@@ -656,6 +789,7 @@ def create_firmware_download_job(
     device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
     if not device:
         raise ValueError("TR-069 device not found")
+    _require_registered_device(device)
 
     if not firmware_url or not firmware_url.strip():
         raise ValueError("Firmware URL is required")
@@ -677,13 +811,28 @@ def create_firmware_download_job(
     job = tr069_service.jobs.create(db=db, payload=payload)
 
     # Execute immediately
-    return tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    executed = tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="firmware_update",
+        entity_type="tr069_device",
+        entity_id=tr069_device_id,
+        metadata={
+            "firmware_url": firmware_url,
+            "filename": filename,
+            "job_id": str(executed.id),
+        },
+    )
+    return executed
 
 
 def queue_bulk_action(
-    device_ids: list[str],
-    action: str,
+    db: Session | list[str],
+    device_ids: list[str] | str,
+    action: str | None = None,
     params: dict | None = None,
+    request: Request | None = None,
 ) -> str:
     """Queue a bulk action for multiple TR-069 devices.
 
@@ -695,6 +844,31 @@ def queue_bulk_action(
     Returns:
         Celery task ID
     """
+    if action is None:
+        legacy_device_ids = db
+        legacy_action = device_ids
+        if not isinstance(legacy_device_ids, list) or not isinstance(
+            legacy_action, str
+        ):
+            raise ValueError("Invalid bulk action arguments")
+        device_ids = legacy_device_ids
+        action = legacy_action
+        registered_ids = [str(device_id) for device_id in device_ids]
+    else:
+        if not isinstance(device_ids, list):
+            raise ValueError("No devices selected for bulk action")
+        registered_ids = [
+            str(row.id)
+            for row in db.query(Tr069CpeDevice)
+            .filter(
+                Tr069CpeDevice.id.in_(
+                    [coerce_uuid(device_id) for device_id in device_ids]
+                )
+            )
+            .filter(Tr069CpeDevice.genieacs_device_id.isnot(None))
+            .all()
+        ]
+
     if not device_ids:
         raise ValueError("No devices selected for bulk action")
 
@@ -702,13 +876,16 @@ def queue_bulk_action(
     if action not in valid_actions:
         raise ValueError(f"Invalid bulk action: {action}")
 
+    if not registered_ids:
+        raise ValueError("No selected devices are registered in GenieACS yet")
+
     from app.celery_app import enqueue_celery_task
     from app.tasks.tr069 import execute_bulk_action
 
     task = enqueue_celery_task(
         execute_bulk_action,
-        args=[device_ids, action, params or {}],
-        correlation_id=f"tr069_bulk:{action}:{len(device_ids)}",
+        args=[registered_ids, action, params or {}],
+        correlation_id=f"tr069_bulk:{action}:{len(registered_ids)}",
         source="web_network_tr069",
     )
     logger.info(
@@ -716,12 +893,26 @@ def queue_bulk_action(
         extra={
             "event": "tr069_bulk_action",
             "action": action,
-            "device_count": len(device_ids),
+            "device_count": len(registered_ids),
             "task_id": str(task.id),
-            "correlation_id": f"tr069_bulk:{action}:{len(device_ids)}",
+            "correlation_id": f"tr069_bulk:{action}:{len(registered_ids)}",
         },
     )
-    return str(task.id)
+    task_id = str(task.id)
+    if isinstance(db, Session):
+        log_tr069_audit_event(
+            db,
+            request=request,
+            action="bulk_action",
+            entity_type="tr069_devices",
+            entity_id=task_id,
+            metadata={
+                "action": action,
+                "device_count": len(device_ids),
+                "task_id": task_id,
+            },
+        )
+    return task_id
 
 
 def create_nat_port_forward_job(
@@ -733,6 +924,7 @@ def create_nat_port_forward_job(
     internal_port: int,
     protocol: str,
     description: str | None = None,
+    request: Request | None = None,
 ) -> Tr069Job:
     """Create a NAT port forwarding rule on a TR-069 device.
 
@@ -751,6 +943,7 @@ def create_nat_port_forward_job(
     device = db.get(Tr069CpeDevice, coerce_uuid(tr069_device_id))
     if not device:
         raise ValueError("TR-069 device not found")
+    _require_registered_device(device)
 
     # Validate inputs
     if not (1 <= external_port <= 65535):
@@ -813,4 +1006,89 @@ def create_nat_port_forward_job(
     job = tr069_service.jobs.create(db=db, payload=payload)
 
     # Execute immediately
-    return tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    executed = tr069_service.jobs.execute(db=db, job_id=str(job.id))
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="nat_port_forward",
+        entity_type="tr069_device",
+        entity_id=tr069_device_id,
+        metadata={
+            "external_port": external_port,
+            "internal_ip": internal_ip,
+            "internal_port": internal_port,
+            "protocol": protocol_upper,
+            "job_id": str(executed.id),
+        },
+    )
+    return executed
+
+
+def push_acs_enforcement_preset(
+    db: Session,
+    acs_id: str,
+    *,
+    on_bootstrap: bool,
+    on_boot: bool,
+    on_periodic: bool,
+    precondition: str,
+    request: Request | None = None,
+) -> dict[str, object]:
+    result = tr069_service.push_acs_enforcement_preset(
+        db,
+        acs_id,
+        on_bootstrap=on_bootstrap,
+        on_boot=on_boot,
+        on_periodic=on_periodic,
+        precondition=precondition,
+    )
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="create_enforcement_preset",
+        entity_type="tr069_acs_server",
+        entity_id=acs_id,
+        metadata={
+            "preset_id": result.get("preset_id"),
+            "provision_id": result.get("provision_id"),
+            "cwmp_url": result.get("cwmp_url"),
+        },
+    )
+    return result
+
+
+def remove_acs_enforcement_preset(
+    db: Session, acs_id: str, *, request: Request | None = None
+) -> dict[str, object]:
+    result = tr069_service.remove_acs_enforcement_preset(db, acs_id)
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="remove_enforcement_preset",
+        entity_type="tr069_acs_server",
+        entity_id=acs_id,
+        metadata={
+            "preset_id": result.get("preset_id"),
+            "provision_id": result.get("provision_id"),
+            "removed": result.get("removed"),
+        },
+    )
+    return result
+
+
+def push_runtime_collection_preset(
+    db: Session, acs_id: str, *, request: Request | None = None
+) -> dict[str, object]:
+    result = tr069_service.push_runtime_collection_preset(db, acs_id)
+    log_tr069_audit_event(
+        db,
+        request=request,
+        action="create_runtime_preset",
+        entity_type="tr069_acs_server",
+        entity_id=acs_id,
+        metadata={
+            "preset_id": result.get("preset_id"),
+            "provision_id": result.get("provision_id"),
+        },
+    )
+    return result

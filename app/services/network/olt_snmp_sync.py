@@ -1,7 +1,7 @@
-"""SNMP-driven OLT/ONT inventory sync helpers.
+"""SNMP-driven OLT/ONU telemetry sync helpers.
 
 This module owns vendor-aware SNMP walks and ONT row reconciliation logic for
-bulk OLT sync and targeted post-authorization sync. `web_network_olts.py`
+bulk OLT telemetry sync and targeted post-authorization sync. `web_network_olts.py`
 keeps thin wrappers so existing callers and tests continue to use the same
 public entrypoints while the heavy sync implementation lives here.
 """
@@ -9,13 +9,13 @@ public entrypoints while the heavy sync implementation lives here.
 from __future__ import annotations
 
 import logging
-import subprocess  # nosec
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import select
+from fastapi import HTTPException
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.network import (
     GponChannel,
@@ -23,16 +23,38 @@ from app.models.network import (
     OntUnit,
     OnuOfflineReason,
     OnuOnlineStatus,
+    PonPort,
     PonType,
 )
 from app.models.network_monitoring import DeviceInterface
-from app.services.credential_crypto import decrypt_credential
+from app.services import tr069 as tr069_service
+from app.services.events import emit_event
+from app.services.events.types import EventType
 from app.services.network.huawei_snmp import (
     decode_huawei_packed_fsp,
     is_huawei_vendor,
     resolve_huawei_snmp_profile,
 )
+from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.olt_monitoring_devices import resolve_snmp_target_for_olt
 from app.services.network.olt_polling import reconcile_snmp_status_with_signal
+from app.services.network.olt_tr069_admin import queue_acs_propagation
+from app.services.network.olt_web_audit import (
+    actor_name_from_request,
+    log_olt_audit_event,
+)
+from app.services.network.olt_web_topology import ensure_canonical_pon_port
+from app.services.network.ont_serials import (
+    is_plausible_vendor_serial,
+    looks_synthetic_ont_serial,
+    normalize_ont_serial,
+    prefer_ont_candidate,
+)
+from app.services.network.ont_status import (
+    apply_status_snapshot,
+    resolve_ont_status_for_model,
+)
+from app.services.network.snmp_walk import run_simple_v2c_walk
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +193,10 @@ def _build_packed_fsp_map(
     db: Session, linked: Any, indexes: set[str]
 ) -> dict[str, str]:
     """Map Huawei packed FSP integers to detected PON hints (0/s/p)."""
+    linked_id = getattr(linked, "id", None)
+    if linked_id is None:
+        return {}
+
     packed_values: list[int] = []
     for idx in indexes:
         parts = [p for p in idx.split(".") if p.isdigit()]
@@ -184,7 +210,7 @@ def _build_packed_fsp_map(
 
     iface_names = list(
         db.scalars(
-            select(DeviceInterface.name).where(DeviceInterface.device_id == linked.id)
+            select(DeviceInterface.name).where(DeviceInterface.device_id == linked_id)
         ).all()
     )
     hints = sorted(
@@ -203,33 +229,8 @@ def _build_packed_fsp_map(
 def _run_simple_v2c_walk(
     linked: Any, oid: str, *, timeout: int = 45, bulk: bool = False
 ) -> list[str]:
-    """Run SNMP walk with minimal flags for Huawei compatibility."""
-    host = linked.mgmt_ip or linked.hostname
-    if not host:
-        raise RuntimeError("Missing SNMP host")
-    if linked.snmp_port:
-        host = f"{host}:{linked.snmp_port}"
-    if (linked.snmp_version or "v2c").lower() not in {"v2c", "2c"}:
-        raise RuntimeError("Only SNMP v2c is supported for ONT sync")
-    community = (
-        decrypt_credential(linked.snmp_community) if linked.snmp_community else ""
-    )
-    if not community:
-        raise RuntimeError("SNMP community is not configured")
-
-    cmd = "snmpbulkwalk" if bulk else "snmpwalk"
-    args = [cmd, "-v2c", "-c", community, host, oid]
-    result = subprocess.run(
-        args,
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=timeout,
-    )
-    if result.returncode != 0:
-        err = (result.stderr or result.stdout or "SNMP walk failed").strip()
-        raise RuntimeError(f"{oid}: {err}")
-    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    """Compatibility wrapper for the shared SNMP walk helper."""
+    return run_simple_v2c_walk(linked, oid, timeout=timeout, bulk=bulk)
 
 
 def sync_onts_from_olt_snmp(
@@ -238,39 +239,48 @@ def sync_onts_from_olt_snmp(
     *,
     walk_fn=None,
 ) -> tuple[bool, str, dict[str, object]]:
-    """Discover ONUs from an OLT by SNMP and upsert OntUnit rows."""
-    from app.services import web_network_olts as web_network_olts_service
+    """Discover ONUs from an OLT by SNMP with a per-OLT advisory lock."""
+    bind = db.get_bind()
+    if bind.dialect.name != "postgresql":
+        if walk_fn is None:
+            return _sync_onts_from_olt_snmp_impl(db, olt_id)
+        return _sync_onts_from_olt_snmp_impl(db, olt_id, walk_fn=walk_fn)
+    lock_key = olt_sync_lock_key(olt_id)
+    lock_acquired = bool(
+        db.execute(
+            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": lock_key}
+        ).scalar()
+    )
+    if not lock_acquired:
+        return (
+            False,
+            "Another sync is already running for this OLT",
+            {"discovered": 0, "created": 0, "updated": 0},
+        )
+    if walk_fn is None:
+        return _sync_onts_from_olt_snmp_impl(db, olt_id)
+    return _sync_onts_from_olt_snmp_impl(db, olt_id, walk_fn=walk_fn)
 
-    walk = walk_fn or web_network_olts_service._run_simple_v2c_walk
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+
+def _sync_onts_from_olt_snmp_impl(
+    db: Session,
+    olt_id: str,
+    *,
+    walk_fn=None,
+) -> tuple[bool, str, dict[str, object]]:
+    """Internal implementation of ONT SNMP sync."""
+    walk = walk_fn or _run_simple_v2c_walk
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found", {"discovered": 0, "created": 0, "updated": 0}
 
-    linked: Any = web_network_olts_service._find_linked_network_device(
-        db,
-        mgmt_ip=olt.mgmt_ip,
-        hostname=olt.hostname,
-        name=olt.name,
-    )
-
+    linked: Any = resolve_snmp_target_for_olt(db, olt)
     if not linked:
-        raw_ro = getattr(olt, "snmp_ro_community", None)
-        if raw_ro and raw_ro.strip():
-            linked = SimpleNamespace(
-                mgmt_ip=olt.mgmt_ip,
-                hostname=olt.hostname,
-                snmp_enabled=True,
-                snmp_community=raw_ro.strip(),
-                snmp_version="v2c",
-                snmp_port=None,
-                vendor=olt.vendor,
-            )
-        else:
-            return (
-                False,
-                "No linked monitoring device and no SNMP community on OLT",
-                {"discovered": 0, "created": 0, "updated": 0},
-            )
+        return (
+            False,
+            "No linked monitoring device and no SNMP community on OLT",
+            {"discovered": 0, "created": 0, "updated": 0},
+        )
     if not linked.snmp_enabled:
         return (
             False,
@@ -370,15 +380,20 @@ def sync_onts_from_olt_snmp(
     existing_onts = list(
         db.scalars(select(OntUnit).where(OntUnit.olt_device_id == olt.id)).all()
     )
-    active_assignment_ont_ids = {
-        str(ont_unit_id)
-        for ont_unit_id in db.scalars(
-            select(OntAssignment.ont_unit_id).where(
-                OntAssignment.active.is_(True),
-                OntAssignment.ont_unit_id.in_([ont.id for ont in existing_onts]),
-            )
-        ).all()
-    }
+    existing_ont_ids = [ont.id for ont in existing_onts]
+    active_assignment_ont_ids = (
+        {
+            str(ont_unit_id)
+            for ont_unit_id in db.scalars(
+                select(OntAssignment.ont_unit_id).where(
+                    OntAssignment.active.is_(True),
+                    OntAssignment.ont_unit_id.in_(existing_ont_ids),
+                )
+            ).all()
+        }
+        if existing_ont_ids
+        else set()
+    )
     by_external_id: dict[str, OntUnit] = {}
     by_fsp_onu: dict[tuple[str, str], OntUnit] = {}
     duplicate_fsp_onu: set[tuple[str, str]] = set()
@@ -388,33 +403,33 @@ def sync_onts_from_olt_snmp(
     for ont in existing_onts:
         external_id_val = str(getattr(ont, "external_id", "") or "").strip()
         if external_id_val:
-            by_external_id[external_id_val] = web_network_olts_service._prefer_ont_candidate(
+            by_external_id[external_id_val] = prefer_ont_candidate(
                 by_external_id.get(external_id_val),
                 ont,
                 active_assignment_ont_ids=active_assignment_ont_ids,
             )
         serial_val = str(getattr(ont, "serial_number", "") or "").strip()
         if serial_val:
-            by_serial[serial_val] = web_network_olts_service._prefer_ont_candidate(
+            by_serial[serial_val] = prefer_ont_candidate(
                 by_serial.get(serial_val),
                 ont,
                 active_assignment_ont_ids=active_assignment_ont_ids,
             )
-            normalized_serial = web_network_olts_service._normalize_ont_serial(serial_val)
+            normalized_serial = normalize_ont_serial(serial_val)
             if normalized_serial:
                 by_normalized_serial[normalized_serial] = (
-                    web_network_olts_service._prefer_ont_candidate(
+                    prefer_ont_candidate(
                         by_normalized_serial.get(normalized_serial),
                         ont,
                         active_assignment_ont_ids=active_assignment_ont_ids,
                     )
                 )
-        vendor_serial_val = web_network_olts_service._normalize_ont_serial(
+        vendor_serial_val = normalize_ont_serial(
             str(getattr(ont, "vendor_serial_number", "") or "").strip()
         )
         if vendor_serial_val:
             by_vendor_serial[vendor_serial_val] = (
-                web_network_olts_service._prefer_ont_candidate(
+                prefer_ont_candidate(
                     by_vendor_serial.get(vendor_serial_val),
                     ont,
                     active_assignment_ont_ids=active_assignment_ont_ids,
@@ -434,7 +449,7 @@ def sync_onts_from_olt_snmp(
                 duplicate_fsp_onu.add(key)
                 by_fsp_onu.pop(key, None)
             elif key not in duplicate_fsp_onu:
-                by_fsp_onu[key] = web_network_olts_service._prefer_ont_candidate(
+                by_fsp_onu[key] = prefer_ont_candidate(
                     by_fsp_onu.get(key),
                     ont,
                     active_assignment_ont_ids=active_assignment_ont_ids,
@@ -443,6 +458,7 @@ def sync_onts_from_olt_snmp(
     created = 0
     updated = 0
     skipped = 0
+    unresolved_topology = 0
     now = datetime.now(UTC)
     olt_tag = str(olt.id).split("-")[0].upper()
     packed_fsp_map = (
@@ -460,10 +476,11 @@ def sync_onts_from_olt_snmp(
         parsed = _split_onu_index(idx)
         if not parsed:
             continue
-        frame = "0"
-        slot = "0"
-        port = "0"
+        frame: str | None = None
+        slot: str | None = None
+        port: str | None = None
         onu = "0"
+        fsp: str | None = None
         if len(parsed) >= 4:
             frame, slot, port, onu = parsed
             fsp = f"{frame}/{slot}/{port}"
@@ -479,24 +496,30 @@ def sync_onts_from_olt_snmp(
                 hinted = packed_fsp_map.get(str(packed))
                 if decoded and hinted and decoded != hinted:
                     logger.warning(
-                        "Huawei packed FSP hint mismatch on OLT %s for %s: decoded=%s hinted=%s; using decoded",
+                        "Huawei packed FSP hint mismatch on OLT %s for %s: decoded=%s hinted=%s; using hinted",
                         olt.id,
                         packed,
                         decoded,
                         hinted,
                     )
-                fsp = decoded or hinted or f"0/0/{packed}"
-            else:
-                fsp = f"0/0/{packed}"
-        fsp_parts = fsp.split("/")
-        frame = fsp_parts[0] if len(fsp_parts) > 0 else "0"
-        slot = fsp_parts[1] if len(fsp_parts) > 1 else "0"
-        port = fsp_parts[2] if len(fsp_parts) > 2 else "0"
-        board = f"{frame}/{slot}"
+                fsp = hinted or decoded
+        if fsp:
+            fsp_parts = fsp.split("/")
+            frame = fsp_parts[0] if len(fsp_parts) > 0 else None
+            slot = fsp_parts[1] if len(fsp_parts) > 1 else None
+            port = fsp_parts[2] if len(fsp_parts) > 2 else None
+        else:
+            unresolved_topology += 1
+        board = f"{frame}/{slot}" if frame is not None and slot is not None else None
         external_id = f"{vendor_key}:{idx}"
-        synthetic_serial = f"{vendor_serial_prefix}-{olt_tag}-{frame}{slot}{port}{onu}"
+        serial_frame = frame if frame is not None else "U"
+        serial_slot = slot if slot is not None else "U"
+        serial_port = port if port is not None else "U"
+        synthetic_serial = (
+            f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
+        )
         vendor_serial = (
-            web_network_olts_service._normalize_ont_serial(
+            normalize_ont_serial(
                 str(serial_rows.get(idx) or "").strip()
             )
             or None
@@ -530,82 +553,348 @@ def sync_onts_from_olt_snmp(
                 or by_serial.get(synthetic_serial)
             ) or None
         if matched_ont is None:
-            ont = OntUnit(
-                serial_number=synthetic_serial,
-                vendor_serial_number=vendor_serial,
-                model=olt.model,
-                vendor=olt.vendor or vendor_key.title(),
-                is_active=True,
-                olt_device_id=olt.id,
-                pon_type=PonType.gpon,
-                gpon_channel=GponChannel.gpon,
-                board=board,
-                port=port,
-                external_id=external_id,
+            skipped += 1
+            logger.info(
+                "Skipping SNMP-only ONU observation on OLT %s index=%s fsp=%s onu=%s vendor_serial=%s; "
+                "ONT inventory is created by autofind authorization, manual add, or explicit import.",
+                olt.id,
+                idx,
+                fsp,
+                onu,
+                vendor_serial,
             )
-            db.add(ont)
-            created += 1
-        else:
-            ont = matched_ont
-            if not ont.is_active:
-                logger.info(
-                    "Inactive ONT %s (external_id=%s) rediscovered during sync on OLT %s",
-                    ont.id,
-                    ont.external_id,
-                    olt.id,
-                )
-            ont.is_active = True
-            ont.olt_device_id = olt.id
-            ont.board = board
-            ont.port = port
-            ont.external_id = external_id
-            updated += 1
+            continue
+
+        ont = matched_ont
+        if not ont.is_active:
+            logger.info(
+                "Inactive ONT %s (external_id=%s) rediscovered during sync on OLT %s",
+                ont.id,
+                ont.external_id,
+                olt.id,
+            )
+        ont.is_active = True
+        ont.olt_device_id = olt.id
+        ont.vendor = ont.vendor or (olt.vendor or vendor_key.title())
+        ont.model = ont.model or olt.model
+        ont.board = board
+        ont.port = port
+        ont.external_id = external_id
+        ont.pon_type = PonType.gpon
+        ont.gpon_channel = GponChannel.gpon
+        tr069_service.sync_ont_acs_server(db, ont, olt.tr069_acs_server_id)
+        updated += 1
 
         if (
             vendor_serial
-            and not web_network_olts_service._looks_synthetic_ont_serial(vendor_serial)
-            and web_network_olts_service._is_plausible_vendor_serial(vendor_serial)
+            and not looks_synthetic_ont_serial(vendor_serial)
+            and is_plausible_vendor_serial(vendor_serial)
         ):
             ont.vendor_serial_number = vendor_serial
             if (
                 not getattr(ont, "serial_number", None)
-                or web_network_olts_service._looks_synthetic_ont_serial(ont.serial_number)
+                or looks_synthetic_ont_serial(ont.serial_number)
             ):
                 ont.serial_number = vendor_serial
         elif not getattr(ont, "vendor_serial_number", None):
             ont.vendor_serial_number = vendor_serial
-        if not getattr(ont, "serial_number", None):
-            ont.serial_number = synthetic_serial
         ont.online_status = status
-        ont.offline_reason = None if status == OnuOnlineStatus.online else offline_reason
+        if status == OnuOnlineStatus.online:
+            ont.last_seen_at = now
+            ont.offline_reason = None
+        elif status == OnuOnlineStatus.offline:
+            ont.offline_reason = offline_reason
+        else:
+            ont.offline_reason = None
         ont.olt_rx_signal_dbm = olt_rx
         ont.onu_rx_signal_dbm = onu_rx
         ont.distance_meters = distance
         ont.signal_updated_at = now
-        ont.last_seen_at = now if status == OnuOnlineStatus.online else ont.last_seen_at
-        if ont.tr069_acs_server_id is None:
-            ont.tr069_acs_server_id = olt.tr069_acs_server_id
+        if fsp and board and port:
+            ensure_canonical_pon_port(
+                db,
+                olt_id=olt.id,
+                fsp=fsp,
+                board=board,
+                port=port,
+            )
+        apply_status_snapshot(
+            ont,
+            resolve_ont_status_for_model(
+                ont,
+                now=now,
+            ),
+        )
+
+    try:
+        db.flush()
+    except Exception as exc:
+        db.rollback()
+        return (
+            False,
+            f"Failed to save discovered ONTs: {exc!s}",
+            {"discovered": len(all_indexes), "created": created, "updated": updated},
+        )
+
+    assignment_created = 0
+    assignment_errors = 0
+    try:
+        olt_pon_ports = {
+            pp.name: pp
+            for pp in db.scalars(
+                select(PonPort).where(
+                    PonPort.olt_id == olt.id,
+                    PonPort.is_active.is_(True),
+                )
+            ).all()
+        }
+        onts_needing_assignment = list(
+            db.scalars(
+                select(OntUnit)
+                .outerjoin(
+                    OntAssignment,
+                    (OntAssignment.ont_unit_id == OntUnit.id)
+                    & (OntAssignment.active.is_(True)),
+                )
+                .where(
+                    OntUnit.olt_device_id == olt.id,
+                    OntUnit.is_active.is_(True),
+                    OntAssignment.id.is_(None),
+                )
+            ).all()
+        )
+        for ont_item in onts_needing_assignment:
+            ont_board = getattr(ont_item, "board", "") or ""
+            ont_port = getattr(ont_item, "port", "") or ""
+            pon_name = f"{ont_board}/{ont_port}" if ont_board and ont_port else None
+            if not pon_name:
+                continue
+            pon_port = olt_pon_ports.get(pon_name)
+            if not pon_port:
+                pon_port = ensure_canonical_pon_port(
+                    db,
+                    olt_id=olt.id,
+                    fsp=pon_name,
+                    board=ont_board,
+                    port=ont_port,
+                )
+            else:
+                pon_port = ensure_canonical_pon_port(
+                    db,
+                    olt_id=olt.id,
+                    fsp=pon_name,
+                    board=ont_board,
+                    port=ont_port,
+                )
+            olt_pon_ports[pon_name] = pon_port
+            assignment = OntAssignment(
+                ont_unit_id=ont_item.id,
+                pon_port_id=pon_port.id,
+                active=True,
+                assigned_at=now,
+            )
+            db.add(assignment)
+            assignment_created += 1
+        if assignment_created:
+            db.flush()
+    except Exception as exc:
+        logger.warning("Failed to auto-create ONT assignments: %s", exc)
+        db.rollback()
+        assignment_errors += 1
+        return (
+            False,
+            f"Failed to auto-create ONT assignments: {exc!s}",
+            {
+                "discovered": len(all_indexes),
+                "created": created,
+                "updated": updated,
+                "assignments_created": 0,
+                "assignment_errors": assignment_errors,
+                "tr069_runtime_synced": 0,
+                "tr069_runtime_errors": 0,
+            },
+        )
+
+    if created > 0:
+        try:
+            emit_event(
+                db,
+                EventType.ont_discovered,
+                {
+                    "olt_id": str(olt.id),
+                    "olt_name": olt.name,
+                    "created": created,
+                    "updated": updated,
+                    "total_discovered": len(all_indexes),
+                },
+                actor="system",
+            )
+        except Exception as exc:
+            logger.warning("Failed to emit ont_discovered event: %s", exc)
+
+    tr069_runtime_synced = 0
+    tr069_runtime_errors = 0
+    if olt.tr069_acs_server_id:
+        try:
+            from app.services.network.ont_tr069 import OntTR069
+
+            onts_for_olt = list(
+                db.scalars(
+                    select(OntUnit)
+                    .where(OntUnit.olt_device_id == olt.id)
+                    .where(OntUnit.is_active.is_(True))
+                ).all()
+            )
+            for ont in onts_for_olt:
+                try:
+                    summary = OntTR069.get_device_summary(
+                        db,
+                        str(ont.id),
+                        persist_observed_runtime=False,
+                    )
+                    if summary.available:
+                        OntTR069._persist_observed_runtime(
+                            db,
+                            ont,
+                            summary,
+                            commit=False,
+                        )
+                        tr069_runtime_synced += 1
+                except Exception:
+                    tr069_runtime_errors += 1
+        except Exception:
+            tr069_runtime_errors += 1
+
+    propagation_stats: dict[str, int] = {}
+    if olt.tr069_acs_server_id:
+        try:
+            propagation_stats = queue_acs_propagation(db, olt)
+        except Exception as exc:
+            logger.error("ACS propagation after ONU telemetry sync failed: %s", exc)
+            propagation_stats = {
+                "attempted": 0,
+                "propagated": 0,
+                "unresolved": 0,
+                "errors": 1,
+            }
+
+    result_stats = {
+        "discovered": len(all_indexes),
+        "created": created,
+        "updated": updated,
+        "skipped": skipped,
+        "unresolved_topology": unresolved_topology,
+        "assignments_created": assignment_created,
+        "assignment_errors": assignment_errors,
+        "tr069_runtime_synced": tr069_runtime_synced,
+        "tr069_runtime_errors": tr069_runtime_errors,
+    }
+    if propagation_stats:
+        result_stats["acs_propagation"] = propagation_stats
 
     try:
         db.commit()
     except Exception as exc:
         db.rollback()
-        return (
-            False,
-            f"Failed to save SNMP sync results: {exc}",
-            {"discovered": len(all_indexes), "created": created, "updated": updated},
-        )
+        return False, f"Failed to finalize ONU telemetry sync: {exc!s}", result_stats
 
     return (
         True,
-        f"Discovered {len(all_indexes)} ONTs from SNMP.",
-        {
-            "discovered": len(all_indexes),
-            "created": created,
-            "updated": updated,
-            "skipped": skipped,
-        },
+        f"{vendor_key.title()} ONU telemetry sync complete: observed {len(all_indexes)}, "
+        f"updated {updated}, skipped {skipped} unlinked.",
+        result_stats,
     )
+
+
+def sync_onts_from_olt_snmp_tracked(
+    db: Session,
+    olt_id: str,
+    *,
+    initiated_by: str | None = None,
+    request: Request | None = None,
+    walk_fn=None,
+    sync_fn=None,
+) -> tuple[bool, str, dict[str, object]]:
+    """Tracked wrapper around SNMP-driven ONU telemetry sync."""
+    from app.models.network_operation import (
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.services.network_operations import network_operations
+
+    initiated_by = initiated_by or actor_name_from_request(request)
+    try:
+        op = network_operations.start(
+            db,
+            NetworkOperationType.olt_ont_sync,
+            NetworkOperationTargetType.olt,
+            olt_id,
+            correlation_key=f"olt_sync:{olt_id}",
+            initiated_by=initiated_by,
+        )
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            return False, "A sync is already in progress for this OLT.", {}
+        raise
+    network_operations.mark_running(db, str(op.id))
+    db.flush()
+
+    try:
+        sync = sync_fn or sync_onts_from_olt_snmp
+        if sync_fn is None:
+            success, message, stats = sync(db, olt_id, walk_fn=walk_fn)
+        else:
+            success, message, stats = sync(db, olt_id)
+        try:
+            if success:
+                network_operations.mark_succeeded(
+                    db, str(op.id), output_payload=dict(stats)
+                )
+            else:
+                network_operations.mark_failed(
+                    db, str(op.id), message, output_payload=dict(stats)
+                )
+        except Exception as track_err:
+            logger.error(
+                "Failed to record operation outcome for %s: %s", op.id, track_err
+            )
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="sync_onts",
+            entity_id=olt_id,
+            metadata={
+                "result": "success" if success else "error",
+                "message": message,
+                "stats": stats,
+            },
+            status_code=200 if success else 500,
+            is_success=success,
+        )
+        return success, message, stats
+    except Exception as exc:
+        try:
+            network_operations.mark_failed(db, str(op.id), str(exc))
+        except Exception as track_err:
+            logger.error(
+                "Failed to record operation failure for %s: %s (original: %s)",
+                op.id,
+                track_err,
+                exc,
+            )
+            db.rollback()
+        raise
+
+
+def olt_sync_lock_key(olt_id: str) -> int:
+    """Return a deterministic positive advisory-lock key for an OLT id."""
+    import hashlib
+
+    digest = hashlib.sha256(str(olt_id).encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], "big", signed=False) & 0x7FFFFFFFFFFFFFFF
+
+
+_olt_sync_lock_key = olt_sync_lock_key
 
 
 def sync_authorized_ont_from_olt_snmp(
@@ -618,186 +907,17 @@ def sync_authorized_ont_from_olt_snmp(
     serial_number: str,
     walk_fn=None,
 ) -> tuple[bool, str, dict[str, object]]:
-    """Sync only the just-authorized ONT from OLT SNMP into the local ONT row."""
-    from app.services import web_network_olts as web_network_olts_service
+    """Compatibility wrapper for the targeted SNMP sync service."""
+    from app.services.network.olt_targeted_sync import (
+        sync_authorized_ont_from_olt_snmp as _sync_authorized_ont_from_olt_snmp,
+    )
 
-    walk = walk_fn or web_network_olts_service._run_simple_v2c_walk
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
-    if not olt:
-        return False, "OLT not found", {}
-
-    ont = db.get(OntUnit, ont_unit_id)
-    if ont is None:
-        return False, "ONT record not found", {}
-
-    linked: Any = web_network_olts_service._find_linked_network_device(
+    return _sync_authorized_ont_from_olt_snmp(
         db,
-        mgmt_ip=olt.mgmt_ip,
-        hostname=olt.hostname,
-        name=olt.name,
-    )
-    if not linked:
-        raw_ro = getattr(olt, "snmp_ro_community", None)
-        if raw_ro and raw_ro.strip():
-            linked = SimpleNamespace(
-                mgmt_ip=olt.mgmt_ip,
-                hostname=olt.hostname,
-                snmp_enabled=True,
-                snmp_community=raw_ro.strip(),
-                snmp_version="v2c",
-                snmp_port=None,
-                vendor=olt.vendor,
-            )
-        else:
-            return False, "No linked monitoring device and no SNMP community on OLT", {}
-    if not linked.snmp_enabled:
-        return False, "SNMP is disabled on the linked monitoring device", {}
-
-    vendor_text = str(linked.vendor or olt.vendor or "").lower()
-    vendor_key = "generic"
-    huawei_profile = None
-    if is_huawei_vendor(vendor_text):
-        huawei_profile = resolve_huawei_snmp_profile(olt.model)
-        vendor_key = "huawei"
-    elif "zte" in vendor_text:
-        vendor_key = "zte"
-    elif "nokia" in vendor_text:
-        vendor_key = "nokia"
-
-    vendor_oid_profiles: dict[str, dict[str, str]] = {
-        "zte": {
-            "status": ".1.3.6.1.4.1.3902.1082.500.10.2.2.1.1.10",
-            "olt_rx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.2",
-            "onu_rx": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.3",
-            "distance": ".1.3.6.1.4.1.3902.1082.500.10.2.3.3.1.7",
-        },
-        "nokia": {
-            "status": ".1.3.6.1.4.1.637.61.1.35.10.1.1.8",
-            "olt_rx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.2",
-            "onu_rx": ".1.3.6.1.4.1.637.61.1.35.10.14.1.4",
-            "distance": ".1.3.6.1.4.1.637.61.1.35.10.1.1.9",
-        },
-        "generic": {
-            "status": ".1.3.6.1.4.1.17409.2.3.6.1.1.8",
-            "olt_rx": ".1.3.6.1.4.1.17409.2.3.6.10.1.2",
-            "onu_rx": ".1.3.6.1.4.1.17409.2.3.6.10.1.3",
-            "distance": ".1.3.6.1.4.1.17409.2.3.6.1.1.9",
-        },
-    }
-    oids = (
-        huawei_profile.oids
-        if huawei_profile is not None
-        else vendor_oid_profiles[vendor_key]
-    )
-
-    try:
-        walk(linked, ".1.3.6.1.2.1.1.5.0", timeout=20, bulk=False)
-        status_rows = _parse_walk_composite(
-            walk(linked, oids["status"], timeout=90, bulk=False)
-        )
-    except Exception as exc:
-        return False, f"SNMP walk failed: {exc!s}", {}
-
-    olt_rx_rows: dict[str, str] = {}
-    onu_rx_rows: dict[str, str] = {}
-    distance_rows: dict[str, str] = {}
-    try:
-        olt_rx_rows = _parse_walk_composite(
-            walk(linked, oids["olt_rx"], timeout=90, bulk=False)
-        )
-    except Exception:
-        olt_rx_rows = {}
-    try:
-        onu_rx_rows = _parse_walk_composite(
-            walk(linked, oids["onu_rx"], timeout=90, bulk=False)
-        )
-    except Exception:
-        onu_rx_rows = {}
-    try:
-        distance_rows = _parse_walk_composite(
-            walk(linked, oids["distance"], timeout=90, bulk=False)
-        )
-    except Exception:
-        distance_rows = {}
-
-    all_indexes = (
-        set(status_rows) | set(olt_rx_rows) | set(onu_rx_rows) | set(distance_rows)
-    )
-    if not all_indexes:
-        return False, "No ONUs discovered from SNMP on this OLT", {}
-
-    packed_fsp_map = (
-        _build_packed_fsp_map(db, linked, all_indexes) if vendor_key == "huawei" else {}
-    )
-    matched_index: str | None = None
-
-    for idx in sorted(all_indexes):
-        parsed = _split_onu_index(idx)
-        if not parsed:
-            continue
-        idx_fsp = ""
-        onu = ""
-        if len(parsed) >= 4:
-            idx_fsp = f"{parsed[0]}/{parsed[1]}/{parsed[2]}"
-            onu = parsed[3]
-        else:
-            packed, onu = parsed
-            if vendor_key == "huawei":
-                packed_int = int(packed) if str(packed).isdigit() else None
-                decoded = (
-                    _decode_huawei_packed_fsp(packed_int) if packed_int is not None else None
-                )
-                hinted = packed_fsp_map.get(str(packed))
-                if decoded and hinted and decoded != hinted:
-                    logger.warning(
-                        "Huawei packed FSP hint mismatch on OLT %s for %s: decoded=%s hinted=%s; using decoded",
-                        olt.id,
-                        packed,
-                        decoded,
-                        hinted,
-                    )
-                idx_fsp = decoded or hinted or f"0/0/{packed}"
-            else:
-                idx_fsp = f"0/0/{packed}"
-
-        if idx_fsp == fsp and onu == str(ont_id_on_olt):
-            matched_index = idx
-            break
-
-    if matched_index is None:
-        return False, f"SNMP sync could not find ONT-ID {ont_id_on_olt} on {fsp}.", {}
-
-    olt_rx = _parse_signal_dbm(olt_rx_rows.get(matched_index))
-    status, offline_reason, _reconciled = reconcile_snmp_status_with_signal(
-        vendor=vendor_key,
-        raw_status=status_rows.get(matched_index),
-        olt_rx_dbm=olt_rx,
-    )
-    onu_rx = _parse_signal_dbm(onu_rx_rows.get(matched_index))
-    distance = _parse_distance_m(distance_rows.get(matched_index))
-    now = datetime.now(UTC)
-
-    try:
-        ont.olt_device_id = olt.id
-        ont.external_id = f"{vendor_key}:{matched_index}"
-        ont.board = "/".join(fsp.split("/")[:2])
-        ont.port = fsp.split("/")[2]
-        ont.online_status = status
-        ont.olt_rx_signal_dbm = olt_rx
-        ont.onu_rx_signal_dbm = onu_rx
-        ont.distance_meters = distance
-        ont.signal_updated_at = now
-        ont.last_seen_at = now if status == OnuOnlineStatus.online else ont.last_seen_at
-        ont.offline_reason = None if status == OnuOnlineStatus.online else offline_reason
-        if ont.tr069_acs_server_id is None:
-            ont.tr069_acs_server_id = olt.tr069_acs_server_id
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        return False, f"Failed to save SNMP sync for ONT: {exc}", {}
-
-    return (
-        True,
-        f"Synced ONT {ont.serial_number} from OLT SNMP using index {matched_index}.",
-        {"matched_index": matched_index},
+        olt_id=olt_id,
+        ont_unit_id=ont_unit_id,
+        fsp=fsp,
+        ont_id_on_olt=ont_id_on_olt,
+        serial_number=serial_number,
+        walk_fn=walk_fn,
     )

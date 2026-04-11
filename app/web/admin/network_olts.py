@@ -19,18 +19,25 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
-from app.services import web_network_olts as web_network_olts_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
 from app.services import (
     web_network_pon_interfaces as web_network_pon_interfaces_service,
 )
-from app.services.audit_helpers import (
-    build_audit_activities,
-    log_audit_event,
-)
+from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
+from app.services.network import (
+    olt_authorization_workflow as olt_authorization_workflow_service,
+)
+from app.services.network import olt_autofind as olt_autofind_service
+from app.services.network import olt_operations as olt_operations_service
+from app.services.network import olt_snmp_sync as olt_snmp_sync_service
+from app.services.network import olt_tr069_admin as olt_tr069_admin_service
+from app.services.network import olt_web_forms as olt_web_forms_service
+from app.services.network import olt_web_resources as olt_web_resources_service
+from app.services.network import olt_web_topology as olt_web_topology_service
+from app.services.network.olt_inventory import get_olt_or_none
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -147,10 +154,8 @@ def olt_new(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_create(request: Request, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user
-
-    values = web_network_olts_service.parse_form_values(parse_form_data_sync(request))
-    error = web_network_olts_service.validate_values(db, values)
+    values = olt_web_forms_service.parse_form_values(parse_form_data_sync(request))
+    error = olt_web_forms_service.validate_values(db, values)
     if error:
         context = _base_context(request, db, active_page="olts")
         context.update(
@@ -162,16 +167,12 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    olt, error = web_network_olts_service.create_olt_with_audit(
-        db, request, values, actor_id
-    )
+    olt, error = olt_web_forms_service.create_olt_with_audit(db, request, values)
     if error:
         context = _base_context(request, db, active_page="olts")
         context.update(
             {
-                "olt": web_network_olts_service.snapshot(values),
+                "olt": olt_web_forms_service.snapshot(values),
                 "action_url": "/admin/network/olts",
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
@@ -188,7 +189,7 @@ def olt_create(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:read"))],
 )
 def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)):
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -198,7 +199,7 @@ def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
-            "olt": web_network_olts_service.build_form_model(db, olt),
+            "olt": olt_web_forms_service.build_form_model(db, olt),
             "action_url": f"/admin/network/olts/{olt.id}",
             "tr069_servers": web_network_onts_service.get_tr069_servers(db),
         }
@@ -212,38 +213,34 @@ def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
-    from app.web.admin import get_current_user
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-    values = web_network_olts_service.parse_form_values(parse_form_data_sync(request))
-    error = web_network_olts_service.validate_values(db, values, current_olt=olt)
+    values = olt_web_forms_service.parse_form_values(parse_form_data_sync(request))
+    error = olt_web_forms_service.validate_values(db, values, current_olt=olt)
     if error:
         context = _base_context(request, db, active_page="olts")
         context.update(
             {
-                "olt": web_network_olts_service.snapshot(values),
+                "olt": olt_web_forms_service.snapshot(values),
                 "action_url": f"/admin/network/olts/{olt.id}",
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    olt, error = web_network_olts_service.update_olt_with_audit(
-        db, request, olt_id, olt, values, actor_id
+    olt, error = olt_web_forms_service.update_olt_with_audit(
+        db, request, olt_id, olt, values
     )
     if error:
         context = _base_context(request, db, active_page="olts")
         context.update(
             {
-                "olt": web_network_olts_service.snapshot(values),
+                "olt": olt_web_forms_service.snapshot(values),
                 "action_url": f"/admin/network/olts/{olt_id}",
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
@@ -288,7 +285,7 @@ def olt_detail(
             "Failed to load operation history for OLT %s", olt_id, exc_info=True
         )
         operations = []
-    available_olt_firmware = web_network_olts_service.get_olt_firmware_images(
+    available_olt_firmware = olt_operations_service.get_olt_firmware_images(
         db, olt_id
     )
 
@@ -331,7 +328,7 @@ def olt_assign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    web_network_olts_service.assign_vlan_to_olt(db, olt_id, vlan_id)
+    olt_web_resources_service.assign_vlan_to_olt(db, olt_id, vlan_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -345,7 +342,7 @@ def olt_unassign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    web_network_olts_service.unassign_vlan_from_olt(db, olt_id, vlan_id)
+    olt_web_resources_service.unassign_vlan_from_olt(db, olt_id, vlan_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -359,7 +356,7 @@ def olt_assign_ip_pool(
     pool_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    web_network_olts_service.assign_ip_pool_to_olt(db, olt_id, pool_id)
+    olt_web_resources_service.assign_ip_pool_to_olt(db, olt_id, pool_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -373,7 +370,7 @@ def olt_unassign_ip_pool(
     pool_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    web_network_olts_service.unassign_ip_pool_from_olt(db, olt_id, pool_id)
+    olt_web_resources_service.unassign_ip_pool_from_olt(db, olt_id, pool_id)
     return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
 
 
@@ -396,7 +393,7 @@ def olt_run_cli_command(
         )
     import html as html_mod
 
-    ok, message, output = web_network_olts_service.execute_cli_command(db, olt_id, cmd)
+    ok, message, output = olt_operations_service.execute_cli_command(db, olt_id, cmd)
     if not ok:
         return HTMLResponse(
             f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 '
@@ -417,29 +414,10 @@ def olt_run_cli_command(
 def olt_test_ssh_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    from app.web.admin import get_current_user
-
-    ok, message, policy_key = web_network_olts_service.test_olt_ssh_connection(
-        db, olt_id
+    ok, message, _policy_key = olt_operations_service.test_olt_ssh_connection(
+        db, olt_id, request=request
     )
     status = "success" if ok else "error"
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="test_ssh_connection",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "policy_key": policy_key,
-            "message": message,
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
         status_code=303,
@@ -453,26 +431,10 @@ def olt_test_ssh_connection(
 def olt_test_snmp_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    from app.web.admin import get_current_user
-
-    ok, message = web_network_olts_service.test_olt_snmp_connection(db, olt_id)
-    status = "success" if ok else "error"
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="test_snmp_connection",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
+    ok, message = olt_operations_service.test_olt_snmp_connection(
+        db, olt_id, request=request
     )
+    status = "success" if ok else "error"
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?snmp_test_status={status}&snmp_test_message={quote_plus(message)}",
         status_code=303,
@@ -486,29 +448,10 @@ def olt_test_snmp_connection(
 def olt_test_netconf_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    from app.web.admin import get_current_user
-
-    ok, message, capabilities = web_network_olts_service.test_olt_netconf_connection(
-        db, olt_id
+    ok, message, _capabilities = olt_operations_service.test_olt_netconf_connection(
+        db, olt_id, request=request
     )
     status = "success" if ok else "error"
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="test_netconf_connection",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-            "capabilities_count": len(capabilities),
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
         status_code=303,
@@ -525,7 +468,7 @@ def olt_netconf_get_config(
     """Fetch OLT running config via NETCONF and return as formatted HTML."""
     import html as html_mod
 
-    ok, message, config_xml = web_network_olts_service.get_olt_netconf_config(
+    ok, message, config_xml = olt_operations_service.get_olt_netconf_config(
         db, olt_id
     )
     escaped_msg = html_mod.escape(message)
@@ -551,30 +494,10 @@ def olt_netconf_get_config(
 def olt_sync_onts(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    actor_name = current_user.get("name", "unknown") if current_user else "system"
-    ok, message, stats = web_network_olts_service.sync_onts_from_olt_snmp_tracked(
-        db, olt_id, initiated_by=actor_name
+    ok, message, _stats = olt_snmp_sync_service.sync_onts_from_olt_snmp_tracked(
+        db, olt_id, request=request
     )
     status = "success" if ok else "error"
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="sync_onts",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-            "stats": stats,
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
         status_code=303,
@@ -587,7 +510,9 @@ def olt_sync_onts(
 )
 def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
     """GET fallback for auth-refresh redirects targeting the sync POST endpoint."""
-    message = quote_plus("Sync ONTs uses POST. Please click Sync ONTs again.")
+    message = quote_plus(
+        "Sync ONU telemetry uses POST. Please click Sync ONU Telemetry again."
+    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
         status_code=303,
@@ -601,30 +526,10 @@ def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
 def olt_repair_pon_ports(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    actor_name = current_user.get("name", "unknown") if current_user else "system"
-    ok, message, stats = web_network_olts_service.repair_pon_ports_for_olt_tracked(
-        db, olt_id, initiated_by=actor_name
+    ok, message, _stats = olt_web_topology_service.repair_pon_ports_for_olt_tracked(
+        db, olt_id, request=request
     )
     status = "success" if ok else "error"
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="repair_pon_ports",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-            "stats": stats,
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
         status_code=303,
@@ -651,26 +556,15 @@ def olt_autofind_scan(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Scan OLT for unregistered ONTs via SSH autofind."""
-    from app.web.admin import get_current_user
-
-    ok, message, entries = web_network_olts_service.get_autofind_onts(db, olt_id)
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="autofind_scan",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "message": message,
-            "count": len(entries),
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
+    ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
+        db, olt_id, request=request
     )
+    if ok:
+        web_network_ont_autofind_service.sync_olt_autofind_entries(
+            db,
+            olt_id=olt_id,
+            entries=entries,
+        )
     autofind_data = [
         {
             "fsp": e.fsp,
@@ -699,7 +593,6 @@ def olt_autofind_scan(
 
 @router.get(
     "/unconfigured-onts",
-    response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
 def unconfigured_onts_list(
@@ -711,23 +604,21 @@ def unconfigured_onts_list(
     status: str | None = None,
     message: str | None = None,
     db: Session = Depends(get_db),
-) -> HTMLResponse:
-    context = _base_context(request, db, active_page="unconfigured-onts")
-    context.update(
-        web_network_ont_autofind_service.build_unconfigured_onts_page_data(
-            db,
-            search=search,
-            olt_id=olt_id,
-            view=view,
-            resolution=resolution,
-        )
-    )
-    context["status"] = status
-    context["message"] = message
-    return templates.TemplateResponse(
-        "admin/network/onts/unconfigured_index.html",
-        context,
-    )
+) -> RedirectResponse:
+    params = ["view=unconfigured"]
+    if view:
+        params.append(f"candidate_view={quote_plus(view)}")
+    if resolution:
+        params.append(f"resolution={quote_plus(resolution)}")
+    if search:
+        params.append(f"search={quote_plus(search)}")
+    if olt_id:
+        params.append(f"olt_id={quote_plus(olt_id)}")
+    if status:
+        params.append(f"status={quote_plus(status)}")
+    if message:
+        params.append(f"message={quote_plus(message)}")
+    return RedirectResponse(f"/admin/network/onts?{'&'.join(params)}", status_code=303)
 
 
 @router.post(
@@ -744,7 +635,7 @@ def unconfigured_onts_scan_now() -> RedirectResponse:
         source="admin_network_olts",
     )
     return RedirectResponse(
-        "/admin/network/unconfigured-onts?status=success&message="
+        "/admin/network/onts?view=unconfigured&status=success&message="
         + quote_plus("Aggregated OLT autofind scan queued."),
         status_code=303,
     )
@@ -758,30 +649,12 @@ def restore_autofind_candidate(
     request: Request, candidate_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Restore a disappeared autofind candidate to active state."""
-    from app.web.admin import get_current_user
-
-    ok, message = web_network_ont_autofind_service.restore_candidate(
-        db, candidate_id=candidate_id
+    ok, message = web_network_ont_autofind_service.restore_candidate_audited(
+        db, candidate_id=candidate_id, request=request
     )
     status = "success" if ok else "error"
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="restore_autofind_candidate",
-        entity_type="olt_autofind_candidate",
-        entity_id=candidate_id,
-        actor_id=actor_id,
-        metadata={
-            "result": status,
-            "message": message,
-        },
-        status_code=200 if ok else 400,
-        is_success=ok,
-    )
     return RedirectResponse(
-        f"/admin/network/unconfigured-onts?status={status}&message={quote_plus(message)}",
+        f"/admin/network/onts?view=unconfigured&status={status}&message={quote_plus(message)}",
         status_code=303,
     )
 
@@ -796,16 +669,23 @@ def olt_authorize_ont(
     fsp: str = Form(""),
     serial_number: str = Form(""),
     return_to: str = Form(""),
+    force_reauthorize: str = Form(""),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    """Authorize a discovered ONT on the OLT via SSH."""
-    from app.web.admin import get_current_user
+    """Authorize a discovered ONT on the OLT via SSH.
 
+    Args:
+        force_reauthorize: If "true" or "1", delete any existing registration
+            of this serial on the OLT before authorizing on the specified port.
+    """
     if not fsp or not serial_number:
         msg = quote_plus("Missing port or serial number")
-        if return_to == "/admin/network/unconfigured-onts":
+        if return_to in (
+            "/admin/network/unconfigured-onts",
+            "/admin/network/onts?view=unconfigured",
+        ):
             return RedirectResponse(
-                f"{return_to}?status=error&message={msg}",
+                f"/admin/network/onts?view=unconfigured&status=error&message={msg}",
                 status_code=303,
             )
         return RedirectResponse(
@@ -813,31 +693,27 @@ def olt_authorize_ont(
             status_code=303,
         )
 
-    ok, status, message = web_network_olts_service.authorize_autofind_ont(
-        db, olt_id, fsp, serial_number
-    )
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="authorize_ont",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": status,
-            "message": message,
-            "fsp": fsp,
-            "serial_number": serial_number,
-        },
-        status_code=200 if status != "error" else 500,
-        is_success=status != "error",
+    # Parse force_reauthorize checkbox value
+    force = force_reauthorize.lower() in ("true", "1", "on", "yes")
+    logger.info(
+        "authorize_ont route: serial=%s force_reauthorize_raw=%r force=%s",
+        serial_number,
+        force_reauthorize,
+        force,
     )
 
-    if return_to == "/admin/network/unconfigured-onts":
+    auth_result = olt_authorization_workflow_service.authorize_autofind_ont_audited(
+        db, olt_id, fsp, serial_number, force_reauthorize=force, request=request
+    )
+    status = auth_result.status
+    message = auth_result.message
+
+    if return_to in (
+        "/admin/network/unconfigured-onts",
+        "/admin/network/onts?view=unconfigured",
+    ):
         return RedirectResponse(
-            f"{return_to}?status={status}&message={quote_plus(message)}",
+            f"/admin/network/onts?view=unconfigured&status={status}&message={quote_plus(message)}",
             status_code=303,
         )
 
@@ -860,7 +736,7 @@ def olt_tr069_profiles_ssh(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Read TR-069 server profiles from OLT via SSH and return partial."""
-    ok, message, profiles, extra = web_network_olts_service.get_tr069_profiles_context(
+    ok, message, profiles, extra = olt_tr069_admin_service.get_tr069_profiles_context(
         db, olt_id
     )
     return templates.TemplateResponse(
@@ -892,9 +768,7 @@ def olt_tr069_profile_create(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Create a TR-069 server profile on the OLT via SSH."""
-    from app.web.admin import get_current_user
-
-    ok, message = web_network_olts_service.handle_create_tr069_profile(
+    ok, message = olt_tr069_admin_service.handle_create_tr069_profile_audited(
         db,
         olt_id,
         profile_name=profile_name.strip(),
@@ -902,19 +776,7 @@ def olt_tr069_profile_create(
         username=acs_username.strip(),
         password=acs_password.strip(),
         inform_interval=inform_interval,
-    )
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
         request=request,
-        action="create_tr069_profile",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={"result": "success" if ok else "error", "profile_name": profile_name},
-        status_code=200 if ok else 500,
-        is_success=ok,
     )
     return JSONResponse(
         {"ok": ok, "message": message},
@@ -932,8 +794,6 @@ async def olt_tr069_rebind(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Rebind selected ONTs to a TR-069 server profile."""
-    from app.web.admin import get_current_user
-
     form = await request.form()
     raw_profile_id = form.get("target_profile_id")
     target_profile_id = int(raw_profile_id) if isinstance(raw_profile_id, str) else 0
@@ -944,8 +804,8 @@ async def olt_tr069_rebind(
             status_code=400,
         )
 
-    stats = web_network_olts_service.handle_rebind_tr069_profiles(
-        db, olt_id, ont_ids, target_profile_id
+    stats = olt_tr069_admin_service.handle_rebind_tr069_profiles_audited(
+        db, olt_id, ont_ids, target_profile_id, request=request
     )
     rebound_val = stats.get("rebound", 0)
     failed_val = stats.get("failed", 0)
@@ -959,24 +819,6 @@ async def olt_tr069_rebind(
 
     ok = rebound > 0
 
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="rebind_tr069_profiles",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": "success" if ok else "error",
-            "rebound": rebound,
-            "failed": failed,
-            "target_profile_id": target_profile_id,
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
     return JSONResponse(
         {
             "ok": ok,
@@ -998,55 +840,17 @@ def olt_init_tr069(
     olt_id: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    """Create or verify DotMac-ACS TR-069 profile on the OLT."""
-    from app.models.network import OLTDevice as OLTModel
-
-    olt = db.get(OLTModel, olt_id)
+    """Create or verify the linked ACS TR-069 profile on the OLT."""
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return RedirectResponse(
             f"/admin/network/olts/{olt_id}?error=OLT+not+found", status_code=303
         )
 
-    # Check if profile already exists
-    from app.services.network.olt_ssh import (
-        create_tr069_server_profile,
-        get_tr069_server_profiles,
-    )
-
-    ok, msg, profiles = get_tr069_server_profiles(olt)
-    if not ok:
-        return RedirectResponse(
-            f"/admin/network/olts/{olt_id}?error={quote_plus(msg)}", status_code=303
+    ok, msg, _profile_id = (
+        olt_tr069_admin_service.ensure_tr069_profile_for_linked_acs_audited(
+            db, olt, request=request
         )
-
-    for p in profiles:
-        if "dotmac" in p.name.lower() or "10.10.41.1" in (p.acs_url or ""):
-            return RedirectResponse(
-                f"/admin/network/olts/{olt_id}?notice={quote_plus(f'TR-069 profile already exists: {p.name} (ID {p.profile_id})')}",
-                status_code=303,
-            )
-
-    # Create profile
-    ok, msg = create_tr069_server_profile(
-        olt,
-        profile_name="DotMac-ACS",
-        acs_url="http://10.10.41.1:7547",
-        username="acs",
-        password="acs",  # nosec  # noqa: S106
-        inform_interval=300,
-    )
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="init_tr069",
-        entity_type="olt",
-        entity_id=olt_id,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"success": ok, "message": msg},
     )
 
     status = "notice" if ok else "error"
@@ -1066,8 +870,6 @@ def olt_firmware_upgrade(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Trigger firmware upgrade on OLT via SSH."""
-    from app.web.admin import get_current_user
-
     if not firmware_image_id:
         msg = quote_plus("No firmware image selected")
         return RedirectResponse(
@@ -1075,27 +877,10 @@ def olt_firmware_upgrade(
             status_code=303,
         )
 
-    ok, message = web_network_olts_service.trigger_olt_firmware_upgrade(
-        db, olt_id, firmware_image_id
+    ok, message = olt_operations_service.trigger_olt_firmware_upgrade(
+        db, olt_id, firmware_image_id, request=request
     )
     status = "success" if ok else "error"
-    current_user = get_current_user(request)
-    actor_id = str(current_user.get("subscriber_id")) if current_user else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="firmware_upgrade",
-        entity_type="olt",
-        entity_id=str(olt_id),
-        actor_id=actor_id,
-        metadata={
-            "result": status,
-            "message": message,
-            "firmware_image_id": firmware_image_id,
-        },
-        status_code=200 if ok else 500,
-        is_success=ok,
-    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
         status_code=303,
@@ -1116,14 +901,14 @@ def olt_backups_list(
     test_message: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-    backups = web_network_olts_service.list_olt_backups(
+    backups = olt_operations_service.list_olt_backups(
         db,
         olt_id=olt_id,
         start_at=start_at,
@@ -1151,21 +936,21 @@ def olt_backups_list(
 def olt_backup_detail(
     request: Request, backup_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    backup = web_network_olts_service.get_olt_backup_or_none(db, backup_id)
+    backup = olt_operations_service.get_olt_backup_or_none(db, backup_id)
     if not backup:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Backup not found"},
             status_code=404,
         )
-    olt = web_network_olts_service.get_olt_or_none(db, str(backup.olt_device_id))
+    olt = get_olt_or_none(db, str(backup.olt_device_id))
     if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "OLT not found"},
             status_code=404,
         )
-    preview = web_network_olts_service.read_backup_preview(backup)
+    preview = olt_operations_service.read_backup_preview(backup)
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
@@ -1182,10 +967,10 @@ def olt_backup_detail(
     dependencies=[Depends(require_permission("network:read"))],
 )
 def olt_backup_download(backup_id: str, db: Session = Depends(get_db)) -> FileResponse:
-    backup = web_network_olts_service.get_olt_backup_or_none(db, backup_id)
+    backup = olt_operations_service.get_olt_backup_or_none(db, backup_id)
     if not backup:
         raise HTTPException(status_code=404, detail="Backup not found")
-    path = web_network_olts_service.backup_file_path(backup)
+    path = olt_operations_service.backup_file_path(backup)
     filename = path.name
     return FileResponse(path=path, filename=filename, media_type="text/plain")
 
@@ -1197,7 +982,7 @@ def olt_backup_download(backup_id: str, db: Session = Depends(get_db)) -> FileRe
 def olt_backup_test_connection(
     olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    ok, message = web_network_olts_service.test_olt_connection(db, olt_id)
+    ok, message = olt_operations_service.test_olt_connection(db, olt_id)
     status = "success" if ok else "error"
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
@@ -1212,7 +997,7 @@ def olt_backup_test_connection(
 def olt_backup_test_backup(
     olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    backup, message = web_network_olts_service.run_test_backup(db, olt_id)
+    backup, message = olt_operations_service.run_test_backup(db, olt_id)
     if backup is not None:
         status = "success"
     else:
@@ -1229,7 +1014,7 @@ def olt_backup_test_backup(
 )
 def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
     """Fetch full running config via SSH and save as backup."""
-    backup, message = web_network_olts_service.backup_running_config_ssh(db, olt_id)
+    backup, message = olt_operations_service.backup_running_config_ssh(db, olt_id)
     status = "success" if backup is not None else "error"
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
@@ -1249,7 +1034,7 @@ def olt_backup_compare(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     try:
-        backup1, backup2, diff = web_network_olts_service.compare_olt_backups(
+        backup1, backup2, diff = olt_operations_service.compare_olt_backups(
             db, backup_id_1, backup_id_2
         )
     except HTTPException as exc:
@@ -1259,7 +1044,7 @@ def olt_backup_compare(
             status_code=exc.status_code,
         )
 
-    olt = web_network_olts_service.get_olt_or_none(db, str(backup1.olt_device_id))
+    olt = get_olt_or_none(db, str(backup1.olt_device_id))
     if not olt:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -1287,7 +1072,7 @@ def olt_device_events(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: ONT physical-link events (PON online/offline/signal)."""
-    data = web_network_olts_service.olt_device_events_context(db, olt_id)
+    data = olt_web_resources_service.olt_device_events_context(db, olt_id)
     context = _base_context(request, db, active_page="olts")
     context.update(data)
     return templates.TemplateResponse(

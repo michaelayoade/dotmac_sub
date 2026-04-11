@@ -170,8 +170,27 @@ def _display_ont_serial(value: object) -> str:
     serial = str(value or "").strip()
     if not serial:
         return ""
+    if _is_synthetic_ont_serial(serial):
+        return ""
     decoded = decode_huawei_hex_serial(serial)
     return decoded or serial
+
+
+def _ont_display_serial(ont: object) -> str:
+    """Return the best real ONT serial for UI tables.
+
+    SNMP sync may create synthetic serial numbers before a vendor serial is
+    known. Those are useful as internal unique keys, but should not be shown
+    to operators as the ONT serial.
+    """
+    vendor_serial = _display_ont_serial(getattr(ont, "vendor_serial_number", None))
+    if vendor_serial:
+        return vendor_serial
+
+    raw_serial = str(getattr(ont, "serial_number", "") or "").strip()
+    if _is_synthetic_ont_serial(raw_serial):
+        return ""
+    return _display_ont_serial(raw_serial) or raw_serial
 
 
 def _recent_acs_inform_by_ont_id(
@@ -1444,7 +1463,13 @@ def _is_synthetic_ont_serial(value: object | None) -> bool:
     text = str(value or "").strip()
     if not text:
         return False
-    return bool(re.match(r"^(HW|ZT|NK|OLT)-[A-F0-9]{8}-\d+$", text))
+    return bool(
+        re.match(
+            r"^(HW|ZT|NK|OLT)-[A-F0-9]{8}-[A-Z0-9]+(?:-\d{10,20})?$",
+            text,
+            re.IGNORECASE,
+        )
+    )
 
 
 def onts_list_page_data(
@@ -1471,7 +1496,14 @@ def onts_list_page_data(
     from app.models.network import OLTDevice, OntUnit
     from app.services.network.olt_polling import get_signal_thresholds
 
-    normalized_view = "diagnostics" if view == "diagnostics" else "list"
+    normalized_view = (
+        "diagnostics"
+        if view == "diagnostics"
+        else "unconfigured"
+        if view == "unconfigured"
+        else "list"
+    )
+    per_page = min(max(int(per_page or 50), 10), 500)
 
     # Determine is_active from status filter
     status_filter = (status or "all").strip().lower()
@@ -1672,11 +1704,11 @@ def onts_list_page_data(
     serial_display_by_ont_id: dict[str, str] = {}
     hex_serial_by_ont_id: dict[str, str] = {}
     for ont in list(onts) + [item for item in diagnostics_onts if item not in onts]:
-        serial_value = str(getattr(ont, "serial_number", "") or "").strip()
-        if serial_value:
-            serial_display_by_ont_id[str(ont.id)] = _display_ont_serial(serial_value)
-            # Compute hex serial for display
-            hex_serial = encode_to_hex_serial(serial_value)
+        display_serial = _ont_display_serial(ont)
+        if display_serial:
+            serial_display_by_ont_id[str(ont.id)] = display_serial
+            # Compute hex serial for display from the real serial, not a synthetic key.
+            hex_serial = encode_to_hex_serial(display_serial)
             if hex_serial:
                 hex_serial_by_ont_id[str(ont.id)] = hex_serial
             continue
@@ -1768,6 +1800,7 @@ def onts_list_page_data(
             "view": normalized_view,
             "order_by": order_by,
             "order_dir": order_dir,
+            "per_page": per_page,
         },
         # Pagination
         "pagination": {
@@ -1889,7 +1922,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "crit_threshold": crit,
     }
 
-    display_serial_number = _display_ont_serial(getattr(ont, "serial_number", None))
+    display_serial_number = _ont_display_serial(ont)
+    display_serial_label = display_serial_number or "-"
 
     # Build network path info (OLT → PON Port → Splitter → ONT)
     network_path: dict[str, object] = {}
@@ -2026,6 +2060,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     return {
         "ont": ont,
         "display_serial_number": display_serial_number,
+        "display_serial_label": display_serial_label,
         "assignment": assignment,
         "past_assignments": past_assignments,
         "signal_info": signal_info,
@@ -2304,7 +2339,7 @@ def consolidated_page_data(
             if any(
                 _contains(v)
                 for v in [
-                    getattr(ont, "serial_number", None),
+                    _display_ont_serial(getattr(ont, "serial_number", None)),
                     getattr(ont, "vendor", None),
                     getattr(ont, "model", None),
                     getattr(ont, "firmware_version", None),
@@ -2341,6 +2376,11 @@ def consolidated_page_data(
         "ont_inactive": len(inactive_onts),
         "cpe_total": len(cpes),
     }
+    serial_display_by_ont_id = {
+        str(ont.id): _ont_display_serial(ont)
+        for ont in onts
+        if getattr(ont, "id", None)
+    }
     return {
         "tab": tab,
         "search": search or "",
@@ -2349,6 +2389,7 @@ def consolidated_page_data(
         "olts": olts,
         "olt_stats": olt_stats,
         "onts": onts,
+        "serial_display_by_ont_id": serial_display_by_ont_id,
         "cpes": cpes,
     }
 

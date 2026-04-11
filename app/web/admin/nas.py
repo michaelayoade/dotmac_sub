@@ -9,19 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.csrf import get_csrf_token
 from app.db import get_db
-from app.schemas.catalog import (
-    NasDeviceCreate,
-    NasDeviceUpdate,
-    ProvisioningTemplateCreate,
-    ProvisioningTemplateUpdate,
-)
 from app.services import nas as nas_service
-from app.services.audit_helpers import (
-    build_audit_activities,
-    diff_dicts,
-    log_audit_event,
-    model_to_dict,
-)
+from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_method_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -33,15 +22,6 @@ router = APIRouter(
         Depends(require_method_permission("network:nas:read", "network:nas:write"))
     ],
 )
-
-DEVICE_AUDIT_EXCLUDE_FIELDS = {
-    "ssh_password",
-    "api_password",
-    "radius_secret",
-    "api_key",
-    "ssh_key",
-    "snmp_community",
-}
 
 
 def _base_context(
@@ -85,11 +65,6 @@ def _prefixed_values_from_tags(tags: list | None, prefix: str) -> list[str]:
 
 def _extract_enhanced_fields(tags: list | None) -> dict[str, str | list[str] | None]:
     return nas_service.extract_enhanced_fields(tags)
-
-
-def _exception_message(exc: Exception) -> str:
-    detail = getattr(exc, "detail", None)
-    return str(detail) if detail else str(exc)
 
 
 # ============== NAS Dashboard ==============
@@ -284,20 +259,10 @@ def device_create(
         )
 
     try:
-        if not isinstance(payload, NasDeviceCreate):
-            raise ValueError("Invalid payload type: expected NasDeviceCreate")
-        device = nas_service.NasDevices.create(db, payload)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
+        device = nas_service.create_nas_device_with_audit(
+            db,
             request=request,
-            action="create",
-            entity_type="nas_device",
-            entity_id=str(device.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"name": device.name, "ip_address": device.ip_address},
+            payload=payload,
         )
         return RedirectResponse(
             f"/admin/network/nas/devices/{device.id}", status_code=303
@@ -442,7 +407,6 @@ def device_update(
 ):
     """Update NAS device."""
     device = nas_service.NasDevices.get(db, device_id)
-    before_snapshot = model_to_dict(device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS)
     payload, errors = nas_service.build_nas_device_payload(
         db,
         form={
@@ -515,25 +479,11 @@ def device_update(
         )
 
     try:
-        if not isinstance(payload, NasDeviceUpdate):
-            raise ValueError("Invalid payload type: expected NasDeviceUpdate")
-        updated_device = nas_service.NasDevices.update(db, device_id, payload)
-        after_snapshot = model_to_dict(
-            updated_device, exclude=DEVICE_AUDIT_EXCLUDE_FIELDS
-        )
-        changes = diff_dicts(before_snapshot, after_snapshot)
-        metadata = {"changes": changes} if changes else None
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
+        nas_service.update_nas_device_with_audit(
+            db,
             request=request,
-            action="update",
-            entity_type="nas_device",
-            entity_id=str(updated_device.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata,
+            device_id=device_id,
+            payload=payload,
         )
         return RedirectResponse(
             f"/admin/network/nas/devices/{device_id}", status_code=303
@@ -559,30 +509,18 @@ def device_update(
 @router.post("/devices/{device_id}/delete")
 def device_delete(request: Request, device_id: str, db: Session = Depends(get_db)):
     """Delete NAS device."""
-    device = nas_service.NasDevices.get(db, device_id)
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
+    nas_service.delete_nas_device_with_audit(
+        db,
         request=request,
-        action="delete",
-        entity_type="nas_device",
-        entity_id=str(device.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": device.name, "ip_address": device.ip_address},
+        device_id=device_id,
     )
-    nas_service.NasDevices.delete(db, device_id)
     return RedirectResponse("/admin/network/nas", status_code=303)
 
 
 @router.post("/devices/{device_id}/ping")
 def device_ping(device_id: str, db: Session = Depends(get_db)):
     """Update device last_seen_at timestamp."""
-    device = nas_service.NasDevices.get(db, device_id)
-    ping_status = nas_service.get_ping_status(device.ip_address or device.management_ip)
-    if ping_status.get("state") == "reachable":
-        nas_service.NasDevices.update_last_seen(db, device_id)
+    nas_service.ping_nas_device_and_touch_last_seen(db, device_id=device_id)
     return RedirectResponse(f"/admin/network/nas/devices/{device_id}", status_code=303)
 
 
@@ -599,8 +537,8 @@ def device_connection_rule_create(
     notes: str | None = Form(None),
 ):
     """Create a connection rule for a NAS device."""
-    try:
-        message = nas_service.create_connection_rule_for_device(
+    return RedirectResponse(
+        nas_service.create_connection_rule_redirect_url(
             db,
             device_id=device_id,
             name=name,
@@ -610,16 +548,9 @@ def device_connection_rule_create(
             match_expression=match_expression,
             priority=priority,
             notes=notes,
-        )
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=connection-rules&rule_status=success&rule_message={quote_plus(message)}",
-            status_code=303,
-        )
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=connection-rules&rule_status=error&rule_message={quote_plus(_exception_message(exc))}",
-            status_code=303,
-        )
+        ),
+        status_code=303,
+    )
 
 
 @router.post("/devices/{device_id}/connection-rules/{rule_id}/toggle")
@@ -630,22 +561,15 @@ def device_connection_rule_toggle(
     is_active: str = Form(...),
 ):
     """Toggle active state for a device connection rule."""
-    try:
-        message = nas_service.toggle_connection_rule_for_device(
+    return RedirectResponse(
+        nas_service.toggle_connection_rule_redirect_url(
             db,
             device_id=device_id,
             rule_id=rule_id,
-            is_active_raw=is_active,
-        )
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=connection-rules&rule_status=success&rule_message={quote_plus(message)}",
-            status_code=303,
-        )
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=connection-rules&rule_status=error&rule_message={quote_plus(_exception_message(exc))}",
-            status_code=303,
-        )
+            is_active=is_active,
+        ),
+        status_code=303,
+    )
 
 
 @router.post("/devices/{device_id}/connection-rules/{rule_id}/delete")
@@ -655,39 +579,23 @@ def device_connection_rule_delete(
     db: Session = Depends(get_db),
 ):
     """Delete a device connection rule."""
-    try:
-        message = nas_service.delete_connection_rule_for_device(
+    return RedirectResponse(
+        nas_service.delete_connection_rule_redirect_url(
             db,
             device_id=device_id,
             rule_id=rule_id,
-        )
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=connection-rules&rule_status=success&rule_message={quote_plus(message)}",
-            status_code=303,
-        )
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=connection-rules&rule_status=error&rule_message={quote_plus(_exception_message(exc))}",
-            status_code=303,
-        )
+        ),
+        status_code=303,
+    )
 
 
 @router.post("/devices/{device_id}/vendor/mikrotik/test-api")
 def device_test_mikrotik_api(device_id: str, db: Session = Depends(get_db)):
     """Run MikroTik API connection/status test."""
-    try:
-        message = nas_service.refresh_mikrotik_status_for_device(
-            db, device_id=device_id
-        )
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=vendor-specific&api_test_status=success&api_test_message={quote_plus(message)}",
-            status_code=303,
-        )
-    except Exception as exc:
-        return RedirectResponse(
-            f"/admin/network/nas/devices/{device_id}?tab=vendor-specific&api_test_status=error&api_test_message={quote_plus(str(exc))}",
-            status_code=303,
-        )
+    return RedirectResponse(
+        nas_service.mikrotik_api_test_redirect_url(db, device_id=device_id),
+        status_code=303,
+    )
 
 
 @router.post(
@@ -718,14 +626,8 @@ def device_generate_mikrotik_bootstrap_script(
 @router.get("/devices/{device_id}/live-bandwidth")
 def device_live_bandwidth(device_id: str, db: Session = Depends(get_db)):
     """Open live bandwidth usage view for mapped network device."""
-    device = nas_service.NasDevices.get(db, device_id)
-    if device.network_device_id:
-        return RedirectResponse(
-            f"/admin/network/core-devices/{device.network_device_id}",
-            status_code=303,
-        )
     return RedirectResponse(
-        f"/admin/network/nas/devices/{device_id}?tab=information&api_test_status=error&api_test_message=No+linked+monitoring+device+for+live+bandwidth.",
+        nas_service.live_bandwidth_redirect_url(db, device_id=device_id),
         status_code=303,
     )
 
@@ -765,30 +667,13 @@ def device_backup_trigger(
     triggered_by: str = Form("web"),
 ):
     """Trigger a configuration backup from the device."""
-    result = nas_service.trigger_backup_for_device(
+    result = nas_service.trigger_backup_for_device_with_audit(
         db,
+        request=request,
         device_id=device_id,
         triggered_by=triggered_by,
     )
     if result["ok"]:
-        backup = result["backup"]
-        if backup is None:
-            raise ValueError("Backup trigger succeeded but returned no backup record")
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="backup_triggered",
-            entity_type="nas_backup",
-            entity_id=str(backup.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "nas_device_id": str(backup.nas_device_id),
-                "triggered_by": triggered_by,
-            },
-        )
         return RedirectResponse(
             f"/admin/network/nas/devices/{device_id}?message=Backup+triggered+successfully",
             status_code=303,
@@ -924,25 +809,10 @@ def template_create(
         )
 
     try:
-        if not isinstance(payload, ProvisioningTemplateCreate):
-            raise ValueError(
-                "Invalid payload type: expected ProvisioningTemplateCreate"
-            )
-        template, metadata = nas_service.create_provisioning_template_with_metadata(
+        template = nas_service.create_provisioning_template_with_audit(
             db,
-            payload=payload,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
             request=request,
-            action="create",
-            entity_type="nas_template",
-            entity_id=str(template.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata,
+            payload=payload,
         )
         return RedirectResponse(
             f"/admin/network/nas/templates/{template.id}", status_code=303
@@ -1034,28 +904,11 @@ def template_update(
         )
 
     try:
-        if not isinstance(payload, ProvisioningTemplateUpdate):
-            raise ValueError(
-                "Invalid payload type: expected ProvisioningTemplateUpdate"
-            )
-        updated_template, metadata = (
-            nas_service.update_provisioning_template_with_metadata(
-                db,
-                template_id=template_id,
-                payload=payload,
-            )
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
+        nas_service.update_provisioning_template_with_audit(
+            db,
             request=request,
-            action="update",
-            entity_type="nas_template",
-            entity_id=str(updated_template.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata,
+            template_id=template_id,
+            payload=payload,
         )
         return RedirectResponse(
             f"/admin/network/nas/templates/{template_id}", status_code=303
@@ -1076,20 +929,11 @@ def template_update(
 @router.post("/templates/{template_id}/delete")
 def template_delete(request: Request, template_id: str, db: Session = Depends(get_db)):
     """Delete provisioning template."""
-    template = nas_service.ProvisioningTemplates.get(db, template_id)
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
+    nas_service.delete_provisioning_template_with_audit(
+        db,
         request=request,
-        action="delete",
-        entity_type="nas_template",
-        entity_id=str(template.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": template.name},
+        template_id=template_id,
     )
-    nas_service.ProvisioningTemplates.delete(db, template_id)
     return RedirectResponse("/admin/network/nas/templates", status_code=303)
 
 
@@ -1147,48 +991,21 @@ def log_detail(request: Request, log_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/{device_id}/enable-monitoring")
-def enable_monitoring_for_nas(
-    request: Request, device_id: str, db: Session = Depends(get_db)
-):
+def enable_monitoring_for_nas(device_id: str, db: Session = Depends(get_db)):
     """Create a NetworkDevice from a NAS device and enable ping/SNMP monitoring."""
-    from app.services.monitoring_metrics import sync_nas_to_monitoring
-
-    try:
-        monitoring_device = sync_nas_to_monitoring(db, device_id)
-        db.commit()
-        return RedirectResponse(
-            f"/admin/nas/{device_id}?notice={quote_plus(f'Monitoring enabled — device linked as {monitoring_device.name}')}",
-            status_code=303,
-        )
-    except Exception as exc:
-        db.rollback()
-        return RedirectResponse(
-            f"/admin/nas/{device_id}?error={quote_plus(str(exc))}",
-            status_code=303,
-        )
+    return RedirectResponse(
+        nas_service.enable_monitoring_redirect_url(db, device_id=device_id),
+        status_code=303,
+    )
 
 
 @router.post("/sync-all-monitoring")
-def sync_all_nas_monitoring(request: Request, db: Session = Depends(get_db)):
+def sync_all_nas_monitoring(db: Session = Depends(get_db)):
     """Sync all active NAS devices into the monitoring system."""
-    from app.services.monitoring_metrics import sync_all_nas_to_monitoring
-
-    try:
-        result = sync_all_nas_to_monitoring(db)
-        notice = (
-            f"Monitoring sync complete: {result['synced']} synced, "
-            f"{result['skipped']} skipped, {result['errors']} errors"
-        )
-        return RedirectResponse(
-            f"/admin/nas?notice={quote_plus(notice)}",
-            status_code=303,
-        )
-    except Exception as exc:
-        db.rollback()
-        return RedirectResponse(
-            f"/admin/nas?error={quote_plus(str(exc))}",
-            status_code=303,
-        )
+    return RedirectResponse(
+        nas_service.sync_all_monitoring_redirect_url(db),
+        status_code=303,
+    )
 
 
 # ── NAS VLAN Management ──────────────────────────────────────────
@@ -1224,32 +1041,14 @@ def device_vlan_create(
     """Create a VLAN + IP + PPPoE server on the NAS device."""
     from app.services import web_nas_vlan
 
-    result = web_nas_vlan.handle_vlan_create(
+    result = web_nas_vlan.handle_vlan_create_with_audit(
         db,
-        device_id,
+        request=request,
+        device_id=device_id,
         vlan_id=vlan_id,
         parent_interface=parent_interface,
         ip_address=ip_address,
         pppoe_service_name=pppoe_service_name or None,
-    )
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create_vlan",
-        entity_type="nas_device",
-        entity_id=device_id,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "vlan_id": vlan_id,
-            "parent_interface": parent_interface,
-            "ip_address": ip_address,
-            "success": result["success"],
-            "message": result["message"],
-        },
     )
 
     msg = quote_plus(result["message"])
@@ -1271,25 +1070,12 @@ def device_vlan_delete(
     """Remove a VLAN interface (and its IP + PPPoE server) from the NAS."""
     from app.services import web_nas_vlan
 
-    result = web_nas_vlan.handle_vlan_delete(
-        db, device_id, vlan_id=vlan_id, parent_interface=parent_interface
-    )
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
+    result = web_nas_vlan.handle_vlan_delete_with_audit(
+        db,
         request=request,
-        action="delete_vlan",
-        entity_type="nas_device",
-        entity_id=device_id,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "vlan_id": vlan_id,
-            "success": result["success"],
-            "message": result["message"],
-        },
+        device_id=device_id,
+        vlan_id=vlan_id,
+        parent_interface=parent_interface,
     )
 
     msg = quote_plus(result["message"])

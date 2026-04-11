@@ -7,11 +7,12 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
+from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice
-from app.models.catalog import CatalogOffer, PriceType, SubscriptionStatus
+from app.models.catalog import CatalogOffer, PriceType, Subscription, SubscriptionStatus
 from app.models.provisioning import InstallAppointment, ServiceOrder
 from app.models.subscriber import (
     AccountStatus,
@@ -23,9 +24,87 @@ from app.models.support import Ticket, TicketStatus
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
+from app.services.bandwidth import bandwidth_samples
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
+
+
+def emit_customer_event(db: Session, event_name: str, payload: dict) -> None:
+    """Emit a customer portal event without letting telemetry break the request."""
+    try:
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        event_type = getattr(EventType, event_name, None)
+        if event_type:
+            emit_event(db, event_type, payload, actor="customer")
+    except Exception as exc:
+        logger.warning("Failed to emit customer event %s: %s", event_name, exc)
+
+
+def resolve_subscriber_id(session: dict) -> str:
+    """Extract subscriber_id from a customer session for CRM lookups."""
+    return str(
+        session.get("subscriber_id")
+        or session.get("session", {}).get("subscriber_id", "")
+    )
+
+
+def resolve_allowed_subscriber_ids(session: dict, db: Session) -> list[str]:
+    """Resolve all customer-visible subscriber/account IDs for access checks."""
+    allowed = get_allowed_account_ids(session, db)
+    if allowed:
+        return [str(item) for item in allowed if item]
+    fallback = resolve_subscriber_id(session)
+    return [fallback] if fallback else []
+
+
+def resolve_customer_subscription(
+    db: Session, session: dict
+) -> Subscription | None:
+    """Resolve the active subscription visible to the current customer session."""
+    account_id, session_subscription_id = resolve_customer_account(session, db)
+    account_id_str = str(account_id) if account_id else None
+
+    if session_subscription_id:
+        subscription = db.get(Subscription, session_subscription_id)
+        if subscription and (
+            not account_id_str or str(subscription.subscriber_id) == account_id_str
+        ):
+            return subscription
+
+    if not account_id_str:
+        return None
+
+    try:
+        return bandwidth_samples.get_user_active_subscription(
+            db, {"account_id": account_id_str}
+        )
+    except HTTPException:
+        return None
+
+
+def get_dashboard_template_context(db: Session, session: dict) -> tuple[str, dict]:
+    """Return the dashboard template and context for full or restricted access."""
+    subscriber_id = session.get("subscriber_id")
+    if subscriber_id and is_subscriber_restricted(db, subscriber_id):
+        return (
+            "customer/dashboard/restricted.html",
+            {
+                "customer": session,
+                **get_restricted_dashboard_context(db, session),
+                "active_page": "dashboard",
+            },
+        )
+    return (
+        "customer/dashboard/index.html",
+        {
+            "customer": session,
+            **get_dashboard_context(db, session),
+            "active_page": "dashboard",
+        },
+    )
 
 
 def _format_address(address) -> str:

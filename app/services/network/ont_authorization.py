@@ -21,7 +21,8 @@ from app.models.network import (
     OntProvisioningStatus,
     OntUnit,
 )
-from app.services.network.ont_provision_steps import StepResult
+from app.services.network.ont_provisioning.context import resolve_olt_context
+from app.services.network.ont_provisioning.result import StepResult
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +55,26 @@ class OntAuthorizationService:
         Returns:
             StepResult with success/failure details.
         """
-        from app.services.network.ont_provision_steps import resolve_olt_context
-
         ctx, err = resolve_olt_context(db, ont_id)
         if not ctx:
             return StepResult("authorize", False, err, critical=True)
 
+        from app.services.network.olt_profile_resolution import (
+            ensure_ont_service_profile_match,
+            resolve_authorization_profiles,
+        )
         from app.services.network.olt_ssh import authorize_ont as ssh_authorize
+
+        if line_profile_id is None or service_profile_id is None:
+            profiles_ok, profiles_msg, profiles = resolve_authorization_profiles(
+                ctx.olt,
+                model=ctx.ont.model,
+                onu_type=getattr(ctx.ont, "onu_type", None),
+            )
+            if not profiles_ok or profiles is None:
+                return StepResult("authorize", False, profiles_msg, critical=True)
+            line_profile_id = profiles.line_profile_id
+            service_profile_id = profiles.service_profile_id
 
         ok, msg, olt_ont_id = ssh_authorize(
             ctx.olt,
@@ -86,6 +100,20 @@ class OntAuthorizationService:
                 serial_number=ctx.ont.serial_number,
             )
             if verification.success:
+                if olt_ont_id is not None:
+                    match_ok, match_msg = ensure_ont_service_profile_match(
+                        ctx.olt,
+                        fsp=ctx.fsp,
+                        ont_id=olt_ont_id,
+                    )
+                    if not match_ok:
+                        ctx.ont.provisioning_status = (
+                            OntProvisioningStatus.drift_detected
+                        )
+                        db.flush()
+                        return StepResult(
+                            "authorize", False, match_msg, critical=True
+                        )
                 ctx.ont.authorization_status = OntAuthorizationStatus.authorized
                 db.flush()
                 logger.info(
@@ -125,7 +153,6 @@ class OntAuthorizationService:
             StepResult with success/failure details.
         """
         from app.services.network.olt_ssh_ont import delete_ont_registration
-        from app.services.network.ont_provision_steps import resolve_olt_context
 
         ctx, err = resolve_olt_context(db, ont_id)
         if not ctx:

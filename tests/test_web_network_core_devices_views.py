@@ -33,6 +33,14 @@ def test_display_ont_serial_decodes_huawei_hex() -> None:
     assert core_devices_views._display_ont_serial("HWTC03217F84") == "HWTC03217F84"
 
 
+def test_display_ont_serial_hides_generated_placeholders() -> None:
+    assert (
+        core_devices_views._display_ont_serial("HW-86BF78E7-04104-2604111358482263")
+        == ""
+    )
+    assert core_devices_views._display_ont_serial("ZT-86BF78E7-04104") == ""
+
+
 def test_ont_detail_page_data_uses_unified_subscriber_name_and_status(db_session):
     subscriber = Subscriber(
         first_name="Ada",
@@ -110,6 +118,27 @@ def test_ont_detail_page_data_exposes_display_serial_number(db_session):
 
     assert payload is not None
     assert payload["display_serial_number"] == "HWTC08D90492"
+    assert payload["display_serial_label"] == "HWTC08D90492"
+
+
+def test_ont_detail_page_data_hides_synthetic_serial(db_session):
+    olt = OLTDevice(name="OLT-SYNTH-SERIAL", mgmt_ip="198.51.100.214")
+    db_session.add(olt)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="HW-86BF78E7-04104-2604111358482263",
+        is_active=True,
+        olt_device_id=olt.id,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["display_serial_number"] == ""
+    assert payload["display_serial_label"] == "-"
 
 
 def test_ont_detail_page_data_uses_recent_acs_inform_for_effective_online_status(

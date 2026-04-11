@@ -8,13 +8,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.schemas.billing import TaxRateCreate
-from app.services import billing as billing_service
 from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services import web_billing_tax_rates as web_billing_tax_rates_service
 from app.services.auth_dependencies import require_permission
-from app.validators.forms import parse_decimal
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -56,13 +53,13 @@ def billing_tax_rate_create(
     db: Session = Depends(get_db),
 ):
     try:
-        payload = TaxRateCreate(
-            name=name.strip(),
-            rate=parse_decimal(rate, "rate"),
-            code=code.strip() if code else None,
-            description=description.strip() if description else None,
+        web_billing_tax_rates_service.create_tax_rate_from_form(
+            db,
+            name=name,
+            rate=rate,
+            code=code,
+            description=description,
         )
-        billing_service.tax_rates.create(db, payload)
     except Exception as exc:
         state = web_billing_tax_rates_service.list_data(db)
         from app.web.admin import get_current_user, get_sidebar_stats
@@ -92,7 +89,7 @@ def billing_tax_rate_toggle(
     rate_id: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    billing_service.tax_rates.toggle_active(db, rate_id)
+    web_billing_tax_rates_service.toggle_tax_rate(db, rate_id=rate_id)
     return RedirectResponse(url="/admin/billing/tax-rates", status_code=303)
 
 

@@ -6,7 +6,10 @@ auto-link ONTs, parameter map resolution, and session cleanup.
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from app.models.tr069 import (
     Tr069AcsServer,
@@ -178,6 +181,13 @@ class TestInformWebhook:
         payload = InformPayload(serial_number="TEST-001", event="boot")
         assert payload.serial_number == "TEST-001"
         assert payload.event == "boot"
+        extra_payload = InformPayload(
+            serial_number="TEST-001",
+            parameters={"Device.DeviceInfo.SoftwareVersion": "V1"},
+        )
+        assert extra_payload.model_dump()["parameters"] == {
+            "Device.DeviceInfo.SoftwareVersion": "V1"
+        }
 
         # Without serial — should default
         payload = InformPayload()
@@ -313,6 +323,213 @@ class TestAutoLinkOnts:
         )
         assert linked is not None
         assert linked.ont_unit_id == ont.id
+
+    def test_sync_reactivates_offline_local_ont_tr069_row(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="Offline Local ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        ont = OntUnit(
+            serial_number="HWTC13EE6B84",
+            tr069_acs_server_id=server.id,
+            is_active=True,
+        )
+        db_session.add(ont)
+        db_session.flush()
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number="HWTC13EE6B84",
+            is_active=False,
+        )
+        db_session.add(device)
+        db_session.commit()
+
+        with patch("app.services.tr069.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = []
+
+            result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        db_session.refresh(device)
+        db_session.refresh(ont)
+        assert result["local_reactivated"] == 1
+        assert device.is_active is True
+        assert device.ont_unit_id == ont.id
+        assert ont.tr069_acs_server_id == server.id
+
+    def test_sync_creates_local_tr069_row_for_olt_assigned_offline_ont(
+        self, db_session
+    ) -> None:
+        from app.models.network import OLTDevice, OntUnit
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="OLT Local ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        olt = OLTDevice(
+            name="TR069 Offline OLT",
+            tr069_acs_server_id=server.id,
+            is_active=True,
+        )
+        db_session.add(olt)
+        db_session.flush()
+        ont = OntUnit(
+            serial_number="OFFLINE-OLT-ACS-001",
+            olt_device_id=olt.id,
+            is_active=True,
+        )
+        db_session.add(ont)
+        db_session.commit()
+
+        with patch("app.services.tr069.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = []
+
+            result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        linked = (
+            db_session.query(Tr069CpeDevice)
+            .filter_by(serial_number="OFFLINE-OLT-ACS-001", is_active=True)
+            .one()
+        )
+        db_session.refresh(ont)
+        assert result["local_created"] == 1
+        assert linked.ont_unit_id == ont.id
+        assert linked.genieacs_device_id is None
+        assert ont.tr069_acs_server_id == server.id
+
+    def test_sync_retires_expected_placeholder_when_real_acs_device_arrives(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.tr069 import CpeDevices, acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="Placeholder Reconcile ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        ont = OntUnit(
+            serial_number="HWTC13EE6B84",
+            tr069_acs_server_id=server.id,
+            is_active=True,
+        )
+        db_session.add(ont)
+        db_session.flush()
+        placeholder = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number="HWTC13EE6B84",
+            is_active=True,
+        )
+        db_session.add(placeholder)
+        db_session.commit()
+
+        mock_device = {
+            "_id": "4857544313EE6B84",
+            "_deviceId": {
+                "_OUI": "48575443",
+                "_ProductClass": "HG8245H",
+                "_SerialNumber": "4857544313EE6B84",
+            },
+            "_lastInform": datetime.now(UTC).isoformat(),
+        }
+        with patch("app.services.tr069.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = [mock_device]
+            instance.parse_device_id.return_value = (
+                "48575443",
+                "HG8245H",
+                "4857544313EE6B84",
+            )
+            instance.extract_parameter_value.return_value = None
+
+            result = CpeDevices.sync_from_genieacs(db_session, str(server.id))
+
+        registered = (
+            db_session.query(Tr069CpeDevice)
+            .filter_by(genieacs_device_id="4857544313EE6B84")
+            .one()
+        )
+        db_session.refresh(placeholder)
+        db_session.refresh(ont)
+
+        assert result["created"] == 1
+        assert registered.ont_unit_id == ont.id
+        assert registered.is_active is True
+        assert placeholder.ont_unit_id is None
+        assert placeholder.is_active is False
+        assert ont.tr069_acs_server_id == server.id
+
+    def test_unregistered_expected_rows_reject_firmware_and_nat_actions(
+        self, db_session
+    ) -> None:
+        from app.services import web_network_tr069 as web_network_tr069_service
+        from app.services.tr069 import acs_servers
+
+        server = acs_servers.create(
+            db_session,
+            Tr069AcsServerCreate(
+                name="Expected Action Guard ACS",
+                base_url="http://genieacs:7557",
+                cwmp_url="http://acs/cwmp",
+                cwmp_username="u",
+                cwmp_password="p",
+                connection_request_username="cu",
+                connection_request_password="cp",
+            ),
+        )
+        device = Tr069CpeDevice(
+            acs_server_id=server.id,
+            serial_number="EXPECTED-ACTION-001",
+            is_active=True,
+        )
+        db_session.add(device)
+        db_session.commit()
+
+        with pytest.raises(ValueError, match="not registered in GenieACS"):
+            web_network_tr069_service.create_firmware_download_job(
+                db_session,
+                tr069_device_id=str(device.id),
+                firmware_url="https://example.test/fw.bin",
+            )
+        with pytest.raises(ValueError, match="not registered in GenieACS"):
+            web_network_tr069_service.create_nat_port_forward_job(
+                db_session,
+                tr069_device_id=str(device.id),
+                external_port=8080,
+                internal_ip="192.168.1.10",
+                internal_port=80,
+                protocol="TCP",
+            )
 
 
 class TestCreateOntFromTr069Device:
@@ -595,7 +812,101 @@ class TestDeviceResolution:
         assert device_id == "00D09E-TestProduct-HWTC7D4733C3"
         assert reason == "resolved_via_ont_acs"
 
-    def test_resolve_prefers_explicit_tr069_link_for_synthetic_ont_serial(
+    def test_resolve_matches_device_by_genieacs_deviceid_serial(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Resolve ACS DeviceId",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.commit()
+
+        ont = OntUnit(
+            serial_number="HWTC7D4733C3",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.commit()
+
+        mock_device = {
+            "_id": "00259E-EG8145V5-485754437D4733C3",
+            "_deviceId": {"_SerialNumber": "485754437D4733C3"},
+        }
+
+        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.side_effect = [[], [], [mock_device]]
+
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is not None
+        _client, device_id = result
+        assert device_id == "00259E-EG8145V5-485754437D4733C3"
+        assert reason == "resolved_via_ont_acs"
+        issued_queries = [
+            call.kwargs["query"] for call in instance.list_devices.call_args_list
+        ]
+        assert any(
+            {"_deviceId._SerialNumber": "485754437D4733C3"}
+            in query.get("$or", [])
+            for query in issued_queries
+        )
+
+    def test_resolve_matches_device_by_tr098_serial_parameter(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Resolve ACS TR098",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.commit()
+
+        ont = OntUnit(
+            serial_number="485754437D4733C3",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.commit()
+
+        mock_device = {
+            "_id": "00259E-EG8145V5-ALTID",
+            "InternetGatewayDevice": {
+                "DeviceInfo": {
+                    "SerialNumber": {"_value": "485754437D4733C3"}
+                }
+            },
+        }
+
+        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
+            instance = MockClient.return_value
+            instance.list_devices.return_value = [mock_device]
+
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is not None
+        _client, device_id = result
+        assert device_id == "00259E-EG8145V5-ALTID"
+        assert reason == "resolved_via_ont_acs"
+        issued_query = instance.list_devices.call_args.kwargs["query"]
+        assert {
+            "InternetGatewayDevice.DeviceInfo.SerialNumber._value": (
+                "485754437D4733C3"
+            )
+        } in issued_query["$or"]
+
+    def test_resolve_does_not_build_synthetic_id_for_placeholder_ont(
         self, db_session
     ) -> None:
         from app.models.network import OntUnit
@@ -631,17 +942,247 @@ class TestDeviceResolution:
         with patch("app.services.network._resolve.GenieACSClient") as MockClient:
             instance = MockClient.return_value
             instance.list_devices.return_value = []
-            instance.build_device_id.return_value = "48575443-EG8145V5-HWTC7D4806C3"
 
+            result, reason = resolve_genieacs_with_reason(db_session, ont)
+
+        assert result is None
+        assert "No TR-069 device found" in reason
+        instance.build_device_id.assert_not_called()
+
+    def test_resolve_prefers_linked_tr069_device_with_genieacs_id(
+        self, db_session
+    ) -> None:
+        from app.models.network import OntUnit
+        from app.services.network._resolve import resolve_genieacs_with_reason
+
+        server = Tr069AcsServer(
+            name="Linked Resolve ACS",
+            base_url="http://genieacs:7557",
+            is_active=True,
+        )
+        db_session.add(server)
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HW-OLT-0001",
+            is_active=True,
+            tr069_acs_server_id=server.id,
+        )
+        db_session.add(ont)
+        db_session.flush()
+
+        linked = Tr069CpeDevice(
+            acs_server_id=server.id,
+            ont_unit_id=ont.id,
+            serial_number="HWTC7D4806C3",
+            genieacs_device_id="48575443-EG8145V5-HWTC7D4806C3",
+            oui="48575443",
+            product_class="EG8145V5",
+            is_active=True,
+        )
+        db_session.add(linked)
+        db_session.commit()
+
+        with patch("app.services.network._resolve.GenieACSClient") as MockClient:
             result, reason = resolve_genieacs_with_reason(db_session, ont)
 
         assert result is not None
         _client, device_id = result
         assert device_id == "48575443-EG8145V5-HWTC7D4806C3"
         assert reason == "resolved_via_linked_tr069_device"
+        MockClient.return_value.list_devices.assert_not_called()
 
 
 class TestAcsPropagation:
+    def test_auto_bind_uses_olt_linked_acs_profile_without_hardcoded_match(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network import olt_ssh
+
+        olt = SimpleNamespace(
+            name="OLT-AutoBind",
+            tr069_acs_server=SimpleNamespace(
+                name="Primary ACS",
+                cwmp_url="http://acs.example.com/cwmp/",
+                cwmp_username="cwmp-user",
+                cwmp_password=None,
+                periodic_inform_interval=300,
+            ),
+        )
+        profiles = [
+            olt_ssh.Tr069ServerProfile(
+                profile_id=17,
+                name="Provider Profile",
+                acs_url="http://acs.example.com/cwmp",
+                acs_username="cwmp-user",
+            )
+        ]
+        bound: dict[str, int] = {}
+
+        monkeypatch.setattr(
+            olt_ssh,
+            "get_tr069_server_profiles",
+            lambda _olt: (True, "ok", profiles),
+        )
+        monkeypatch.setattr(
+            olt_ssh,
+            "bind_tr069_server_profile",
+            lambda _olt, fsp, ont_id, profile_id: bound.update(
+                {"profile_id": profile_id, "ont_id": ont_id}
+            )
+            or (True, "bound"),
+        )
+
+        olt_ssh._auto_bind_tr069_after_authorize(olt, "0/2/1", 6)
+
+        assert bound == {"profile_id": 17, "ont_id": 6}
+
+    def test_auto_bind_accepts_matching_profile_when_username_not_parsed(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network import olt_ssh
+
+        olt = SimpleNamespace(
+            name="OLT-AutoBind-NoUsername",
+            tr069_acs_server=SimpleNamespace(
+                name="Primary ACS",
+                cwmp_url="http://acs.example.com/cwmp",
+                cwmp_username="cwmp-user",
+                cwmp_password=None,
+                periodic_inform_interval=300,
+            ),
+        )
+        profiles = [
+            olt_ssh.Tr069ServerProfile(
+                profile_id=19,
+                name="Provider Profile",
+                acs_url="http://acs.example.com/cwmp",
+                acs_username="",
+            )
+        ]
+        bound: dict[str, int] = {}
+
+        monkeypatch.setattr(
+            olt_ssh,
+            "get_tr069_server_profiles",
+            lambda _olt: (True, "ok", profiles),
+        )
+        monkeypatch.setattr(
+            olt_ssh,
+            "create_tr069_server_profile",
+            lambda *_args, **_kwargs: pytest.fail(
+                "matching profile should be reused"
+            ),
+        )
+        monkeypatch.setattr(
+            olt_ssh,
+            "bind_tr069_server_profile",
+            lambda _olt, fsp, ont_id, profile_id: bound.update(
+                {"profile_id": profile_id, "ont_id": ont_id}
+            )
+            or (True, "bound"),
+        )
+
+        olt_ssh._auto_bind_tr069_after_authorize(olt, "0/2/1", 6)
+
+        assert bound == {"profile_id": 19, "ont_id": 6}
+
+    def test_auto_bind_creates_profile_for_olt_linked_acs_when_missing(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network import olt_ssh
+
+        olt = SimpleNamespace(
+            name="OLT-AutoCreate",
+            tr069_acs_server=SimpleNamespace(
+                name="Primary ACS",
+                cwmp_url="http://acs.example.com/cwmp",
+                cwmp_username="cwmp-user",
+                cwmp_password=None,
+                periodic_inform_interval=180,
+            ),
+        )
+        calls = {"list": 0}
+        created: dict[str, object] = {}
+        bound: dict[str, int] = {}
+
+        def fake_profiles(_olt):
+            calls["list"] += 1
+            if calls["list"] == 1:
+                return True, "ok", []
+            return True, "ok", [
+                olt_ssh.Tr069ServerProfile(
+                    profile_id=23,
+                    name="ACS Primary ACS",
+                    acs_url="http://acs.example.com/cwmp",
+                    acs_username="cwmp-user",
+                )
+            ]
+
+        def fake_create(_olt, **kwargs):
+            created.update(kwargs)
+            return True, "created"
+
+        monkeypatch.setattr(olt_ssh, "get_tr069_server_profiles", fake_profiles)
+        monkeypatch.setattr(olt_ssh, "create_tr069_server_profile", fake_create)
+        monkeypatch.setattr(
+            olt_ssh,
+            "bind_tr069_server_profile",
+            lambda _olt, fsp, ont_id, profile_id: bound.update(
+                {"profile_id": profile_id, "ont_id": ont_id}
+            )
+            or (True, "bound"),
+        )
+
+        olt_ssh._auto_bind_tr069_after_authorize(olt, "0/2/1", 6)
+
+        assert created["acs_url"] == "http://acs.example.com/cwmp"
+        assert created["username"] == "cwmp-user"
+        assert created["inform_interval"] == 180
+        assert bound == {"profile_id": 23, "ont_id": 6}
+
+    def test_tr069_profile_match_does_not_fallback_to_dotmac_name(self) -> None:
+        from app.services.network.olt_tr069_admin import match_tr069_profile
+
+        wrong_profile = SimpleNamespace(
+            profile_id=99,
+            name="DotMac old ACS",
+            acs_url="http://old-acs.example.com/cwmp",
+            acs_username="cwmp-user",
+        )
+
+        result = match_tr069_profile(
+            [wrong_profile],
+            acs_url="http://new-acs.example.com/cwmp",
+            acs_username="cwmp-user",
+        )
+
+        assert result is None
+
+    def test_olt_create_auto_init_uses_linked_acs_service(self, monkeypatch) -> None:
+        from app.services.network import olt_web_forms
+
+        olt = SimpleNamespace(
+            id="olt-1",
+            name="OLT Auto Init",
+            ssh_username="admin",
+            ssh_password="encrypted",
+        )
+        called: dict[str, object] = {}
+
+        def fake_ensure(received_olt):
+            called["olt"] = received_olt
+            return True, "profile ready", 31
+
+        monkeypatch.setattr(
+            "app.services.network.olt_tr069_admin.ensure_tr069_profile_for_linked_acs",
+            fake_ensure,
+        )
+
+        olt_web_forms._auto_init_tr069_profile(olt)
+
+        assert called["olt"] is olt
+
     def test_queue_acs_propagation_includes_tr098_and_tr181_paths(
         self, db_session
     ) -> None:

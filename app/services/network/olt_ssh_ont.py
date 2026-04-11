@@ -144,6 +144,104 @@ def get_registered_ont_serials(
         transport.close()
 
 
+def find_ont_by_serial(
+    olt: OLTDevice,
+    serial_number: str,
+) -> tuple[bool, str, RegisteredOntEntry | None]:
+    """Find where an ONT serial is already registered on an OLT.
+
+    Uses 'display ont info by-sn' for direct lookup which is more reliable
+    than parsing all registered ONTs.
+
+    Returns:
+        (success, message, entry) where entry contains fsp, onu_id, run_state
+        if the serial is found, or None if not registered.
+    """
+    from app.services.network import olt_ssh as core
+
+    # Normalize serial (remove dashes, uppercase)
+    normalized_serial = serial_number.replace("-", "").strip().upper()
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (core.SSHException, OSError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+    except Exception as exc:
+        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
+        return False, f"Unexpected error: {type(exc).__name__}", None
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        # Use direct serial lookup - much more reliable than parsing all ONTs
+        output = core._run_huawei_cmd(
+            channel,
+            f"display ont info by-sn {normalized_serial}",
+            prompt=r"#\s*$",
+        )
+
+        # Check for "not exist" or similar error
+        if "not exist" in output.lower() or "failure" in output.lower():
+            logger.info(
+                "ONT serial %s not found on OLT %s",
+                serial_number,
+                olt.name,
+            )
+            return True, f"ONT {serial_number} is not registered on {olt.name}", None
+
+        # Parse the output for F/S/P, ONT-ID, and Run state
+        fsp_match = re.search(r"F/S/P\s*:\s*(\d+/\d+/\d+)", output)
+        ont_id_match = re.search(r"ONT-ID\s*:\s*(\d+)", output)
+        run_state_match = re.search(r"Run state\s*:\s*(\w+)", output, re.IGNORECASE)
+
+        if fsp_match and ont_id_match:
+            fsp = fsp_match.group(1)
+            ont_id = int(ont_id_match.group(1))
+            run_state = run_state_match.group(1).lower() if run_state_match else "unknown"
+
+            logger.info(
+                "Found existing ONT registration: serial=%s on %s port %s ont_id=%d state=%s",
+                serial_number,
+                olt.name,
+                fsp,
+                ont_id,
+                run_state,
+            )
+            return (
+                True,
+                f"ONT {serial_number} is registered on {fsp} as ONT-ID {ont_id} ({run_state})",
+                RegisteredOntEntry(
+                    fsp=fsp,
+                    onu_id=ont_id,
+                    real_serial=normalized_serial,
+                    run_state=run_state,
+                ),
+            )
+
+        # If we got output but couldn't parse it, log for debugging
+        logger.warning(
+            "Could not parse ONT info output for serial %s on OLT %s: %s",
+            serial_number,
+            olt.name,
+            output[:500],
+        )
+        return True, f"ONT {serial_number} is not registered on {olt.name}", None
+
+    except Exception as exc:
+        logger.error(
+            "Error finding ONT by serial %s on OLT %s: %s",
+            serial_number,
+            olt.name,
+            exc,
+        )
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()
+
+
 def _run_ont_config_command(
     olt: OLTDevice,
     fsp: str,
@@ -204,6 +302,7 @@ def configure_ont_iphost(
     *,
     vlan_id: int,
     ip_mode: str = "dhcp",
+    priority: int | None = None,
     ip_address: str | None = None,
     subnet: str | None = None,
     gateway: str | None = None,
@@ -255,19 +354,33 @@ def configure_ont_iphost(
             channel, f"interface gpon {frame_slot}", prompt=config_prompt
         )
 
+        priority_clause = f" priority {priority}" if priority is not None else ""
         if ip_mode == "dhcp":
-            cmd = f"ont ipconfig {port_num} {ont_id} ip-index 0 dhcp vlan {vlan_id}"
+            cmd = (
+                f"ont ipconfig {port_num} {ont_id} ip-index 0 "
+                f"dhcp vlan {vlan_id}{priority_clause}"
+            )
         else:
             # ip_address, subnet, gateway already validated above
             cmd = (
                 f"ont ipconfig {port_num} {ont_id} "
                 f"ip-index 0 static ip-address {ip_address} "
-                f"mask {subnet} gateway {gateway} vlan {vlan_id}"
+                f"mask {subnet} gateway {gateway} vlan {vlan_id}{priority_clause}"
             )
 
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+
+        if "make configuration repeatedly" in output.lower():
+            logger.info(
+                "IPHOST config already present for ONT %d on OLT %s (%s VLAN %d)",
+                ont_id,
+                olt.name,
+                ip_mode,
+                vlan_id,
+            )
+            return True, f"Management IP already configured ({ip_mode} on VLAN {vlan_id})"
 
         if core.is_error_output(output):
             logger.warning(
@@ -291,6 +404,38 @@ def configure_ont_iphost(
         return False, f"Error: {exc}"
     finally:
         transport.close()
+
+
+def parse_iphost_config_output(output: str) -> dict[str, str]:
+    """Parse Huawei ``display ont ipconfig`` output into normalized fields."""
+    config: dict[str, str] = {}
+    aliases = {
+        "ont ip host index": "ip_index",
+        "ont iphost index": "ip_index",
+        "ont config type": "mode",
+        "ont ip": "ip_address",
+        "ont subnet mask": "subnet_mask",
+        "ont gateway": "gateway",
+        "ont primary dns": "primary_dns",
+        "ont slave dns": "secondary_dns",
+        "ont mac": "mac_address",
+        "ont manage vlan": "vlan",
+        "ont manage priority": "priority",
+        "dscp mapping table index": "dscp_mapping_table_index",
+    }
+    for line in output.splitlines():
+        if ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        raw_key = " ".join(key.strip().lower().split())
+        raw_value = value.strip()
+        if not raw_key:
+            continue
+        config[key.strip()] = raw_value
+        normalized_key = aliases.get(raw_key)
+        if normalized_key:
+            config[normalized_key] = raw_value
+    return config
 
 
 def clear_ont_ipconfig(
@@ -335,16 +480,16 @@ def get_ont_iphost_config(
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
-        cmd = f"display ont ipconfig {parts[0]}/{parts[1]} {port_num} {ont_id}"
-        output = core._run_huawei_cmd(channel, cmd)
-        config: dict[str, str] = {}
-        for line in output.splitlines():
-            if ":" in line:
-                key, _, value = line.partition(":")
-                config[key.strip()] = value.strip()
+        config_prompt = r"[#)]\s*$"
+        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
+        core._run_huawei_cmd(
+            channel, f"interface gpon {parts[0]}/{parts[1]}", prompt=config_prompt
+        )
+
+        cmd = f"display ont ipconfig {port_num} {ont_id}"
+        output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
+        config = parse_iphost_config_output(output)
         return True, "IPHOST config retrieved", config
     except Exception as exc:
         logger.error("Error getting IPHOST config from OLT %s: %s", olt.name, exc)
@@ -942,6 +1087,13 @@ def bind_tr069_server_profile(
     parts = fsp.split("/")
     frame_slot = f"{parts[0]}/{parts[1]}"
     port_num = parts[2]
+    logger.info(
+        "TR-069 bind requested: olt=%s fsp=%s ont_id=%s profile_id=%s",
+        olt.name,
+        fsp,
+        ont_id,
+        profile_id,
+    )
 
     try:
         transport, channel, _policy = core._open_shell(olt)
@@ -963,13 +1115,24 @@ def bind_tr069_server_profile(
 
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
+        if core.is_error_output(output) and "unknown command" in output.lower():
+            # Some Huawei builds expect only the ONT ID after entering
+            # `interface gpon F/S`; the port is already implied by context.
+            fallback_cmd = f"ont tr069-server-config {ont_id} profile-id {profile_id}"
+            fallback_output = core._run_huawei_cmd(
+                channel, fallback_cmd, prompt=config_prompt
+            )
+            if not core.is_error_output(fallback_output):
+                output = fallback_output
         if core.is_error_output(output):
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
             logger.warning(
-                "TR-069 profile bind failed for ONT %d on OLT %s: %s",
-                ont_id,
+                "TR-069 profile bind failed: olt=%s fsp=%s ont_id=%s profile_id=%s output=%s",
                 olt.name,
+                fsp,
+                ont_id,
+                profile_id,
                 output.strip()[-150:],
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
@@ -984,10 +1147,24 @@ def bind_tr069_server_profile(
         if core.is_error_output(reset_out):
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
             core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            if "ont is not online" in reset_out.lower():
+                logger.info(
+                    "TR-069 bind succeeded but reset skipped because ONT is offline: olt=%s fsp=%s ont_id=%s profile_id=%s",
+                    olt.name,
+                    fsp,
+                    ont_id,
+                    profile_id,
+                )
+                return (
+                    True,
+                    f"TR-069 profile {profile_id} bound to ONT {ont_id}; ONT is offline, so reset will occur when it next boots.",
+                )
             logger.warning(
-                "TR-069 profile bound but ONT reset failed for ONT %d on OLT %s: %s",
-                ont_id,
+                "TR-069 bind succeeded but reset failed: olt=%s fsp=%s ont_id=%s profile_id=%s output=%s",
                 olt.name,
+                fsp,
+                ont_id,
+                profile_id,
                 reset_out.strip()[-150:],
             )
             return (
@@ -998,10 +1175,11 @@ def bind_tr069_server_profile(
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
         logger.info(
-            "Bound TR-069 profile %d to ONT %d on OLT %s (reset triggered)",
-            profile_id,
-            ont_id,
+            "TR-069 bind succeeded and reset triggered: olt=%s fsp=%s ont_id=%s profile_id=%s",
             olt.name,
+            fsp,
+            ont_id,
+            profile_id,
         )
         return (
             True,

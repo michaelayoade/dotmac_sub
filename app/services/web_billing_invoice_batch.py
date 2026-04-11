@@ -10,6 +10,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from app.models.billing import BillingRunSchedule, BillingRunStatus
+from app.models.catalog import BillingCycle
 from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
@@ -21,16 +22,21 @@ from app.timezone import APP_TIMEZONE_NAME
 logger = logging.getLogger(__name__)
 
 
-def parse_billing_cycle(value: str | None, parse_cycle_fn):
-    return parse_cycle_fn(value)
+def parse_billing_cycle(value: str | None) -> BillingCycle | None:
+    if not value:
+        return None
+    try:
+        return BillingCycle(value)
+    except ValueError as exc:
+        raise ValueError("Invalid billing cycle") from exc
 
 
-def run_batch(db, *, billing_cycle: str | None, parse_cycle_fn) -> str:
+def run_batch(db, *, billing_cycle: str | None) -> str:
     """Run invoice cycle and return user-facing note."""
     try:
         summary = billing_automation_service.run_invoice_cycle(
             db=db,
-            billing_cycle=parse_billing_cycle(billing_cycle, parse_cycle_fn),
+            billing_cycle=parse_billing_cycle(billing_cycle),
             dry_run=False,
         )
         return (
@@ -43,14 +49,13 @@ def run_batch(db, *, billing_cycle: str | None, parse_cycle_fn) -> str:
         return f"Batch run failed: {exc}"
 
 
-def retry_batch_run(db, *, run_id: str, parse_cycle_fn) -> str:
+def retry_batch_run(db, *, run_id: str) -> str:
     """Retry a previous billing run using its billing cycle."""
     run = billing_service.billing_runs.get(db, run_id)
     cycle_value = run.billing_cycle or None
     return run_batch(
         db,
         billing_cycle=cycle_value,
-        parse_cycle_fn=parse_cycle_fn,
     )
 
 
@@ -66,14 +71,13 @@ def preview_batch(
     billing_cycle: str | None,
     billing_date: str | None,
     separate_by_partner: bool = False,
-    parse_cycle_fn,
 ) -> dict[str, object]:
     """Run dry-run invoice preview and return JSON payload."""
     run_date = _parse_run_date(billing_date)
 
     summary = billing_automation_service.run_invoice_cycle(
         db=db,
-        billing_cycle=parse_billing_cycle(billing_cycle, parse_cycle_fn),
+        billing_cycle=parse_billing_cycle(billing_cycle),
         dry_run=True,
         run_at=run_date,
     )
@@ -180,13 +184,12 @@ def run_batch_with_date(
     *,
     billing_cycle: str | None,
     billing_date: str | None,
-    parse_cycle_fn,
 ) -> str:
     """Run invoice cycle honoring billing date when provided."""
     try:
         summary = billing_automation_service.run_invoice_cycle(
             db=db,
-            billing_cycle=parse_billing_cycle(billing_cycle, parse_cycle_fn),
+            billing_cycle=parse_billing_cycle(billing_cycle),
             dry_run=False,
             run_at=_parse_run_date(billing_date),
         )
@@ -358,6 +361,32 @@ def render_runs_csv(rows: list[dict[str, object]]) -> str:
 
 def render_single_run_csv(row: dict[str, object]) -> str:
     return render_runs_csv([row])
+
+
+def build_batch_page_state(db, *, note: str | None = None) -> dict[str, object]:
+    """Build invoice batch page state."""
+    from app.services import subscriber as subscriber_service
+    from app.services import (
+        web_billing_invoice_actions as web_billing_invoice_actions_service,
+    )
+
+    active_resellers = subscriber_service.resellers.list(
+        db=db,
+        is_active=True,
+        order_by="created_at",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+    return {
+        "today": web_billing_invoice_actions_service.batch_today_str(),
+        "recent_runs": list_recent_runs(db, limit=25),
+        "note": note,
+        "schedule_config": get_billing_run_schedule(db),
+        "schedule_partner_options": [
+            {"id": str(item.id), "name": item.name} for item in active_resellers
+        ],
+    }
 
 
 def _default_schedule_config() -> dict[str, object]:

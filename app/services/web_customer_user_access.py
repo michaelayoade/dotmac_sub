@@ -14,8 +14,10 @@ from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory
+from app.services.audit_helpers import log_audit_event
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.settings_spec import resolve_value
+from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 
 logger = logging.getLogger(__name__)
 
@@ -251,6 +253,188 @@ def activate_customer_login(
         is_active=True,
     )
     return target
+
+
+def send_customer_invite(
+    db: Session,
+    *,
+    request,
+    customer_type: str,
+    customer_id: str,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Send or reject a customer portal invite and record audit metadata."""
+    state = build_customer_user_access_state(
+        db,
+        customer_type=customer_type,
+        customer_id=customer_id,
+    )
+    if not state.get("can_send_invite"):
+        retry_at = state.get("invite_available_at")
+        when = (
+            f"{format_in_app_timezone(retry_at, '%Y-%m-%d %H:%M')} {APP_TIMEZONE_NAME}"
+            if retry_at
+            else "later"
+        )
+        log_audit_event(
+            db=db,
+            request=request,
+            action=INVITE_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state.get("target_subscriber_id") or ""),
+            actor_id=actor_id,
+            metadata={"reason": "rate_limited"},
+            status_code=429,
+            is_success=False,
+        )
+        return {
+            "ok": False,
+            "title": "Invite blocked",
+            "message": f"Invite already sent recently. You can resend after {when}.",
+        }
+
+    note = web_system_user_mutations_service.send_user_invite_for_user(
+        db,
+        user_id=str(state["target_subscriber_id"]),
+    )
+    ok = "sent" in note.lower()
+    log_audit_event(
+        db=db,
+        request=request,
+        action=INVITE_AUDIT_ACTION,
+        entity_type="subscriber",
+        entity_id=str(state["target_subscriber_id"]),
+        actor_id=actor_id,
+        metadata={
+            "email": state.get("email"),
+            "email_source": state.get("email_source"),
+            "customer_type": customer_type,
+            "result": note,
+        },
+        status_code=200,
+        is_success=ok,
+    )
+    return {"ok": ok, "title": "User invite", "message": note}
+
+
+def send_customer_reset_link(
+    db: Session,
+    *,
+    request,
+    customer_type: str,
+    customer_id: str,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Send or reject a customer password reset link and record audit metadata."""
+    state = build_customer_user_access_state(
+        db,
+        customer_type=customer_type,
+        customer_id=customer_id,
+    )
+    if not state.get("can_send_reset"):
+        log_audit_event(
+            db=db,
+            request=request,
+            action=RESET_AUDIT_ACTION,
+            entity_type="subscriber",
+            entity_id=str(state.get("target_subscriber_id") or ""),
+            actor_id=actor_id,
+            metadata={"reason": "rate_limited"},
+            status_code=429,
+            is_success=False,
+        )
+        return {
+            "ok": False,
+            "title": "Reset link blocked",
+            "message": "Reset limit reached: max 3 reset links per hour.",
+        }
+
+    note = web_system_user_mutations_service.send_password_reset_link_for_user(
+        db,
+        user_id=str(state["target_subscriber_id"]),
+    )
+    ok = "sent" in note.lower()
+    log_audit_event(
+        db=db,
+        request=request,
+        action=RESET_AUDIT_ACTION,
+        entity_type="subscriber",
+        entity_id=str(state["target_subscriber_id"]),
+        actor_id=actor_id,
+        metadata={
+            "email": state.get("email"),
+            "email_source": state.get("email_source"),
+            "customer_type": customer_type,
+            "result": note,
+        },
+        status_code=200,
+        is_success=ok,
+    )
+    return {"ok": ok, "title": "Password reset", "message": note}
+
+
+def set_customer_login_active(
+    db: Session,
+    *,
+    request,
+    customer_type: str,
+    customer_id: str,
+    actor_id: str | None,
+    is_active: bool,
+) -> dict[str, object]:
+    """Toggle customer portal login and record audit metadata."""
+    target = (
+        activate_customer_login(
+            db, customer_type=customer_type, customer_id=customer_id
+        )
+        if is_active
+        else deactivate_customer_login(
+            db, customer_type=customer_type, customer_id=customer_id
+        )
+    )
+    log_audit_event(
+        db=db,
+        request=request,
+        action=LOGIN_TOGGLE_AUDIT_ACTION,
+        entity_type="subscriber",
+        entity_id=str(target.subscriber.id),
+        actor_id=actor_id,
+        metadata={"login_active": is_active, "customer_type": customer_type},
+    )
+    return {
+        "ok": True,
+        "title": "Login activated" if is_active else "Login deactivated",
+        "message": "Customer portal login has been activated."
+        if is_active
+        else "Customer portal login has been deactivated.",
+    }
+
+
+def log_customer_user_access_error(
+    db: Session,
+    *,
+    request,
+    action: str,
+    customer_type: str,
+    customer_id: str,
+    actor_id: str | None,
+    error: Exception,
+    login_active: bool | None = None,
+) -> None:
+    metadata = {"customer_type": customer_type, "error": str(error)}
+    if login_active is not None:
+        metadata["login_active"] = login_active
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="customer",
+        entity_id=str(customer_id),
+        actor_id=actor_id,
+        metadata=metadata,
+        status_code=500,
+        is_success=False,
+    )
 
 
 def activate_subscriber_login(db: Session, *, subscriber_id: str) -> CustomerUserTarget:

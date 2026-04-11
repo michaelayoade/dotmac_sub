@@ -5,6 +5,7 @@ from app.db import get_db
 from app.schemas.common import ListResponse
 from app.schemas.settings import DomainSettingRead, DomainSettingUpdate
 from app.services import settings_api as settings_service
+from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/settings", tags=["settings"])
 
@@ -125,7 +126,10 @@ def get_radius_setting(key: str, db: Session = Depends(get_db)):
 
 
 @router.get(
-    "/auth", response_model=ListResponse[DomainSettingRead], tags=["settings-auth"]
+    "/auth",
+    response_model=ListResponse[DomainSettingRead],
+    tags=["settings-auth"],
+    dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def list_auth_settings(
     is_active: bool | None = None,
@@ -145,6 +149,7 @@ def list_auth_settings(
     response_model=DomainSettingRead,
     status_code=status.HTTP_200_OK,
     tags=["settings-auth"],
+    dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def upsert_auth_setting(
     key: str, payload: DomainSettingUpdate, db: Session = Depends(get_db)
@@ -156,6 +161,7 @@ def upsert_auth_setting(
     "/auth/{key}",
     response_model=DomainSettingRead,
     tags=["settings-auth"],
+    dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def get_auth_setting(key: str, db: Session = Depends(get_db)):
     return settings_service.get_auth_setting(db, key)
@@ -321,6 +327,7 @@ def get_scheduler_setting(key: str, db: Session = Depends(get_db)):
     "/billing",
     response_model=ListResponse[DomainSettingRead],
     tags=["settings-billing"],
+    dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def list_billing_settings(
     is_active: bool | None = None,
@@ -340,6 +347,7 @@ def list_billing_settings(
     response_model=DomainSettingRead,
     status_code=status.HTTP_200_OK,
     tags=["settings-billing"],
+    dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def upsert_billing_setting(
     key: str, payload: DomainSettingUpdate, db: Session = Depends(get_db)
@@ -351,6 +359,7 @@ def upsert_billing_setting(
     "/billing/{key}",
     response_model=DomainSettingRead,
     tags=["settings-billing"],
+    dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def get_billing_setting(key: str, db: Session = Depends(get_db)):
     return settings_service.get_billing_setting(db, key)

@@ -79,3 +79,11 @@ def detail_data(db: Session, *, arrangement_id: str) -> dict[str, object] | None
         "statuses": [s.value for s in ArrangementStatus],
         "frequencies": [f.value for f in PaymentFrequency],
     }
+
+
+def approve_arrangement(db: Session, *, arrangement_id: str):
+    return arrangement_service.payment_arrangements.approve(db, arrangement_id)
+
+
+def cancel_arrangement(db: Session, *, arrangement_id: str):
+    return arrangement_service.payment_arrangements.cancel(db, arrangement_id)

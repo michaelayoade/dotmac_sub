@@ -9,7 +9,9 @@ from app.db import get_db
 from app.services import web_network_fdh as web_network_fdh_service
 from app.services import web_network_fiber as web_network_fiber_service
 from app.services import web_network_fiber_plant as web_network_fiber_plant_service
-from app.services.audit_helpers import build_audit_activities, log_audit_event
+from app.services import (
+    web_network_fiber_plant_actions as web_network_fiber_plant_actions_service,
+)
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync, parse_json_body_sync
 
@@ -112,38 +114,13 @@ def fiber_change_request_detail(
 def fiber_change_request_approve(
     request: Request, request_id: str, db: Session = Depends(get_db)
 ):
-    data = parse_form_data_sync(request)
-    review_notes = web_network_fiber_plant_service.form_optional_str(
-        data, "review_notes"
-    )
-    force_apply = data.get("force_apply") == "true"
-    current_user = _base_context(request, db, active_page="fiber-change-requests")[
-        "current_user"
-    ]
-    approved, error = web_network_fiber_plant_service.approve_change_request(
+    redirect_url = web_network_fiber_plant_actions_service.approve_change_request_from_form(
+        request,
         db,
         request_id=request_id,
-        reviewer_person_id=current_user["person_id"],
-        review_notes=review_notes,
-        force_apply=force_apply,
+        form=parse_form_data_sync(request),
     )
-    if not approved and error == "conflict":
-        return RedirectResponse(
-            url=f"/admin/network/fiber-change-requests/{request_id}?error=conflict",
-            status_code=303,
-        )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="approve",
-        entity_type="fiber_change_request",
-        entity_id=str(request_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"force_apply": force_apply, "review_notes": review_notes},
-    )
-    return RedirectResponse(
-        url=f"/admin/network/fiber-change-requests/{request_id}", status_code=303
-    )
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @router.post(
@@ -153,36 +130,13 @@ def fiber_change_request_approve(
 def fiber_change_request_reject(
     request: Request, request_id: str, db: Session = Depends(get_db)
 ):
-    data = parse_form_data_sync(request)
-    review_notes = web_network_fiber_plant_service.form_optional_str(
-        data, "review_notes"
-    )
-    current_user = _base_context(request, db, active_page="fiber-change-requests")[
-        "current_user"
-    ]
-    error = web_network_fiber_plant_service.reject_change_request(
+    redirect_url = web_network_fiber_plant_actions_service.reject_change_request_from_form(
+        request,
         db,
         request_id=request_id,
-        reviewer_person_id=current_user["person_id"],
-        review_notes=review_notes,
+        form=parse_form_data_sync(request),
     )
-    if error == "reject_note_required":
-        return RedirectResponse(
-            url=f"/admin/network/fiber-change-requests/{request_id}?error=reject_note_required",
-            status_code=303,
-        )
-    log_audit_event(
-        db=db,
-        request=request,
-        action="reject",
-        entity_type="fiber_change_request",
-        entity_id=str(request_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"review_notes": review_notes},
-    )
-    return RedirectResponse(
-        url=f"/admin/network/fiber-change-requests/{request_id}", status_code=303
-    )
+    return RedirectResponse(url=redirect_url, status_code=303)
 
 
 @router.post(
@@ -190,43 +144,14 @@ def fiber_change_request_reject(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def fiber_change_requests_bulk_approve(request: Request, db: Session = Depends(get_db)):
-    data = parse_form_data_sync(request)
-    request_ids = web_network_fiber_plant_service.form_getlist_str(data, "request_ids")
-    force_apply = data.get("force_apply") == "true"
-    current_user = _base_context(request, db, active_page="fiber-change-requests")[
-        "current_user"
-    ]
-    result = web_network_fiber_plant_service.bulk_approve_change_requests(
-        db,
-        request_ids=request_ids,
-        reviewer_person_id=current_user["person_id"],
-        force_apply=force_apply,
-    )
-    approved_request_ids = result["approved_request_ids"]
-    for request_id in approved_request_ids:
-        log_audit_event(
-            db=db,
-            request=request,
-            action="approve",
-            entity_type="fiber_change_request",
-            entity_id=str(request_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={"force_apply": force_apply, "review_notes": "Bulk approved"},
+    redirect_url = (
+        web_network_fiber_plant_actions_service.bulk_approve_change_requests_from_form(
+            request, db, parse_form_data_sync(request)
         )
-    return RedirectResponse(
-        url=f"/admin/network/fiber-change-requests?bulk=approved&skipped={result['skipped']}",
-        status_code=303,
     )
-
-
-@router.post(
-    "/fiber-map/save-plan", dependencies=[Depends(require_permission("network:write"))]
-)
-def fiber_map_save_plan(request: Request, db: Session = Depends(get_db)):
-    """Persist a planned route to a project quote."""
-    # vendor_service removed during CRM cleanup - this endpoint is disabled
-    return JSONResponse(
-        {"error": "Route revision feature not available"}, status_code=501
+    return RedirectResponse(
+        url=redirect_url,
+        status_code=303,
     )
 
 
@@ -354,47 +279,23 @@ def fdh_cabinet_new(request: Request, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:write"))],
 )
 def fdh_cabinet_create(request: Request, db: Session = Depends(get_db)):
-    result = web_network_fdh_service.create_cabinet_submission(
+    result = web_network_fiber_plant_actions_service.create_cabinet_from_form(
+        request,
         db,
         parse_form_data_sync(request),
-        action_url="/admin/network/fdh-cabinets",
     )
-    if result["error"]:
+    if not result.success:
         context = _base_context(
             request, db, active_page="fdh-cabinets", active_menu="fiber"
         )
-        context.update(result["form_context"])
-        return templates.TemplateResponse(
-            "admin/network/fiber/fdh-cabinet-form.html", context
-        )
-
-    cabinet = result["cabinet"]
-    if cabinet is None:
-        context = _base_context(
-            request, db, active_page="fdh-cabinets", active_menu="fiber"
-        )
-        context.update(result["form_context"])
+        context.update(result.form_context or {})
         return templates.TemplateResponse(
             "admin/network/fiber/fdh-cabinet-form.html",
             context,
-            status_code=400,
+            status_code=result.status_code,
         )
-    from app.web.admin import get_current_user
 
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="fdh_cabinet",
-        entity_id=str(cabinet.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": cabinet.name, "code": cabinet.code},
-    )
-
-    return RedirectResponse(
-        f"/admin/network/fdh-cabinets/{cabinet.id}", status_code=303
-    )
+    return RedirectResponse(result.redirect_url or "/admin/network/fdh-cabinets", status_code=303)
 
 
 @router.get(
@@ -433,45 +334,28 @@ def fdh_cabinet_edit(request: Request, cabinet_id: str, db: Session = Depends(ge
 def fdh_cabinet_update(
     request: Request, cabinet_id: str, db: Session = Depends(get_db)
 ):
-    cabinet = web_network_fdh_service.get_cabinet(db, cabinet_id)
-    if not cabinet:
+    result = web_network_fiber_plant_actions_service.update_cabinet_from_form(
+        request,
+        db,
+        cabinet_id=cabinet_id,
+        form=parse_form_data_sync(request),
+    )
+    if result.not_found_message:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": "FDH Cabinet not found"},
+            {"request": request, "message": result.not_found_message},
             status_code=404,
         )
-
-    result = web_network_fdh_service.update_cabinet_submission(
-        db,
-        cabinet,
-        parse_form_data_sync(request),
-        action_url=f"/admin/network/fdh-cabinets/{cabinet.id}",
-    )
-    if result["error"]:
+    if not result.success:
         context = _base_context(
             request, db, active_page="fdh-cabinets", active_menu="fiber"
         )
-        context.update(result["form_context"])
+        context.update(result.form_context or {})
         return templates.TemplateResponse(
             "admin/network/fiber/fdh-cabinet-form.html", context
         )
 
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="fdh_cabinet",
-        entity_id=str(cabinet.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata=result["metadata"],
-    )
-
-    return RedirectResponse(
-        f"/admin/network/fdh-cabinets/{cabinet.id}", status_code=303
-    )
+    return RedirectResponse(result.redirect_url or "/admin/network/fdh-cabinets", status_code=303)
 
 
 @router.get(
@@ -494,7 +378,7 @@ def fdh_cabinet_detail(
         request, db, active_page="fdh-cabinets", active_menu="fiber"
     )
     context.update(page_data)
-    context["activities"] = build_audit_activities(
+    context["activities"] = web_network_fiber_plant_actions_service.activity_for_entity(
         db, "fdh_cabinet", str(cabinet_id), limit=10
     )
     return templates.TemplateResponse(
@@ -539,48 +423,23 @@ def splitter_new(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def splitter_create(request: Request, db: Session = Depends(get_db)):
-    result = web_network_fdh_service.create_splitter_submission(
+    result = web_network_fiber_plant_actions_service.create_splitter_from_form(
+        request,
         db,
         parse_form_data_sync(request),
-        action_url="/admin/network/splitters",
     )
-    if result["error"]:
+    if not result.success:
         context = _base_context(
             request, db, active_page="splitters", active_menu="fiber"
         )
-        context.update(result["form_context"])
-        return templates.TemplateResponse(
-            "admin/network/fiber/splitter-form.html", context
-        )
-
-    splitter = result["splitter"]
-    if splitter is None:
-        context = _base_context(
-            request, db, active_page="splitters", active_menu="fiber"
-        )
-        context.update(result["form_context"])
+        context.update(result.form_context or {})
         return templates.TemplateResponse(
             "admin/network/fiber/splitter-form.html",
             context,
-            status_code=400,
+            status_code=result.status_code,
         )
-    from app.web.admin import get_current_user
 
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="splitter",
-        entity_id=str(splitter.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "name": splitter.name,
-            "fdh_id": str(splitter.fdh_id) if splitter.fdh_id else None,
-        },
-    )
-
-    return RedirectResponse(f"/admin/network/splitters/{splitter.id}", status_code=303)
+    return RedirectResponse(result.redirect_url or "/admin/network/splitters", status_code=303)
 
 
 @router.get(
@@ -614,43 +473,28 @@ def splitter_edit(request: Request, splitter_id: str, db: Session = Depends(get_
     dependencies=[Depends(require_permission("network:write"))],
 )
 def splitter_update(request: Request, splitter_id: str, db: Session = Depends(get_db)):
-    splitter = web_network_fdh_service.get_splitter(db, splitter_id)
-    if not splitter:
+    result = web_network_fiber_plant_actions_service.update_splitter_from_form(
+        request,
+        db,
+        splitter_id=splitter_id,
+        form=parse_form_data_sync(request),
+    )
+    if result.not_found_message:
         return templates.TemplateResponse(
             "admin/errors/404.html",
-            {"request": request, "message": "Splitter not found"},
+            {"request": request, "message": result.not_found_message},
             status_code=404,
         )
-
-    result = web_network_fdh_service.update_splitter_submission(
-        db,
-        splitter,
-        parse_form_data_sync(request),
-        action_url=f"/admin/network/splitters/{splitter.id}",
-    )
-    if result["error"]:
+    if not result.success:
         context = _base_context(
             request, db, active_page="splitters", active_menu="fiber"
         )
-        context.update(result["form_context"])
+        context.update(result.form_context or {})
         return templates.TemplateResponse(
             "admin/network/fiber/splitter-form.html", context
         )
 
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="splitter",
-        entity_id=str(splitter.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata=result["metadata"],
-    )
-
-    return RedirectResponse(f"/admin/network/splitters/{splitter.id}", status_code=303)
+    return RedirectResponse(result.redirect_url or "/admin/network/splitters", status_code=303)
 
 
 @router.get(
@@ -669,7 +513,7 @@ def splitter_detail(request: Request, splitter_id: str, db: Session = Depends(ge
 
     context = _base_context(request, db, active_page="splitters", active_menu="fiber")
     context.update(page_data)
-    context["activities"] = build_audit_activities(
+    context["activities"] = web_network_fiber_plant_actions_service.activity_for_entity(
         db, "splitter", str(splitter_id), limit=10
     )
     return templates.TemplateResponse(

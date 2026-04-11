@@ -5,12 +5,7 @@ Focused implementations live in sibling modules grouped by responsibility.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from app.services.network.ont_action_common import ActionResult, DeviceConfig
-
-if TYPE_CHECKING:
-    from sqlalchemy.orm import Session
 from app.services.network.ont_action_device import (
     factory_reset,
     firmware_upgrade,
@@ -26,6 +21,7 @@ from app.services.network.ont_action_network import (
     enable_ipv6_on_wan,
     send_connection_request,
     set_connection_request_credentials,
+    set_lan_config,
     set_pppoe_credentials,
 )
 from app.services.network.ont_action_wifi import (
@@ -33,26 +29,6 @@ from app.services.network.ont_action_wifi import (
     set_wifi_ssid,
     toggle_lan_port,
 )
-
-
-def _set_lan_config(
-    db: Session,
-    ont_id: str,
-    *,
-    lan_ip: str | None = None,
-    lan_subnet: str | None = None,
-) -> ActionResult:
-    """Set LAN IP/subnet on ONT via GenieACS TR-069.
-
-    Stub implementation — returns success with a message indicating
-    the operation is not yet fully implemented.
-    """
-    if not lan_ip:
-        return ActionResult(success=False, message="LAN IP address is required")
-    return ActionResult(
-        success=True,
-        message=f"LAN config set to {lan_ip}/{lan_subnet or '255.255.255.0'} (stub)",
-    )
 
 
 class OntActions:
@@ -74,7 +50,7 @@ class OntActions:
     run_ping_diagnostic = staticmethod(run_ping_diagnostic)
     run_traceroute_diagnostic = staticmethod(run_traceroute_diagnostic)
     enable_ipv6_on_wan = staticmethod(enable_ipv6_on_wan)
-    set_lan_config = staticmethod(_set_lan_config)
+    set_lan_config = staticmethod(set_lan_config)
 
 
 ont_actions = OntActions()

@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 from sqlalchemy import select
+from starlette.requests import Request
 
 from app.models.network import (
     HardwareUnitStatus,
@@ -27,6 +28,7 @@ from app.models.network import (
     OltShelf,
 )
 from app.services.credential_crypto import decrypt_credential
+from app.services.network.olt_web_audit import log_olt_audit_event
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -437,6 +439,29 @@ def discover_olt_hardware(
     )
     msg = f"Discovered {total_created} new, updated {total_updated} existing"
     return True, msg, stats.to_dict()
+
+
+def discover_olt_hardware_audited(
+    db: Session,
+    olt: OLTDevice,
+    *,
+    request: Request | None = None,
+) -> tuple[bool, str, dict[str, object]]:
+    ok, message, stats = discover_olt_hardware(db, olt)
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="discover_hardware",
+        entity_id=olt.id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "stats": stats,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message, stats
 
 
 def _update_olt_system_info(

@@ -8,13 +8,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.schemas.billing import CollectionAccountUpdate
-from app.services import billing as billing_service
 from app.services import (
     web_billing_collection_accounts as web_billing_collection_accounts_service,
 )
 from app.services.auth_dependencies import require_permission
-from app.services.billing import configuration as billing_config_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
@@ -71,7 +68,7 @@ def collection_accounts_create(
     db: Session = Depends(get_db),
 ):
     try:
-        billing_config_service.create_collection_account(
+        web_billing_collection_accounts_service.create_collection_account_from_form(
             db=db,
             name=name,
             account_type=account_type,
@@ -146,7 +143,7 @@ def collection_accounts_update(
     db: Session = Depends(get_db),
 ):
     try:
-        billing_config_service.update_collection_account(
+        web_billing_collection_accounts_service.update_collection_account_from_form(
             db=db,
             account_id=account_id,
             name=name,
@@ -184,7 +181,9 @@ def collection_accounts_update(
     dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_deactivate(account_id: UUID, db: Session = Depends(get_db)):
-    billing_service.collection_accounts.delete(db, str(account_id))
+    web_billing_collection_accounts_service.deactivate_collection_account(
+        db, account_id=account_id
+    )
     return RedirectResponse(url="/admin/billing/collection-accounts", status_code=303)
 
 
@@ -194,9 +193,7 @@ def collection_accounts_deactivate(account_id: UUID, db: Session = Depends(get_d
     dependencies=[Depends(require_permission("billing:account:write"))],
 )
 def collection_accounts_activate(account_id: UUID, db: Session = Depends(get_db)):
-    billing_service.collection_accounts.update(
-        db,
-        str(account_id),
-        CollectionAccountUpdate(is_active=True),
+    web_billing_collection_accounts_service.activate_collection_account(
+        db, account_id=account_id
     )
     return RedirectResponse(url="/admin/billing/collection-accounts", status_code=303)

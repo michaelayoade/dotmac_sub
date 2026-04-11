@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.catalog import Subscription
 from app.models.network import CPEDevice, DeviceStatus, OntAssignment, OntUnit
@@ -14,9 +16,12 @@ from app.models.subscriber import Address, Subscriber, UserType
 from app.models.tr069 import Tr069CpeDevice
 from app.schemas.network import CPEDeviceCreate, CPEDeviceUpdate
 from app.services import network as network_service
-from app.services.network import cpe as cpe_service
+from app.services import web_network_operations as web_network_operations_service
+from app.services.audit_helpers import build_audit_activities
 from app.services.common import coerce_uuid, validate_enum
+from app.services.network import cpe as cpe_service
 from app.services.network._common import decode_huawei_hex_serial, normalize_mac_address
+from app.services.web_network_cpe_audit import log_cpe_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +39,14 @@ _CPE_DEVICE_TYPE_OPTIONS = [
     "other",
 ]
 _CPE_DEFAULT_DEVICE_TYPE = "router"
+
+
+@dataclass
+class CpeFormResult:
+    cpe: CPEDevice | None = None
+    form_model: dict[str, object] | None = None
+    error: str | None = None
+    not_found: bool = False
 
 
 def _vendor_from_serial(value: str | None) -> str | None:
@@ -307,6 +320,31 @@ def create_cpe(db, values: dict[str, object]):
     return network_service.cpe_devices.create(db=db, payload=payload)
 
 
+def create_cpe_from_values(
+    db: Session, values: dict[str, object], *, request: Request | None = None
+) -> CpeFormResult:
+    error = validate_cpe_values(values)
+    if error:
+        return CpeFormResult(form_model=cpe_form_snapshot(values), error=error)
+    try:
+        cpe = create_cpe(db, values)
+    except Exception as exc:
+        logger.error("Failed to create CPE: %s", exc, exc_info=True)
+        db.rollback()
+        return CpeFormResult(
+            form_model=cpe_form_snapshot(values),
+            error="Failed to create CPE. Please check the form and try again.",
+        )
+    log_cpe_audit_event(
+        db,
+        request=request,
+        action="create",
+        entity_id=cpe.id,
+        metadata={"serial_number": cpe.serial_number, "vendor": cpe.vendor},
+    )
+    return CpeFormResult(cpe=cpe)
+
+
 def update_cpe(db, *, cpe_id: str, values: dict[str, object]):
     normalized = dict(values)
     if values.get("subscriber_id"):
@@ -335,8 +373,93 @@ def update_cpe(db, *, cpe_id: str, values: dict[str, object]):
     return network_service.cpe_devices.update(db=db, device_id=cpe_id, payload=payload)
 
 
+def update_cpe_from_values(
+    db: Session,
+    *,
+    cpe_id: str,
+    values: dict[str, object],
+    request: Request | None = None,
+) -> CpeFormResult:
+    try:
+        get_cpe(db, cpe_id=cpe_id)
+    except Exception:
+        return CpeFormResult(not_found=True)
+    error = validate_cpe_values(values)
+    if error:
+        return CpeFormResult(
+            form_model=cpe_form_snapshot(values, cpe_id=cpe_id),
+            error=error,
+        )
+    try:
+        cpe = update_cpe(db, cpe_id=cpe_id, values=values)
+    except Exception as exc:
+        logger.error("Failed to update CPE %s: %s", cpe_id, exc, exc_info=True)
+        db.rollback()
+        return CpeFormResult(
+            form_model=cpe_form_snapshot(values, cpe_id=cpe_id),
+            error="Failed to update CPE. Please check the form and try again.",
+        )
+    log_cpe_audit_event(
+        db,
+        request=request,
+        action="update",
+        entity_id=cpe.id,
+        metadata={"serial_number": cpe.serial_number, "vendor": cpe.vendor},
+    )
+    return CpeFormResult(cpe=cpe)
+
+
 def get_cpe(db, *, cpe_id: str):
     return network_service.cpe_devices.get(db=db, device_id=cpe_id)
+
+
+def validate_mikrotik_api_config(cpe: CPEDevice) -> tuple[bool, str]:
+    meta, _ = parse_cpe_notes_metadata(cpe.notes)
+    api_host = str(meta.get("api_host") or "").strip()
+    api_port = str(meta.get("api_port") or "8728").strip()
+    api_user = str(meta.get("api_user") or "").strip()
+    if "mikrotik" not in str(cpe.vendor or "").lower():
+        return False, "API panel is for MikroTik devices"
+    if not api_host:
+        return False, "API host is not configured"
+    return True, f"API configuration looks valid ({api_host}:{api_port}) user={api_user or 'n/a'}"
+
+
+def build_cpe_detail_data(
+    db: Session,
+    *,
+    cpe_id: str,
+    test_status: str | None = None,
+    test_message: str | None = None,
+) -> dict[str, object]:
+    from app.services.network.cpe_tr069 import CpeTR069
+
+    cpe = get_cpe(db, cpe_id=cpe_id)
+    meta, cleaned_notes = parse_cpe_notes_metadata(cpe.notes)
+    identity = build_cpe_identity_context(db, cpe)
+    tr069_summary = CpeTR069.get_device_summary(db, cpe_id)
+    activities = build_audit_activities(db, "cpe", str(cpe_id), limit=20)
+    try:
+        operations = web_network_operations_service.build_operation_history(
+            db, "cpe", str(cpe_id), limit=10
+        )
+    except Exception:
+        logger.error(
+            "Failed to load operation history for CPE %s", cpe_id, exc_info=True
+        )
+        operations = []
+    return {
+        "cpe": cpe,
+        "cpe_identity": identity,
+        "cpe_tr069_summary": tr069_summary,
+        "cpe_meta": meta,
+        "cpe_notes": cleaned_notes,
+        "is_mikrotik": "mikrotik" in str(cpe.vendor or "").lower(),
+        "activities": activities,
+        "operations": operations,
+        "test_status": test_status,
+        "test_message": test_message,
+    }
 
 
 def cpe_form_reference_data(

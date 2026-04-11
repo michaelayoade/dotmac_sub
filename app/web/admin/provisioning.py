@@ -1,9 +1,7 @@
 """Admin provisioning management web routes."""
 
-import json
 import logging
-import re
-from datetime import UTC, datetime
+from datetime import datetime
 from urllib.parse import quote_plus
 from uuid import UUID
 
@@ -13,7 +11,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.notification import NotificationChannel, NotificationStatus
 from app.models.provisioning import (
     AppointmentStatus,
     ProvisioningStepType,
@@ -21,39 +18,22 @@ from app.models.provisioning import (
     ServiceOrderStatus,
     TaskStatus,
 )
-from app.schemas.notification import NotificationCreate
-from app.schemas.provisioning import (
-    InstallAppointmentCreate,
-    InstallAppointmentUpdate,
-    ProvisioningStepCreate,
-    ProvisioningStepUpdate,
-    ProvisioningTaskCreate,
-    ProvisioningTaskUpdate,
-    ProvisioningWorkflowCreate,
-    ProvisioningWorkflowUpdate,
-    ServiceOrderUpdate,
-)
-from app.services import notification as notification_service
 from app.services import provisioning as provisioning_service
-from app.services import subscriber as subscriber_service
+from app.services import web_admin as web_admin_service
+from app.services import web_provisioning_actions as provisioning_actions_service
 from app.services import web_provisioning_bulk_activate as bulk_activate_service
 from app.services import web_provisioning_migration as migration_service
 from app.services.audit_helpers import (
     build_audit_activities,
-    diff_dicts,
-    log_audit_event,
-    model_to_dict,
 )
 from app.services.auth_dependencies import require_permission
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
-from app.validators.forms import parse_datetime
 from app.web.request_parsing import parse_form_data_sync
 
 logger = logging.getLogger(__name__)
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/provisioning", tags=["web-admin-provisioning"])
-MENTION_EMAIL_RE = re.compile(r"@([A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,})")
 
 
 def _ctx(request: Request, db: Session, active_page: str = "provisioning") -> dict:
@@ -83,77 +63,7 @@ def _subscriber_label(subscriber: object) -> str:
 
 
 def _actor_id(request: Request) -> str | None:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    return str(current_user.get("subscriber_id")) if current_user else None
-
-
-def _extract_mentioned_emails(comment: str) -> list[str]:
-    seen: set[str] = set()
-    ordered: list[str] = []
-    for match in MENTION_EMAIL_RE.findall(comment):
-        email = match.strip().lower()
-        if email and email not in seen:
-            seen.add(email)
-            ordered.append(email)
-    return ordered
-
-
-def _notify_tagged_users(
-    db: Session,
-    request: Request,
-    *,
-    order_id: UUID,
-    comment: str,
-    mentioned_emails: list[str],
-) -> int:
-    if not mentioned_emails:
-        return 0
-
-    actor_subscriber_id = _actor_id(request)
-    recipients = subscriber_service.subscribers.list_active_by_emails(
-        db, mentioned_emails
-    )
-
-    notified = 0
-    base_url = str(request.base_url).rstrip("/")
-    order_url = f"{base_url}/admin/provisioning/orders/{order_id}"
-    short_order_id = str(order_id)[:8]
-    subject = f"You were mentioned in Service Order {short_order_id}"
-    body = (
-        f"You were tagged in a comment on Service Order {short_order_id}.\n\n"
-        f"Comment:\n{comment}\n\n"
-        f"Open order: {order_url}"
-    )
-
-    for subscriber in recipients:
-        if actor_subscriber_id and str(subscriber.id) == actor_subscriber_id:
-            continue
-
-        notification_service.notifications.create(
-            db,
-            NotificationCreate(
-                channel=NotificationChannel.push,
-                recipient=str(subscriber.id),
-                subject=subject,
-                body=body,
-                status=NotificationStatus.delivered,
-                sent_at=datetime.now(UTC),
-            ),
-        )
-        notification_service.notifications.create(
-            db,
-            NotificationCreate(
-                channel=NotificationChannel.email,
-                recipient=subscriber.email,
-                subject=subject,
-                body=body,
-                status=NotificationStatus.queued,
-            ),
-        )
-        notified += 1
-    return notified
+    return web_admin_service.get_actor_id(request)
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +230,7 @@ def service_migration_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     ctx = _ctx(request, db, "provisioning-migrate")
+    actor_id = _actor_id(request)
     filters = migration_service.MigrationFilters(
         reseller_id=reseller_id,
         pop_site_id=pop_site_id,
@@ -329,8 +240,10 @@ def service_migration_page(
         query=query,
     )
     table = migration_service.build_selection_table(db, filters=filters)
-    options = migration_service.page_options(db)
-    active_job = migration_service.get_job(db, job_id) if job_id else None
+    options = migration_service.page_options(db, actor_id=actor_id)
+    active_job = (
+        migration_service.get_job(db, job_id, actor_id=actor_id) if job_id else None
+    )
     ctx.update(
         {
             **options,
@@ -445,7 +358,7 @@ def service_migration_job_status(
     job_id: str,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    job = migration_service.get_job(db, job_id)
+    job = migration_service.get_job(db, job_id, actor_id=_actor_id(request))
     return templates.TemplateResponse(
         "admin/provisioning/_migrate_job_status.html",
         {"request": request, "job": job},
@@ -570,38 +483,13 @@ def order_add_comment(
     db: Session = Depends(get_db),
     comment: str = Form(...),
 ) -> RedirectResponse:
-    order = provisioning_service.service_orders.get(db, str(order_id))
-    if not order:
-        return RedirectResponse(url="/admin/provisioning/orders", status_code=303)
-
-    cleaned_comment = comment.strip()
-    if not cleaned_comment:
-        return RedirectResponse(
-            url=f"/admin/provisioning/orders/{order_id}", status_code=303
-        )
-
-    mentions = _extract_mentioned_emails(cleaned_comment)
-    notified_count = _notify_tagged_users(
+    if not provisioning_actions_service.add_order_comment_with_mentions(
         db,
         request,
         order_id=order_id,
-        comment=cleaned_comment,
-        mentioned_emails=mentions,
-    )
-
-    log_audit_event(
-        db=db,
-        request=request,
-        action="comment",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata={
-            "comment": cleaned_comment,
-            "mentions": mentions,
-            "notified_users": notified_count,
-        },
-    )
+        comment=comment,
+    ):
+        return RedirectResponse(url="/admin/provisioning/orders", status_code=303)
     return RedirectResponse(
         url=f"/admin/provisioning/orders/{order_id}", status_code=303
     )
@@ -623,23 +511,11 @@ def order_status_change(
     db: Session = Depends(get_db),
     new_status: str = Form(...),
 ) -> RedirectResponse:
-    before = provisioning_service.service_orders.get(db, str(order_id))
-    before_state = model_to_dict(before) if before else None
-    payload = ServiceOrderUpdate(status=ServiceOrderStatus(new_status))
-    provisioning_service.service_orders.update(db, str(order_id), payload)
-    after = provisioning_service.service_orders.get(db, str(order_id))
-    metadata = None
-    if before_state is not None and after:
-        changes = diff_dicts(before_state, model_to_dict(after))
-        metadata = {"changes": changes} if changes else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata=metadata,
+    provisioning_actions_service.update_order_status_with_audit(
+        db,
+        request,
+        order_id=order_id,
+        new_status=new_status,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/orders/{order_id}", status_code=303
@@ -666,34 +542,15 @@ def add_appointment(
     notes: str | None = Form(default=None),
     is_self_install: bool = Form(default=False),
 ) -> RedirectResponse:
-    start = parse_datetime(scheduled_start)
-    end = parse_datetime(scheduled_end)
-    if not start or not end:
-        return RedirectResponse(
-            url=f"/admin/provisioning/orders/{order_id}", status_code=303
-        )
-    payload = InstallAppointmentCreate(
-        service_order_id=order_id,
-        scheduled_start=start,
-        scheduled_end=end,
-        technician=technician or None,
-        notes=notes or None,
+    provisioning_actions_service.add_appointment_with_audit(
+        db,
+        request,
+        order_id=order_id,
+        scheduled_start=scheduled_start,
+        scheduled_end=scheduled_end,
+        technician=technician,
+        notes=notes,
         is_self_install=is_self_install,
-    )
-    appointment = provisioning_service.install_appointments.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata={
-            "appointment_id": str(appointment.id),
-            "technician": technician or None,
-            "scheduled_start": start.isoformat(),
-            "scheduled_end": end.isoformat(),
-        },
     )
     return RedirectResponse(
         url=f"/admin/provisioning/orders/{order_id}", status_code=303
@@ -718,25 +575,13 @@ def add_task(
     assigned_to: str | None = Form(default=None),
     notes: str | None = Form(default=None),
 ) -> RedirectResponse:
-    payload = ProvisioningTaskCreate(
-        service_order_id=order_id,
+    provisioning_actions_service.add_task_with_audit(
+        db,
+        request,
+        order_id=order_id,
         name=name,
-        assigned_to=assigned_to or None,
-        notes=notes or None,
-    )
-    task = provisioning_service.provisioning_tasks.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata={
-            "task_id": str(task.id),
-            "name": name,
-            "assigned_to": assigned_to or None,
-        },
+        assigned_to=assigned_to,
+        notes=notes,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/orders/{order_id}", status_code=303
@@ -755,23 +600,12 @@ def task_status_update(
     db: Session = Depends(get_db),
     new_status: str = Form(...),
 ) -> RedirectResponse:
-    before = provisioning_service.provisioning_tasks.get(db, str(task_id))
-    before_state = model_to_dict(before) if before else None
-    payload = ProvisioningTaskUpdate(status=TaskStatus(new_status))
-    provisioning_service.provisioning_tasks.update(db, str(task_id), payload)
-    after = provisioning_service.provisioning_tasks.get(db, str(task_id))
-    metadata = None
-    if before_state is not None and after:
-        changes = diff_dicts(before_state, model_to_dict(after))
-        metadata = {"changes": changes} if changes else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata=metadata,
+    provisioning_actions_service.update_task_status_with_audit(
+        db,
+        request,
+        order_id=order_id,
+        task_id=task_id,
+        new_status=new_status,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/orders/{order_id}", status_code=303
@@ -794,15 +628,11 @@ def run_workflow(
     db: Session = Depends(get_db),
     workflow_id: str = Form(...),
 ) -> RedirectResponse:
-    provisioning_service.service_orders.run_for_order(db, str(order_id), workflow_id)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="run_workflow",
-        entity_type="service_order",
-        entity_id=str(order_id),
-        actor_id=_actor_id(request),
-        metadata={"workflow_id": workflow_id},
+    provisioning_actions_service.run_order_workflow_with_audit(
+        db,
+        request,
+        order_id=order_id,
+        workflow_id=workflow_id,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/orders/{order_id}", status_code=303
@@ -899,21 +729,13 @@ def workflow_create(
     description: str | None = Form(default=None),
     is_active: bool = Form(default=True),
 ) -> RedirectResponse:
-    payload = ProvisioningWorkflowCreate(
+    workflow = provisioning_actions_service.create_workflow_with_audit(
+        db,
+        request,
         name=name,
-        vendor=ProvisioningVendor(vendor),
-        description=description or None,
+        vendor=vendor,
+        description=description,
         is_active=is_active,
-    )
-    workflow = provisioning_service.provisioning_workflows.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="provisioning_workflow",
-        entity_id=str(workflow.id),
-        actor_id=_actor_id(request),
-        metadata={"name": name, "vendor": vendor},
     )
     return RedirectResponse(
         url=f"/admin/provisioning/workflows/{workflow.id}", status_code=303
@@ -1009,28 +831,14 @@ def workflow_edit(
     description: str | None = Form(default=None),
     is_active: bool = Form(default=True),
 ) -> RedirectResponse:
-    before = provisioning_service.provisioning_workflows.get(db, str(workflow_id))
-    before_state = model_to_dict(before) if before else None
-    payload = ProvisioningWorkflowUpdate(
+    provisioning_actions_service.update_workflow_with_audit(
+        db,
+        request,
+        workflow_id=workflow_id,
         name=name,
-        vendor=ProvisioningVendor(vendor),
-        description=description or None,
+        vendor=vendor,
+        description=description,
         is_active=is_active,
-    )
-    provisioning_service.provisioning_workflows.update(db, str(workflow_id), payload)
-    after = provisioning_service.provisioning_workflows.get(db, str(workflow_id))
-    metadata = None
-    if before_state is not None and after:
-        changes = diff_dicts(before_state, model_to_dict(after))
-        metadata = {"changes": changes} if changes else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="provisioning_workflow",
-        entity_id=str(workflow_id),
-        actor_id=_actor_id(request),
-        metadata=metadata,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/workflows/{workflow_id}", status_code=303
@@ -1056,34 +864,14 @@ def add_step(
     order_index: int = Form(default=0),
     config_json: str | None = Form(default=None),
 ) -> RedirectResponse:
-    config: dict | None = None
-    if config_json:
-        try:
-            config = json.loads(config_json)
-        except (json.JSONDecodeError, TypeError):
-            config = None
-
-    payload = ProvisioningStepCreate(
+    provisioning_actions_service.create_step_with_audit(
+        db,
+        request,
         workflow_id=workflow_id,
         name=name,
-        step_type=ProvisioningStepType(step_type),
+        step_type=step_type,
         order_index=order_index,
-        config=config,
-    )
-    step = provisioning_service.provisioning_steps.create(db, payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create_step",
-        entity_type="provisioning_workflow",
-        entity_id=str(workflow_id),
-        actor_id=_actor_id(request),
-        metadata={
-            "step_id": str(step.id),
-            "name": name,
-            "step_type": step_type,
-            "order_index": order_index,
-        },
+        config_json=config_json,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/workflows/{workflow_id}", status_code=303
@@ -1105,36 +893,15 @@ def edit_step(
     order_index: int | None = Form(default=None),
     config_json: str | None = Form(default=None),
 ) -> RedirectResponse:
-    before = provisioning_service.provisioning_steps.get(db, str(step_id))
-    before_state = model_to_dict(before) if before else None
-    update_data: dict[str, object] = {}
-    if name:
-        update_data["name"] = name
-    if step_type:
-        update_data["step_type"] = ProvisioningStepType(step_type)
-    if order_index is not None:
-        update_data["order_index"] = order_index
-    if config_json:
-        try:
-            update_data["config"] = json.loads(config_json)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    payload = ProvisioningStepUpdate.model_validate(update_data)
-    provisioning_service.provisioning_steps.update(db, str(step_id), payload)
-    after = provisioning_service.provisioning_steps.get(db, str(step_id))
-    metadata = None
-    if before_state is not None and after:
-        changes = diff_dicts(before_state, model_to_dict(after))
-        metadata = {"changes": changes} if changes else None
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update_step",
-        entity_type="provisioning_workflow",
-        entity_id=str(workflow_id),
-        actor_id=_actor_id(request),
-        metadata=metadata,
+    provisioning_actions_service.update_step_with_audit(
+        db,
+        request,
+        workflow_id=workflow_id,
+        step_id=step_id,
+        name=name,
+        step_type=step_type,
+        order_index=order_index,
+        config_json=config_json,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/workflows/{workflow_id}", status_code=303
@@ -1152,17 +919,11 @@ def delete_step(
     step_id: UUID,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    step = provisioning_service.provisioning_steps.get(db, str(step_id))
-    payload = ProvisioningStepUpdate(is_active=False)
-    provisioning_service.provisioning_steps.update(db, str(step_id), payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="delete_step",
-        entity_type="provisioning_workflow",
-        entity_id=str(workflow_id),
-        actor_id=_actor_id(request),
-        metadata={"step_id": str(step_id), "name": getattr(step, "name", None)},
+    provisioning_actions_service.delete_step_with_audit(
+        db,
+        request,
+        workflow_id=workflow_id,
+        step_id=step_id,
     )
     return RedirectResponse(
         url=f"/admin/provisioning/workflows/{workflow_id}", status_code=303
@@ -1234,30 +995,12 @@ def appointment_status(
     new_status: str = Form(...),
     redirect_to: str | None = Form(default=None),
 ) -> RedirectResponse:
-    before = provisioning_service.install_appointments.get(db, str(appointment_id))
-    before_state = model_to_dict(before) if before else None
-    payload = InstallAppointmentUpdate(status=AppointmentStatus(new_status))
-    provisioning_service.install_appointments.update(db, str(appointment_id), payload)
-    after = provisioning_service.install_appointments.get(db, str(appointment_id))
-    order_id = str(
-        (after and getattr(after, "service_order_id", None))
-        or (before and getattr(before, "service_order_id", None))
-        or ""
+    provisioning_actions_service.update_appointment_status_with_audit(
+        db,
+        request,
+        appointment_id=appointment_id,
+        new_status=new_status,
     )
-    if order_id:
-        metadata = None
-        if before_state is not None and after:
-            changes = diff_dicts(before_state, model_to_dict(after))
-            metadata = {"changes": changes} if changes else None
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update_appointment",
-            entity_type="service_order",
-            entity_id=order_id,
-            actor_id=_actor_id(request),
-            metadata=metadata,
-        )
     if redirect_to:
         return RedirectResponse(url=redirect_to, status_code=303)
     return RedirectResponse(url="/admin/provisioning/appointments", status_code=303)

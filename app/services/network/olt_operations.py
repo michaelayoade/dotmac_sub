@@ -13,8 +13,14 @@ from uuid import UUID
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
+from app.services.credential_crypto import decrypt_credential
+from app.services.network import olt_ssh as olt_ssh_service
+from app.services.network.olt_inventory import get_olt_or_none
+from app.services.network.olt_monitoring_devices import find_linked_network_device
+from app.services.network.olt_web_audit import log_olt_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -144,8 +150,6 @@ def compare_olt_backups(
 
 def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | None:
     """Fetch a lightweight running-config snapshot via SNMP."""
-    from app.services import web_network_olts as web_network_olts_service
-
     if not olt.mgmt_ip:
         return None
     try:
@@ -163,13 +167,11 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
 
     community_str = "public"
     if db is not None:
-        linked = web_network_olts_service._find_linked_network_device(
+        linked = find_linked_network_device(
             db, mgmt_ip=olt.mgmt_ip, hostname=olt.hostname, name=olt.name
         )
         if linked and linked.snmp_community:
-            decrypted = web_network_olts_service.decrypt_credential(
-                linked.snmp_community
-            )
+            decrypted = decrypt_credential(linked.snmp_community)
             if decrypted:
                 community_str = decrypted
 
@@ -213,28 +215,26 @@ def fetch_running_config(olt: OLTDevice, db: Session | None = None) -> str | Non
 
 
 def test_olt_connection(db: Session, olt_id: str) -> tuple[bool, str]:
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found"
     if not olt.mgmt_ip:
         return False, "Management IP is required"
-    config = web_network_olts_service.fetch_running_config(olt)
+    config = fetch_running_config(olt)
     if not config:
         return False, "Connection test failed: unable to fetch SNMP data"
     return True, "Connection test successful"
 
 
-def test_olt_snmp_connection(db: Session, olt_id: str) -> tuple[bool, str]:
+def test_olt_snmp_connection(
+    db: Session, olt_id: str, *, request: Request | None = None
+) -> tuple[bool, str]:
     """Run an on-demand SNMP test for an OLT via its linked monitoring device."""
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found"
 
-    linked = web_network_olts_service._find_linked_network_device(
+    linked = find_linked_network_device(
         db,
         mgmt_ip=olt.mgmt_ip,
         hostname=olt.hostname,
@@ -253,15 +253,36 @@ def test_olt_snmp_connection(db: Session, olt_id: str) -> tuple[bool, str]:
     except Exception as exc:
         db.rollback()
         logger.exception("Manual SNMP test failed for OLT %s", olt_id)
-        return False, f"SNMP test failed: {exc!s}"
+        message = f"SNMP test failed: {exc!s}"
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="test_snmp_connection",
+            entity_id=olt_id,
+            metadata={"result": "error", "message": message},
+            status_code=500,
+            is_success=False,
+        )
+        return False, message
 
     if error:
-        return False, f"SNMP test failed: {error}"
-    if not device:
-        return False, "SNMP test failed: linked device not found"
-    if device.last_snmp_ok:
-        return True, "SNMP test successful"
-    return False, "SNMP test failed: no response from device"
+        ok, message = False, f"SNMP test failed: {error}"
+    elif not device:
+        ok, message = False, "SNMP test failed: linked device not found"
+    elif device.last_snmp_ok:
+        ok, message = True, "SNMP test successful"
+    else:
+        ok, message = False, "SNMP test failed: no response from device"
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="test_snmp_connection",
+        entity_id=olt_id,
+        metadata={"result": "success" if ok else "error", "message": message},
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message
 
 
 def extract_firmware_version(version_output: str) -> str | None:
@@ -279,20 +300,30 @@ def extract_firmware_version(version_output: str) -> str | None:
     return None
 
 
-def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | None]:
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+def test_olt_ssh_connection(
+    db: Session, olt_id: str, *, request: Request | None = None
+) -> tuple[bool, str, str | None]:
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
-        return False, "OLT not found", None
-    ok, message, policy_key = web_network_olts_service.olt_ssh_service.test_connection(
-        olt
-    )
+        ok, message, policy_key = False, "OLT not found", None
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="test_ssh_connection",
+            entity_id=olt_id,
+            metadata={
+                "result": "error",
+                "policy_key": policy_key,
+                "message": message,
+            },
+            status_code=500,
+            is_success=False,
+        )
+        return ok, message, policy_key
+    ok, message, policy_key = olt_ssh_service.test_connection(olt)
     if ok and policy_key:
         try:
-            _policy_key, version_output = (
-                web_network_olts_service.olt_ssh_service.run_version_probe(olt)
-            )
+            _policy_key, version_output = olt_ssh_service.run_version_probe(olt)
             fw = extract_firmware_version(version_output)
             if fw and fw != olt.firmware_version:
                 olt.firmware_version = fw
@@ -303,29 +334,56 @@ def test_olt_ssh_connection(db: Session, olt_id: str) -> tuple[bool, str, str | 
                 olt.id,
                 exc_info=True,
             )
-        return True, f"{message} ({policy_key})", policy_key
+        message = f"{message} ({policy_key})"
+        ok = True
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="test_ssh_connection",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "policy_key": policy_key,
+            "message": message,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
     return ok, message, policy_key
 
 
 def test_olt_netconf_connection(
-    db: Session, olt_id: str
+    db: Session, olt_id: str, *, request: Request | None = None
 ) -> tuple[bool, str, list[str]]:
-    from app.services import web_network_olts as web_network_olts_service
     from app.services.network import olt_netconf
 
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
-        return False, "OLT not found", []
-    return olt_netconf.test_connection(olt)
+        ok, message, capabilities = False, "OLT not found", []
+    else:
+        ok, message, capabilities = olt_netconf.test_connection(olt)
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="test_netconf_connection",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "capabilities_count": len(capabilities),
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message, capabilities
 
 
 def get_olt_netconf_config(
     db: Session, olt_id: str, *, filter_xpath: str | None = None
 ) -> tuple[bool, str, str]:
-    from app.services import web_network_olts as web_network_olts_service
     from app.services.network import olt_netconf
 
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found", ""
     return olt_netconf.get_running_config(olt, filter_xpath=filter_xpath)
@@ -333,9 +391,8 @@ def get_olt_netconf_config(
 
 def get_olt_firmware_images(db: Session, olt_id: str) -> list:
     from app.models.network import OltFirmwareImage
-    from app.services import web_network_olts as web_network_olts_service
 
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return []
     stmt = select(OltFirmwareImage).where(OltFirmwareImage.is_active.is_(True))
@@ -345,12 +402,11 @@ def get_olt_firmware_images(db: Session, olt_id: str) -> list:
 
 
 def trigger_olt_firmware_upgrade(
-    db: Session, olt_id: str, image_id: str
+    db: Session, olt_id: str, image_id: str, *, request: Request | None = None
 ) -> tuple[bool, str]:
     from app.models.network import OltFirmwareImage
-    from app.services import web_network_olts as web_network_olts_service
 
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found"
     image = db.get(OltFirmwareImage, image_id)
@@ -358,21 +414,33 @@ def trigger_olt_firmware_upgrade(
         return False, "Firmware image not found"
     if not image.is_active:
         return False, "Firmware image is not active"
-    return web_network_olts_service.olt_ssh_service.upgrade_firmware(
+    ok, message = olt_ssh_service.upgrade_firmware(
         olt, image.file_url, method=image.upgrade_method or "sftp"
     )
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="firmware_upgrade",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "firmware_image_id": image_id,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message
 
 
 def run_test_backup(db: Session, olt_id: str) -> tuple[OltConfigBackup | None, str]:
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return None, "OLT not found"
     if not olt.mgmt_ip:
         return None, "Management IP is required"
 
-    config_text = web_network_olts_service.fetch_running_config(olt)
+    config_text = fetch_running_config(olt)
     if not config_text:
         return None, "Test backup failed: could not fetch running configuration"
 
@@ -423,9 +491,7 @@ def validate_cli_command(command: str) -> str | None:
 def execute_cli_command(
     db: Session, olt_id: str, command: str
 ) -> tuple[bool, str, str]:
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return False, "OLT not found", ""
 
@@ -433,9 +499,7 @@ def execute_cli_command(
     if error:
         return False, error, ""
 
-    ok, message, output = web_network_olts_service.olt_ssh_service.run_cli_command(
-        olt, command.strip()
-    )
+    ok, message, output = olt_ssh_service.run_cli_command(olt, command.strip())
     logger.info(
         "CLI command on OLT %s: %s -> %s",
         olt.name,
@@ -449,14 +513,12 @@ def backup_running_config_ssh(
     db: Session, olt_id: str
 ) -> tuple[OltConfigBackup | None, str]:
     """Fetch full running config via SSH and save as backup."""
-    from app.services import web_network_olts as web_network_olts_service
-
-    olt = web_network_olts_service.get_olt_or_none(db, olt_id)
+    olt = get_olt_or_none(db, olt_id)
     if not olt:
         return None, "OLT not found"
 
     ok, message, config_text = (
-        web_network_olts_service.olt_ssh_service.fetch_running_config_ssh(olt)
+        olt_ssh_service.fetch_running_config_ssh(olt)
     )
     if not ok or not config_text:
         return None, f"SSH config backup failed: {message}"

@@ -159,3 +159,8 @@ def handle_update(
         capability=OnuCapability(str(form_data["capability"])),
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
+
+
+def handle_delete(db: Session, onu_type_id: str) -> None:
+    """Soft-delete an ONU type."""
+    onu_types.delete(db, onu_type_id)

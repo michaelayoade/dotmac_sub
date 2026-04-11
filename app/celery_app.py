@@ -1,8 +1,8 @@
 import logging
 
-from celery import Celery
-from celery import current_task
+from celery import Celery, current_task
 from celery.signals import task_failure, task_postrun, task_prerun, task_retry
+from kombu import Queue
 
 from app.services.scheduler_config import build_beat_schedule, get_celery_config
 
@@ -23,10 +23,9 @@ celery_app.conf.task_routes = {
     "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "tr069"},
     "app.tasks.tr069.cleanup_tr069_records": {"queue": "tr069"},
     "app.tasks.tr069.execute_bulk_action": {"queue": "tr069"},
+    "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "tr069"},
 }
 
-# Define queues
-from kombu import Queue
 celery_app.conf.task_queues = (
     Queue("celery"),  # Default queue
     Queue("tr069"),   # Dedicated TR-069 queue

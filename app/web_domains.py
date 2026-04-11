@@ -40,7 +40,6 @@ from app.services import (
 from app.services import (
     network as network_service,
 )
-from app.services.network import cpe as cpe_service
 from app.services import (
     network_monitoring as monitoring_service,
 )
@@ -83,6 +82,7 @@ from app.services import (
 from app.services import (
     webhook as webhook_service,
 )
+from app.services.network import cpe as cpe_service
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/web", tags=["web"])
@@ -467,12 +467,6 @@ def external_references_home(request: Request, db: Session = Depends(get_db)):
         offset=0,
     )
     return _render(request, "External References", items)
-
-
-@router.get("/workflow", response_class=HTMLResponse)
-def workflow_home(request: Request, db: Session = Depends(get_db)):
-    """Workflow page - SLA management removed, returns placeholder."""
-    return _render(request, "Workflow", [])
 
 
 @router.get("/analytics", response_class=HTMLResponse)

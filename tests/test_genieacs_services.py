@@ -9,7 +9,6 @@ import pytest
 from app.services.genieacs import (
     GenieACSClient,
     GenieACSError,
-    GenieACSMethodNotAllowedError,
 )
 
 
@@ -154,31 +153,49 @@ class TestDeviceOperations:
             assert "projection" in call_args.kwargs["params"]
 
     def test_get_device(self, client, mock_response):
-        """Test get_device returns device."""
+        """Test get_device returns device using query lookup."""
         device = {"_id": "ABC-Model-123"}
 
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.request.return_value = mock_response(
-                json_data=device
+                json_data=[device]
             )
 
             result = client.get_device("ABC-Model-123")
 
             assert result == device
+            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            assert call_args.args[:2] == ("GET", "http://genieacs:7557/devices")
+            assert json.loads(call_args.kwargs["params"]["query"]) == {
+                "_id": "ABC-Model-123"
+            }
 
-    def test_get_device_falls_back_to_query_on_405(self, client, mock_response):
-        """Test get_device falls back to query lookup when direct GET is not allowed."""
+    def test_get_device_uses_serial_suffix_regex_when_exact_id_missing(self, client):
+        """Test get_device can resolve by serial suffix when exact ID is missing."""
         device = {"_id": "ABC-Model-123"}
 
-        with patch.object(client, "_request") as mock_request, patch.object(
-            client, "list_devices", return_value=[device]
+        with patch.object(
+            client,
+            "list_devices",
+            side_effect=[[], [device]],
         ) as mock_list_devices:
-            mock_request.side_effect = GenieACSMethodNotAllowedError("API error: 405")
-
             result = client.get_device("ABC-Model-123")
 
             assert result == device
-            mock_list_devices.assert_called_once_with(query={"_id": "ABC-Model-123"})
+            assert mock_list_devices.call_args_list[0].kwargs == {
+                "query": {"_id": "ABC-Model-123"}
+            }
+            assert mock_list_devices.call_args_list[1].kwargs == {
+                "query": {"_id": {"$regex": ".*-123$"}}
+            }
+
+    def test_get_device_does_not_probe_direct_device_endpoint(self, client):
+        """Test get_device avoids deployments that reject GET /devices/{id}."""
+        with patch.object(client, "list_devices", return_value=[]) as mock_list_devices:
+            with pytest.raises(GenieACSError, match="Device not found"):
+                client.get_device("ABC-Model-123")
+
+            assert mock_list_devices.call_count == 2
 
     def test_delete_device(self, client, mock_response):
         """Test delete_device succeeds."""
@@ -335,6 +352,48 @@ class TestTaskOperations:
             result = client.create_task("device1", {"name": "reboot"})
 
             assert "connectionRequestError" not in result
+
+    def test_create_task_reuses_matching_pending_task(self, client, mock_response):
+        pending = [{"_id": "task123", "name": "reboot", "device": "device1"}]
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response(json_data=pending)
+            )
+
+            result = client.create_task("device1", {"name": "reboot"})
+
+            assert result["_id"] == "task123"
+            assert result["alreadyPending"] is True
+            assert mock_client.return_value.__enter__.return_value.request.call_count == 1
+
+    def test_create_task_replaces_pending_parameter_write(self, client, mock_response):
+        pending = [
+            {
+                "_id": "old-task",
+                "name": "setParameterValues",
+                "device": "device1",
+                "parameterValues": [["Device.PPP.Interface.1.Username", "old", "xsd:string"]],
+            }
+        ]
+        accepted = {"_id": "new-task"}
+
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.side_effect = [
+                mock_response(json_data=pending),
+                mock_response(),
+                mock_response(json_data=accepted, text=json.dumps(accepted)),
+            ]
+
+            result = client.set_parameter_values(
+                "device1",
+                {"Device.PPP.Interface.1.Username": "new"},
+            )
+
+            assert result["_id"] == "new-task"
+            calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+            assert calls[1].args[0] == "DELETE"
+            assert calls[2].args[0] == "POST"
 
     def test_get_parameter_values(self, client, mock_response):
         """Test get_parameter_values creates correct task."""

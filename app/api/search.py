@@ -110,15 +110,6 @@ def search_pop_sites(
     return typeahead_service.pop_sites_response(db, q, limit)
 
 
-@router.get("/vendors", response_model=ListResponse[TypeaheadItem])
-def search_vendors(
-    q: str = Query(min_length=2),
-    limit: int = Query(default=20, ge=1, le=50),
-    db: Session = Depends(get_db),
-):
-    return typeahead_service.vendors_response(db, q, limit)
-
-
 @router.get("/resellers", response_model=ListResponse[TypeaheadItem])
 def search_resellers(
     q: str = Query(min_length=2),

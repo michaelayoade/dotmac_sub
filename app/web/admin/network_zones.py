@@ -6,7 +6,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import network as network_service
 from app.services import web_network_zones as web_network_zones_service
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data_sync
@@ -123,18 +122,13 @@ def zone_edit(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Show zone edit form."""
-    zone = network_service.network_zones.get_or_none(db, zone_id)
-    if not zone:
+    form_context = web_network_zones_service.edit_form_context(db, zone_id=zone_id)
+    if not form_context:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Network zone not found"},
             status_code=404,
         )
-    form_context = web_network_zones_service.build_form_context(
-        db,
-        zone=zone,
-        action_url=f"/admin/network/zones/{zone.id}",
-    )
     context = _base_context(request, db, active_page="zones")
     context.update(form_context)
     return templates.TemplateResponse("admin/network/zones/form.html", context)
@@ -151,8 +145,8 @@ def zone_update(
     db: Session = Depends(get_db),
 ) -> Response:
     """Update an existing zone."""
-    zone = network_service.network_zones.get_or_none(db, zone_id)
-    if not zone:
+    form_context = web_network_zones_service.edit_form_context(db, zone_id=zone_id)
+    if not form_context:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Network zone not found"},
@@ -162,14 +156,11 @@ def zone_update(
     values = web_network_zones_service.parse_form_values(form)
     error = web_network_zones_service.validate_form(values)
     if error:
-        form_context = web_network_zones_service.build_form_context(
-            db,
-            zone=zone,
-            action_url=f"/admin/network/zones/{zone.id}",
-            error=error,
+        form_context = web_network_zones_service.edit_form_context(
+            db, zone_id=zone_id, error=error
         )
         context = _base_context(request, db, active_page="zones")
-        context.update(form_context)
+        context.update(form_context or {})
         return templates.TemplateResponse("admin/network/zones/form.html", context)
 
     web_network_zones_service.update_zone(db, zone_id, values)

@@ -6,9 +6,11 @@ import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.tr069 import Tr069AcsServer
 from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.tr069_web_audit import log_tr069_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,13 @@ class Tr069ProvisionManager:
             raise
 
     def create(
-        self, db: Session, acs_server_id: str, provision_id: str, script: str
+        self,
+        db: Session,
+        acs_server_id: str,
+        provision_id: str,
+        script: str,
+        *,
+        request: Request | None = None,
     ) -> None:
         """Create a new provision.
 
@@ -77,12 +85,26 @@ class Tr069ProvisionManager:
         client = self._get_client(db, acs_server_id)
         try:
             client.create_provision(provision_id.strip(), script)
+            log_tr069_audit_event(
+                db,
+                request=request,
+                action="create",
+                entity_type="tr069_provision",
+                entity_id=provision_id,
+                metadata={"acs_server_id": acs_server_id},
+            )
         except GenieACSError as e:
             logger.error("Failed to create provision in GenieACS: %s", e)
             raise
 
     def update(
-        self, db: Session, acs_server_id: str, provision_id: str, script: str
+        self,
+        db: Session,
+        acs_server_id: str,
+        provision_id: str,
+        script: str,
+        *,
+        request: Request | None = None,
     ) -> None:
         """Update an existing provision.
 
@@ -98,11 +120,26 @@ class Tr069ProvisionManager:
         client = self._get_client(db, acs_server_id)
         try:
             client.create_provision(provision_id, script)  # PUT is idempotent
+            log_tr069_audit_event(
+                db,
+                request=request,
+                action="update",
+                entity_type="tr069_provision",
+                entity_id=provision_id,
+                metadata={"acs_server_id": acs_server_id},
+            )
         except GenieACSError as e:
             logger.error("Failed to update provision %s in GenieACS: %s", provision_id, e)
             raise
 
-    def delete(self, db: Session, acs_server_id: str, provision_id: str) -> bool:
+    def delete(
+        self,
+        db: Session,
+        acs_server_id: str,
+        provision_id: str,
+        *,
+        request: Request | None = None,
+    ) -> bool:
         """Delete a provision.
 
         Args:
@@ -116,6 +153,14 @@ class Tr069ProvisionManager:
         client = self._get_client(db, acs_server_id)
         try:
             client.delete_provision(provision_id)
+            log_tr069_audit_event(
+                db,
+                request=request,
+                action="delete",
+                entity_type="tr069_provision",
+                entity_id=provision_id,
+                metadata={"acs_server_id": acs_server_id},
+            )
             return True
         except GenieACSError as e:
             logger.error("Failed to delete provision %s from GenieACS: %s", provision_id, e)

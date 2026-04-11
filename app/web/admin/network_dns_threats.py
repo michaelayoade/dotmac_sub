@@ -7,7 +7,6 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_dns_threats as web_network_dns_threats_service
-from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_method_permission
 from app.web.request_parsing import parse_form_data_sync
 
@@ -85,51 +84,21 @@ def dns_threats_create(request: Request, db: Session = Depends(get_db)):
     values = web_network_dns_threats_service.parse_event_form(
         parse_form_data_sync(request)
     )
-    error = web_network_dns_threats_service.validate_event_values(values)
-    if error:
-        context = _base_context(request, db, active_page="dns-threats")
-        context.update(
-            {
-                "event": values,
-                "action_url": "/admin/network/dns-threats",
-                "error": error,
-                **web_network_dns_threats_service.event_form_reference_data(db),
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/network/dns_threats/form.html", context
-        )
-
-    try:
-        event = web_network_dns_threats_service.create_event(db, values)
-    except Exception as exc:
-        context = _base_context(request, db, active_page="dns-threats")
-        context.update(
-            {
-                "event": values,
-                "action_url": "/admin/network/dns-threats",
-                "error": str(exc),
-                **web_network_dns_threats_service.event_form_reference_data(db),
-            }
-        )
-        return templates.TemplateResponse(
-            "admin/network/dns_threats/form.html", context
-        )
-
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="dns_threat",
-        entity_id=str(event.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={
-            "queried_domain": event.queried_domain,
-            "severity": event.severity.value,
-            "action": event.action.value,
-        },
+    result = web_network_dns_threats_service.create_event_from_values(
+        db, values, request=request
     )
+    if result.error:
+        context = _base_context(request, db, active_page="dns-threats")
+        context.update(
+            {
+                "event": result.form_model,
+                "action_url": "/admin/network/dns-threats",
+                "error": result.error,
+                **web_network_dns_threats_service.event_form_reference_data(db),
+            }
+        )
+        return templates.TemplateResponse(
+            "admin/network/dns_threats/form.html", context
+        )
+
     return RedirectResponse("/admin/network/dns-threats", status_code=303)

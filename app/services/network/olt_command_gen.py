@@ -91,6 +91,7 @@ class ProvisioningSpec:
     mgmt_ip_address: str = ""
     mgmt_subnet: str = ""
     mgmt_gateway: str = ""
+    mgmt_priority: int | None = None
     tr069_profile_id: int | None = None
     line_profile_id: int = 1
     service_profile_id: int = 1
@@ -225,17 +226,20 @@ class HuaweiCommandGenerator:
 
         enter_cmd = f"interface gpon {context.frame_slot}"
 
+        priority_clause = (
+            f" priority {spec.mgmt_priority}" if spec.mgmt_priority is not None else ""
+        )
         if spec.mgmt_ip_mode == "dhcp":
             iphost_cmd = (
                 f"ont ipconfig {context.port} {context.ont_id} "
-                f"ip-index 0 dhcp vlan {spec.mgmt_vlan_tag}"
+                f"ip-index 0 dhcp vlan {spec.mgmt_vlan_tag}{priority_clause}"
             )
         else:
             iphost_cmd = (
                 f"ont ipconfig {context.port} {context.ont_id} "
                 f"ip-index 0 static ip-address {spec.mgmt_ip_address} "
                 f"mask {spec.mgmt_subnet} gateway {spec.mgmt_gateway} "
-                f"vlan {spec.mgmt_vlan_tag}"
+                f"vlan {spec.mgmt_vlan_tag}{priority_clause}"
             )
 
         return [
@@ -464,6 +468,7 @@ def build_spec_from_profile(
     internet_config_ip_index: int | None = 0
     wan_config_profile_id: int | None = 0
     pppoe_omci_vlan: int | None = None
+    mgmt_priority: int | None = None
 
     if hasattr(profile, "internet_config_ip_index"):
         raw_ic = getattr(profile, "internet_config_ip_index", None)
@@ -474,6 +479,13 @@ def build_spec_from_profile(
     if hasattr(profile, "pppoe_omci_vlan"):
         raw_pv = getattr(profile, "pppoe_omci_vlan", None)
         pppoe_omci_vlan = int(raw_pv) if raw_pv is not None else None
+    for ws in getattr(profile, "wan_services", []) or []:
+        if _enum_value(getattr(ws, "service_type", "")) != "management":
+            continue
+        raw_priority = getattr(ws, "cos_priority", None)
+        if raw_priority is not None:
+            mgmt_priority = int(raw_priority)
+            break
 
     # Determine if dual-stack is enabled from profile ip_protocol
     ipv6_enabled = False
@@ -489,6 +501,7 @@ def build_spec_from_profile(
         wan_services=wan_services,
         mgmt_vlan_tag=profile.mgmt_vlan_tag,
         mgmt_ip_mode=mgmt_ip_mode,
+        mgmt_priority=mgmt_priority,
         tr069_profile_id=tr069_profile_id,
         internet_config_ip_index=internet_config_ip_index,
         wan_config_profile_id=wan_config_profile_id,

@@ -202,6 +202,16 @@ def get_ont_client_or_error(
         return None, ActionResult(success=False, message="ONT not found.")
     resolved, error = resolve_client_or_error(db, ont)
     if error:
+        if error.message.startswith("No TR-069 device found in GenieACS"):
+            return None, ActionResult(
+                success=False,
+                message=(
+                    f"ONT {ont.serial_number} is synced locally and waiting for its "
+                    "first GenieACS inform before TR-069 configuration can be pushed."
+                ),
+                data={"waiting_reason": "next_inform", "serial": ont.serial_number},
+                waiting=True,
+            )
         return None, error
     if resolved is None:
         return None, ActionResult(

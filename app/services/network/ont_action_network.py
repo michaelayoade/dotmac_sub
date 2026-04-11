@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+from ipaddress import IPv4Address, IPv4Network
+from typing import Any
 
 import httpx
 from fastapi import HTTPException
@@ -25,6 +27,19 @@ from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
 
+_LAN_CONFIG_PATHS = {
+    "Device": {
+        "ip_address": "IP.Interface.2.IPv4Address.1.IPAddress",
+        "subnet_mask": "IP.Interface.2.IPv4Address.1.SubnetMask",
+        "refresh": "IP.Interface.2.",
+    },
+    "InternetGatewayDevice": {
+        "ip_address": "LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceIPAddress",
+        "subnet_mask": "LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceSubnetMask",
+        "refresh": "LANDevice.1.LANHostConfigManagement.",
+    },
+}
+
 
 def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
     expr = func.upper(column)
@@ -35,6 +50,36 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
 
 def _normalize_serial(value: str | None) -> str:
     return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _validate_ipv4(value: str, field_name: str) -> str | ActionResult:
+    try:
+        return str(IPv4Address(value))
+    except ValueError:
+        return ActionResult(success=False, message=f"{field_name} must be a valid IPv4 address.")
+
+
+def _validate_subnet_mask(value: str) -> str | ActionResult:
+    try:
+        IPv4Network(f"0.0.0.0/{value}")
+    except ValueError:
+        return ActionResult(success=False, message="LAN subnet mask must be valid.")
+    return str(IPv4Address(value))
+
+
+def _request_lan_refresh(client: Any, device_id: str, root: str) -> None:
+    refresh = getattr(client, "refresh_object", None)
+    if not callable(refresh):
+        return
+    path = _LAN_CONFIG_PATHS[root]["refresh"]
+    try:
+        refresh(device_id, f"{root}.{path}", connection_request=True)
+    except Exception:
+        logger.debug(
+            "Runtime refresh request failed for device %s after LAN config update",
+            device_id,
+            exc_info=True,
+        )
 
 
 def _send_connection_request_http(
@@ -111,6 +156,71 @@ def _resolve_ont_fallback_connection_request_auth(
     if not username and not password:
         return None
     return username, password
+
+
+def set_lan_config(
+    db: Session,
+    ont_id: str,
+    *,
+    lan_ip: str | None = None,
+    lan_subnet: str | None = None,
+) -> ActionResult:
+    """Set ONT LAN gateway IP/subnet via TR-069."""
+    if not lan_ip and not lan_subnet:
+        return ActionResult(
+            success=False,
+            message="LAN IP address or subnet mask is required.",
+        )
+
+    params_to_set: dict[str, str] = {}
+    if lan_ip:
+        normalized_ip = _validate_ipv4(str(lan_ip).strip(), "LAN IP address")
+        if isinstance(normalized_ip, ActionResult):
+            return normalized_ip
+        params_to_set["ip_address"] = normalized_ip
+    if lan_subnet:
+        normalized_mask = _validate_subnet_mask(str(lan_subnet).strip())
+        if isinstance(normalized_mask, ActionResult):
+            return normalized_mask
+        params_to_set["subnet_mask"] = normalized_mask
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
+
+    path_map = _LAN_CONFIG_PATHS[root]
+    tr069_params = build_tr069_params(
+        root,
+        {path_map[key]: value for key, value in params_to_set.items()},
+    )
+
+    try:
+        result = client.set_parameter_values(device_id, tr069_params)
+        _request_lan_refresh(client, device_id, root)
+        logger.info(
+            "LAN config set on ONT %s (root=%s, params=%s)",
+            ont.serial_number,
+            root,
+            sorted(tr069_params),
+        )
+        changed = []
+        if "ip_address" in params_to_set:
+            changed.append(f"IP {params_to_set['ip_address']}")
+        if "subnet_mask" in params_to_set:
+            changed.append(f"subnet {params_to_set['subnet_mask']}")
+        return ActionResult(
+            success=True,
+            message=f"LAN config updated on {ont.serial_number}: {', '.join(changed)}.",
+            data=result,
+        )
+    except GenieACSError as exc:
+        logger.error("Set LAN config failed for ONT %s: %s", ont.serial_number, exc)
+        return ActionResult(success=False, message=f"Failed to set LAN config: {exc}")
 
 
 def set_connection_request_credentials(

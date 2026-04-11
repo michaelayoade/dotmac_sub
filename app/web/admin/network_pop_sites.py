@@ -6,23 +6,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import web_network_core_runtime as web_network_core_runtime_service
 from app.services import web_network_pop_sites as web_network_pop_sites_service
-from app.services.audit_helpers import (
-    build_audit_activities,
-    diff_dicts,
-    log_audit_event,
-    model_to_dict,
-)
+from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
-from app.services.file_storage import build_content_disposition, file_uploads
-from app.services.object_storage import ObjectNotFoundError
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
-
-_coerce_float_or_none = web_network_core_runtime_service.coerce_float_or_none
 
 
 def _base_context(
@@ -80,100 +70,17 @@ def pop_site_new(request: Request, db: Session = Depends(get_db)):
 )
 def pop_site_create(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    reference_data = web_network_pop_sites_service.form_reference_data(db)
-    values = web_network_pop_sites_service.parse_site_form_values(form)
-    normalized, error = web_network_pop_sites_service.validate_site_values(values)
-    lat_value = (
-        _coerce_float_or_none(normalized.get("latitude")) if normalized else None
+    result = web_network_pop_sites_service.create_site_from_form(
+        db, form, request=request
     )
-    lon_value = (
-        _coerce_float_or_none(normalized.get("longitude")) if normalized else None
-    )
-    mast_enabled, mast_data, mast_error, mast_defaults = (
-        web_network_pop_sites_service.parse_mast_form(form, lat_value, lon_value)
-    )
-
-    if error:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=None,
-            action_url="/admin/network/pop-sites",
-            error=error,
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
+    if result.error:
         context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-    if mast_error:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=None,
-            action_url="/admin/network/pop-sites",
-            mast_error=mast_error,
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
+        context.update(result.form_context or {})
         return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
 
-    if normalized is None:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=None,
-            action_url="/admin/network/pop-sites",
-            error="Please correct the highlighted fields.",
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-    normalized, error = web_network_pop_sites_service.resolve_site_relationships(
-        db, normalized
-    )
-    if error:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=None,
-            action_url="/admin/network/pop-sites",
-            error=error,
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-    if normalized is None:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=None,
-            action_url="/admin/network/pop-sites",
-            error="Please correct the highlighted fields.",
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-    pop_site = web_network_pop_sites_service.create_site(db, normalized)
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="pop_site",
-        entity_id=str(pop_site.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata={"name": pop_site.name, "code": pop_site.code},
-    )
-
-    if mast_enabled:
-        web_network_pop_sites_service.maybe_create_mast(db, str(pop_site.id), mast_data)
-
+    pop_site = result.pop_site
+    if pop_site is None:
+        raise HTTPException(status_code=500, detail="POP site creation failed")
     return RedirectResponse(f"/admin/network/pop-sites/{pop_site.id}", status_code=303)
 
 
@@ -209,119 +116,27 @@ def pop_site_edit(request: Request, pop_site_id: str, db: Session = Depends(get_
     dependencies=[Depends(require_permission("network:write"))],
 )
 def pop_site_update(request: Request, pop_site_id: str, db: Session = Depends(get_db)):
-    pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
-    if not pop_site:
+    form = parse_form_data_sync(request)
+    result = web_network_pop_sites_service.update_site_from_form(
+        db,
+        pop_site_id,
+        form,
+        request=request,
+    )
+    if result.not_found:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "POP Site not found"},
             status_code=404,
         )
-
-    form = parse_form_data_sync(request)
-    reference_data = web_network_pop_sites_service.form_reference_data(db)
-    values = web_network_pop_sites_service.parse_site_form_values(form)
-    normalized, error = web_network_pop_sites_service.validate_site_values(values)
-    fallback_lat = (
-        _coerce_float_or_none(normalized.get("latitude"))
-        if normalized
-        else pop_site.latitude
-    )
-    fallback_lon = (
-        _coerce_float_or_none(normalized.get("longitude"))
-        if normalized
-        else pop_site.longitude
-    )
-    mast_enabled, mast_data, mast_error, mast_defaults = (
-        web_network_pop_sites_service.parse_mast_form(form, fallback_lat, fallback_lon)
-    )
-
-    if error:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=pop_site,
-            action_url=f"/admin/network/pop-sites/{pop_site.id}",
-            error=error,
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
+    if result.error:
         context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
+        context.update(result.form_context or {})
         return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
 
-    if normalized is None:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=pop_site,
-            action_url=f"/admin/network/pop-sites/{pop_site.id}",
-            error="Please correct the highlighted fields.",
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-    if mast_error:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=pop_site,
-            action_url=f"/admin/network/pop-sites/{pop_site.id}",
-            mast_error=mast_error,
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-
-    normalized, error = web_network_pop_sites_service.resolve_site_relationships(
-        db, normalized
-    )
-    if error:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=pop_site,
-            action_url=f"/admin/network/pop-sites/{pop_site.id}",
-            error=error,
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-    if normalized is None:
-        form_context = web_network_pop_sites_service.build_form_context(
-            pop_site=pop_site,
-            action_url=f"/admin/network/pop-sites/{pop_site.id}",
-            error="Please correct the highlighted fields.",
-            mast_enabled=mast_enabled,
-            mast_defaults=mast_defaults,
-            reference_data=reference_data,
-        )
-        context = _base_context(request, db, active_page="pop-sites")
-        context.update(form_context)
-        return templates.TemplateResponse("admin/network/pop-sites/form.html", context)
-
-    before_snapshot = model_to_dict(pop_site)
-    web_network_pop_sites_service.commit_site_update(db, pop_site, normalized)
-    after_snapshot = model_to_dict(pop_site)
-    changes = diff_dicts(before_snapshot, after_snapshot)
-    metadata_payload = {"changes": changes} if changes else None
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="pop_site",
-        entity_id=str(pop_site.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata=metadata_payload,
-    )
-
-    if mast_enabled:
-        web_network_pop_sites_service.maybe_create_mast(db, str(pop_site.id), mast_data)
-
+    pop_site = result.pop_site
+    if pop_site is None:
+        raise HTTPException(status_code=500, detail="POP site update failed")
     return RedirectResponse(f"/admin/network/pop-sites/{pop_site.id}", status_code=303)
 
 
@@ -374,38 +189,14 @@ def pop_site_photo_upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
-    if not pop_site:
+    result = web_network_pop_sites_service.upload_photo(
+        db,
+        pop_site_id=pop_site_id,
+        file=file,
+        request=request,
+    )
+    if result.not_found:
         raise HTTPException(status_code=404, detail="POP Site not found")
-    if not file.filename:
-        return RedirectResponse(
-            f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
-            status_code=303,
-        )
-    payload = file.file.read()
-    if not payload:
-        return RedirectResponse(
-            f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
-            status_code=303,
-        )
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    actor_id = current_user.get("subscriber_id")
-    owner_subscriber_id = (
-        file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
-    )
-    file_uploads.upload(
-        db=db,
-        domain="branding",
-        entity_type="pop_site_photo",
-        entity_id=str(pop_site_id),
-        original_filename=file.filename,
-        content_type=file.content_type,
-        data=payload,
-        uploaded_by=actor_id,
-        owner_subscriber_id=owner_subscriber_id,
-    )
     return RedirectResponse(
         f"/admin/network/pop-sites/{pop_site_id}?tab=gallery",
         status_code=303,
@@ -424,40 +215,15 @@ def pop_site_document_upload(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ):
-    pop_site = web_network_pop_sites_service.get_pop_site(db, pop_site_id)
-    if not pop_site:
+    result = web_network_pop_sites_service.upload_document(
+        db,
+        pop_site_id=pop_site_id,
+        category=category,
+        file=file,
+        request=request,
+    )
+    if result.not_found:
         raise HTTPException(status_code=404, detail="POP Site not found")
-    if category not in {"lease", "permit", "survey", "asbuilt", "other"}:
-        category = "other"
-    if not file.filename:
-        return RedirectResponse(
-            f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
-            status_code=303,
-        )
-    payload = file.file.read()
-    if not payload:
-        return RedirectResponse(
-            f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
-            status_code=303,
-        )
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    actor_id = current_user.get("subscriber_id")
-    owner_subscriber_id = (
-        file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
-    )
-    file_uploads.upload(
-        db=db,
-        domain="attachments",
-        entity_type=f"pop_site_document_{category}",
-        entity_id=str(pop_site_id),
-        original_filename=file.filename,
-        content_type=file.content_type,
-        data=payload,
-        uploaded_by=actor_id,
-        owner_subscriber_id=owner_subscriber_id,
-    )
     return RedirectResponse(
         f"/admin/network/pop-sites/{pop_site_id}?tab=documents",
         status_code=303,
@@ -474,34 +240,19 @@ def pop_site_file_download(
     file_id: str,
     db: Session = Depends(get_db),
 ):
-    record = web_network_pop_sites_service.get_site_file_or_none(db, file_id)
-    if not record or record.entity_id != str(pop_site_id):
-        raise HTTPException(status_code=404, detail="File not found")
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    current_owner = (
-        file_uploads.resolve_user_owner_subscriber(
-            db, current_user.get("subscriber_id")
-        )
-        if current_user.get("subscriber_id")
-        else None
+    stream = web_network_pop_sites_service.stream_site_file(
+        db,
+        pop_site_id=pop_site_id,
+        file_id=file_id,
+        request=request,
+        as_attachment=True,
     )
-    file_uploads.assert_owner_access(record, current_owner)
-    try:
-        stream = file_uploads.stream_file(record)
-    except ObjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="File not found") from exc
-
-    headers = {
-        "Content-Disposition": build_content_disposition(record.original_filename)
-    }
-    if stream.content_length is not None:
-        headers["Content-Length"] = str(stream.content_length)
+    if stream.not_found or stream.chunks is None:
+        raise HTTPException(status_code=404, detail="File not found")
     return StreamingResponse(
         stream.chunks,
-        media_type=stream.content_type or "application/octet-stream",
-        headers=headers,
+        media_type=stream.media_type,
+        headers=stream.headers or {},
     )
 
 
@@ -515,27 +266,18 @@ def pop_site_file_preview(
     file_id: str,
     db: Session = Depends(get_db),
 ):
-    record = web_network_pop_sites_service.get_site_file_or_none(db, file_id)
-    if not record or record.entity_id != str(pop_site_id):
-        raise HTTPException(status_code=404, detail="File not found")
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    current_owner = (
-        file_uploads.resolve_user_owner_subscriber(
-            db, current_user.get("subscriber_id")
-        )
-        if current_user.get("subscriber_id")
-        else None
+    stream = web_network_pop_sites_service.stream_site_file(
+        db,
+        pop_site_id=pop_site_id,
+        file_id=file_id,
+        request=request,
     )
-    file_uploads.assert_owner_access(record, current_owner)
-    try:
-        stream = file_uploads.stream_file(record)
-    except ObjectNotFoundError as exc:
-        raise HTTPException(status_code=404, detail="File not found") from exc
+    if stream.not_found or stream.chunks is None:
+        raise HTTPException(status_code=404, detail="File not found")
     return StreamingResponse(
         stream.chunks,
-        media_type=stream.content_type or "application/octet-stream",
+        media_type=stream.media_type,
+        headers=stream.headers or {},
     )
 
 
@@ -550,21 +292,14 @@ def pop_site_file_delete(
     tab: str = Form("documents"),
     db: Session = Depends(get_db),
 ):
-    record = web_network_pop_sites_service.get_site_file_or_none(db, file_id)
-    if not record or record.entity_id != str(pop_site_id):
-        raise HTTPException(status_code=404, detail="File not found")
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    current_owner = (
-        file_uploads.resolve_user_owner_subscriber(
-            db, current_user.get("subscriber_id")
-        )
-        if current_user.get("subscriber_id")
-        else None
+    deleted = web_network_pop_sites_service.delete_site_file(
+        db,
+        pop_site_id=pop_site_id,
+        file_id=file_id,
+        request=request,
     )
-    file_uploads.assert_owner_access(record, current_owner)
-    file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="File not found")
     if tab not in {"gallery", "documents"}:
         tab = "documents"
     return RedirectResponse(

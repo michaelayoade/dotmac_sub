@@ -87,8 +87,21 @@ def _resolve_device_id_from_server(
     serial_number: str,
 ) -> str | None:
     for candidate in _serial_search_candidates(serial_number):
+        escaped_candidate = re.escape(candidate)
         devices = client.list_devices(
-            query={"_id": {"$regex": f".*-{re.escape(candidate)}$"}}
+            query={
+                "$or": [
+                    {"_id": {"$regex": f".*-{escaped_candidate}$"}},
+                    {"_deviceId._SerialNumber": candidate},
+                    {"_deviceId.SerialNumber": candidate},
+                    {"Device.DeviceInfo.SerialNumber._value": candidate},
+                    {
+                        "InternetGatewayDevice.DeviceInfo.SerialNumber._value": (
+                            candidate
+                        )
+                    },
+                ]
+            }
         )
         if not devices:
             continue
@@ -108,6 +121,28 @@ def _resolve_server_by_id(
     if not server or not server.base_url:
         return None
     return server
+
+
+def _cache_genieacs_device_id(
+    db: Session,
+    device: Tr069CpeDevice | None,
+    device_id: str | None,
+) -> None:
+    if not device or not device_id:
+        return
+    clean_id = str(device_id).strip()
+    if not clean_id or device.genieacs_device_id == clean_id:
+        return
+    device.genieacs_device_id = clean_id[:255]
+    try:
+        db.flush()
+    except Exception:
+        logger.debug(
+            "Failed to cache GenieACS device id %s on TR-069 device %s",
+            clean_id,
+            device.id,
+            exc_info=True,
+        )
 
 
 def resolve_genieacs(db: Session, ont: OntUnit) -> tuple[GenieACSClient, str] | None:
@@ -145,28 +180,10 @@ def resolve_genieacs_with_reason(
             client = GenieACSClient(server.base_url)
             return (client, linked.genieacs_device_id), "resolved_via_linked_tr069_device"
     if linked and linked.acs_server_id:
-        server = _resolve_server_by_id(db, str(linked.acs_server_id))
-        if server:
-            client = GenieACSClient(server.base_url)
-            linked_serial = str(linked.serial_number or "").strip()
-            if linked.oui and linked.product_class and linked_serial:
-                try:
-                    device_id = client.build_device_id(
-                        str(linked.oui),
-                        str(linked.product_class),
-                        linked_serial,
-                    )
-                    if device_id:
-                        return (
-                            client,
-                            device_id,
-                        ), "resolved_via_linked_tr069_device"
-                except Exception:
-                    logger.debug(
-                        "Failed to build linked GenieACS device ID for ONT %s",
-                        ont.id,
-                        exc_info=True,
-                    )
+        logger.debug(
+            "Linked TR-069 placeholder for ONT %s has no GenieACS device id yet",
+            ont.id,
+        )
 
     # 2) Discovery: Search GenieACS for device by serial
     # Try OLT's ACS server first, then default server
@@ -207,6 +224,7 @@ def resolve_genieacs_with_reason(
                 _resolve_device_id_from_server(client, serial) if serial else None
             )
             if found_device_id:
+                _cache_genieacs_device_id(db, linked, found_device_id)
                 return (client, found_device_id), reason
         except GenieACSError:
             logger.debug("GenieACS search failed for ONT %s on %s", ont.serial_number, server.name)
@@ -259,17 +277,18 @@ def resolve_genieacs_for_cpe_with_reason(
             server = _resolve_server_by_id(db, str(linked.acs_server_id))
             if server:
                 client = GenieACSClient(server.base_url)
+                if linked.genieacs_device_id:
+                    return (
+                        client,
+                        str(linked.genieacs_device_id),
+                    ), "resolved_via_cpe_device_fk"
                 try:
                     device_id = _resolve_device_id_from_server(client, serial)
                 except GenieACSError:
                     device_id = None
-                if not device_id:
-                    device_id = client.build_device_id(
-                        linked.oui or "",
-                        linked.product_class or "",
-                        linked.serial_number or "",
-                    )
-                return (client, device_id), "resolved_via_cpe_device_fk"
+                if device_id:
+                    _cache_genieacs_device_id(db, linked, device_id)
+                    return (client, device_id), "resolved_via_cpe_device_fk"
 
     # 2) Linked Tr069CpeDevice by normalized serial number match
     normalized_candidates = [
@@ -293,17 +312,18 @@ def resolve_genieacs_for_cpe_with_reason(
             server = _resolve_server_by_id(db, str(cpe_tr069.acs_server_id))
             if server:
                 client = GenieACSClient(server.base_url)
+                if cpe_tr069.genieacs_device_id:
+                    return (
+                        client,
+                        str(cpe_tr069.genieacs_device_id),
+                    ), "resolved_via_tr069_serial_match"
                 try:
                     device_id = _resolve_device_id_from_server(client, serial)
                 except GenieACSError:
                     device_id = None
-                if not device_id:
-                    device_id = client.build_device_id(
-                        cpe_tr069.oui or "",
-                        cpe_tr069.product_class or "",
-                        cpe_tr069.serial_number or "",
-                    )
-                return (client, device_id), "resolved_via_tr069_serial_match"
+                if device_id:
+                    _cache_genieacs_device_id(db, cpe_tr069, device_id)
+                    return (client, device_id), "resolved_via_tr069_serial_match"
 
     # 3) Default ACS server from settings
     default_server_id = settings_spec.resolve_value(

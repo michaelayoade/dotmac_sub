@@ -7,6 +7,7 @@ import logging
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.services import collections as collections_service
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.audit_helpers import log_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -144,3 +145,30 @@ def execute_action(
     if case_ids_csv is not None:
         return apply_bulk_action(db, case_ids_csv=case_ids_csv, action=action)
     raise ValueError("case_id or case_ids_csv is required")
+
+
+def execute_action_with_audit(
+    db,
+    *,
+    request,
+    action: str,
+    actor_id: str | None,
+    case_id: str | None = None,
+    case_ids_csv: str | None = None,
+) -> list[str]:
+    processed_ids = execute_action(
+        db,
+        action=action,
+        case_id=case_id,
+        case_ids_csv=case_ids_csv,
+    )
+    for processed_id in processed_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=action,
+            entity_type="dunning_case",
+            entity_id=processed_id,
+            actor_id=actor_id,
+        )
+    return processed_ids

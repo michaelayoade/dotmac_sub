@@ -10,6 +10,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
+from sqlalchemy.exc import ProgrammingError
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -22,6 +23,11 @@ from app.models.tr069 import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _is_psycopg_autocommit_state_error(exc: ProgrammingError) -> bool:
+    """Return true for stale pooled psycopg connections stuck in a transaction."""
+    return "can't change 'autocommit' now" in str(exc).lower()
 
 
 @celery_app.task(name="app.tasks.tr069.sync_all_acs_devices")
@@ -56,6 +62,8 @@ def sync_all_acs_devices() -> dict[str, int]:
         synced = 0
         total_created = 0
         total_updated = 0
+        total_local_created = 0
+        total_local_reactivated = 0
         errors = 0
 
         for server in servers:
@@ -63,6 +71,8 @@ def sync_all_acs_devices() -> dict[str, int]:
                 result = CpeDevices.sync_from_genieacs(db, str(server.id))
                 total_created += result.get("created", 0)
                 total_updated += result.get("updated", 0)
+                total_local_created += result.get("local_created", 0)
+                total_local_reactivated += result.get("local_reactivated", 0)
                 synced += 1
             except Exception as e:
                 logger.error(
@@ -90,20 +100,83 @@ def sync_all_acs_devices() -> dict[str, int]:
                 logger.warning("Failed to emit tr069_device_discovered event: %s", e)
 
         logger.info(
-            "TR-069 sync complete: %d servers, %d created, %d updated, %d errors",
+            "TR-069 sync complete: %d servers, %d created, %d updated, %d local created, %d local reactivated, %d errors",
             synced,
             total_created,
             total_updated,
+            total_local_created,
+            total_local_reactivated,
             errors,
         )
         return {
             "servers_synced": synced,
             "total_created": total_created,
             "total_updated": total_updated,
+            "total_local_created": total_local_created,
+            "total_local_reactivated": total_local_reactivated,
             "errors": errors,
         }
     except Exception:
         db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.tr069.wait_for_ont_bootstrap")
+def wait_for_ont_bootstrap(ont_id: str, operation_id: str | None = None) -> dict[str, object]:
+    """Wait for an ONT to become resolvable in GenieACS after TR-069 binding."""
+    from app.services.network.ont_provision_steps import wait_tr069_bootstrap
+    from app.services.network_operations import network_operations
+
+    logger.info("Starting TR-069 bootstrap wait for ONT %s", ont_id)
+    db = SessionLocal()
+    try:
+        if operation_id:
+            network_operations.mark_running(db, operation_id)
+            db.commit()
+
+        result = wait_tr069_bootstrap(db, ont_id)
+        db.rollback()
+        payload = {
+            "step_name": result.step_name,
+            "success": result.success,
+            "message": result.message,
+            "duration_ms": result.duration_ms,
+            "waiting": result.waiting,
+            "data": result.data or {},
+        }
+
+        if operation_id:
+            if result.success:
+                network_operations.mark_succeeded(
+                    db,
+                    operation_id,
+                    output_payload=payload,
+                )
+            else:
+                network_operations.mark_failed(
+                    db,
+                    operation_id,
+                    result.message,
+                    output_payload=payload,
+                )
+            db.commit()
+
+        return payload
+    except Exception as exc:
+        db.rollback()
+        if operation_id:
+            try:
+                network_operations.mark_failed(db, operation_id, str(exc))
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning(
+                    "Failed to mark TR-069 bootstrap operation %s failed",
+                    operation_id,
+                    exc_info=True,
+                )
         raise
     finally:
         db.close()
@@ -572,7 +645,19 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
             .order_by(OntUnit.observed_runtime_updated_at.asc().nulls_first())
             .limit(batch_size)
         )
-        onts = list(db.scalars(stmt).all())
+        try:
+            onts = list(db.scalars(stmt).all())
+        except ProgrammingError as exc:
+            if not _is_psycopg_autocommit_state_error(exc):
+                raise
+
+            logger.warning(
+                "TR-069 runtime refresh hit a stale DB connection; invalidating and retrying once"
+            )
+            db.invalidate()
+            db.close()
+            db = SessionLocal()
+            onts = list(db.scalars(stmt).all())
 
         if not onts:
             logger.info("No ONTs need runtime refresh")

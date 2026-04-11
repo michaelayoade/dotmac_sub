@@ -13,6 +13,7 @@ from app.models.billing import InvoiceStatus
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as billing_invoice_pdf_service
 from app.services import web_billing_invoices as web_billing_invoices_service
+from app.services.audit_helpers import log_audit_event
 from app.services.object_storage import ObjectNotFoundError
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,35 @@ def execute_bulk_action(db, *, action: str, invoice_ids_csv: str) -> list[str]:
     if action == "mark_paid":
         return bulk_mark_paid(db, invoice_ids_csv)
     raise ValueError("Unsupported invoice bulk action")
+
+
+def execute_audited_bulk_action(
+    db,
+    request,
+    *,
+    action: str,
+    invoice_ids_csv: str,
+) -> list[str]:
+    """Execute a bulk invoice action and log one audit event per affected invoice."""
+    updated_ids = execute_bulk_action(
+        db,
+        action=action,
+        invoice_ids_csv=invoice_ids_csv,
+    )
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    actor_id = str(current_user.get("subscriber_id")) if current_user else None
+    for invoice_id in updated_ids:
+        log_audit_event(
+            db=db,
+            request=request,
+            action=action,
+            entity_type="invoice",
+            entity_id=invoice_id,
+            actor_id=actor_id,
+        )
+    return updated_ids
 
 
 def bulk_queue_pdf_exports(

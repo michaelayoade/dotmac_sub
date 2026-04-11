@@ -1,6 +1,5 @@
 """Admin customer (person & business) management web routes."""
 
-import json
 import logging
 import uuid
 from typing import Literal
@@ -30,31 +29,17 @@ from app.services import web_customer_actions as web_customer_actions_service
 from app.services import web_customer_details as web_customer_details_service
 from app.services import web_customer_lists as web_customer_lists_service
 from app.services import web_customer_user_access as web_customer_user_access_service
-from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services.audit_helpers import (
     build_changes_metadata,
     log_audit_event,
 )
 from app.services.auth_dependencies import require_permission
-from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 from app.web.request_parsing import parse_json_body
 
 logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/customers", tags=["web-admin-customers"])
 contacts_router = APIRouter(prefix="/contacts", tags=["web-admin-contacts"])
-
-
-def _parse_json(value: str | None, field: str) -> dict | None:
-    if not value or not value.strip():
-        return None
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"{field} must be valid JSON") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"{field} must be a JSON object")
-    return parsed
 
 
 def _htmx_error_response(
@@ -81,11 +66,7 @@ def _get_subscriber(db: Session, subscriber_id: str):
 
 
 def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
-    """Accept only a business subscriber id for business routes."""
-    subscriber = _get_subscriber(db=db, subscriber_id=customer_id)
-    if subscriber.category != SubscriberCategory.business:
-        raise HTTPException(status_code=404, detail="Business customer not found")
-    return customer_id
+    return web_customer_actions_service.resolve_business_customer_id(db, customer_id)
 
 
 def _load_tax_rates(db: Session):
@@ -93,38 +74,7 @@ def _load_tax_rates(db: Session):
 
 
 def _billing_form_defaults(db: Session, customer_type: str, customer) -> dict[str, str]:
-    defaults = {
-        "billing_enabled_override": "",
-        "captive_redirect_enabled": "",
-        "billing_day": "",
-        "payment_due_days": "",
-        "grace_period_days": "",
-        "min_balance": "",
-        "tax_rate_id": "",
-        "payment_method": "",
-    }
-    if not customer:
-        return defaults
-    subscriber = customer
-    defaults.update(
-        {
-            "billing_enabled_override": (
-                "true" if subscriber.billing_enabled else "false"
-            )
-            if subscriber.billing_enabled is not None
-            else "",
-            "captive_redirect_enabled": "true"
-            if subscriber.captive_redirect_enabled
-            else "false",
-            "billing_day": str(subscriber.billing_day or ""),
-            "payment_due_days": str(subscriber.payment_due_days or ""),
-            "grace_period_days": str(subscriber.grace_period_days or ""),
-            "min_balance": str(subscriber.min_balance or ""),
-            "tax_rate_id": str(subscriber.tax_rate_id or ""),
-            "payment_method": str(subscriber.payment_method or ""),
-        }
-    )
-    return defaults
+    return web_customer_actions_service.billing_form_defaults(customer)
 
 
 def _toast_response(
@@ -499,7 +449,9 @@ def customer_create(
             "notes": notes,
             "account_start_date": account_start_date,
             "org_account_start_date": org_account_start_date,
-            "metadata_json": _parse_json(metadata, "metadata"),
+            "metadata_json": web_customer_actions_service.parse_json_object(
+                metadata, "metadata"
+            ),
         }
         created_type, created_id = (
             web_customer_actions_service.create_customer_from_form(
@@ -641,75 +593,29 @@ def customer_user_send_invite(
     actor = get_current_user(request)
     actor_id = str(actor.get("subscriber_id")) if actor else None
     try:
-        state = web_customer_user_access_service.build_customer_user_access_state(
+        result = web_customer_user_access_service.send_customer_invite(
             db,
             customer_type=customer_type,
             customer_id=customer_id,
-        )
-        if not state.get("can_send_invite"):
-            retry_at = state.get("invite_available_at")
-            when = (
-                f"{format_in_app_timezone(retry_at, '%Y-%m-%d %H:%M')} {APP_TIMEZONE_NAME}"
-                if retry_at
-                else "later"
-            )
-            message = f"Invite already sent recently. You can resend after {when}."
-            log_audit_event(
-                db=db,
-                request=request,
-                action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
-                entity_type="subscriber",
-                entity_id=str(state.get("target_subscriber_id") or ""),
-                actor_id=actor_id,
-                metadata={"reason": "rate_limited"},
-                status_code=429,
-                is_success=False,
-            )
-            return _toast_response(
-                request=request,
-                redirect_url=redirect_url,
-                ok=False,
-                title="Invite blocked",
-                message=message,
-            )
-        note = web_system_user_mutations_service.send_user_invite_for_user(
-            db,
-            user_id=str(state["target_subscriber_id"]),
-        )
-        log_audit_event(
-            db=db,
             request=request,
-            action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
-            entity_type="subscriber",
-            entity_id=str(state["target_subscriber_id"]),
             actor_id=actor_id,
-            metadata={
-                "email": state.get("email"),
-                "email_source": state.get("email_source"),
-                "customer_type": customer_type,
-                "result": note,
-            },
-            status_code=200,
-            is_success="sent" in note.lower(),
         )
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
-            ok="sent" in note.lower(),
-            title="User invite",
-            message=note,
+            ok=bool(result["ok"]),
+            title=str(result["title"]),
+            message=str(result["message"]),
         )
     except Exception as exc:
-        log_audit_event(
+        web_customer_user_access_service.log_customer_user_access_error(
             db=db,
             request=request,
             action=web_customer_user_access_service.INVITE_AUDIT_ACTION,
-            entity_type="customer",
-            entity_id=str(customer_id),
+            customer_type=customer_type,
+            customer_id=customer_id,
             actor_id=actor_id,
-            metadata={"customer_type": customer_type, "error": str(exc)},
-            status_code=500,
-            is_success=False,
+            error=exc,
         )
         return _toast_response(
             request=request,
@@ -737,69 +643,29 @@ def customer_user_send_reset_link(
     actor = get_current_user(request)
     actor_id = str(actor.get("subscriber_id")) if actor else None
     try:
-        state = web_customer_user_access_service.build_customer_user_access_state(
+        result = web_customer_user_access_service.send_customer_reset_link(
             db,
             customer_type=customer_type,
             customer_id=customer_id,
-        )
-        if not state.get("can_send_reset"):
-            message = "Reset limit reached: max 3 reset links per hour."
-            log_audit_event(
-                db=db,
-                request=request,
-                action=web_customer_user_access_service.RESET_AUDIT_ACTION,
-                entity_type="subscriber",
-                entity_id=str(state.get("target_subscriber_id") or ""),
-                actor_id=actor_id,
-                metadata={"reason": "rate_limited"},
-                status_code=429,
-                is_success=False,
-            )
-            return _toast_response(
-                request=request,
-                redirect_url=redirect_url,
-                ok=False,
-                title="Reset link blocked",
-                message=message,
-            )
-        note = web_system_user_mutations_service.send_password_reset_link_for_user(
-            db,
-            user_id=str(state["target_subscriber_id"]),
-        )
-        log_audit_event(
-            db=db,
             request=request,
-            action=web_customer_user_access_service.RESET_AUDIT_ACTION,
-            entity_type="subscriber",
-            entity_id=str(state["target_subscriber_id"]),
             actor_id=actor_id,
-            metadata={
-                "email": state.get("email"),
-                "email_source": state.get("email_source"),
-                "customer_type": customer_type,
-                "result": note,
-            },
-            status_code=200,
-            is_success="sent" in note.lower(),
         )
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
-            ok="sent" in note.lower(),
-            title="Password reset",
-            message=note,
+            ok=bool(result["ok"]),
+            title=str(result["title"]),
+            message=str(result["message"]),
         )
     except Exception as exc:
-        log_audit_event(
+        web_customer_user_access_service.log_customer_user_access_error(
             db=db,
             request=request,
             action=web_customer_user_access_service.RESET_AUDIT_ACTION,
-            entity_type="customer",
-            entity_id=str(customer_id),
+            customer_type=customer_type,
+            customer_id=customer_id,
             actor_id=actor_id,
-            metadata={"customer_type": customer_type, "error": str(exc)},
-            status_code=500,
-            is_success=False,
+            error=exc,
         )
         return _toast_response(
             request=request,
@@ -827,42 +693,31 @@ def customer_user_activate_login(
     actor = get_current_user(request)
     actor_id = str(actor.get("subscriber_id")) if actor else None
     try:
-        target = web_customer_user_access_service.activate_customer_login(
+        result = web_customer_user_access_service.set_customer_login_active(
             db,
             customer_type=customer_type,
             customer_id=customer_id,
-        )
-        log_audit_event(
-            db=db,
             request=request,
-            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
-            entity_type="subscriber",
-            entity_id=str(target.subscriber.id),
             actor_id=actor_id,
-            metadata={"login_active": True, "customer_type": customer_type},
+            is_active=True,
         )
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
-            ok=True,
-            title="Login activated",
-            message="Customer portal login has been activated.",
+            ok=bool(result["ok"]),
+            title=str(result["title"]),
+            message=str(result["message"]),
         )
     except Exception as exc:
-        log_audit_event(
+        web_customer_user_access_service.log_customer_user_access_error(
             db=db,
             request=request,
             action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
-            entity_type="customer",
-            entity_id=str(customer_id),
+            customer_type=customer_type,
+            customer_id=customer_id,
             actor_id=actor_id,
-            metadata={
-                "customer_type": customer_type,
-                "login_active": True,
-                "error": str(exc),
-            },
-            status_code=500,
-            is_success=False,
+            error=exc,
+            login_active=True,
         )
         return _toast_response(
             request=request,
@@ -890,42 +745,31 @@ def customer_user_deactivate_login(
     actor = get_current_user(request)
     actor_id = str(actor.get("subscriber_id")) if actor else None
     try:
-        target = web_customer_user_access_service.deactivate_customer_login(
+        result = web_customer_user_access_service.set_customer_login_active(
             db,
             customer_type=customer_type,
             customer_id=customer_id,
-        )
-        log_audit_event(
-            db=db,
             request=request,
-            action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
-            entity_type="subscriber",
-            entity_id=str(target.subscriber.id),
             actor_id=actor_id,
-            metadata={"login_active": False, "customer_type": customer_type},
+            is_active=False,
         )
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
-            ok=True,
-            title="Login deactivated",
-            message="Customer portal login has been deactivated.",
+            ok=bool(result["ok"]),
+            title=str(result["title"]),
+            message=str(result["message"]),
         )
     except Exception as exc:
-        log_audit_event(
+        web_customer_user_access_service.log_customer_user_access_error(
             db=db,
             request=request,
             action=web_customer_user_access_service.LOGIN_TOGGLE_AUDIT_ACTION,
-            entity_type="customer",
-            entity_id=str(customer_id),
+            customer_type=customer_type,
+            customer_id=customer_id,
             actor_id=actor_id,
-            metadata={
-                "customer_type": customer_type,
-                "login_active": False,
-                "error": str(exc),
-            },
-            status_code=500,
-            is_success=False,
+            error=exc,
+            login_active=False,
         )
         return _toast_response(
             request=request,
@@ -1178,7 +1022,9 @@ def person_update(
             captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             payment_method=payment_method,
-            metadata_json=_parse_json(metadata, "metadata")
+            metadata_json=web_customer_actions_service.parse_json_object(
+                metadata, "metadata"
+            )
             if metadata is not None
             else None,
         )
@@ -1585,25 +1431,13 @@ def geocode_address(
     db: Session = Depends(get_db),
 ):
     """Update address coordinates from a geocoding selection."""
-    from app.schemas.subscriber import AddressUpdate
-
-    try:
-        parsed_address_id = uuid.UUID(address_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid address id") from exc
-
-    address = subscriber_service.addresses.update(
-        db=db,
-        address_id=str(parsed_address_id),
-        payload=AddressUpdate(latitude=latitude, longitude=longitude),
-    )
     return JSONResponse(
-        {
-            "success": True,
-            "address_id": str(address.id),
-            "latitude": address.latitude,
-            "longitude": address.longitude,
-        }
+        web_customer_actions_service.save_address_coordinates(
+            db=db,
+            address_id=address_id,
+            latitude=latitude,
+            longitude=longitude,
+        )
     )
 
 
@@ -1619,69 +1453,13 @@ def geocode_primary_address(
     db: Session = Depends(get_db),
 ):
     """Save coordinates to a primary address, creating one from profile address if missing."""
-    from app.schemas.subscriber import AddressCreate, AddressUpdate
-
-    try:
-        parsed_customer_id = uuid.UUID(customer_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail="Invalid customer id") from exc
-
-    customer = subscriber_service.subscribers.get(
-        db=db, subscriber_id=str(parsed_customer_id)
-    )
-    if not customer:
-        raise HTTPException(status_code=404, detail="Customer not found")
-
-    addresses = subscriber_service.addresses.list(
-        db=db,
-        subscriber_id=str(parsed_customer_id),
-        order_by="created_at",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-    )
-    primary_address = next(
-        (addr for addr in addresses if addr.is_primary),
-        addresses[0] if addresses else None,
-    )
-
-    created = False
-    if primary_address is None:
-        if not (customer.address_line1 or "").strip():
-            raise HTTPException(
-                status_code=400,
-                detail="No address exists to geolocate. Add an address first.",
-            )
-        primary_address = subscriber_service.addresses.create(
-            db=db,
-            payload=AddressCreate(
-                subscriber_id=parsed_customer_id,
-                address_line1=customer.address_line1,
-                address_line2=customer.address_line2,
-                city=customer.city,
-                region=customer.region,
-                postal_code=customer.postal_code,
-                country_code=customer.country_code,
-                latitude=latitude,
-                longitude=longitude,
-                is_primary=True,
-            ),
-        )
-        created = True
-
-    updated = subscriber_service.addresses.update(
-        db=db,
-        address_id=str(primary_address.id),
-        payload=AddressUpdate(latitude=latitude, longitude=longitude),
-    )
     return JSONResponse(
-        {
-            "success": True,
-            "created_address": created,
-            "address_id": str(updated.id),
-            "latitude": updated.latitude,
-            "longitude": updated.longitude,
-        }
+        web_customer_actions_service.save_primary_address_coordinates(
+            db=db,
+            customer_id=customer_id,
+            latitude=latitude,
+            longitude=longitude,
+        )
     )
 
 
@@ -1811,24 +1589,8 @@ def bulk_update_status(
 ):
     """Bulk update customer status (activate/deactivate)."""
     try:
-        customer_ids = data.get("customer_ids", [])
-        new_status = data.get("status")
-
-        if not customer_ids or not new_status:
-            raise HTTPException(
-                status_code=400, detail="customer_ids and status are required"
-            )
-
-        if new_status not in ("active", "inactive"):
-            raise HTTPException(
-                status_code=400, detail="status must be 'active' or 'inactive'"
-            )
-
-        is_active = new_status == "active"
-        return web_customer_actions_service.bulk_update_customer_status(
-            db=db,
-            customer_ids=customer_ids,
-            is_active=is_active,
+        return web_customer_actions_service.bulk_update_customer_status_from_payload(
+            db=db, payload=data
         )
     except HTTPException:
         raise
@@ -1846,13 +1608,8 @@ def bulk_delete_customers(
 ):
     """Bulk delete customers (only inactive customers without subscribers)."""
     try:
-        customer_ids = data.get("customer_ids", [])
-
-        if not customer_ids:
-            raise HTTPException(status_code=400, detail="customer_ids is required")
-        return web_customer_actions_service.bulk_delete_customers(
-            db=db,
-            customer_ids=customer_ids,
+        return web_customer_actions_service.bulk_delete_customers_from_payload(
+            db=db, payload=data
         )
     except HTTPException:
         raise

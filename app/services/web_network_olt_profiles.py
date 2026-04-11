@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.network import OLTDevice, OntProvisioningProfile
+from app.services.network import olt as olt_service
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
     OntProvisioningContext,
@@ -18,6 +21,7 @@ from app.services.network.olt_ssh_profiles import (
     get_service_profiles,
     get_tr069_server_profiles,
 )
+from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.web_network_service_ports import _resolve_ont_olt_context
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,88 @@ def tr069_profiles_context(db: Session, olt_id: str) -> dict[str, Any]:
         context["error"] = msg
 
     return context
+
+
+def propagate_acs_to_onts(
+    db: Session, olt_id: str, *, request: Request | None = None
+) -> tuple[int, dict[str, Any]]:
+    try:
+        stats = olt_service.OLTDevices.propagate_acs_to_onts(db, olt_id)
+    except HTTPException as exc:
+        return exc.status_code, {"ok": False, "message": exc.detail}
+
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="propagate_acs",
+        entity_id=olt_id,
+        metadata=stats,
+    )
+    updated = stats["updated"]
+    total = stats["total"]
+    already = stats["already_bound"]
+    if updated:
+        message = (
+            f"ACS binding propagated to {updated} ONTs "
+            f"({already} already bound, {total} total)."
+        )
+    else:
+        message = f"All {total} ONTs already bound to this ACS server."
+    return 200, {"ok": True, "message": message, **stats}
+
+
+def enforce_provisioning(
+    db: Session, olt_id: str, *, request: Request | None = None
+) -> tuple[int, dict[str, Any]]:
+    from app.services.network.provisioning_enforcement import ProvisioningEnforcement
+
+    stats = ProvisioningEnforcement.run_full_enforcement(db, olt_id=olt_id)
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="enforce_provisioning",
+        entity_id=olt_id,
+        metadata=stats,
+    )
+
+    gaps = stats.get("gaps_detected", {})
+    total_gaps = sum(gaps.values()) if isinstance(gaps, dict) else 0
+    if total_gaps == 0:
+        message = "No provisioning gaps detected on this OLT."
+    else:
+        message = f"Provisioning gap scan complete: {total_gaps} gap(s) detected."
+    return 200, {"ok": True, "message": message, **stats}
+
+
+def backfill_pon_ports(
+    db: Session, olt_id: str, *, request: Request | None = None
+) -> tuple[int, dict[str, Any]]:
+    try:
+        stats = olt_service.OLTDevices.backfill_pon_ports(db, olt_id)
+    except HTTPException as exc:
+        return exc.status_code, {"ok": False, "message": exc.detail}
+
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="backfill_pon_ports",
+        entity_id=olt_id,
+        metadata=stats,
+    )
+
+    created = stats["ports_created"]
+    linked = stats["assignments_linked"]
+    total = stats["total_onts"]
+    parts = []
+    if created:
+        parts.append(f"{created} PON ports created")
+    if linked:
+        parts.append(f"{linked} assignments linked")
+    if not parts:
+        message = f"All PON ports already exist for {total} ONTs."
+    else:
+        message = f"{', '.join(parts)} ({total} ONTs on this OLT)."
+    return 200, {"ok": True, "message": message, **stats}
 
 
 def command_preview_context(

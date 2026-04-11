@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -125,6 +126,10 @@ class Tr069CpeDevice(Base):
 
 class Tr069Session(Base):
     __tablename__ = "tr069_sessions"
+    __table_args__ = (
+        Index("ix_tr069_sessions_device_started_at", "device_id", "started_at"),
+        Index("ix_tr069_sessions_created_at", "created_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -148,6 +153,10 @@ class Tr069Session(Base):
 
 class Tr069Parameter(Base):
     __tablename__ = "tr069_parameters"
+    __table_args__ = (
+        UniqueConstraint("device_id", "name", name="uq_tr069_parameters_device_name"),
+        Index("ix_tr069_parameters_device_updated_at", "device_id", "updated_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

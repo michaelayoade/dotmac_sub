@@ -16,6 +16,7 @@ from app.models.network_monitoring import (
     NetworkDevice,
 )
 from app.services.common import coerce_uuid
+from app.services.network.olt_web_topology import ensure_canonical_pon_port
 
 _PON_TOKENS = ("pon", "gpon", "epon", "xgpon", "xgs")
 _ALIAS_PREFIX = "[[alias:"
@@ -354,14 +355,12 @@ def save_alias(
         olt = db.get(OLTDevice, coerce_uuid(olt_id))
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
-        from app.services import web_network_olts as web_network_olts_service
-
         fsp_hint = _extract_pon_hint(interface_name)
         board = None
         port_number = None
         if fsp_hint:
             board, port_number = fsp_hint.rsplit("/", 1)
-        port = web_network_olts_service.ensure_canonical_pon_port(
+        port = ensure_canonical_pon_port(
             db,
             olt_id=olt.id,
             fsp=fsp_hint or interface_name,
@@ -421,14 +420,12 @@ def save_description(
         olt = db.get(OLTDevice, coerce_uuid(olt_id))
         if not olt:
             raise HTTPException(status_code=404, detail="OLT device not found")
-        from app.services import web_network_olts as web_network_olts_service
-
         fsp_hint = _extract_pon_hint(interface_name)
         board = None
         port_number = None
         if fsp_hint:
             board, port_number = fsp_hint.rsplit("/", 1)
-        port = web_network_olts_service.ensure_canonical_pon_port(
+        port = ensure_canonical_pon_port(
             db,
             olt_id=olt.id,
             fsp=fsp_hint or interface_name,

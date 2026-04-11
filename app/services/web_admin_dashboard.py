@@ -499,9 +499,9 @@ def dashboard(request: Request, db: Session):
     # --- VPN tunnel status ---
     vpn_tunnels = []
     try:
-        from app.web.admin.network_monitoring import _get_vpn_tunnel_status
+        from app.services.web_network_monitoring import get_vpn_tunnel_status
 
-        vpn_tunnels = _get_vpn_tunnel_status()
+        vpn_tunnels = get_vpn_tunnel_status()
     except Exception:
         logger.debug("Failed to load VPN tunnel status for dashboard", exc_info=True)
 

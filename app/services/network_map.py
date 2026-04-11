@@ -436,7 +436,6 @@ def build_network_map_context(db: Session) -> dict:
             for device, _ in network_devices
             if device.status and device.status.value in {"degraded", "maintenance"}
         ),
-        "survey_points": 0,
         "onts": len(ont_units),
         "onts_online": ont_online,
         "onts_offline": ont_offline,

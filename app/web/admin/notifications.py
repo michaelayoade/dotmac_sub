@@ -1,7 +1,6 @@
 """Admin notifications management routes."""
 
 import json
-import logging
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, Query, Request, Response
@@ -10,29 +9,14 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.notification import (
-    DeliveryStatus,
-    NotificationChannel,
-    NotificationStatus,
-)
-from app.schemas.notification import (
-    AlertNotificationPolicyCreate,
-    AlertNotificationPolicyStepCreate,
-    AlertNotificationPolicyUpdate,
-    OnCallRotationCreate,
-    OnCallRotationMemberCreate,
-    OnCallRotationUpdate,
-)
-from app.services import notification as notification_service
-from app.services import notification_template_renderer as template_renderer
 from app.services import web_admin_notifications as web_admin_notifications_service
+from app.services import web_notifications as web_notifications_service
 from app.services import (
     web_notifications_alert_policies as web_alert_policies_service,
 )
 from app.services.auth_dependencies import require_permission
 from app.timezone import APP_TIMEZONE_NAME
 
-logger = logging.getLogger(__name__)
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/notifications", tags=["web-admin-notifications"])
 
@@ -75,39 +59,18 @@ def notification_templates_list(
     db: Session = Depends(get_db),
 ):
     """List notification templates."""
-    offset = (page - 1) * per_page
-
-    template_list = notification_service.templates.list(
-        db=db,
-        channel=channel if channel else None,
-        is_active=None,
-        order_by="name",
-        order_dir="asc",
-        limit=per_page,
-        offset=offset,
-    )
-
-    total = notification_service.templates.count(
-        db=db, channel=channel if channel else None
-    )
-    total_pages = (total + per_page - 1) // per_page if total else 1
-
-    channel_counts = notification_service.templates.channel_counts(db)
-
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
         "admin/notifications/templates_list.html",
         {
             "request": request,
-            "templates": template_list,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "channel": channel,
-            "channel_counts": channel_counts,
-            "channels": [c.value for c in NotificationChannel],
+            **web_notifications_service.templates_list_context(
+                db,
+                channel=channel,
+                page=page,
+                per_page=per_page,
+            ),
             "active_page": "notification-templates",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -125,14 +88,12 @@ def notification_template_new(request: Request, db: Session = Depends(get_db)):
     """Create new notification template form."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    state = web_notifications_service.template_form_context(db)
     return templates.TemplateResponse(
         "admin/notifications/template_form.html",
         {
             "request": request,
-            "channels": [c.value for c in NotificationChannel],
-            "action_url": "/admin/notifications/templates",
-            "form_title": "New Notification Template",
-            "submit_label": "Create Template",
+            **(state or {}),
             "active_page": "notification-templates",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -156,17 +117,15 @@ def notification_template_create(
     db: Session = Depends(get_db),
 ):
     """Create a notification template."""
-    from app.schemas.notification import NotificationTemplateCreate
-
     try:
-        payload = NotificationTemplateCreate(
-            name=name.strip(),
-            code=code.strip().lower().replace(" ", "_"),
-            channel=NotificationChannel(channel),
-            subject=subject.strip() if subject else None,
-            body=body.strip(),
+        template = web_notifications_service.create_template(
+            db,
+            name=name,
+            code=code,
+            channel=channel,
+            subject=subject,
+            body=body,
         )
-        template = notification_service.templates.create(db=db, payload=payload)
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template.id}", status_code=303
         )
@@ -177,11 +136,10 @@ def notification_template_create(
             "admin/notifications/template_form.html",
             {
                 "request": request,
-                "channels": [c.value for c in NotificationChannel],
-                "action_url": "/admin/notifications/templates",
-                "form_title": "New Notification Template",
-                "submit_label": "Create Template",
-                "error": str(exc),
+                **(
+                    web_notifications_service.template_form_context(db, error=str(exc))
+                    or {}
+                ),
                 "active_page": "notification-templates",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -202,8 +160,8 @@ def notification_template_detail(
     db: Session = Depends(get_db),
 ):
     """View and edit notification template."""
-    template = notification_service.templates.get(db=db, template_id=str(template_id))
-    if not template:
+    state = web_notifications_service.template_form_context(db, template_id=template_id)
+    if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
             {"request": request, "message": "Template not found"},
@@ -216,11 +174,7 @@ def notification_template_detail(
         "admin/notifications/template_form.html",
         {
             "request": request,
-            "template": template,
-            "channels": [c.value for c in NotificationChannel],
-            "action_url": f"/admin/notifications/templates/{template_id}",
-            "form_title": "Edit Notification Template",
-            "submit_label": "Update Template",
+            **state,
             "active_page": "notification-templates",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -246,39 +200,33 @@ def notification_template_update(
     db: Session = Depends(get_db),
 ):
     """Update a notification template."""
-    from app.schemas.notification import NotificationTemplateUpdate
-
     try:
-        payload = NotificationTemplateUpdate(
-            name=name.strip(),
-            code=code.strip().lower().replace(" ", "_"),
-            channel=NotificationChannel(channel),
-            subject=subject.strip() if subject else None,
-            body=body.strip(),
+        web_notifications_service.update_template(
+            db,
+            template_id=template_id,
+            name=name,
+            code=code,
+            channel=channel,
+            subject=subject,
+            body=body,
             is_active=is_active,
-        )
-        notification_service.templates.update(
-            db=db, template_id=str(template_id), payload=payload
         )
         return RedirectResponse(
             url=f"/admin/notifications/templates/{template_id}", status_code=303
         )
     except Exception as exc:
-        template = notification_service.templates.get(
-            db=db, template_id=str(template_id)
-        )
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
             "admin/notifications/template_form.html",
             {
                 "request": request,
-                "template": template,
-                "channels": [c.value for c in NotificationChannel],
-                "action_url": f"/admin/notifications/templates/{template_id}",
-                "form_title": "Edit Notification Template",
-                "submit_label": "Update Template",
-                "error": str(exc),
+                **(
+                    web_notifications_service.template_form_context(
+                        db, template_id=template_id, error=str(exc)
+                    )
+                    or {}
+                ),
                 "active_page": "notification-templates",
                 "active_menu": "system",
                 "current_user": get_current_user(request),
@@ -301,60 +249,13 @@ def notification_template_test(
     db: Session = Depends(get_db),
 ):
     """Send a test notification using this template."""
-    from app.services import email as email_service
-    from app.services import sms as sms_service
-    from app.services.integrations.connectors import whatsapp as whatsapp_service
-
     try:
-        template = notification_service.templates.get(
-            db=db, template_id=str(template_id)
+        message = web_notifications_service.send_template_test(
+            db,
+            template_id=template_id,
+            test_recipient=test_recipient,
+            test_variables_json=test_variables_json,
         )
-        variables = template_renderer.default_preview_variables()
-        if test_variables_json and test_variables_json.strip():
-            parsed = json.loads(test_variables_json)
-            if not isinstance(parsed, dict):
-                raise ValueError("test_variables_json must be a JSON object")
-            for key, value in parsed.items():
-                variables[str(key)] = "" if value is None else str(value)
-        rendered_subject = template_renderer.render_template_text(
-            template.subject or "Test Notification",
-            variables,
-        )
-        rendered_body = template_renderer.render_template_text(template.body, variables)
-
-        # Send test notification based on channel
-        if template.channel == NotificationChannel.sms:
-            sms_service.send_sms(
-                db=db,
-                to_phone=test_recipient.strip(),
-                body=rendered_body,
-                track=True,
-            )
-            message = f"Test SMS sent to {test_recipient}"
-        elif template.channel == NotificationChannel.email:
-            email_service.send_email(
-                db=db,
-                to_email=test_recipient.strip(),
-                subject=rendered_subject,
-                body_html=rendered_body,
-                activity="notification_test",
-            )
-            message = f"Test email sent to {test_recipient}"
-        elif template.channel == NotificationChannel.whatsapp:
-            result = whatsapp_service.send_text_message(
-                db=db,
-                recipient=test_recipient.strip(),
-                body=rendered_body,
-                dry_run=False,
-            )
-            if not result.get("ok"):
-                raise RuntimeError(
-                    str(result.get("response") or "Failed to send WhatsApp test")
-                )
-            message = f"Test WhatsApp message sent to {test_recipient}"
-        else:
-            message = f"Test notification queued for {template.channel.value}"
-
         if request.headers.get("HX-Request"):
             trigger = {
                 "showToast": {
@@ -389,29 +290,16 @@ def notification_template_preview(
     db: Session = Depends(get_db),
 ):
     """Render template preview with variable substitution."""
-    template = notification_service.templates.get(db=db, template_id=str(template_id))
-    variables = template_renderer.default_preview_variables()
-    if test_variables_json and test_variables_json.strip():
-        parsed = json.loads(test_variables_json)
-        if not isinstance(parsed, dict):
-            raise ValueError("test_variables_json must be a JSON object")
-        for key, value in parsed.items():
-            variables[str(key)] = "" if value is None else str(value)
-
-    rendered_subject = template_renderer.render_template_text(
-        template.subject or "",
-        variables,
-    )
-    rendered_body = template_renderer.render_template_text(template.body, variables)
     return templates.TemplateResponse(
         request,
         "admin/notifications/_template_preview.html",
         {
             "request": request,
-            "rendered_subject": rendered_subject,
-            "rendered_body": rendered_body,
-            "variables": variables,
-            "channel": template.channel.value,
+            **web_notifications_service.render_template_preview(
+                db,
+                template_id=template_id,
+                test_variables_json=test_variables_json,
+            ),
         },
     )
 
@@ -433,7 +321,7 @@ def notification_template_delete(
 ):
     """Delete (deactivate) a notification template."""
     try:
-        notification_service.templates.delete(db=db, template_id=str(template_id))
+        web_notifications_service.delete_template(db, template_id=template_id)
         if request.headers.get("HX-Request"):
             return Response(
                 status_code=200,
@@ -462,45 +350,19 @@ def notification_queue(
     db: Session = Depends(get_db),
 ):
     """View pending and queued notifications."""
-    offset = (page - 1) * per_page
-
-    notifications_list = notification_service.notifications.list(
-        db=db,
-        channel=channel if channel else None,
-        status=status if status else "queued",
-        is_active=True,
-        order_by="created_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
-    )
-
-    effective_status = status if status else "queued"
-    total = notification_service.notifications.count(
-        db=db,
-        channel=channel if channel else None,
-        status=effective_status,
-    )
-    total_pages = (total + per_page - 1) // per_page if total else 1
-
-    status_counts = notification_service.notifications.status_counts(db)
-
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
         "admin/notifications/queue.html",
         {
             "request": request,
-            "notifications": notifications_list,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "status": status or "queued",
-            "channel": channel,
-            "status_counts": status_counts,
-            "channels": [c.value for c in NotificationChannel],
-            "statuses": [s.value for s in NotificationStatus],
+            **web_notifications_service.queue_context(
+                db,
+                status=status,
+                channel=channel,
+                page=page,
+                per_page=per_page,
+            ),
             "active_page": "notification-queue",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -523,39 +385,19 @@ def notification_history(
     db: Session = Depends(get_db),
 ):
     """View notification delivery history."""
-    offset = (page - 1) * per_page
-
-    deliveries = notification_service.deliveries.list(
-        db=db,
-        notification_id=None,
-        status=status if status else None,
-        is_active=True,
-        order_by="occurred_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
-    )
-
-    total = notification_service.deliveries.count(
-        db=db,
-        status=status if status else None,
-    )
-    total_pages = (total + per_page - 1) // per_page if total else 1
-
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
         "admin/notifications/history.html",
         {
             "request": request,
-            "deliveries": deliveries,
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "total_pages": total_pages,
-            "status": status,
-            "channel": channel,
-            "statuses": [s.value for s in DeliveryStatus],
+            **web_notifications_service.history_context(
+                db,
+                status=status,
+                channel=channel,
+                page=page,
+                per_page=per_page,
+            ),
             "active_page": "notification-history",
             "active_menu": "system",
             "current_user": get_current_user(request),
@@ -642,20 +484,16 @@ def alert_policy_create(
     db: Session = Depends(get_db),
 ):
     """Create an alert notification policy."""
-    from app.models.network_monitoring import AlertSeverity
-
     try:
-        payload = AlertNotificationPolicyCreate(
-            name=name.strip(),
-            channel=NotificationChannel(channel),
-            recipient=recipient.strip(),
-            severity_min=AlertSeverity(severity_min),
-            template_id=UUID(template_id) if template_id else None,
-            notes=notes.strip() if notes else None,
-            is_active=is_active is not None,
-        )
-        policy = notification_service.alert_notification_policies.create(
-            db=db, payload=payload
+        policy = web_alert_policies_service.create_alert_policy(
+            db,
+            name=name,
+            channel=channel,
+            recipient=recipient,
+            severity_min=severity_min,
+            template_id=template_id,
+            notes=notes,
+            is_active=is_active,
         )
         return RedirectResponse(
             url=f"/admin/notifications/alert-policies/{policy.id}",
@@ -739,20 +577,17 @@ def alert_policy_update(
     db: Session = Depends(get_db),
 ):
     """Update an alert notification policy."""
-    from app.models.network_monitoring import AlertSeverity
-
     try:
-        payload = AlertNotificationPolicyUpdate(
-            name=name.strip(),
-            channel=NotificationChannel(channel),
-            recipient=recipient.strip(),
-            severity_min=AlertSeverity(severity_min),
-            template_id=UUID(template_id) if template_id else None,
-            notes=notes.strip() if notes else None,
-            is_active=is_active is not None,
-        )
-        notification_service.alert_notification_policies.update(
-            db=db, policy_id=str(policy_id), payload=payload
+        web_alert_policies_service.update_alert_policy(
+            db,
+            policy_id=policy_id,
+            name=name,
+            channel=channel,
+            recipient=recipient,
+            severity_min=severity_min,
+            template_id=template_id,
+            notes=notes,
+            is_active=is_active,
         )
         return RedirectResponse(
             url=f"/admin/notifications/alert-policies/{policy_id}",
@@ -789,9 +624,7 @@ def alert_policy_update(
 )
 def alert_policy_delete(policy_id: UUID, db: Session = Depends(get_db)):
     """Delete an alert notification policy."""
-    notification_service.alert_notification_policies.delete(
-        db=db, policy_id=str(policy_id)
-    )
+    web_alert_policies_service.delete_alert_policy(db, policy_id=policy_id)
     return RedirectResponse(url="/admin/notifications/alert-policies", status_code=303)
 
 
@@ -811,24 +644,15 @@ def alert_policy_step_create(
     db: Session = Depends(get_db),
 ):
     """Add an escalation step to an alert policy."""
-    try:
-        payload = AlertNotificationPolicyStepCreate(
-            policy_id=policy_id,
-            step_index=step_index,
-            delay_minutes=delay_minutes,
-            channel=NotificationChannel(step_channel),
-            recipient=step_recipient.strip() if step_recipient else None,
-            rotation_id=UUID(step_rotation_id) if step_rotation_id else None,
-        )
-        notification_service.alert_notification_policy_steps.create(
-            db=db, payload=payload
-        )
-    except Exception:
-        logger.warning(
-            "Failed to create alert policy step for policy %s",
-            policy_id,
-            exc_info=True,
-        )  # Redirect back regardless
+    web_alert_policies_service.create_alert_policy_step(
+        db,
+        policy_id=policy_id,
+        step_index=step_index,
+        delay_minutes=delay_minutes,
+        step_channel=step_channel,
+        step_recipient=step_recipient,
+        step_rotation_id=step_rotation_id,
+    )
     return RedirectResponse(
         url=f"/admin/notifications/alert-policies/{policy_id}",
         status_code=303,
@@ -846,9 +670,7 @@ def alert_policy_step_delete(
     db: Session = Depends(get_db),
 ):
     """Delete an escalation step."""
-    notification_service.alert_notification_policy_steps.delete(
-        db=db, step_id=str(step_id)
-    )
+    web_alert_policies_service.delete_alert_policy_step(db, step_id=step_id)
     return RedirectResponse(
         url=f"/admin/notifications/alert-policies/{policy_id}",
         status_code=303,
@@ -904,12 +726,12 @@ def oncall_rotation_create(
 ):
     """Create an on-call rotation."""
     try:
-        payload = OnCallRotationCreate(
-            name=name.strip(),
-            timezone=timezone.strip(),
-            notes=notes.strip() if notes else None,
+        rotation = web_alert_policies_service.create_oncall_rotation(
+            db,
+            name=name,
+            timezone=timezone,
+            notes=notes,
         )
-        rotation = notification_service.on_call_rotations.create(db=db, payload=payload)
         return RedirectResponse(
             url=f"/admin/notifications/oncall-rotations/{rotation.id}",
             status_code=303,
@@ -986,14 +808,13 @@ def oncall_rotation_update(
 ):
     """Update an on-call rotation."""
     try:
-        payload = OnCallRotationUpdate(
-            name=name.strip(),
-            timezone=timezone.strip(),
-            notes=notes.strip() if notes else None,
-            is_active=is_active is not None,
-        )
-        notification_service.on_call_rotations.update(
-            db=db, rotation_id=str(rotation_id), payload=payload
+        web_alert_policies_service.update_oncall_rotation(
+            db,
+            rotation_id=rotation_id,
+            name=name,
+            timezone=timezone,
+            notes=notes,
+            is_active=is_active,
         )
         return RedirectResponse(
             url=f"/admin/notifications/oncall-rotations/{rotation_id}",
@@ -1027,7 +848,7 @@ def oncall_rotation_update(
 )
 def oncall_rotation_delete(rotation_id: UUID, db: Session = Depends(get_db)):
     """Delete an on-call rotation."""
-    notification_service.on_call_rotations.delete(db=db, rotation_id=str(rotation_id))
+    web_alert_policies_service.delete_oncall_rotation(db, rotation_id=rotation_id)
     return RedirectResponse(
         url="/admin/notifications/oncall-rotations", status_code=303
     )
@@ -1047,20 +868,13 @@ def oncall_rotation_member_create(
     db: Session = Depends(get_db),
 ):
     """Add a member to an on-call rotation."""
-    try:
-        payload = OnCallRotationMemberCreate(
-            rotation_id=rotation_id,
-            name=member_name.strip(),
-            contact=member_contact.strip(),
-            priority=member_priority,
-        )
-        notification_service.on_call_rotation_members.create(db=db, payload=payload)
-    except Exception:
-        logger.warning(
-            "Failed to create on-call rotation member for rotation %s",
-            rotation_id,
-            exc_info=True,
-        )  # Redirect back regardless
+    web_alert_policies_service.create_oncall_rotation_member(
+        db,
+        rotation_id=rotation_id,
+        member_name=member_name,
+        member_contact=member_contact,
+        member_priority=member_priority,
+    )
     return RedirectResponse(
         url=f"/admin/notifications/oncall-rotations/{rotation_id}",
         status_code=303,
@@ -1078,9 +892,7 @@ def oncall_rotation_member_delete(
     db: Session = Depends(get_db),
 ):
     """Remove a member from an on-call rotation."""
-    notification_service.on_call_rotation_members.delete(
-        db=db, member_id=str(member_id)
-    )
+    web_alert_policies_service.delete_oncall_rotation_member(db, member_id=member_id)
     return RedirectResponse(
         url=f"/admin/notifications/oncall-rotations/{rotation_id}",
         status_code=303,

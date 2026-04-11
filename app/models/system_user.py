@@ -8,6 +8,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 from app.models.subscriber import UserType
 
+SystemUserType = UserType
+
 
 class SystemUser(Base):
     __tablename__ = "system_users"

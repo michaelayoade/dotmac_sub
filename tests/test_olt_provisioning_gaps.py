@@ -19,13 +19,11 @@ from typing import cast
 from starlette.routing import Route
 
 from app.models.network import (
-    OltCard,
-    OltCardPort,
-    OltShelf,
     OLTDevice,
     OntAssignment,
     OntProvisioningProfile,
     OntUnit,
+    OnuOnlineStatus,
     PonPort,
     PppoePasswordMode,
     Splitter,
@@ -34,6 +32,7 @@ from app.models.network import (
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber, SubscriberCategory
+from app.services.network import olt_authorization_workflow
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
     OltCommandSet,
@@ -53,7 +52,6 @@ from app.services.network.vlan_chain import (
     VlanChainWarning,
     validate_chain,
 )
-from app.services.network import olt_authorization_workflow
 
 
 def _create_business_subscriber(db_session) -> Subscriber:
@@ -124,7 +122,8 @@ def test_authorize_autofind_logs_disappeared_candidate_after_refresh(
     db_session.refresh(olt)
 
     monkeypatch.setattr(
-        "app.services.web_network_olts.get_olt_or_none",
+        olt_authorization_workflow,
+        "get_olt_or_none",
         lambda *_args, **_kwargs: olt,
     )
     monkeypatch.setattr(
@@ -180,7 +179,8 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     db_session.commit()
 
     monkeypatch.setattr(
-        "app.services.web_network_olts.get_olt_or_none",
+        olt_authorization_workflow,
+        "get_olt_or_none",
         lambda *_args, **_kwargs: olt,
     )
     monkeypatch.setattr(
@@ -192,11 +192,36 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
         ),
     )
     monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles",
+        lambda *_args, **_kwargs: (
+            True,
+            "Resolved OLT profiles from live inventory.",
+            SimpleNamespace(
+                line_profile_id=40,
+                service_profile_id=44,
+                message="Resolved OLT profiles from live inventory.",
+                warnings=[],
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.ensure_ont_service_profile_match",
+        lambda *_args, **_kwargs: (
+            True,
+            "ONT service profile already matches live capability.",
+        ),
+    )
+    monkeypatch.setattr(
         "app.services.network.olt_write_reconciliation.verify_ont_authorized",
         lambda *_args, **_kwargs: SimpleNamespace(
             success=True,
             message="Verified ONT HWTC-8535819A on 0/1/3.",
-            details={"ont_id": 9, "fsp": "0/1/3", "serial_number": "HWTC8535819A"},
+            details={
+                "ont_id": 9,
+                "fsp": "0/1/3",
+                "serial_number": "HWTC8535819A",
+                "run_state": "online",
+            },
         ),
     )
     monkeypatch.setattr(
@@ -219,6 +244,92 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     assert any(
         "already registered on the OLT" in step.message for step in result.steps
     )
+    db_session.refresh(candidate)
+    assert candidate.is_active is False
+    assert candidate.resolution_reason == "authorized"
+    assert candidate.ont_unit_id is not None
+    assert any(step.name == "Resolve autofind candidate" for step in result.steps)
+    ont = db_session.get(OntUnit, candidate.ont_unit_id)
+    assert ont is not None
+    assert ont.online_status == OnuOnlineStatus.online
+    assert ont.offline_reason is None
+    assert ont.last_seen_at is not None
+    assert ont.last_sync_source == "olt_ssh_readback"
+
+
+def test_post_authorization_binds_resolved_tr069_profile_id(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(name="Resolved ACS OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    bound: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "ensure_assignment_and_pon_port_for_authorized_ont",
+        lambda *_args, **_kwargs: (True, "assignment ok"),
+    )
+    targeted_sync: dict[str, object] = {}
+
+    def fake_targeted_sync(_db, **kwargs):
+        targeted_sync.update(kwargs)
+        return True, "targeted sync ok", {"matched_index": "4194312960.9"}
+
+    monkeypatch.setattr(
+        "app.services.network.olt_targeted_sync.sync_authorized_ont_from_olt_snmp",
+        fake_targeted_sync,
+    )
+    monkeypatch.setattr(
+        "app.services.web_network_ont_autofind.resolve_candidate_authorized",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_tr069_admin.ensure_tr069_profile_for_linked_acs",
+        lambda _olt: (True, "TR-069 profile already exists: DotMac-ACS (ID 7)", 7),
+    )
+
+    def fake_bind(_olt, fsp, ont_id_on_olt, profile_id):
+        bound["fsp"] = fsp
+        bound["ont_id_on_olt"] = ont_id_on_olt
+        bound["profile_id"] = profile_id
+        return True, f"profile {profile_id} bound"
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.bind_tr069_server_profile",
+        fake_bind,
+    )
+
+    ont_unit_id = str(uuid.uuid4())
+    ok, message, steps = olt_authorization_workflow.run_post_authorization_follow_up(
+        db_session,
+        ont_unit_id=ont_unit_id,
+        olt_id=str(olt.id),
+        fsp="0/1/3",
+        serial_number="HWTC8535819A",
+        ont_id_on_olt=9,
+    )
+
+    assert ok is True
+    assert message == "Post-authorization sync completed successfully."
+    assert targeted_sync == {
+        "olt_id": str(olt.id),
+        "ont_unit_id": ont_unit_id,
+        "fsp": "0/1/3",
+        "serial_number": "HWTC8535819A",
+        "ont_id_on_olt": 9,
+    }
+    assert bound == {"fsp": "0/1/3", "ont_id_on_olt": 9, "profile_id": 7}
+    assert any(step["name"] == "Verify DotMac ACS profile" for step in steps)
+    assert any(step["name"] == "Bind DotMac ACS profile" for step in steps)
+
 
 # ---------------------------------------------------------------------------
 # Phase 1: Service-port SSH parsing and filtering
@@ -453,6 +564,18 @@ class TestHuaweiCommandGenerator:
         cmds = result[0].commands
         assert any("interface gpon 0/2" in c for c in cmds)
         assert any("dhcp vlan 100" in c for c in cmds)
+
+    def test_iphost_dhcp_commands_include_priority_when_set(self) -> None:
+        ctx = self._make_context()
+        spec = ProvisioningSpec(
+            mgmt_vlan_tag=100,
+            mgmt_ip_mode="dhcp",
+            mgmt_priority=2,
+        )
+        result = HuaweiCommandGenerator.generate_iphost_commands(spec, ctx)
+
+        assert len(result) == 1
+        assert any("dhcp vlan 100 priority 2" in c for c in result[0].commands)
 
     def test_iphost_static_commands(self) -> None:
         ctx = self._make_context()
@@ -753,6 +876,83 @@ class TestOltProfileParsing:
         assert entry.type == ""
         assert entry.binding_count == 0
         assert entry.extra == {}
+
+    def test_line_profile_tr069_detail_parser(self) -> None:
+        from app.services.network.olt_profile_resolution import (
+            parse_line_profile_tr069_enabled,
+        )
+
+        output = "TR069 management      : Enable\nTR069 IP index        : 0\n"
+
+        assert parse_line_profile_tr069_enabled(output) is True
+
+    def test_service_profile_matching_prefers_capability_over_name(self) -> None:
+        from app.services.network.olt_profile_resolution import (
+            OntCapabilityCounts,
+            ServiceProfileDetail,
+            choose_service_profile,
+        )
+
+        profiles = [
+            ServiceProfileDetail(
+                profile_id=41,
+                name="EG8145V5",
+                ethernet_ports=4,
+                voip_ports=2,
+                binding_count=100,
+            ),
+            ServiceProfileDetail(
+                profile_id=44,
+                name="Residential-4GE-1POTS",
+                ethernet_ports=4,
+                voip_ports=1,
+                binding_count=10,
+            ),
+        ]
+
+        selected = choose_service_profile(
+            profiles,
+            capability=OntCapabilityCounts(ethernet_ports=4, voip_ports=1),
+            model="EG8145V5",
+        )
+
+        assert selected is not None
+        assert selected.profile_id == 44
+
+    def test_authorize_ont_refuses_static_profile_defaults(self) -> None:
+        from app.models.network import OLTDevice
+        from app.services.network.olt_ssh import authorize_ont
+
+        ok, msg, ont_id = authorize_ont(
+            OLTDevice(name="No Defaults OLT", vendor="Huawei", model="MA5608T"),
+            "0/1/13",
+            "HWTC-348F8A84",
+        )
+
+        assert ok is False
+        assert ont_id is None
+        assert "refusing to use static profile defaults" in msg
+
+    def test_parse_huawei_iphost_config_output(self) -> None:
+        from app.services.network.olt_ssh_ont import parse_iphost_config_output
+
+        output = """
+  ONT IP host index        : 0
+  ONT config type          : DHCP
+  ONT IP                   : -
+  ONT MAC                  : 9C74-1A3F-98C6
+  ONT manage VLAN          : 201
+  ONT manage priority      : 5
+"""
+
+        config = parse_iphost_config_output(output)
+
+        assert config["ip_index"] == "0"
+        assert config["mode"] == "DHCP"
+        assert config["ip_address"] == "-"
+        assert config["mac_address"] == "9C74-1A3F-98C6"
+        assert config["vlan"] == "201"
+        assert config["priority"] == "5"
 
 
 # ---------------------------------------------------------------------------
@@ -1192,11 +1392,15 @@ class TestRouteRegistration:
     def test_new_routes_registered(self) -> None:
         from app.web.admin.network_olts_onts import router
         from app.web.admin.network_onts_actions import router as actions_router
+        from app.web.admin.network_onts_inventory import router as inventory_router
 
         # Collect paths from both routers (main routes + action routes)
         route_paths = [route.path for route in router.routes if isinstance(route, Route)]
+        inventory_paths = [
+            route.path for route in inventory_router.routes if isinstance(route, Route)
+        ]
         action_paths = [route.path for route in actions_router.routes if isinstance(route, Route)]
-        all_paths = route_paths + action_paths
+        all_paths = route_paths + inventory_paths + action_paths
 
         # Phase 1: Service-port routes
         assert "/network/onts/{ont_id}/service-ports" in route_paths
@@ -1212,6 +1416,7 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/location-details" in route_paths
         assert "/network/onts/{ont_id}/device-info" in route_paths
         assert "/network/onts/{ont_id}/gpon-channel" in route_paths
+        assert "/network/onts/{ont_id}/edit" not in all_paths
 
         # Phase 3: OLT profile routes remain, provisioning UI routes do not
         assert "/network/olts/{olt_id}/profiles/line" in route_paths
@@ -1240,10 +1445,11 @@ class TestProvisioningUiTemplates:
         assert "Address or comment" in template
         assert "Contact" in template
 
-    def test_ont_detail_template_includes_live_device_and_gpon_modals(self) -> None:
+    def test_ont_detail_template_locks_discovered_device_info(self) -> None:
         template = Path("templates/admin/network/onts/detail.html").read_text()
 
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/device-info"' in template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/device-info"' not in template
+        assert "/admin/network/onts/{{ ont.id }}/edit" not in template
         assert 'hx-get="/admin/network/onts/{{ ont.id }}/gpon-channel"' in template
         assert "Board" in template
         assert "GPON Channel" in template

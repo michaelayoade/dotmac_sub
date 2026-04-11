@@ -628,7 +628,6 @@
     let planCustomerLatLng = null;
     let planEstimate = null;
     let planMessage = null;
-    let planSaveMessage = null;
     const allMarkers = [];
     const allFeatures = [];  // For search functionality
 
@@ -913,7 +912,6 @@
         planEstimate = null;
         planTraceMode = false;
         planMessage = null;
-        planSaveMessage = null;
         renderPlanIntro();
     }
 
@@ -1006,27 +1004,15 @@
         ` : '';
 
         const messageHtml = planMessage ? `<div class="mt-3 text-xs text-amber-600 dark:text-amber-400">${escapeHtml(planMessage)}</div>` : '';
-        const saveMessageHtml = planSaveMessage ? `<div class="mt-3 text-xs text-emerald-600 dark:text-emerald-400">${escapeHtml(planSaveMessage)}</div>` : '';
         const estimateHtml = planEstimate
             ? buildEstimateHtml(planEstimate.distance_m, planEstimate.distance_display, planEstimate.route_label)
             : '';
-        const saveHtml = (planLine || traceLine) ? `
-            <div class="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-600 dark:bg-slate-900">
-                <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300">Save plan to quote</label>
-                <div class="mt-2 flex gap-2">
-                    <input id="plan-quote-id" type="text" placeholder="Quote ID" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 focus:border-violet-400 focus:outline-none dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
-                    <button id="btn-save-plan" class="shrink-0 rounded-lg bg-gradient-to-r from-violet-500 to-purple-600 px-4 py-2 text-xs font-semibold text-white shadow-sm hover:shadow-md transition-all">Save</button>
-                </div>
-                ${saveMessageHtml}
-            </div>
-        ` : '';
 
         content.innerHTML = `
             ${optionsHtml}
             ${selectedHtml}
             ${messageHtml}
             ${estimateHtml}
-            ${saveHtml}
         `;
 
         document.querySelectorAll('[data-cabinet-id]').forEach(button => {
@@ -1043,56 +1029,12 @@
         if (traceBtn) traceBtn.addEventListener('click', () => toggleTraceMode());
         const clearBtn = document.getElementById('btn-plan-clear');
         if (clearBtn) clearBtn.addEventListener('click', () => clearPlanMarkers());
-        const saveBtn = document.getElementById('btn-save-plan');
-        if (saveBtn) saveBtn.addEventListener('click', () => savePlanToQuote());
-    }
-
-    function buildPlanGeojson() {
-        const routeLine = planLine || traceLine;
-        if (!routeLine) return null;
-        const latlngs = routeLine.getLatLngs();
-        if (!latlngs || latlngs.length < 2) return null;
-        const coords = latlngs.map(latlng => [latlng.lng, latlng.lat]);
-        return { type: 'LineString', coordinates: coords };
-    }
-
-    async function savePlanToQuote() {
-        const quoteIdInput = document.getElementById('plan-quote-id');
-        const quoteId = quoteIdInput ? quoteIdInput.value.trim() : '';
-        const geojson = buildPlanGeojson();
-        if (!quoteId) {
-            planSaveMessage = 'Quote ID is required to save.';
-            renderPlanPanel();
-            return;
-        }
-        if (!geojson) {
-            planSaveMessage = 'No route available to save.';
-            renderPlanPanel();
-            return;
-        }
-        planSaveMessage = 'Saving plan...';
-        renderPlanPanel();
-        try {
-            const lengthMeters = planEstimate ? planEstimate.distance_m : null;
-            const response = await fetch('/admin/network/fiber-map/save-plan', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ quote_id: quoteId, geojson, length_meters: lengthMeters })
-            });
-            const data = await response.json();
-            if (!response.ok) throw new Error(data.error || 'Failed to save plan');
-            planSaveMessage = `Saved as revision ${data.revision_number}.`;
-        } catch (e) {
-            planSaveMessage = e.message || 'Failed to save plan.';
-        }
-        renderPlanPanel();
     }
 
     function selectCabinet(cabinet) {
         selectedCabinet = cabinet;
         planEstimate = null;
         planMessage = null;
-        planSaveMessage = null;
         if (planLine) { map.removeLayer(planLine); planLine = null; }
         if (traceLine) { map.removeLayer(traceLine); traceLine = null; }
         traceMarkers.forEach(marker => map.removeLayer(marker));

@@ -44,7 +44,9 @@ def discover_all_olt_onts() -> dict[str, int]:
                 "skipped_due_to_lock": 1,
             }
 
-        from app.services.web_network_olts import sync_onts_from_olt_snmp_tracked
+        from app.services.network.olt_snmp_sync import (
+            sync_onts_from_olt_snmp_tracked,
+        )
 
         olts = list(
             db.scalars(select(OLTDevice).where(OLTDevice.is_active.is_(True))).all()

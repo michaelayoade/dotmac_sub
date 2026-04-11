@@ -8,7 +8,6 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_network_speed_profiles as web_speed_profiles_service
 from app.services.auth_dependencies import require_permission
-from app.services.network.speed_profiles import speed_profiles
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -153,7 +152,7 @@ def speed_profile_update(
     """Handle speed profile update."""
     # Verify the profile exists
     try:
-        speed_profiles.get(db, profile_id)
+        web_speed_profiles_service.ensure_profile_exists(db, profile_id)
     except Exception:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -197,9 +196,7 @@ def speed_profile_delete(
 ) -> Response:
     """Handle speed profile soft-delete."""
     try:
-        profile = speed_profiles.get(db, profile_id)
-        direction_value = profile.direction.value
-        speed_profiles.delete(db, profile_id)
+        direction = web_speed_profiles_service.handle_delete(db, profile_id)
     except Exception:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -207,6 +204,6 @@ def speed_profile_delete(
             status_code=404,
         )
     return RedirectResponse(
-        url=f"/admin/network/speed-profiles?direction={direction_value}",
+        url=f"/admin/network/speed-profiles?direction={direction.value}",
         status_code=303,
     )

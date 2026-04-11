@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Bulk TR-069 profile rebind for SmartOLT → GenieACS migration.
+"""Bulk TR-069 profile rebind for ACS migration.
 
-Rebinds ONTs from their current TR-069 server profile to the DotMac ACS
-profile on each OLT, triggering a reset so ONTs register with GenieACS.
+Rebinds ONTs from their current TR-069 server profile to each OLT's linked
+ACS profile, triggering a reset so ONTs register with the configured ACS.
 
-Auto-detects the DotMac ACS profile per OLT by name/URL match.  If the
-profile doesn't exist yet, it is auto-created (matching the web UI's
-"Init TR-069" behaviour).
+Auto-detects the linked ACS profile per OLT by URL/username match. If the
+profile doesn't exist yet, it is auto-created using the same service as the
+web UI's "Init TR-069" behaviour.
 
 Uses a single SSH session per OLT for efficiency (vs one connection per ONT).
 Writes a checkpoint file per OLT so interrupted runs can be safely resumed.
@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
@@ -67,14 +67,6 @@ logger = logging.getLogger("bulk_rebind")
 
 # Checkpoint directory for resume capability
 CHECKPOINT_DIR = Path("scripts/migration/.rebind_checkpoints")
-
-# Default ACS config (matches web_network_olts.py Init TR-069 behaviour)
-DEFAULT_ACS_PROFILE_NAME = "DotMac-ACS"
-DEFAULT_ACS_URL = "http://10.10.41.1:7547"
-DEFAULT_ACS_USERNAME = "acs"
-DEFAULT_ACS_PASSWORD = "acs"  # noqa: S105
-DEFAULT_ACS_INFORM_INTERVAL = 300
-
 
 class OntBatchItem(TypedDict):
     serial_number: str
@@ -235,59 +227,55 @@ def _preflight_check_olt(
 # ── Profile resolution ────────────────────────────────────────────────
 
 
-def _resolve_dotmac_profile(
+def _resolve_linked_acs_profile(
     olt: OLTDevice,
     *,
     auto_create: bool = False,
 ) -> tuple[int | None, str]:
-    """Find the DotMac ACS TR-069 profile ID on this OLT.
+    """Find or create the TR-069 profile for this OLT's linked ACS.
 
-    Matches by name (contains "dotmac") or ACS URL (contains the default
-    ACS host).  If no match is found and ``auto_create`` is True, creates
-    the profile using the default ACS config.
+    If no match is found and ``auto_create`` is True, creates/verifies the
+    profile using the shared OLT TR-069 admin service.
 
     Returns:
         (profile_id, message) — profile_id is None if not found/created.
     """
     from app.services.network.olt_ssh_profiles import get_tr069_server_profiles
+    from app.services.network.olt_tr069_admin import (
+        ensure_tr069_profile_for_linked_acs,
+        linked_acs_profile_payload,
+    )
+    from app.services.network.tr069_profile_matching import match_tr069_profile
 
-    acs_host = DEFAULT_ACS_URL.split("//", 1)[-1].split(":")[0]  # "10.10.41.1"
+    payload = linked_acs_profile_payload(olt)
+    if payload is None:
+        return None, "No linked ACS configured on OLT"
 
     ok, msg, profiles = get_tr069_server_profiles(olt)
     if not ok:
         return None, f"Cannot list profiles: {msg}"
 
-    # Search existing profiles
-    for p in profiles:
-        if "dotmac" in p.name.lower() or acs_host in (p.acs_url or ""):
-            return p.profile_id, f"Found profile '{p.name}' (ID {p.profile_id})"
+    existing = match_tr069_profile(
+        profiles,
+        acs_url=payload["acs_url"],
+        acs_username=payload["username"],
+    )
+    if existing is not None:
+        return (
+            existing.profile_id,
+            f"Found linked ACS profile '{existing.name}' (ID {existing.profile_id})",
+        )
 
     if not auto_create:
         names = ", ".join(f"{p.name}(ID {p.profile_id})" for p in profiles) or "(none)"
-        return None, f"No DotMac ACS profile found. Existing: {names}"
+        return None, f"No linked ACS profile found. Existing: {names}"
 
-    # Auto-create
-    from app.services.network.olt_ssh import create_tr069_server_profile
-
-    ok, create_msg = create_tr069_server_profile(
-        olt,
-        profile_name=DEFAULT_ACS_PROFILE_NAME,
-        acs_url=DEFAULT_ACS_URL,
-        username=DEFAULT_ACS_USERNAME,
-        password=DEFAULT_ACS_PASSWORD,
-        inform_interval=DEFAULT_ACS_INFORM_INTERVAL,
-    )
+    ok, create_msg, profile_id = ensure_tr069_profile_for_linked_acs(olt)
     if not ok:
         return None, f"Auto-create failed: {create_msg}"
-
-    # Re-query to get the assigned profile ID
-    ok, _msg2, profiles2 = get_tr069_server_profiles(olt)
-    if ok:
-        for p in profiles2:
-            if "dotmac" in p.name.lower() or acs_host in (p.acs_url or ""):
-                return p.profile_id, f"Auto-created profile '{p.name}' (ID {p.profile_id})"
-
-    return None, "Profile created but could not verify ID"
+    if profile_id is None:
+        return None, "Profile created but could not verify ID"
+    return profile_id, f"Auto-created linked ACS profile (ID {profile_id})"
 
 
 # ── Batch rebind ───────────────────────────────────────────────────────────
@@ -466,14 +454,14 @@ def run(
 
     Args:
         db: Database session.
-        profile_id: Target TR-069 OLT profile ID.  If None, auto-detects
-            the DotMac ACS profile per OLT by name/URL match.
+        profile_id: Target TR-069 OLT profile ID. If None, auto-detects
+            each OLT's linked ACS profile by URL/username match.
         olt_name: If set, only rebind ONTs on this OLT.
         dry_run: If True, log commands but don't execute.
         limit: Max ONTs per OLT (for staged rollout).
         resume: If True, load checkpoint and skip already-rebound ONTs.
         skip_preflight: If True, skip SSH/profile verification.
-        auto_create_profile: If True and the DotMac ACS profile doesn't
+        auto_create_profile: If True and the linked ACS profile doesn't
             exist on an OLT, create it automatically.
 
     Returns:
@@ -486,7 +474,7 @@ def run(
         OLTDevice.mgmt_ip.isnot(None),
         OLTDevice.ssh_username.isnot(None),
         OLTDevice.ssh_password.isnot(None),
-    )
+    ).options(joinedload(OLTDevice.tr069_acs_server))
     if olt_name:
         olt_stmt = olt_stmt.where(OLTDevice.name == olt_name)
     olts = db.scalars(olt_stmt).all()
@@ -505,8 +493,8 @@ def run(
             olt_profile_id = profile_id
             logger.info("  Using explicit profile ID %d", olt_profile_id)
         else:
-            logger.info("  Auto-detecting DotMac ACS profile...")
-            resolved_id, resolve_msg = _resolve_dotmac_profile(
+            logger.info("  Auto-detecting linked ACS profile...")
+            resolved_id, resolve_msg = _resolve_linked_acs_profile(
                 olt, auto_create=auto_create_profile and not dry_run,
             )
             if resolved_id is None:
@@ -742,7 +730,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--no-auto-create", action="store_true",
-        help="Don't auto-create the DotMac ACS profile on OLTs that lack it",
+        help="Don't auto-create the linked ACS profile on OLTs that lack it",
     )
     parser.add_argument(
         "--verify", action="store_true",
@@ -767,7 +755,7 @@ def main() -> None:
         if args.profile_id:
             logger.info("Profile ID: %d (explicit override)", args.profile_id)
         else:
-            logger.info("Profile: auto-detect per OLT (DotMac ACS by name/URL)")
+            logger.info("Profile: auto-detect per OLT (linked ACS by URL/username)")
             if not args.no_auto_create:
                 logger.info("Auto-create: ON (will create profile on OLTs that lack it)")
         if args.olt:

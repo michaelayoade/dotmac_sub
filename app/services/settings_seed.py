@@ -2074,22 +2074,6 @@ def seed_wireguard_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("WIREGUARD_TOKEN_CLEANUP_INTERVAL_SECONDS", "3600"),
     )
-    # Peer stats sync settings
-    stats_sync_enabled = os.getenv("WIREGUARD_PEER_STATS_SYNC_ENABLED", "true")
-    network_settings.ensure_by_key(
-        db,
-        key="wireguard_peer_stats_sync_enabled",
-        value_type=SettingValueType.boolean,
-        value_text=stats_sync_enabled,
-        value_json=stats_sync_enabled.lower() in {"1", "true", "yes", "on"},
-    )
-    network_settings.ensure_by_key(
-        db,
-        key="wireguard_peer_stats_sync_interval_seconds",
-        value_type=SettingValueType.integer,
-        value_text=os.getenv("WIREGUARD_PEER_STATS_SYNC_INTERVAL_SECONDS", "300"),
-    )
-
     # VPN Server Defaults
     network_settings.ensure_by_key(
         db,

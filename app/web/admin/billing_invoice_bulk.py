@@ -9,30 +9,9 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.services import web_billing_invoice_bulk as web_billing_invoice_bulk_service
 from app.services import web_billing_overview as web_billing_overview_service
-from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
 
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
-
-
-def _log_bulk_audit_events(
-    *,
-    db: Session,
-    request: Request,
-    action: str,
-    entity_type: str,
-    entity_ids: list[str],
-    actor_id: str | None,
-) -> None:
-    for entity_id in entity_ids:
-        log_audit_event(
-            db=db,
-            request=request,
-            action=action,
-            entity_type=entity_type,
-            entity_id=entity_id,
-            actor_id=actor_id,
-        )
 
 
 @router.post(
@@ -44,23 +23,12 @@ def invoice_bulk_issue(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    updated_ids = web_billing_invoice_bulk_service.execute_bulk_action(
+    updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
         action="issue",
         invoice_ids_csv=invoice_ids,
     )
     count = len(updated_ids)
-    _log_bulk_audit_events(
-        db=db,
-        request=request,
-        action="issue",
-        entity_type="invoice",
-        entity_ids=updated_ids,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-    )
     return JSONResponse({"message": f"Issued {count} invoices", "count": count})
 
 
@@ -73,23 +41,12 @@ def invoice_bulk_send(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    queued_ids = web_billing_invoice_bulk_service.execute_bulk_action(
+    queued_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
         action="send",
         invoice_ids_csv=invoice_ids,
     )
     count = len(queued_ids)
-    _log_bulk_audit_events(
-        db=db,
-        request=request,
-        action="send",
-        entity_type="invoice",
-        entity_ids=queued_ids,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-    )
     return JSONResponse(
         {"message": f"Queued {count} invoice notifications", "count": count}
     )
@@ -104,23 +61,12 @@ def invoice_bulk_void(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    updated_ids = web_billing_invoice_bulk_service.execute_bulk_action(
+    updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
         action="void",
         invoice_ids_csv=invoice_ids,
     )
     count = len(updated_ids)
-    _log_bulk_audit_events(
-        db=db,
-        request=request,
-        action="void",
-        entity_type="invoice",
-        entity_ids=updated_ids,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-    )
     return JSONResponse({"message": f"Voided {count} invoices", "count": count})
 
 
@@ -133,23 +79,12 @@ def invoice_bulk_mark_paid(
     invoice_ids: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
-    updated_ids = web_billing_invoice_bulk_service.execute_bulk_action(
+    updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
         action="mark_paid",
         invoice_ids_csv=invoice_ids,
     )
     count = len(updated_ids)
-    _log_bulk_audit_events(
-        db=db,
-        request=request,
-        action="mark_paid",
-        entity_type="invoice",
-        entity_ids=updated_ids,
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-    )
     return JSONResponse({"message": f"Marked {count} invoices as paid", "count": count})
 
 

@@ -177,6 +177,8 @@ class OntWriteService:
         *,
         mgmt_ip_mode: str,
         mgmt_vlan_id: str | None = None,
+        mgmt_vlan_tag: int | None = None,
+        mgmt_priority: int | None = None,
         mgmt_ip_address: str | None = None,
         mgmt_subnet: str | None = None,
         mgmt_gateway: str | None = None,
@@ -208,15 +210,30 @@ class OntWriteService:
                 message="ONT external_id does not contain a usable ONT number.",
             )
 
-        # Resolve VLAN ID integer from UUID
+        # Resolve VLAN tag for the OLT command. Web/API callers commonly pass
+        # a DB VLAN UUID, while provisioning profiles carry the actual VLAN tag.
         vlan_int = None
+        resolved_mgmt_vlan_id = None
         if mgmt_vlan_id:
             from app.services.network.cpe import Vlans
 
             vlan_obj = Vlans.get(db, mgmt_vlan_id)
             vlan_int = vlan_obj.tag if vlan_obj else None
+            resolved_mgmt_vlan_id = mgmt_vlan_id if vlan_obj else None
             if vlan_int is None:
                 return ActionResult(success=False, message="Management VLAN not found.")
+        elif mgmt_vlan_tag is not None:
+            from app.models.network import Vlan
+
+            vlan_int = int(mgmt_vlan_tag)
+            vlan_obj = db.scalars(
+                select(Vlan).where(
+                    Vlan.tag == vlan_int,
+                    Vlan.is_active.is_(True),
+                    (Vlan.olt_device_id == olt.id) | (Vlan.olt_device_id.is_(None)),
+                )
+            ).first()
+            resolved_mgmt_vlan_id = getattr(vlan_obj, "id", None) if vlan_obj else None
 
         if vlan_int is None:
             return ActionResult(
@@ -232,6 +249,7 @@ class OntWriteService:
                 ont_number,
                 vlan_id=vlan_int,
                 ip_mode=mgmt_ip_mode,
+                priority=mgmt_priority,
                 ip_address=mgmt_ip_address,
                 subnet=mgmt_subnet,
                 gateway=mgmt_gateway,
@@ -250,8 +268,8 @@ class OntWriteService:
             ont.mgmt_ip_mode = MgmtIpMode(mgmt_ip_mode)
         except ValueError:
             pass
-        if mgmt_vlan_id:
-            ont.mgmt_vlan_id = coerce_uuid(mgmt_vlan_id)
+        if resolved_mgmt_vlan_id:
+            ont.mgmt_vlan_id = coerce_uuid(str(resolved_mgmt_vlan_id))
         if mgmt_ip_address:
             ont.mgmt_ip_address = mgmt_ip_address
         _set_sync_meta(ont, "ssh")

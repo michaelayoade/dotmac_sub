@@ -8,8 +8,6 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.schemas.billing import PaymentProviderCreate, PaymentProviderUpdate
-from app.services import billing as billing_service
 from app.services import web_billing_providers as web_billing_providers_service
 from app.services.auth_dependencies import require_permission
 
@@ -64,18 +62,14 @@ def payment_providers_create(
     db: Session = Depends(get_db),
 ):
     try:
-        payload = PaymentProviderCreate(
-            name=name.strip(),
-            provider_type=web_billing_providers_service.parse_supported_provider_type(
-                provider_type
-            ),
-            webhook_secret_ref=webhook_secret_ref.strip()
-            if webhook_secret_ref
-            else None,
-            notes=notes.strip() if notes else None,
-            is_active=is_active is not None,
+        web_billing_providers_service.create_provider_from_form(
+            db,
+            name=name,
+            provider_type=provider_type,
+            webhook_secret_ref=webhook_secret_ref,
+            notes=notes,
+            is_active=is_active,
         )
-        billing_service.payment_providers.create(db, payload)
         return RedirectResponse(url="/admin/billing/payment-providers", status_code=303)
     except Exception as exc:
         state = web_billing_providers_service.list_data(db, show_inactive=False)
@@ -133,18 +127,15 @@ def payment_providers_update(
     db: Session = Depends(get_db),
 ):
     try:
-        payload = PaymentProviderUpdate(
-            name=name.strip(),
-            provider_type=web_billing_providers_service.parse_supported_provider_type(
-                provider_type
-            ),
-            webhook_secret_ref=webhook_secret_ref.strip()
-            if webhook_secret_ref
-            else None,
-            notes=notes.strip() if notes else None,
-            is_active=is_active is not None,
+        web_billing_providers_service.update_provider_from_form(
+            db,
+            provider_id=provider_id,
+            name=name,
+            provider_type=provider_type,
+            webhook_secret_ref=webhook_secret_ref,
+            notes=notes,
+            is_active=is_active,
         )
-        billing_service.payment_providers.update(db, str(provider_id), payload)
         return RedirectResponse(url="/admin/billing/payment-providers", status_code=303)
     except Exception as exc:
         state = web_billing_providers_service.edit_data(
@@ -170,7 +161,7 @@ def payment_providers_update(
     dependencies=[Depends(require_permission("billing:provider:write"))],
 )
 def payment_providers_deactivate(provider_id: UUID, db: Session = Depends(get_db)):
-    billing_service.payment_providers.delete(db, str(provider_id))
+    web_billing_providers_service.deactivate_provider(db, provider_id=provider_id)
     return RedirectResponse(url="/admin/billing/payment-providers", status_code=303)
 
 

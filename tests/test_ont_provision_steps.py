@@ -13,9 +13,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-from starlette.requests import Request
-
 
 class TestResolveOltContext:
     """Test ONT → OLT context resolution."""
@@ -136,6 +133,85 @@ class TestBindTr069:
         assert result.step_name == "bind_tr069"
 
 
+class TestValidatePrerequisites:
+    """Test preflight gating rules."""
+
+    def test_acs_enabled_ont_does_not_require_manual_tr069_profile_id(
+        self, db_session
+    ) -> None:
+        from app.models.network import (
+            OLTDevice,
+            OntAssignment,
+            OntProvisioningProfile,
+            OntUnit,
+        )
+        from app.models.subscriber import Subscriber
+        from app.models.tr069 import Tr069AcsServer
+        from app.services.network.ont_provision_steps import validate_prerequisites
+
+        subscriber = Subscriber(
+            first_name="Preflight",
+            last_name="No PPPoE",
+            email=f"preflight-{uuid.uuid4().hex[:8]}@test.local",
+        )
+        acs = Tr069AcsServer(
+            name="DotMac ACS",
+            base_url="http://genieacs:7557",
+            cwmp_url="http://acs.example/cwmp",
+            is_active=True,
+        )
+        db_session.add_all([subscriber, acs])
+        db_session.flush()
+
+        olt = OLTDevice(
+            name="ACS OLT",
+            vendor="Huawei",
+            model="MA5800-X2",
+            ssh_username="admin",
+            ssh_password="secret",
+            tr069_acs_server_id=acs.id,
+        )
+        profile = OntProvisioningProfile(
+            name="TR069 Profile",
+            cr_username="cwmp",
+            cr_password="secret",
+            is_active=True,
+        )
+        db_session.add_all([olt, profile])
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="HWTC-PREFLIGHT",
+            olt_device_id=olt.id,
+            board="0/2",
+            port="1",
+            provisioning_profile_id=profile.id,
+            is_active=True,
+        )
+        db_session.add(ont)
+        db_session.flush()
+        db_session.add(
+            OntAssignment(
+                ont_unit_id=ont.id,
+                subscriber_id=subscriber.id,
+                active=True,
+            )
+        )
+        db_session.commit()
+
+        result = validate_prerequisites(db_session, str(ont.id))
+
+        tr069_check = next(
+            check for check in result["checks"] if check["name"] == "TR-069 OLT profile"
+        )
+        assert tr069_check["status"] == "ok"
+        assert "dynamically" in tr069_check["message"]
+        assert "PPPoE credential" not in {
+            check["name"] for check in result["checks"]
+        }
+        assert result["ready"] is True
+
+
 class TestWaitTr069Bootstrap:
     """Test bootstrap polling dispatch."""
 
@@ -212,55 +288,6 @@ class TestWaitTr069Bootstrap:
         assert result.waiting is False
         assert "Failed to queue TR-069 bootstrap polling" in result.message
         mark_failed.assert_called_once()
-
-    @pytest.mark.skip(reason="ServiceOrderActionStatus not available on this branch")
-    def test_record_ont_step_action_keeps_waiting_steps_pending(
-        self, db_session
-    ) -> None:
-        from app.models.provisioning import ServiceOrderActionStatus
-        from app.services.network.ont_provision_steps import StepResult
-        from app.web.admin.network_onts_provisioning import _record_ont_step_action
-
-        request = Request({"type": "http", "headers": []})
-
-        with (
-            patch(
-                "app.web.admin.network_onts_provisioning._resolve_service_order_id_for_ont",
-                return_value=str(uuid.uuid4()),
-            ),
-            patch(
-                "app.web.admin.network_onts_provisioning.web_admin_service.get_current_user",
-                return_value={"subscriber_id": "user-1"},
-            ),
-            patch(
-                "app.web.admin.network_onts_provisioning.provisioning_service.service_order_actions.create",
-                return_value=SimpleNamespace(id="action-1"),
-            ),
-            patch(
-                "app.web.admin.network_onts_provisioning.provisioning_service.service_order_actions.update",
-            ) as update_action,
-        ):
-            _record_ont_step_action(
-                db_session,
-                request,
-                "ont-1",
-                StepResult(
-                    "wait_tr069_bootstrap",
-                    False,
-                    "Queued bootstrap polling.",
-                    waiting=True,
-                    critical=False,
-                    data={"operation_id": "op-1"},
-                ),
-            )
-
-        update_payload = update_action.call_args.args[2]
-        assert update_payload.status == ServiceOrderActionStatus.pending
-        assert update_payload.error_message is None
-        assert update_payload.completed_at is None
-        assert update_payload.result_payload["waiting"] is True
-        assert update_payload.result_payload["data"] == {"operation_id": "op-1"}
-
 
 class TestPushPppoeOmci:
     """Test push_pppoe_omci step."""

@@ -1,5 +1,8 @@
+import inspect
+
 from app.services.network import ont_metrics
-from app.services.network.olt_ssh import _DEFAULT_HUAWEI_PROMPT, _run_huawei_cmd
+from app.services.network.olt_ssh import _run_huawei_cmd
+from app.web.admin.network_olts_inventory import olt_authorize_ont
 from app.web.admin.network_olts_inventory import router as olts_inventory_router
 
 
@@ -17,16 +20,16 @@ def test_promql_label_selector_does_not_overescape_hyphen() -> None:
         ont_id="d3158608-b57d-405b-8ace-e71ba195ed33",
     )
     assert 'ont_id="d3158608-b57d-405b-8ace-e71ba195ed33"' in selector
-    assert 'ont_serial=~"^(?:' in selector
-    assert r"HWTC\-7D4510C3" not in selector
-    assert "HWTC-7D4510C3" in selector
+    assert 'ont_serial=~"' in selector
+    assert r"485754437D4510C3" in selector
+    assert r"485754437D4510C3\-" not in selector
 
 
 def test_huawei_command_defaults_accept_user_and_exec_prompts(monkeypatch) -> None:
     channel = _DummyChannel()
 
     def _fake_read_until_prompt(_channel, prompt_regex: str, timeout_sec: float = 8.0) -> str:
-        assert prompt_regex.startswith(_DEFAULT_HUAWEI_PROMPT)
+        assert prompt_regex.startswith(r"#\s*$")
         assert timeout_sec == 12
         return "OLT>"
 
@@ -46,3 +49,9 @@ def test_olt_autofind_get_route_exists_for_auth_redirect_recovery() -> None:
         and "GET" in getattr(r, "methods", set())
     )
     assert "GET" in route.methods
+
+
+def test_inventory_authorize_route_accepts_force_reauthorize_flag() -> None:
+    signature = inspect.signature(olt_authorize_ont)
+
+    assert "force_reauthorize" in signature.parameters

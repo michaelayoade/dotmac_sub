@@ -1,6 +1,5 @@
 """Admin billing payments routes."""
 
-from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 from uuid import UUID
 
@@ -24,7 +23,7 @@ from app.services import web_billing_payments as web_billing_payments_service
 from app.services import (
     web_billing_reconciliation as web_billing_reconciliation_service,
 )
-from app.services.audit_helpers import build_audit_activities, log_audit_event
+from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_json_body
 
@@ -362,8 +361,9 @@ def payment_create(
     balance_value = None
     balance_display = None
     try:
-        result = web_billing_payments_service.process_payment_create(
+        result = web_billing_payments_service.process_payment_create_with_audit(
             db,
+            request,
             account_id=account_id,
             amount=amount,
             currency=currency,
@@ -376,18 +376,6 @@ def payment_create(
         resolved_invoice = result["resolved_invoice"]
         balance_value = result["balance_value"]
         balance_display = result["balance_display"]
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="create",
-            entity_type="payment",
-            entity_id=str(payment.id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=cast(dict[str, object], result.get("audit_metadata") or {}),
-        )
     except Exception as exc:
         deps = cast(
             dict[str, object],
@@ -529,8 +517,9 @@ def payment_update(
     db: Session = Depends(get_db),
 ):
     try:
-        result = web_billing_payments_service.process_payment_update(
+        web_billing_payments_service.process_payment_update_with_audit(
             db,
+            request,
             payment_id=str(payment_id),
             account_id=account_id,
             amount=amount,
@@ -539,19 +528,6 @@ def payment_update(
             invoice_id=invoice_id,
             payment_method_id=payment_method_id,
             memo=memo,
-        )
-        metadata_payload = cast(dict[str, object] | None, result.get("audit_metadata"))
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="update",
-            entity_type="payment",
-            entity_id=str(payment_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata_payload,
         )
     except Exception as exc:
         edit_state = web_billing_payments_service.build_payment_edit_data(
@@ -688,67 +664,18 @@ def payment_import_submit(
     db: Session = Depends(get_db),
 ):
     try:
-        payments_data = body.get("payments", [])
-        handler = body.get("handler")
-
-        if not payments_data:
-            return JSONResponse({"message": "No payments to import"}, status_code=400)
-
-        default_currency = web_billing_payments_service.resolve_default_currency(db)
-        normalized_rows = web_billing_payments_service.normalize_import_rows(
-            payments_data,
-            handler,
-        )
-        payment_source = body.get("payment_source")
-        payment_method_type = body.get("payment_method_type")
-        file_name = body.get("file_name")
-        pair_inactive_customers = bool(body.get("pair_inactive_customers", True))
-        row_count = len(normalized_rows)
-        total_amount = 0.0
-        for row in normalized_rows:
-            try:
-                total_amount += float(Decimal(str(row.get("amount", 0) or 0)))
-            except (TypeError, ValueError, InvalidOperation):
-                continue
-
-        imported_count, errors = web_billing_payments_service.import_payments(
+        result = web_billing_payments_service.process_payment_import_payload_with_audit(
             db,
-            normalized_rows,
-            default_currency,
-            payment_source=payment_source,
-            payment_method_type=payment_method_type,
-            pair_inactive_customers=pair_inactive_customers,
+            request,
+            body,
         )
-
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="import",
-            entity_type="payment",
-            entity_id="bulk",
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata={
-                "imported": imported_count,
-                "errors": len(errors),
-                "payment_source": payment_source,
-                "payment_method_type": payment_method_type,
-                "file_name": file_name,
-                "row_count": row_count,
-                "total_amount": total_amount,
-                "pair_inactive_customers": pair_inactive_customers,
-                "handler": handler,
-            },
-        )
-
-        return JSONResponse(
-            web_billing_payments_service.build_import_result_payload(
-                imported_count=imported_count,
-                errors=errors,
+        if int(result.get("status_code", 200)) != 200:
+            return JSONResponse(
+                cast(dict[str, object], result),
+                status_code=int(result.get("status_code", 400)),
             )
-        )
+
+        return JSONResponse(cast(dict[str, object], result.get("payload") or {}))
 
     except Exception as exc:
         return JSONResponse({"message": f"Import failed: {str(exc)}"}, status_code=500)

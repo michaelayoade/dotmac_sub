@@ -1,32 +1,16 @@
 """Admin legal document management web routes."""
 
-from datetime import datetime
-
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.legal import LegalDocumentType
-from app.schemas.legal import LegalDocumentCreate, LegalDocumentUpdate
-from app.services import legal as legal_service
+from app.services import web_legal as web_legal_service
 from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/legal", tags=["web-admin-legal"])
-
-
-def _base_context(request: Request, db: Session, active_page: str = "legal"):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    return {
-        "request": request,
-        "active_page": active_page,
-        "active_menu": "system",
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-    }
 
 
 @router.get(
@@ -43,68 +27,21 @@ def legal_documents_list(
     db: Session = Depends(get_db),
 ):
     """List all legal documents."""
-    offset = (page - 1) * per_page
-
-    # Parse filters
-    doc_type = None
-    if document_type:
-        try:
-            doc_type = LegalDocumentType(document_type)
-        except ValueError:
-            pass
-
-    published = None
-    if is_published == "true":
-        published = True
-    elif is_published == "false":
-        published = False
-
-    documents = legal_service.legal_documents.list(
-        db=db,
-        document_type=doc_type,
-        is_published=published,
-        order_by="updated_at",
-        order_dir="desc",
-        limit=per_page,
-        offset=offset,
-    )
-    stats = legal_service.legal_documents.get_list_stats(
+    context = web_legal_service.list_context(
+        request,
         db,
-        document_type=doc_type,
-        is_published=published,
+        document_type=document_type,
+        is_published=is_published,
+        page=page,
+        per_page=per_page,
     )
-    total_pages = (stats["total"] + per_page - 1) // per_page
-
-    context = _base_context(request, db)
-    context.update(
-        {
-            "documents": documents,
-            "stats": stats,
-            "document_types": [t.value for t in LegalDocumentType],
-            "document_type_filter": document_type,
-            "is_published_filter": is_published,
-            "page": page,
-            "per_page": per_page,
-            "total_pages": total_pages,
-        }
-    )
-
     return templates.TemplateResponse("admin/system/legal/index.html", context)
 
 
 @router.get("/new", response_class=HTMLResponse)
 def legal_document_new(request: Request, db: Session = Depends(get_db)):
     """New legal document form."""
-    context = _base_context(request, db)
-    context.update(
-        {
-            "document": None,
-            "document_types": [
-                (t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType
-            ],
-            "action": "create",
-        }
-    )
+    context = web_legal_service.form_context(request, db)
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
 
@@ -123,39 +60,22 @@ def legal_document_create(
 ):
     """Create a new legal document."""
     try:
-        doc_type = LegalDocumentType(document_type)
-        eff_date = None
-        if effective_date:
-            eff_date = datetime.fromisoformat(effective_date.replace("Z", "+00:00"))
-
-        payload = LegalDocumentCreate(
-            document_type=doc_type,
+        document = web_legal_service.create_document(
+            db,
+            document_type=document_type,
             title=title,
             slug=slug,
             version=version,
-            summary=summary if summary else None,
-            content=content if content else None,
-            is_published=is_published == "true",
-            effective_date=eff_date,
+            summary=summary,
+            content=content,
+            is_published=is_published,
+            effective_date=effective_date,
         )
-
-        document = legal_service.legal_documents.create(db=db, payload=payload)
         return RedirectResponse(
             url=f"/admin/system/legal/{document.id}", status_code=303
         )
     except Exception as e:
-        context = _base_context(request, db)
-        context.update(
-            {
-                "document": None,
-                "document_types": [
-                    (t.value, t.value.replace("_", " ").title())
-                    for t in LegalDocumentType
-                ],
-                "action": "create",
-                "error": str(e),
-            }
-        )
+        context = web_legal_service.form_context(request, db, error=str(e))
         return templates.TemplateResponse(
             "admin/system/legal/form.html", context, status_code=400
         )
@@ -166,7 +86,7 @@ def legal_document_detail(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """View legal document details."""
-    document = legal_service.legal_documents.get(db=db, document_id=document_id)
+    document = web_legal_service.get_document(db, document_id)
     if not document:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -174,8 +94,7 @@ def legal_document_detail(
             status_code=404,
         )
 
-    context = _base_context(request, db)
-    context.update({"document": document})
+    context = web_legal_service.detail_context(request, db, document=document)
     return templates.TemplateResponse("admin/system/legal/detail.html", context)
 
 
@@ -184,7 +103,7 @@ def legal_document_edit(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Edit legal document form."""
-    document = legal_service.legal_documents.get(db=db, document_id=document_id)
+    document = web_legal_service.get_document(db, document_id)
     if not document:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -192,15 +111,11 @@ def legal_document_edit(
             status_code=404,
         )
 
-    context = _base_context(request, db)
-    context.update(
-        {
-            "document": document,
-            "document_types": [
-                (t.value, t.value.replace("_", " ").title()) for t in LegalDocumentType
-            ],
-            "action": "edit",
-        }
+    context = web_legal_service.form_context(
+        request,
+        db,
+        document=document,
+        action="edit",
     )
     return templates.TemplateResponse("admin/system/legal/form.html", context)
 
@@ -221,23 +136,17 @@ def legal_document_update(
 ):
     """Update a legal document."""
     try:
-        eff_date = None
-        if effective_date:
-            eff_date = datetime.fromisoformat(effective_date.replace("Z", "+00:00"))
-
-        payload = LegalDocumentUpdate(
+        document = web_legal_service.update_document(
+            db,
+            document_id=document_id,
             title=title,
             slug=slug,
             version=version,
-            summary=summary if summary else None,
-            content=content if content else None,
-            is_current=is_current == "true",
-            is_published=is_published == "true",
-            effective_date=eff_date,
-        )
-
-        document = legal_service.legal_documents.update(
-            db=db, document_id=document_id, payload=payload
+            summary=summary,
+            content=content,
+            is_current=is_current,
+            is_published=is_published,
+            effective_date=effective_date,
         )
         if not document:
             return templates.TemplateResponse(
@@ -250,18 +159,13 @@ def legal_document_update(
             url=f"/admin/system/legal/{document.id}", status_code=303
         )
     except Exception as e:
-        document = legal_service.legal_documents.get(db=db, document_id=document_id)
-        context = _base_context(request, db)
-        context.update(
-            {
-                "document": document,
-                "document_types": [
-                    (t.value, t.value.replace("_", " ").title())
-                    for t in LegalDocumentType
-                ],
-                "action": "edit",
-                "error": str(e),
-            }
+        document = web_legal_service.get_document(db, document_id)
+        context = web_legal_service.form_context(
+            request,
+            db,
+            document=document,
+            action="edit",
+            error=str(e),
         )
         return templates.TemplateResponse(
             "admin/system/legal/form.html", context, status_code=400
@@ -277,36 +181,13 @@ def legal_document_upload(
 ):
     """Upload a file for a legal document."""
     try:
-        from app.web.admin import get_current_user as get_admin_current_user
-
-        # Validate file type
-        allowed_types = [
-            "application/pdf",
-            "text/html",
-            "text/plain",
-            "application/msword",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ]
-        if file.content_type not in allowed_types:
-            raise ValueError(
-                "File type not allowed. Allowed types: PDF, HTML, TXT, DOC, DOCX"
-            )
-
-        # Read file content
-        content = file.file.read()
-
-        # Max file size: 10MB
-        if len(content) > 10 * 1024 * 1024:
-            raise ValueError("File size exceeds 10MB limit")
-
-        current_user = get_admin_current_user(request)
-        document = legal_service.legal_documents.upload_file(
-            db=db,
+        document = web_legal_service.upload_document_file(
+            request,
+            db,
             document_id=document_id,
-            file_content=content,
+            file_content=file.file.read(),
             file_name=file.filename or "document",
             mime_type=file.content_type,
-            uploaded_by=current_user.get("subscriber_id") or None,
         )
 
         if not document:
@@ -320,9 +201,9 @@ def legal_document_upload(
             url=f"/admin/system/legal/{document.id}", status_code=303
         )
     except Exception as e:
-        context = _base_context(request, db)
-        document = legal_service.legal_documents.get(db=db, document_id=document_id)
-        context.update({"document": document, "error": str(e)})
+        document = web_legal_service.get_document(db, document_id)
+        context = web_legal_service.detail_context(request, db, document=document)
+        context["error"] = str(e)
         return templates.TemplateResponse(
             "admin/system/legal/detail.html", context, status_code=400
         )
@@ -333,7 +214,7 @@ def legal_document_delete_file(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Delete the file associated with a legal document."""
-    document = legal_service.legal_documents.delete_file(db=db, document_id=document_id)
+    document = web_legal_service.delete_document_file(db, document_id=document_id)
     if not document:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -352,12 +233,7 @@ def legal_document_publish(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Publish a legal document."""
-    payload = LegalDocumentUpdate.model_validate(
-        {"is_published": True, "is_current": True}
-    )
-    document = legal_service.legal_documents.update(
-        db=db, document_id=document_id, payload=payload
-    )
+    document = web_legal_service.publish_document(db, document_id=document_id)
     if not document:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -372,10 +248,7 @@ def legal_document_unpublish(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Unpublish a legal document."""
-    payload = LegalDocumentUpdate.model_validate({"is_published": False})
-    document = legal_service.legal_documents.update(
-        db=db, document_id=document_id, payload=payload
-    )
+    document = web_legal_service.unpublish_document(db, document_id=document_id)
     if not document:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -390,7 +263,7 @@ def legal_document_delete(
     request: Request, document_id: str, db: Session = Depends(get_db)
 ):
     """Delete a legal document."""
-    success = legal_service.legal_documents.delete(db=db, document_id=document_id)
+    success = web_legal_service.delete_document(db, document_id=document_id)
     if not success:
         return templates.TemplateResponse(
             "admin/errors/404.html",

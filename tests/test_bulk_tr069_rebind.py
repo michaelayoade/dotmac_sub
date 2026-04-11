@@ -8,7 +8,7 @@ from unittest.mock import patch
 from scripts.bulk_tr069_rebind import (
     _build_fsp,
     _parse_ont_id_from_external,
-    _resolve_dotmac_profile,
+    _resolve_linked_acs_profile,
 )
 
 # ── ONT-ID parsing ───────────────────────────────────────────────────
@@ -59,25 +59,41 @@ def _make_profile(profile_id: int, name: str, acs_url: str = "") -> SimpleNamesp
 _PROFILE_PATCH = "app.services.network.olt_ssh_profiles.get_tr069_server_profiles"
 
 
-def test_resolve_finds_profile_by_name():
+def test_resolve_finds_profile_by_linked_acs_url_and_username():
     profiles = [
         _make_profile(1, "SmartOLT", "http://smartolt.example.com:7547"),
-        _make_profile(3, "DotMac-ACS", "http://10.10.41.1:7547"),
+        _make_profile(3, "Primary ACS", "http://acs.example.com/cwmp"),
     ]
-    olt = SimpleNamespace(name="Test OLT")
+    olt = SimpleNamespace(
+        name="Test OLT",
+        tr069_acs_server=SimpleNamespace(
+            name="Primary ACS",
+            cwmp_url="http://acs.example.com/cwmp",
+            cwmp_username="cwmp-user",
+            cwmp_password=None,
+        ),
+    )
     with patch(_PROFILE_PATCH, return_value=(True, "OK", profiles)):
-        pid, msg = _resolve_dotmac_profile(olt)
+        pid, msg = _resolve_linked_acs_profile(olt)
     assert pid == 3
-    assert "DotMac-ACS" in msg
+    assert "Primary ACS" in msg
 
 
-def test_resolve_finds_profile_by_url():
+def test_resolve_finds_profile_when_username_not_parsed():
     profiles = [
-        _make_profile(5, "GenieACS", "http://10.10.41.1:7547"),
+        _make_profile(5, "GenieACS", "http://acs.example.com/cwmp"),
     ]
-    olt = SimpleNamespace(name="Test OLT")
+    olt = SimpleNamespace(
+        name="Test OLT",
+        tr069_acs_server=SimpleNamespace(
+            name="Primary ACS",
+            cwmp_url="http://acs.example.com/cwmp",
+            cwmp_username="cwmp-user",
+            cwmp_password=None,
+        ),
+    )
     with patch(_PROFILE_PATCH, return_value=(True, "OK", profiles)):
-        pid, msg = _resolve_dotmac_profile(olt)
+        pid, msg = _resolve_linked_acs_profile(olt)
     assert pid == 5
 
 
@@ -85,16 +101,41 @@ def test_resolve_returns_none_when_no_match():
     profiles = [
         _make_profile(1, "SmartOLT", "http://smartolt.example.com:7547"),
     ]
-    olt = SimpleNamespace(name="Test OLT")
+    olt = SimpleNamespace(
+        name="Test OLT",
+        tr069_acs_server=SimpleNamespace(
+            name="Primary ACS",
+            cwmp_url="http://acs.example.com/cwmp",
+            cwmp_username="cwmp-user",
+            cwmp_password=None,
+        ),
+    )
     with patch(_PROFILE_PATCH, return_value=(True, "OK", profiles)):
-        pid, msg = _resolve_dotmac_profile(olt, auto_create=False)
+        pid, msg = _resolve_linked_acs_profile(olt, auto_create=False)
     assert pid is None
-    assert "No DotMac ACS profile found" in msg
+    assert "No linked ACS profile found" in msg
 
 
 def test_resolve_returns_none_when_ssh_fails():
-    olt = SimpleNamespace(name="Test OLT")
+    olt = SimpleNamespace(
+        name="Test OLT",
+        tr069_acs_server=SimpleNamespace(
+            name="Primary ACS",
+            cwmp_url="http://acs.example.com/cwmp",
+            cwmp_username="cwmp-user",
+            cwmp_password=None,
+        ),
+    )
     with patch(_PROFILE_PATCH, return_value=(False, "SSH connection failed", [])):
-        pid, msg = _resolve_dotmac_profile(olt)
+        pid, msg = _resolve_linked_acs_profile(olt)
     assert pid is None
     assert "Cannot list profiles" in msg
+
+
+def test_resolve_returns_none_without_linked_acs():
+    olt = SimpleNamespace(name="Test OLT", tr069_acs_server=None)
+
+    pid, msg = _resolve_linked_acs_profile(olt)
+
+    assert pid is None
+    assert "No linked ACS configured" in msg

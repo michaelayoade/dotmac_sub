@@ -10,8 +10,19 @@ from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.network import CPEDevice, OLTDevice, OntUnit
-from app.models.tr069 import Tr069CpeDevice, Tr069Event, Tr069JobStatus
-from app.schemas.network import OLTDeviceCreate, OntAssignmentCreate, OntUnitCreate, PonPortCreate
+from app.models.tr069 import (
+    Tr069CpeDevice,
+    Tr069Event,
+    Tr069JobStatus,
+    Tr069Parameter,
+    Tr069Session,
+)
+from app.schemas.network import (
+    OLTDeviceCreate,
+    OntAssignmentCreate,
+    OntUnitCreate,
+    PonPortCreate,
+)
 from app.schemas.tr069 import (
     Tr069AcsServerCreate,
     Tr069AcsServerUpdate,
@@ -70,6 +81,19 @@ def test_update_acs_server(db_session):
     )
     assert updated.name == "Updated ACS"
     assert updated.base_url == "https://new.acs.com"
+
+
+def test_runtime_collection_provision_reads_tr098_and_tr181_paths():
+    script = tr069_service._build_runtime_collection_provision()
+
+    assert "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID" in script
+    assert "InternetGatewayDevice.LANDevice.1.Hosts.HostNumberOfEntries" in script
+    assert "Device.WiFi.SSID.1.SSID" in script
+    assert "Device.WiFi.AccessPoint.1.AssociatedDeviceNumberOfEntries" in script
+    assert "Device.Hosts.HostNumberOfEntries" in script
+    assert "Device.PPP.Interface.1.Username" in script
+    assert 'root + ".WANDevice' not in script
+    assert 'root + ".LANDevice' not in script
 
 
 def test_list_acs_servers(db_session):
@@ -526,6 +550,8 @@ def test_execute_tr069_job_logs_structured_lifecycle(
             product_class="HG8546M",
         ),
     )
+    device.genieacs_device_id = "HWTC-HG8546M-JOB-LOG-CPE"
+    db_session.commit()
     job = tr069_service.jobs.create(
         db_session,
         Tr069JobCreate(
@@ -566,6 +592,43 @@ def test_execute_tr069_job_logs_structured_lifecycle(
     assert start_record.event == "tr069_job"
     assert start_record.serial_number == "JOB-LOG-CPE"
     assert complete_record.job_status == Tr069JobStatus.succeeded.value
+
+
+def test_execute_tr069_job_fails_until_device_has_informed(
+    db_session, acs_server, monkeypatch
+):
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="JOB-WAITING-CPE",
+            oui="HWTC",
+            product_class="HG8546M",
+        ),
+    )
+    job = tr069_service.jobs.create(
+        db_session,
+        Tr069JobCreate(
+            device_id=device.id,
+            name="Reboot",
+            command="reboot",
+            status=Tr069JobStatus.queued,
+        ),
+    )
+
+    class _FakeClient:
+        def __init__(self, _base_url):
+            return None
+
+        def create_task(self, _device_id, _task):
+            raise AssertionError("placeholder device should not receive ACS tasks")
+
+    monkeypatch.setattr(tr069_service, "GenieACSClient", _FakeClient)
+
+    updated = tr069_service.jobs.execute(db_session, str(job.id))
+
+    assert updated.status == Tr069JobStatus.failed
+    assert "has not informed" in str(updated.error)
 
 
 def test_create_tr069_parameter(db_session, acs_server):
@@ -690,6 +753,103 @@ def test_list_sessions_by_device(db_session, acs_server):
     )
     assert len(sessions) >= 2
     assert all(s.device_id == device.id for s in sessions)
+
+
+def test_receive_inform_stores_full_payload_and_parameters(db_session, acs_server):
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="INFORM-FULL-001",
+        ),
+    )
+    device.genieacs_device_id = "00D09E-Test-INFORM-FULL-001"
+    db_session.commit()
+
+    result = tr069_service.receive_inform(
+        db_session,
+        serial_number=None,
+        device_id_raw="00D09E-Test-INFORM-FULL-001",
+        event=[{"EventCode": "4 VALUE CHANGE"}],
+        request_id="req-123",
+        remote_addr="192.0.2.10",
+        headers={"user-agent": "GenieACS"},
+        raw_payload={
+            "device_id": "00D09E-Test-INFORM-FULL-001",
+            "events": [{"EventCode": "4 VALUE CHANGE"}],
+            "parameters": {
+                "Device.DeviceInfo.SoftwareVersion": {"_value": "V1.2.3"},
+                "InternetGatewayDevice.DeviceInfo.SerialNumber": "INFORM-FULL-001",
+            },
+            "ignored": {"nested": True},
+        },
+    )
+
+    assert result["status"] == "ok"
+    assert result["event"] == "value_change"
+    assert result["parameters"] == 2
+
+    db_session.refresh(device)
+    assert device.last_inform_at is not None
+
+    session = db_session.scalars(
+        select(Tr069Session).where(Tr069Session.device_id == device.id)
+    ).one()
+    assert session.event_type == Tr069Event.value_change
+    assert session.request_id == "req-123"
+    assert session.inform_payload["raw_payload"]["ignored"] == {"nested": True}
+    assert session.inform_payload["request"]["remote_addr"] == "192.0.2.10"
+
+    params = {
+        param.name: param.value
+        for param in db_session.scalars(
+            select(Tr069Parameter).where(Tr069Parameter.device_id == device.id)
+        ).all()
+    }
+    assert params["Device.DeviceInfo.SoftwareVersion"] == "V1.2.3"
+    assert params["InternetGatewayDevice.DeviceInfo.SerialNumber"] == "INFORM-FULL-001"
+
+
+def test_receive_inform_resolves_normalized_serial_variant(db_session, acs_server):
+    device = tr069_service.cpe_devices.create(
+        db_session,
+        Tr069CpeDeviceCreate(
+            acs_server_id=acs_server.id,
+            serial_number="HWTC7D4733C3",
+        ),
+    )
+
+    result = tr069_service.receive_inform(
+        db_session,
+        serial_number="485754437D4733C3",
+        device_id_raw="00D09E-Test-485754437D4733C3",
+        event="2 PERIODIC",
+        raw_payload={"serial_number": "485754437D4733C3"},
+    )
+
+    assert result["status"] == "ok"
+    assert result["device_id"] == str(device.id)
+
+
+def test_receive_inform_creates_placeholder_for_unknown_device(db_session, acs_server):
+    result = tr069_service.receive_inform(
+        db_session,
+        serial_number="UNKNOWN-INFORM-001",
+        device_id_raw="00D09E-Test-UNKNOWN-INFORM-001",
+        event="1 BOOT",
+        oui="00D09E",
+        product_class="Test",
+        raw_payload={"serial_number": "UNKNOWN-INFORM-001"},
+    )
+
+    assert result["status"] == "ok"
+    device = db_session.scalars(
+        select(Tr069CpeDevice).where(
+            Tr069CpeDevice.serial_number == "UNKNOWN-INFORM-001"
+        )
+    ).one()
+    assert device.acs_server_id == acs_server.id
+    assert device.genieacs_device_id == "00D09E-Test-UNKNOWN-INFORM-001"
 
 
 def test_delete_cpe_device(db_session, acs_server):

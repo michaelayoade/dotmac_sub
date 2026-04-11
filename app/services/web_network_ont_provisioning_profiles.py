@@ -334,6 +334,11 @@ def handle_update(
     )
 
 
+def handle_delete(db: Session, profile_id: str) -> None:
+    """Soft-delete a provisioning profile."""
+    ont_provisioning_profiles.delete(db, profile_id)
+
+
 def parse_wan_service_form(form: FormData) -> dict[str, object]:
     """Parse WAN service form fields."""
     return {
@@ -430,3 +435,8 @@ def handle_wan_service_create(
         else None,
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
+
+
+def handle_wan_service_delete(db: Session, service_id: str) -> None:
+    """Delete a WAN service from a provisioning profile."""
+    wan_services.delete(db, service_id)

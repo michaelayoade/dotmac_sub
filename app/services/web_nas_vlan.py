@@ -9,6 +9,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.models.catalog import NasDevice
+from app.services import web_admin as web_admin_service
+from app.services.audit_helpers import log_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,44 @@ def handle_vlan_create(
     }
 
 
+def handle_vlan_create_with_audit(
+    db: Session,
+    *,
+    request,
+    device_id: str,
+    vlan_id: int,
+    parent_interface: str,
+    ip_address: str,
+    pppoe_service_name: str | None = None,
+) -> dict[str, Any]:
+    """Create a NAS VLAN and record the admin audit event."""
+    result = handle_vlan_create(
+        db,
+        device_id,
+        vlan_id=vlan_id,
+        parent_interface=parent_interface,
+        ip_address=ip_address,
+        pppoe_service_name=pppoe_service_name,
+    )
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="create_vlan",
+        entity_type="nas_device",
+        entity_id=device_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={
+            "vlan_id": vlan_id,
+            "parent_interface": parent_interface,
+            "ip_address": ip_address,
+            "success": result["success"],
+            "message": result["message"],
+        },
+    )
+    return result
+
+
 def handle_vlan_delete(
     db: Session,
     device_id: str,
@@ -146,3 +186,35 @@ def handle_vlan_delete(
         device, vlan_id=vlan_id, parent_interface=parent_interface
     )
     return {"success": result.success, "message": result.message}
+
+
+def handle_vlan_delete_with_audit(
+    db: Session,
+    *,
+    request,
+    device_id: str,
+    vlan_id: int,
+    parent_interface: str,
+) -> dict[str, Any]:
+    """Delete a NAS VLAN and record the admin audit event."""
+    result = handle_vlan_delete(
+        db,
+        device_id,
+        vlan_id=vlan_id,
+        parent_interface=parent_interface,
+    )
+    current_user = web_admin_service.get_current_user(request)
+    log_audit_event(
+        db=db,
+        request=request,
+        action="delete_vlan",
+        entity_type="nas_device",
+        entity_id=device_id,
+        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        metadata={
+            "vlan_id": vlan_id,
+            "success": result["success"],
+            "message": result["message"],
+        },
+    )
+    return result

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
@@ -29,6 +30,7 @@ from app.models.subscriber import (
 from app.schemas.audit import AuditEventCreate
 from app.schemas.subscriber import (
     AddressCreate,
+    AddressUpdate,
     SubscriberCreate,
     SubscriberUpdate,
 )
@@ -40,6 +42,180 @@ from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
 
 logger = logging.getLogger(__name__)
+
+
+def parse_json_object(value: str | None, field: str) -> dict | None:
+    """Parse an optional JSON object from form input."""
+    if not value or not value.strip():
+        return None
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{field} must be valid JSON") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"{field} must be a JSON object")
+    return parsed
+
+
+def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
+    """Build string defaults for customer billing form controls."""
+    defaults = {
+        "billing_enabled_override": "",
+        "captive_redirect_enabled": "",
+        "billing_day": "",
+        "payment_due_days": "",
+        "grace_period_days": "",
+        "min_balance": "",
+        "tax_rate_id": "",
+        "payment_method": "",
+    }
+    if not subscriber:
+        return defaults
+    defaults.update(
+        {
+            "billing_enabled_override": (
+                "true" if subscriber.billing_enabled else "false"
+            )
+            if subscriber.billing_enabled is not None
+            else "",
+            "captive_redirect_enabled": "true"
+            if subscriber.captive_redirect_enabled
+            else "false",
+            "billing_day": str(subscriber.billing_day or ""),
+            "payment_due_days": str(subscriber.payment_due_days or ""),
+            "grace_period_days": str(subscriber.grace_period_days or ""),
+            "min_balance": str(subscriber.min_balance or ""),
+            "tax_rate_id": str(subscriber.tax_rate_id or ""),
+            "payment_method": str(subscriber.payment_method or ""),
+        }
+    )
+    return defaults
+
+
+def resolve_business_customer_id(db: Session, customer_id: str) -> str:
+    """Accept only a business subscriber id for business routes."""
+    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
+    if subscriber.category != SubscriberCategory.business:
+        raise HTTPException(status_code=404, detail="Business customer not found")
+    return customer_id
+
+
+def save_primary_address_coordinates(
+    db: Session,
+    *,
+    customer_id: str,
+    latitude: float,
+    longitude: float,
+) -> dict[str, object]:
+    """Save coordinates to the primary address, creating one from profile data if needed."""
+    try:
+        parsed_customer_id = coerce_uuid(customer_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid customer id") from exc
+    customer = subscriber_service.subscribers.get(
+        db=db, subscriber_id=str(parsed_customer_id)
+    )
+    addresses = subscriber_service.addresses.list(
+        db=db,
+        subscriber_id=str(parsed_customer_id),
+        order_by="created_at",
+        order_dir="asc",
+        limit=100,
+        offset=0,
+    )
+    primary_address = next(
+        (addr for addr in addresses if addr.is_primary),
+        addresses[0] if addresses else None,
+    )
+
+    created = False
+    if primary_address is None:
+        if not (customer.address_line1 or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="No address exists to geolocate. Add an address first.",
+            )
+        primary_address = subscriber_service.addresses.create(
+            db=db,
+            payload=AddressCreate(
+                subscriber_id=parsed_customer_id,
+                address_line1=customer.address_line1,
+                address_line2=customer.address_line2,
+                city=customer.city,
+                region=customer.region,
+                postal_code=customer.postal_code,
+                country_code=customer.country_code,
+                latitude=latitude,
+                longitude=longitude,
+                is_primary=True,
+            ),
+        )
+        created = True
+
+    updated = subscriber_service.addresses.update(
+        db=db,
+        address_id=str(primary_address.id),
+        payload=AddressUpdate(latitude=latitude, longitude=longitude),
+    )
+    return {
+        "success": True,
+        "created_address": created,
+        "address_id": str(updated.id),
+        "latitude": updated.latitude,
+        "longitude": updated.longitude,
+    }
+
+
+def save_address_coordinates(
+    db: Session,
+    *,
+    address_id: str,
+    latitude: float,
+    longitude: float,
+) -> dict[str, object]:
+    """Save coordinates to an existing customer address."""
+    try:
+        parsed_address_id = coerce_uuid(address_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid address id") from exc
+    address = subscriber_service.addresses.update(
+        db=db,
+        address_id=str(parsed_address_id),
+        payload=AddressUpdate(latitude=latitude, longitude=longitude),
+    )
+    return {
+        "success": True,
+        "address_id": str(address.id),
+        "latitude": address.latitude,
+        "longitude": address.longitude,
+    }
+
+
+def bulk_update_customer_status_from_payload(
+    db: Session, payload: dict[str, Any]
+) -> dict[str, object]:
+    customer_ids = payload.get("customer_ids", [])
+    new_status = payload.get("status")
+    if not customer_ids or not new_status:
+        raise HTTPException(
+            status_code=400, detail="customer_ids and status are required"
+        )
+    if new_status not in ("active", "inactive"):
+        raise HTTPException(status_code=400, detail="status must be 'active' or 'inactive'")
+    return bulk_update_customer_status(
+        db=db,
+        customer_ids=customer_ids,
+        is_active=new_status == "active",
+    )
+
+
+def bulk_delete_customers_from_payload(
+    db: Session, payload: dict[str, Any]
+) -> dict[str, object]:
+    customer_ids = payload.get("customer_ids", [])
+    if not customer_ids:
+        raise HTTPException(status_code=400, detail="customer_ids is required")
+    return bulk_delete_customers(db=db, customer_ids=customer_ids)
 
 
 def _business_identity_from_contacts(

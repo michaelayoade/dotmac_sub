@@ -59,12 +59,13 @@ from app.web.admin.network_onts_provisioning import (
 from app.web.admin.network_onu_types import router as network_onu_types_router
 from app.web.admin.network_pop_sites import router as network_pop_sites_router
 from app.web.admin.network_radius import router as network_radius_router
-from app.web.admin.network_site_survey import router as network_site_survey_router
 from app.web.admin.network_speed_profiles import router as network_speed_profiles_router
 from app.web.admin.network_speedtests import router as network_speedtests_router
 from app.web.admin.network_tr069 import router as network_tr069_router
 from app.web.admin.network_tr069_presets import router as network_tr069_presets_router
-from app.web.admin.network_tr069_provisions import router as network_tr069_provisions_router
+from app.web.admin.network_tr069_provisions import (
+    router as network_tr069_provisions_router,
+)
 from app.web.admin.network_vendor_capabilities import (
     router as network_vendor_capabilities_router,
 )
@@ -282,10 +283,6 @@ router.include_router(
 )
 router.include_router(
     network_pop_sites_router,
-    dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
-)
-router.include_router(
-    network_site_survey_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("network"))],
 )
 router.include_router(

@@ -1,7 +1,6 @@
 """Admin web routes for router management."""
 
 import uuid
-from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -9,13 +8,8 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.services import web_network_routers as web_routers_service
 from app.services.auth_dependencies import require_permission
-from app.services.router_management.config import (
-    RouterConfigService,
-    RouterTemplateService,
-)
-from app.services.router_management.inventory import JumpHostInventory, RouterInventory
-from app.services.router_management.monitoring import RouterMonitoringService
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -24,20 +18,6 @@ router = APIRouter(
     tags=["web-admin-routers"],
     dependencies=[Depends(require_permission("router:read"))],
 )
-
-
-def _base_context(
-    request: Request, db: Session, active_page: str, active_menu: str = "network"
-) -> dict:
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    return {
-        "request": request,
-        "active_page": active_page,
-        "active_menu": active_menu,
-        "current_user": get_current_user(request),
-        "sidebar_stats": get_sidebar_stats(db),
-    }
 
 
 @router.get("", response_class=HTMLResponse)
@@ -49,13 +29,14 @@ def router_list(
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["routers"] = RouterInventory.list(
-        db, status=status, search=search, limit=limit, offset=offset
+    context = web_routers_service.list_context(
+        request,
+        db,
+        status=status,
+        search=search,
+        limit=limit,
+        offset=offset,
     )
-    context["status_filter"] = status
-    context["search"] = search or ""
-    context["summary"] = RouterMonitoringService.get_dashboard_summary(db)
     return templates.TemplateResponse("admin/network/routers/index.html", context)
 
 
@@ -64,9 +45,7 @@ def router_dashboard(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["summary"] = RouterMonitoringService.get_dashboard_summary(db)
-    context["recent_pushes"] = RouterConfigService.list_pushes(db, limit=10)
+    context = web_routers_service.dashboard_context(request, db)
     return templates.TemplateResponse("admin/network/routers/dashboard.html", context)
 
 
@@ -75,9 +54,7 @@ def router_create_form(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["jump_hosts"] = JumpHostInventory.list(db)
-    context["router"] = None
+    context = web_routers_service.create_form_context(request, db)
     return templates.TemplateResponse("admin/network/routers/form.html", context)
 
 
@@ -86,12 +63,7 @@ def router_create(
     request: Request,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    from app.schemas.router_management import RouterCreate
-
-    form_data = parse_form_data_sync(request)
-    data: dict[str, Any] = {k: v for k, v in form_data.items() if isinstance(v, str)}
-    payload = RouterCreate(**data)
-    r = RouterInventory.create(db, payload)
+    r = web_routers_service.create_router(db, parse_form_data_sync(request))
     return RedirectResponse(url=f"/admin/network/routers/{r.id}", status_code=303)
 
 
@@ -101,9 +73,11 @@ def template_list(
     category: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["templates"] = RouterTemplateService.list(db, category=category)
-    context["category_filter"] = category
+    context = web_routers_service.template_list_context(
+        request,
+        db,
+        category=category,
+    )
     return templates.TemplateResponse(
         "admin/network/routers/templates/index.html", context
     )
@@ -114,8 +88,7 @@ def template_create_form(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["template"] = None
+    context = web_routers_service.template_form_context(request, db)
     return templates.TemplateResponse(
         "admin/network/routers/templates/form.html", context
     )
@@ -126,9 +99,7 @@ def push_wizard(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["routers"] = RouterInventory.list(db, limit=200)
-    context["templates"] = RouterTemplateService.list(db)
+    context = web_routers_service.push_wizard_context(request, db)
     return templates.TemplateResponse("admin/network/routers/push.html", context)
 
 
@@ -138,10 +109,7 @@ def push_detail(
     push_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    push = RouterConfigService.get_push(db, push_id)
-    context["push"] = push
-    context["results"] = push.results
+    context = web_routers_service.push_detail_context(request, db, push_id=push_id)
     return templates.TemplateResponse("admin/network/routers/push_detail.html", context)
 
 
@@ -150,8 +118,7 @@ def jump_host_list(
     request: Request,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["jump_hosts"] = JumpHostInventory.list(db)
+    context = web_routers_service.jump_host_list_context(request, db)
     return templates.TemplateResponse("admin/network/routers/jump_hosts.html", context)
 
 
@@ -162,22 +129,12 @@ def router_detail(
     tab: str = "overview",
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    r = RouterInventory.get(db, router_id)
-    context["router"] = r
-    context["tab"] = tab
-
-    if tab == "interfaces":
-        context["interfaces"] = RouterInventory.list_interfaces(db, router_id)
-    elif tab == "config":
-        context["snapshots"] = RouterConfigService.list_snapshots(
-            db, router_id, limit=20
-        )
-    elif tab == "pushes":
-        context["push_results"] = RouterConfigService.list_push_results(
-            db, router_id, limit=20
-        )
-
+    context = web_routers_service.detail_context(
+        request,
+        db,
+        router_id=router_id,
+        tab=tab,
+    )
     return templates.TemplateResponse("admin/network/routers/detail.html", context)
 
 
@@ -187,9 +144,7 @@ def router_edit_form(
     router_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    context = _base_context(request, db, "routers")
-    context["router"] = RouterInventory.get(db, router_id)
-    context["jump_hosts"] = JumpHostInventory.list(db)
+    context = web_routers_service.edit_form_context(request, db, router_id=router_id)
     return templates.TemplateResponse("admin/network/routers/form.html", context)
 
 
@@ -199,10 +154,5 @@ def router_edit(
     router_id: uuid.UUID,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    from app.schemas.router_management import RouterUpdate
-
-    form_data = parse_form_data_sync(request)
-    data: dict[str, Any] = {k: v for k, v in form_data.items() if isinstance(v, str)}
-    payload = RouterUpdate(**data)
-    RouterInventory.update(db, router_id, payload)
+    web_routers_service.update_router(db, router_id, parse_form_data_sync(request))
     return RedirectResponse(url=f"/admin/network/routers/{router_id}", status_code=303)

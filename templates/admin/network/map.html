@@ -371,12 +371,6 @@
                         <div class="mt-1"><span class="text-slate-400">Tile:</span> <span id="elevation-tile">-</span></div>
                         <div><span class="text-slate-400">Source:</span> <span id="elevation-source">SRTM 30m</span></div>
                     </div>
-                    <div class="mt-3 pt-3 border-t border-slate-200 dark:border-slate-700">
-                        <a id="start-survey-link" href="#" class="flex items-center gap-2 text-sm text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                            <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
-                            Start Site Survey
-                        </a>
-                    </div>
                 </div>
             </div>
         </div>
@@ -424,10 +418,6 @@
                     <div class="flex justify-between pl-3">
                         <span class="text-amber-600 dark:text-amber-400 flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-amber-500"></span>Device Degraded</span>
                         <span class="font-medium text-amber-600 dark:text-amber-400">{{ stats.network_devices_degraded }}</span>
-                    </div>
-                    <div class="flex justify-between">
-                        <span class="text-slate-500 dark:text-slate-400">Survey Points</span>
-                        <span class="font-medium text-slate-900 dark:text-white">{{ stats.survey_points }}</span>
                     </div>
                     <div class="flex justify-between">
                         <span class="text-slate-500 dark:text-slate-400">ONT Units (GPS)</span>
@@ -606,10 +596,6 @@
                         <span class="text-sm text-slate-700 dark:text-slate-300">ONT Units</span>
                     </label>
                     <label class="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" id="layer-surveys" checked class="h-4 w-4 rounded border-slate-300 text-fuchsia-600 focus:ring-fuchsia-500">
-                        <span class="text-sm text-slate-700 dark:text-slate-300">Survey Points</span>
-                    </label>
-                    <label class="flex items-center gap-2 cursor-pointer">
                         <input type="checkbox" id="layer-customers" checked class="h-4 w-4 rounded border-slate-300 text-green-600 focus:ring-green-500">
                         <span class="text-sm text-slate-700 dark:text-slate-300">Customers</span>
                     </label>
@@ -635,7 +621,7 @@
                     <h2 class="font-semibold text-slate-900 dark:text-white">Wireless Planning</h2>
                 </div>
                 <div class="p-4 space-y-2 text-sm text-slate-500 dark:text-slate-400">
-                    <p>Select a POP site or customer to start a site survey, or right-click the map for a custom point.</p>
+                    <p>Use POP site detail pages to manage wireless mast locations.</p>
                     <p>Add a mast from a POP site detail panel.</p>
                 </div>
             </div>
@@ -646,10 +632,6 @@
                     <h2 class="font-semibold text-slate-900 dark:text-white">Quick Actions</h2>
                 </div>
                 <div class="p-4 space-y-2">
-                    <a href="/admin/network/site-survey" class="flex items-center gap-2 text-sm text-slate-700 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
-                        Wireless Site Surveys (select on map)
-                    </a>
                     <a href="/admin/network/fiber-map" class="flex items-center gap-2 text-sm text-slate-700 hover:text-primary-600 dark:text-slate-300 dark:hover:text-primary-400">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
                         Edit Fiber Map
@@ -714,7 +696,6 @@
         accessPoints: L.layerGroup().addTo(map),
         networkDevices: L.layerGroup().addTo(map),
         onts: L.layerGroup().addTo(map),
-        surveys: L.layerGroup().addTo(map),
         customers: L.layerGroup().addTo(map),
         feeder: L.layerGroup().addTo(map),
         distribution: L.layerGroup().addTo(map),
@@ -942,13 +923,6 @@
                         : `/admin/customers/person/${p.subscriber_id}`;
                 }
                 break;
-            case 'survey_point':
-                iconBg = '#d946ef';
-                iconSvg = '<svg class="h-5 w-5 text-white" fill="currentColor" viewBox="0 0 20 20"><circle cx="10" cy="6" r="3"/><path d="M4 18l6-6 6 6" /></svg>';
-                typeLabel = 'Survey Point';
-                detailUrl = p.survey_id ? `/admin/network/site-survey/${p.survey_id}` : null;
-                editUrl = p.survey_id ? `/admin/network/site-survey/${p.survey_id}/edit` : null;
-                break;
             case 'fiber_segment':
                 const segColors = { feeder: '#ef4444', distribution: '#3b82f6', drop: '#22c55e' };
                 iconBg = segColors[p.segment_type] || '#3b82f6';
@@ -1004,23 +978,6 @@
         }
 
         html += '</div>';
-
-        const actions = [];
-        if (p.type === 'pop_site' || p.type === 'customer') {
-            const coords = feature.geometry?.coordinates;
-            if (coords && coords.length === 2) {
-                const lat = coords[1].toFixed(6);
-                const lon = coords[0].toFixed(6);
-                let surveyUrl = `/admin/network/site-survey/new?lat=${lat}&lon=${lon}`;
-                if (p.type === 'customer' && p.subscriber_id) {
-                    surveyUrl += `&subscriber_id=${encodeURIComponent(p.subscriber_id)}`;
-                }
-                actions.push(`<a href="${surveyUrl}" class="mt-3 block text-center text-sm font-medium text-primary-600 hover:text-primary-700">Start Site Survey</a>`);
-            }
-        }
-        if (actions.length) {
-            html += actions.join('');
-        }
 
         if (detailUrl || editUrl || coordText) {
             html += '<div class="mt-4 flex flex-wrap items-center gap-2">';
@@ -1112,7 +1069,6 @@
                     case 'access_point': layers.accessPoints.addLayer(marker); break;
                     case 'network_device': layers.networkDevices.addLayer(marker); break;
                     case 'ont': layers.onts.addLayer(marker); break;
-                    case 'survey_point': layers.surveys.addLayer(marker); break;
                     case 'customer': layers.customers.addLayer(marker); break;
                 }
             } else if (geom.type === 'LineString') {
@@ -1164,7 +1120,6 @@
         'layer-access-points': 'accessPoints',
         'layer-network-devices': 'networkDevices',
         'layer-onts': 'onts',
-        'layer-surveys': 'surveys',
         'layer-customers': 'customers',
         'layer-feeder': 'feeder',
         'layer-distribution': 'distribution',
@@ -1207,7 +1162,6 @@
         access_point: { label: 'Access Point', color: '#8b5cf6' },
         network_device: { label: 'Network Device', color: '#16a34a' },
         ont: { label: 'ONT', color: '#06b6d4' },
-        survey_point: { label: 'Survey', color: '#d946ef' },
         customer: { label: 'Customer', color: '#22c55e' },
         fiber_segment: { label: 'Fiber', color: '#3b82f6' },
         coordinate: { label: 'Coordinates', color: '#0f766e' }
@@ -1449,8 +1403,6 @@
         const valueEl = document.getElementById('elevation-value');
         const coordsEl = document.getElementById('elevation-coords');
         const tileEl = document.getElementById('elevation-tile');
-        const linkEl = document.getElementById('start-survey-link');
-
         valueEl.textContent = 'Loading...';
         coordsEl.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         panel.classList.remove('hidden');
@@ -1466,7 +1418,6 @@
                 valueEl.textContent = 'No data available';
             }
             tileEl.textContent = data.tile || '-';
-            linkEl.href = `/admin/network/site-survey/new?lat=${lat.toFixed(6)}&lon=${lng.toFixed(6)}`;
         } catch (err) {
             valueEl.textContent = 'Error';
             console.error('Elevation lookup error:', err);
@@ -1481,8 +1432,6 @@
         const valueEl = document.getElementById('elevation-value');
         const coordsEl = document.getElementById('elevation-coords');
         const tileEl = document.getElementById('elevation-tile');
-        const linkEl = document.getElementById('start-survey-link');
-
         valueEl.textContent = 'Loading...';
         coordsEl.textContent = `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
         panel.classList.remove('hidden');
@@ -1498,7 +1447,6 @@
                 valueEl.textContent = 'No data available';
             }
             tileEl.textContent = data.tile || '-';
-            linkEl.href = `/admin/network/site-survey/new?lat=${lat.toFixed(6)}&lon=${lng.toFixed(6)}`;
         } catch (err) {
             valueEl.textContent = 'Error';
             console.error('Elevation lookup error:', err);

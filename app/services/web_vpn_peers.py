@@ -40,6 +40,38 @@ def build_form_data(**kwargs) -> dict[str, object]:
     return dict(kwargs)
 
 
+def build_form_context(
+    db: Session,
+    *,
+    server_id: UUID | None = None,
+    peer_id: UUID | None = None,
+    peer: WireGuardPeer | None = None,
+    server: WireGuardServer | None = None,
+    errors: list[str] | None = None,
+    form_data: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Build context for the WireGuard peer form."""
+    resolved_peer = peer
+    if resolved_peer is None and peer_id is not None:
+        resolved_peer = wg_service.wg_peers.get(db, peer_id)
+
+    resolved_server = server
+    if resolved_server is None:
+        if resolved_peer is not None:
+            resolved_server = wg_service.wg_servers.get(db, resolved_peer.server_id)
+        elif server_id is not None:
+            resolved_server = wg_service.wg_servers.get(db, server_id)
+
+    context: dict[str, object] = {
+        "server": resolved_server,
+        "peer": resolved_peer,
+        "errors": errors or [],
+    }
+    if form_data is not None:
+        context["form_data"] = form_data
+    return context
+
+
 def build_metadata(
     *,
     existing_metadata: dict | None,

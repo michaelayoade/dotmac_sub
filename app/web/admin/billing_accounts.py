@@ -2,25 +2,30 @@
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.models.notification import NotificationChannel, NotificationStatus
-from app.models.subscriber import SubscriberCategory
-from app.schemas.notification import NotificationCreate
-from app.services import notification as notification_service
-from app.services import subscriber as subscriber_service
 from app.services import web_billing_accounts as web_billing_accounts_service
 from app.services import web_billing_statements as web_billing_statements_service
-from app.services.audit_helpers import build_audit_activities, log_audit_event
+from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.services.file_storage import build_content_disposition
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+
+def _actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    if not current_user:
+        return None
+    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    return str(value) if value else None
 
 
 @router.get(
@@ -64,23 +69,18 @@ def accounts_list(
 def account_new(request: Request, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    customer_ref = request.query_params.get("customer_ref")
-    form_data = web_billing_accounts_service.build_account_form_data(
-        db,
-        customer_ref=customer_ref,
-    )
     return templates.TemplateResponse(
         "admin/billing/account_form.html",
         {
             "request": request,
-            "action_url": "/admin/billing/accounts",
-            "form_title": "New Billing Account",
-            "submit_label": "Create Account",
+            **web_billing_accounts_service.build_new_account_form_context(
+                db,
+                customer_ref=request.query_params.get("customer_ref"),
+            ),
             "active_page": "accounts",
             "active_menu": "billing",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
-            **form_data,
         },
     )
 
@@ -101,12 +101,12 @@ def account_create(
     notes: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    from app.web.admin import get_current_user
-
     try:
-        account, selected_subscriber_id, metadata_payload = (
-            web_billing_accounts_service.create_account_from_form_with_metadata(
+        account, selected_subscriber_id = (
+            web_billing_accounts_service.create_account_from_form_web(
                 db,
+                request=request,
+                actor_id=_actor_id(request),
                 subscriber_id=subscriber_id,
                 customer_ref=customer_ref,
                 reseller_id=reseller_id,
@@ -119,39 +119,25 @@ def account_create(
     except Exception as exc:
         from app.web.admin import get_current_user, get_sidebar_stats
 
-        form_data = web_billing_accounts_service.build_account_form_data(
-            db,
-            customer_ref=customer_ref,
-        )
         return templates.TemplateResponse(
             "admin/billing/account_form.html",
             {
                 "request": request,
-                "action_url": "/admin/billing/accounts",
-                "form_title": "New Billing Account",
-                "submit_label": "Create Account",
-                "error": str(exc),
+                **web_billing_accounts_service.build_new_account_form_context(
+                    db,
+                    customer_ref=customer_ref,
+                    selected_subscriber_id=selected_subscriber_id
+                    if "selected_subscriber_id" in locals()
+                    else subscriber_id,
+                    error=str(exc),
+                ),
                 "active_page": "accounts",
                 "active_menu": "billing",
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                **form_data,
-                "selected_subscriber_id": selected_subscriber_id
-                if "selected_subscriber_id" in locals()
-                else subscriber_id,
             },
             status_code=400,
         )
-    current_user = get_current_user(request)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="subscriber_account",
-        entity_id=str(account.id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-        metadata=metadata_payload,
-    )
     return RedirectResponse(
         url=f"/admin/billing/accounts/{account.id}", status_code=303
     )
@@ -165,36 +151,18 @@ def account_create(
 def account_edit(request: Request, account_id: UUID, db: Session = Depends(get_db)):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    account = subscriber_service.accounts.get(db, str(account_id))
-    customer_ref = (
-        f"business:{account.id}"
-        if account.category == SubscriberCategory.business
-        else f"person:{account.id}"
-    )
-    form_data = web_billing_accounts_service.build_account_form_data(
-        db,
-        customer_ref=customer_ref,
-    )
     return templates.TemplateResponse(
         "admin/billing/account_form.html",
         {
             "request": request,
-            "action_url": f"/admin/billing/accounts/{account_id}/edit",
-            "form_title": "Edit Billing Account",
-            "submit_label": "Update Account",
+            **web_billing_accounts_service.build_edit_account_form_context(
+                db,
+                account_id=str(account_id),
+            ),
             "active_page": "accounts",
             "active_menu": "billing",
-            "account": account,
-            "selected_subscriber_id": str(account.id),
-            "selected_reseller_id": str(account.reseller_id)
-            if account.reseller_id
-            else "",
-            "selected_tax_rate_id": str(account.tax_rate_id)
-            if account.tax_rate_id
-            else "",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
-            **form_data,
         },
     )
 
@@ -216,61 +184,37 @@ def account_update(
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    before = subscriber_service.accounts.get(db, str(account_id))
     try:
-        account, metadata_payload = (
-            web_billing_accounts_service.update_account_from_form_with_metadata(
-                db,
-                account_id=str(account_id),
-                reseller_id=reseller_id,
-                tax_rate_id=tax_rate_id,
-                account_number=account_number,
-                status=status,
-                notes=notes,
-            )
-        )
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
+        account = web_billing_accounts_service.update_account_from_form_web(
+            db,
             request=request,
-            action="update",
-            entity_type="subscriber_account",
-            entity_id=str(account_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
-            metadata=metadata_payload,
+            actor_id=_actor_id(request),
+            account_id=str(account_id),
+            reseller_id=reseller_id,
+            tax_rate_id=tax_rate_id,
+            account_number=account_number,
+            status=status,
+            notes=notes,
         )
         return RedirectResponse(
             url=f"/admin/billing/accounts/{account.id}", status_code=303
         )
     except Exception as exc:
-        customer_ref = (
-            f"business:{before.id}"
-            if before.category == SubscriberCategory.business
-            else f"person:{before.id}"
-        )
-        form_data = web_billing_accounts_service.build_account_form_data(
-            db,
-            customer_ref=customer_ref,
-        )
         return templates.TemplateResponse(
             "admin/billing/account_form.html",
             {
                 "request": request,
-                "action_url": f"/admin/billing/accounts/{account_id}/edit",
-                "form_title": "Edit Billing Account",
-                "submit_label": "Update Account",
-                "error": str(exc),
+                **web_billing_accounts_service.build_edit_account_form_context(
+                    db,
+                    account_id=str(account_id),
+                    reseller_id=reseller_id,
+                    tax_rate_id=tax_rate_id,
+                    error=str(exc),
+                ),
                 "active_page": "accounts",
                 "active_menu": "billing",
-                "account": before,
-                "selected_subscriber_id": str(before.id),
-                "selected_reseller_id": reseller_id
-                or (str(before.reseller_id) if before.reseller_id else ""),
-                "selected_tax_rate_id": tax_rate_id
-                or (str(before.tax_rate_id) if before.tax_rate_id else ""),
                 "current_user": get_current_user(request),
                 "sidebar_stats": get_sidebar_stats(db),
-                **form_data,
             },
             status_code=400,
         )
@@ -341,22 +285,12 @@ def account_statement_csv(
         account_id=account_id,
         date_range=date_range,
     )
-    account_label = (
-        account.account_number
-        or (
-            account.company_name
-            if account.category == SubscriberCategory.business
-            else ""
-        )
-        or f"Account {str(account.id)[:8]}"
-    )
-    content = web_billing_statements_service.render_statement_csv(
-        account_label=account_label,
+    content, filename = web_billing_statements_service.render_account_statement_csv(
+        account=account,
         account_id=account_id,
         date_range=date_range,
         statement=statement,
     )
-    filename = f"statement_{account_label.replace(' ', '_')}_{date_range.start_date.isoformat()}_{date_range.end_date.isoformat()}.csv"
     headers = {"Content-Disposition": build_content_disposition(filename)}
     return StreamingResponse(iter([content]), media_type="text/csv", headers=headers)
 
@@ -378,34 +312,13 @@ def account_statement_send(
         db, account_id=str(account_id)
     )
     account = state["account"]
-    date_range = web_billing_statements_service.parse_statement_range(
-        start_date, end_date
-    )
-    statement = web_billing_statements_service.build_account_statement(
+    date_range = web_billing_statements_service.build_and_queue_account_statement_email(
         db,
+        account=account,
         account_id=account_id,
-        date_range=date_range,
-    )
-    to_email = (recipient_email or account.email or "").strip()
-    if not to_email:
-        raise HTTPException(
-            status_code=400, detail="No recipient email set for this account"
-        )
-    notification_service.notifications.create(
-        db,
-        NotificationCreate(
-            channel=NotificationChannel.email,
-            recipient=to_email,
-            status=NotificationStatus.queued,
-            subject=f"Account statement ({date_range.start_date.isoformat()} - {date_range.end_date.isoformat()})",
-            body=(
-                "Your account statement is ready.\n\n"
-                f"Period: {date_range.start_date.isoformat()} to {date_range.end_date.isoformat()}\n"
-                f"Opening balance: {statement['opening_balance']:.2f}\n"
-                f"Closing balance: {statement['closing_balance']:.2f}\n"
-                f"Transactions: {len(statement['rows'])}\n"
-            ),
-        ),
+        start_date=start_date,
+        end_date=end_date,
+        recipient_email=recipient_email,
     )
     return RedirectResponse(
         url=f"/admin/billing/accounts/{account_id}?statement_start={date_range.start_date.isoformat()}&statement_end={date_range.end_date.isoformat()}",

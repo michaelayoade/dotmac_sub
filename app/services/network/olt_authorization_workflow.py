@@ -20,7 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus, PonPort
+from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus, OnuType, PonPort
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 
@@ -356,11 +356,49 @@ def authorize_autofind_ont(
         step_started_at=validate_started_at,
     )
 
+    onu_type = None
+    candidate_model = getattr(matched_candidate, "model", None)
+    if candidate_model:
+        onu_type = db.scalars(
+            select(OnuType).where(
+                func.upper(OnuType.name) == str(candidate_model).strip().upper()
+            )
+        ).first()
+
+    profile_started_at = monotonic()
+    from app.services.network.olt_profile_resolution import (
+        ensure_ont_service_profile_match,
+        resolve_authorization_profiles,
+    )
+
+    profiles_ok, profiles_msg, authorization_profiles = resolve_authorization_profiles(
+        olt,
+        model=candidate_model,
+        onu_type=onu_type,
+    )
+    if not profiles_ok or authorization_profiles is None:
+        return _fail(
+            "Resolve OLT authorization profiles",
+            profiles_msg,
+            step_started_at=profile_started_at,
+        )
+    profile_message = authorization_profiles.message
+    if authorization_profiles.warnings:
+        profile_message += " " + " ".join(authorization_profiles.warnings)
+    _append_step(
+        "Resolve OLT authorization profiles",
+        True,
+        profile_message,
+        step_started_at=profile_started_at,
+    )
+
     authorize_started_at = monotonic()
     ok, msg, ont_id = olt_ssh_service.authorize_ont(
         olt,
         fsp,
         serial_number,
+        line_profile_id=authorization_profiles.line_profile_id,
+        service_profile_id=authorization_profiles.service_profile_id,
     )
     if not ok or ont_id is None:
         failure_message = msg
@@ -452,6 +490,37 @@ def authorize_autofind_ont(
         True,
         verification.message,
         step_started_at=verify_started_at,
+    )
+
+    match_started_at = monotonic()
+    if ont_id is None:
+        return _fail(
+            "Verify ONT service profile match",
+            "ONT ID on OLT is not available",
+            step_started_at=match_started_at,
+            ont_id_on_olt=ont_id,
+            status="warning",
+            completed_authorization=True,
+        )
+    match_ok, match_msg = ensure_ont_service_profile_match(
+        olt,
+        fsp=fsp,
+        ont_id=ont_id,
+    )
+    if not match_ok:
+        return _fail(
+            "Verify ONT service profile match",
+            match_msg,
+            step_started_at=match_started_at,
+            ont_id_on_olt=ont_id,
+            status="warning",
+            completed_authorization=True,
+        )
+    _append_step(
+        "Verify ONT service profile match",
+        True,
+        match_msg,
+        step_started_at=match_started_at,
     )
 
     ont_record_started_at = monotonic()

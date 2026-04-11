@@ -6,9 +6,11 @@ import logging
 from typing import Any
 
 from sqlalchemy.orm import Session
+from starlette.requests import Request
 
 from app.models.tr069 import Tr069AcsServer
 from app.services.genieacs import GenieACSClient, GenieACSError
+from app.services.tr069_web_audit import log_tr069_audit_event
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,12 @@ class Tr069PresetManager:
             raise
 
     def create(
-        self, db: Session, acs_server_id: str, preset_data: dict[str, Any]
+        self,
+        db: Session,
+        acs_server_id: str,
+        preset_data: dict[str, Any],
+        *,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Create a new preset.
 
@@ -76,13 +83,28 @@ class Tr069PresetManager:
 
         client = self._get_client(db, acs_server_id)
         try:
-            return client.create_preset(preset_data)
+            result = client.create_preset(preset_data)
+            log_tr069_audit_event(
+                db,
+                request=request,
+                action="create",
+                entity_type="tr069_preset",
+                entity_id=preset_data["_id"],
+                metadata={"acs_server_id": acs_server_id},
+            )
+            return result
         except GenieACSError as e:
             logger.error("Failed to create preset in GenieACS: %s", e)
             raise
 
     def update(
-        self, db: Session, acs_server_id: str, preset_id: str, preset_data: dict[str, Any]
+        self,
+        db: Session,
+        acs_server_id: str,
+        preset_id: str,
+        preset_data: dict[str, Any],
+        *,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Update an existing preset.
 
@@ -100,12 +122,28 @@ class Tr069PresetManager:
 
         client = self._get_client(db, acs_server_id)
         try:
-            return client.create_preset(preset_data)  # PUT is idempotent in GenieACS
+            result = client.create_preset(preset_data)  # PUT is idempotent in GenieACS
+            log_tr069_audit_event(
+                db,
+                request=request,
+                action="update",
+                entity_type="tr069_preset",
+                entity_id=preset_id,
+                metadata={"acs_server_id": acs_server_id},
+            )
+            return result
         except GenieACSError as e:
             logger.error("Failed to update preset %s in GenieACS: %s", preset_id, e)
             raise
 
-    def delete(self, db: Session, acs_server_id: str, preset_id: str) -> bool:
+    def delete(
+        self,
+        db: Session,
+        acs_server_id: str,
+        preset_id: str,
+        *,
+        request: Request | None = None,
+    ) -> bool:
         """Delete a preset.
 
         Args:
@@ -119,6 +157,14 @@ class Tr069PresetManager:
         client = self._get_client(db, acs_server_id)
         try:
             client.delete_preset(preset_id)
+            log_tr069_audit_event(
+                db,
+                request=request,
+                action="delete",
+                entity_type="tr069_preset",
+                entity_id=preset_id,
+                metadata={"acs_server_id": acs_server_id},
+            )
             return True
         except GenieACSError as e:
             logger.error("Failed to delete preset %s from GenieACS: %s", preset_id, e)

@@ -153,6 +153,24 @@ def build_form_context(
     return context
 
 
+def edit_form_context(
+    db: Session,
+    *,
+    zone_id: str,
+    error: str | None = None,
+) -> dict[str, object] | None:
+    """Build edit form context, returning None when the zone does not exist."""
+    zone = network_service.network_zones.get_or_none(db, zone_id)
+    if not zone:
+        return None
+    return build_form_context(
+        db,
+        zone=zone,
+        action_url=f"/admin/network/zones/{zone.id}",
+        error=error,
+    )
+
+
 def parse_form_values(form: FormData) -> dict[str, object]:
     """Parse zone form fields into normalized values."""
     lat_str = _form_str(form, "latitude")

@@ -1,6 +1,6 @@
+import importlib
 from types import SimpleNamespace
 from uuid import uuid4
-import importlib
 
 from sqlalchemy import select
 
@@ -8,13 +8,14 @@ from app.models.network import (
     OltCard,
     OltCardPort,
     OltShelf,
-    OnuOfflineReason,
-    OnuOnlineStatus,
     OntAssignment,
     OntUnit,
+    OnuOfflineReason,
+    OnuOnlineStatus,
     PonPort,
 )
-from app.services import web_network_olts as service
+from app.services.network import olt_snmp_sync as service
+from app.services.network import olt_web_topology as topology_service
 
 
 class _ScalarResult:
@@ -156,11 +157,11 @@ def test_sync_onts_from_olt_snmp_impl_flushes_before_final_commit(
 
 def test_decode_huawei_packed_fsp_is_deterministic() -> None:
     # 4194320384 = 0xFA000000 (base) + 16384 (delta)
-    # delta / 256 = 64 -> slot = 64 / 16 = 4, port = 64 % 16 = 0
-    assert service._decode_huawei_packed_fsp(4194320384) == "0/4/0"
+    # delta / 256 = 64 -> slot = 2, port = 0 for the canonical Huawei decoder
+    assert service._decode_huawei_packed_fsp(4194320384) == "0/2/0"
 
 
-def test_sync_impl_fails_closed_when_assignment_creation_rolls_back(
+def test_sync_impl_skips_unknown_snmp_onu_without_creating_inventory(
     monkeypatch,
 ) -> None:
     class _FakeScalarList:
@@ -184,20 +185,16 @@ def test_sync_impl_fails_closed_when_assignment_creation_rolls_back(
 
         def scalars(self, *_args, **_kwargs):
             self.scalar_calls += 1
-            # Let the first three scalars calls succeed:
-            # 1) existing_onts lookup
-            # 2) ONT lookup in loop
-            # 3) PON port lookup for assignment
-            # Then fail on the 4th call (ONTs needing assignment)
-            if self.scalar_calls <= 3:
-                return _FakeScalarList([])
-            raise RuntimeError("assignment flush boom")
+            return _FakeScalarList([])
 
         def flush(self):
             return None
 
         def rollback(self):
             self.rollback_called += 1
+
+        def commit(self):
+            return None
 
         def add(self, _obj):
             return None
@@ -224,26 +221,22 @@ def test_sync_impl_fails_closed_when_assignment_creation_rolls_back(
     )
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: fake_olt)
-    monkeypatch.setattr(service, "_find_linked_network_device", lambda *_a, **_k: fake_linked)
+    monkeypatch.setattr(service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked)
     monkeypatch.setattr(service, "_run_simple_v2c_walk", lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"])
     monkeypatch.setattr(service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"})
 
     result = service._sync_onts_from_olt_snmp_impl(fake_db, "olt-1")
 
-    assert result == (
-        False,
-        "Failed to auto-create ONT assignments: assignment flush boom",
-        {
-            "discovered": 1,
-            "created": 1,
-            "updated": 0,
-            "assignments_created": 0,
-            "assignment_errors": 1,
-            "tr069_runtime_synced": 0,
-            "tr069_runtime_errors": 0,
-        },
-    )
-    assert fake_db.rollback_called == 1
+    ok, message, stats = result
+
+    assert ok is True
+    assert "ONU telemetry sync complete" in message
+    assert stats["discovered"] == 1
+    assert stats["created"] == 0
+    assert stats["updated"] == 0
+    assert stats["skipped"] == 1
+    assert stats["assignments_created"] == 0
+    assert fake_db.rollback_called == 0
 
 
 def test_sync_impl_leaves_unresolved_topology_unassigned(
@@ -305,7 +298,7 @@ def test_sync_impl_leaves_unresolved_topology_unassigned(
     )
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: fake_olt)
-    monkeypatch.setattr(service, "_find_linked_network_device", lambda *_a, **_k: fake_linked)
+    monkeypatch.setattr(service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked)
     monkeypatch.setattr(service, "_run_simple_v2c_walk", lambda *_a, **_k: ["1.3.6.1.x.99.7 = INTEGER: 1"])
     monkeypatch.setattr(service, "_parse_walk_composite", lambda _lines: {"99.7": "1"})
     monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
@@ -318,11 +311,10 @@ def test_sync_impl_leaves_unresolved_topology_unassigned(
 
     assert ok is True
     assert stats["unresolved_topology"] == 1
+    assert stats["created"] == 0
+    assert stats["skipped"] == 1
     assert stats["assignments_created"] == 0
-    assert len(discovered_onts) == 1
-    assert discovered_onts[0].board is None
-    assert discovered_onts[0].port is None
-    assert discovered_onts[0].name == "ONU unresolved:99.7"
+    assert discovered_onts == []
     assert assignments == []
     assert pon_ports == []
 
@@ -362,7 +354,7 @@ def test_sync_impl_clears_stale_offline_reason_when_status_becomes_unknown(
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: fake_olt)
     monkeypatch.setattr(
-        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
     )
     monkeypatch.setattr(
         service,
@@ -409,8 +401,16 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
     shelf = OltShelf(olt_id=olt.id, shelf_number=0)
     db_session.add(shelf)
     db_session.flush()
-    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    card = OltCard(shelf_id=shelf.id, slot_number=2)
     db_session.add(card)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="HWTCREAL0001",
+        olt_device_id=olt.id,
+        external_id="huawei:4194320384.3",
+        is_active=True,
+    )
+    db_session.add(ont)
     db_session.flush()
 
     fake_linked = SimpleNamespace(
@@ -425,7 +425,7 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
     monkeypatch.setattr(
-        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
     )
     monkeypatch.setattr(
         service,
@@ -444,9 +444,11 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
     ).first()
 
     assert ok is True
+    assert stats["created"] == 0
+    assert stats["updated"] == 1
     assert stats["assignments_created"] == 1
     assert pon is not None
-    assert pon.name == "0/4/0"
+    assert pon.name == "0/2/0"
     assert pon.port_number == 0
     assert pon.olt_card_port_id is not None
     card_port = db_session.get(OltCardPort, pon.olt_card_port_id)
@@ -483,17 +485,25 @@ def test_sync_impl_repairs_existing_pon_port_metadata(
     shelf = OltShelf(olt_id=olt.id, shelf_number=0)
     db_session.add(shelf)
     db_session.flush()
-    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    card = OltCard(shelf_id=shelf.id, slot_number=2)
     db_session.add(card)
     db_session.flush()
     legacy_port = PonPort(
         olt_id=olt.id,
-        name="0/4/0",
+        name="0/2/0",
         port_number=None,
         olt_card_port_id=None,
         is_active=True,
     )
     db_session.add(legacy_port)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="HWTCREAL0002",
+        olt_device_id=olt.id,
+        external_id="huawei:4194320384.3",
+        is_active=True,
+    )
+    db_session.add(ont)
     db_session.flush()
 
     fake_linked = SimpleNamespace(
@@ -508,7 +518,7 @@ def test_sync_impl_repairs_existing_pon_port_metadata(
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
     monkeypatch.setattr(
-        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
     )
     monkeypatch.setattr(
         service,
@@ -559,10 +569,10 @@ def test_sync_impl_merges_duplicate_rows_for_same_card_port(
     shelf = OltShelf(olt_id=olt.id, shelf_number=0)
     db_session.add(shelf)
     db_session.flush()
-    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    card = OltCard(shelf_id=shelf.id, slot_number=2)
     db_session.add(card)
     db_session.flush()
-    card_port = OltCardPort(card_id=card.id, port_number=0, name="0/4/0", is_active=True)
+    card_port = OltCardPort(card_id=card.id, port_number=0, name="0/2/0", is_active=True)
     db_session.add(card_port)
     db_session.flush()
     linked_port = PonPort(
@@ -576,14 +586,19 @@ def test_sync_impl_merges_duplicate_rows_for_same_card_port(
     db_session.flush()
     duplicate_name_port = PonPort(
         olt_id=olt.id,
-        name="0/4/0",
+        name="0/2/0",
         port_number=0,
         olt_card_port_id=None,
         is_active=True,
     )
     db_session.add(duplicate_name_port)
     db_session.flush()
-    ont = OntUnit(serial_number="ONT-DUPLICATE-1", is_active=True)
+    ont = OntUnit(
+        serial_number="ONT-DUPLICATE-1",
+        olt_device_id=olt.id,
+        external_id="huawei:4194320384.3",
+        is_active=True,
+    )
     old_ont = OntUnit(serial_number="ONT-DUPLICATE-OLD", is_active=True)
     db_session.add(ont)
     db_session.add(old_ont)
@@ -614,7 +629,7 @@ def test_sync_impl_merges_duplicate_rows_for_same_card_port(
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
     monkeypatch.setattr(
-        service, "_find_linked_network_device", lambda *_a, **_k: fake_linked
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
     )
     monkeypatch.setattr(
         service,
@@ -633,7 +648,7 @@ def test_sync_impl_merges_duplicate_rows_for_same_card_port(
 
     assert ok is True
     assert repaired is not None
-    assert repaired.name == "0/4/0"
+    assert repaired.name == "0/2/0"
     assert repaired.olt_card_port_id == card_port.id
     assert duplicate is not None
     assert duplicate.is_active is False
@@ -723,7 +738,7 @@ def test_repair_pon_ports_for_olt_repairs_assignment_derived_legacy_port(
     shelf = OltShelf(olt_id=olt.id, shelf_number=0)
     db_session.add(shelf)
     db_session.flush()
-    card = OltCard(shelf_id=shelf.id, slot_number=4)
+    card = OltCard(shelf_id=shelf.id, slot_number=2)
     db_session.add(card)
     db_session.flush()
     legacy_port = PonPort(
@@ -735,7 +750,7 @@ def test_repair_pon_ports_for_olt_repairs_assignment_derived_legacy_port(
     )
     db_session.add(legacy_port)
     db_session.flush()
-    ont = OntUnit(serial_number="ONT-REPAIR-1", board="0/4", port="1", is_active=True)
+    ont = OntUnit(serial_number="ONT-REPAIR-1", board="0/2", port="1", is_active=True)
     db_session.add(ont)
     db_session.flush()
     assignment = OntAssignment(
@@ -746,7 +761,7 @@ def test_repair_pon_ports_for_olt_repairs_assignment_derived_legacy_port(
     db_session.add(assignment)
     db_session.commit()
 
-    ok, _msg, stats = service.repair_pon_ports_for_olt(db_session, str(olt.id))
+    ok, _msg, stats = topology_service.repair_pon_ports_for_olt(db_session, str(olt.id))
 
     repaired_ports = list(
         db_session.scalars(select(PonPort).where(PonPort.olt_id == olt.id)).all()
@@ -757,7 +772,7 @@ def test_repair_pon_ports_for_olt_repairs_assignment_derived_legacy_port(
     assert stats["merged"] == 1
     assert stats["unresolved"] == 0
     assert len(active_ports) == 1
-    assert active_ports[0].name == "0/4/1"
+    assert active_ports[0].name == "0/2/1"
     assert active_ports[0].olt_card_port_id is not None
     db_session.refresh(assignment)
     assert assignment.pon_port_id == active_ports[0].id
@@ -786,7 +801,7 @@ def test_repair_pon_ports_for_olt_reports_unresolved_ports(db_session) -> None:
     db_session.add(unresolved_port)
     db_session.commit()
 
-    ok, _msg, stats = service.repair_pon_ports_for_olt(db_session, str(olt.id))
+    ok, _msg, stats = topology_service.repair_pon_ports_for_olt(db_session, str(olt.id))
 
     assert ok is True
     assert stats["scanned"] == 1
@@ -811,7 +826,7 @@ def test_repair_pon_ports_for_olt_skips_inactive_ports(db_session) -> None:
     db_session.flush()
     inactive_port = PonPort(
         olt_id=olt.id,
-        name="0/4/1",
+        name="0/2/1",
         port_number=1,
         olt_card_port_id=None,
         is_active=False,
@@ -819,7 +834,7 @@ def test_repair_pon_ports_for_olt_skips_inactive_ports(db_session) -> None:
     db_session.add(inactive_port)
     db_session.commit()
 
-    ok, _msg, stats = service.repair_pon_ports_for_olt(db_session, str(olt.id))
+    ok, _msg, stats = topology_service.repair_pon_ports_for_olt(db_session, str(olt.id))
 
     db_session.refresh(inactive_port)
     assert ok is True

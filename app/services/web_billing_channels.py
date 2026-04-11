@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import logging
+from uuid import UUID
 
 from app.models.billing import PaymentChannelType
 from app.services import billing as billing_service
+from app.services.billing import configuration as billing_config_service
 
 logger = logging.getLogger(__name__)
 
@@ -132,3 +134,107 @@ def load_payment_channel_account_edit_data(
         "channels": channels,
         "collection_accounts": collection_accounts,
     }
+
+
+def create_payment_channel_from_form(
+    db,
+    *,
+    name: str,
+    channel_type: str,
+    provider_id: str | None,
+    default_collection_account_id: str | None,
+    is_default: str | None,
+    is_active: str | None,
+    fee_rules: str | None,
+    notes: str | None,
+):
+    return billing_config_service.create_payment_channel(
+        db=db,
+        name=name,
+        channel_type=channel_type,
+        provider_id=provider_id,
+        default_collection_account_id=default_collection_account_id,
+        is_default=is_default,
+        is_active=is_active,
+        fee_rules=fee_rules,
+        notes=notes,
+    )
+
+
+def update_payment_channel_from_form(
+    db,
+    *,
+    channel_id: UUID,
+    name: str,
+    channel_type: str,
+    provider_id: str | None,
+    default_collection_account_id: str | None,
+    is_default: str | None,
+    is_active: str | None,
+    fee_rules: str | None,
+    notes: str | None,
+):
+    return billing_config_service.update_payment_channel(
+        db=db,
+        channel_id=channel_id,
+        name=name,
+        channel_type=channel_type,
+        provider_id=provider_id,
+        default_collection_account_id=default_collection_account_id,
+        is_default=is_default,
+        is_active=is_active,
+        fee_rules=fee_rules,
+        notes=notes,
+    )
+
+
+def deactivate_payment_channel(db, *, channel_id: UUID) -> None:
+    billing_service.payment_channels.delete(db, str(channel_id))
+
+
+def create_payment_channel_account_from_form(
+    db,
+    *,
+    channel_id: str,
+    collection_account_id: str,
+    currency: str | None,
+    priority: int,
+    is_default: str | None,
+    is_active: str | None,
+):
+    return billing_config_service.create_payment_channel_account(
+        db=db,
+        channel_id=channel_id,
+        collection_account_id=collection_account_id,
+        currency=currency,
+        priority=priority,
+        is_default=is_default,
+        is_active=is_active,
+    )
+
+
+def update_payment_channel_account_from_form(
+    db,
+    *,
+    mapping_id: UUID,
+    channel_id: str,
+    collection_account_id: str,
+    currency: str | None,
+    priority: int,
+    is_default: str | None,
+    is_active: str | None,
+):
+    return billing_config_service.update_payment_channel_account(
+        db=db,
+        mapping_id=mapping_id,
+        channel_id=channel_id,
+        collection_account_id=collection_account_id,
+        currency=currency,
+        priority=priority,
+        is_default=is_default,
+        is_active=is_active,
+    )
+
+
+def deactivate_payment_channel_account(db, *, mapping_id: UUID) -> None:
+    billing_service.payment_channel_accounts.delete(db, str(mapping_id))

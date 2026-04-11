@@ -100,53 +100,6 @@ def cleanup_expired_tokens() -> dict[str, int]:
         session.close()
 
 
-@celery_app.task(name="app.tasks.wireguard.sync_peer_stats")
-def sync_peer_stats(peer_id: str | None = None) -> dict[str, int]:
-    """Sync peer connection statistics from WireGuard interface.
-
-    This is a placeholder task that would normally connect to the
-    WireGuard server and pull handshake times and traffic stats.
-
-    In a full implementation, this would use the WireGuard API or
-    parse `wg show` output to update peer stats.
-
-    Args:
-        peer_id: Optional specific peer to sync, or all if None
-
-    Returns:
-        Dict with count of synced peers
-    """
-    session = SessionLocal()
-    try:
-        # This is a placeholder - actual implementation would:
-        # 1. Connect to WireGuard server (via SSH or API)
-        # 2. Run `wg show <interface>` or use wgctrl library
-        # 3. Parse output for each peer's:
-        #    - latest handshake time
-        #    - transfer rx/tx bytes
-        #    - endpoint IP
-        # 4. Update the database
-
-        synced_count = 0
-
-        if peer_id:
-            peers = [wg_service.wg_peers.get(session, peer_id)]
-        else:
-            peers = wg_service.wg_peers.list(session, limit=1000)
-
-        # Placeholder: In production, fetch actual stats here
-        # For now, just count peers that could be synced
-        synced_count = len(peers)
-
-        return {"synced_peers": synced_count}
-    except Exception as e:
-        logger.error("Error in sync_peer_stats: %s", e)
-        session.rollback()
-        raise
-    finally:
-        session.close()
-
-
 @celery_app.task(name="app.tasks.wireguard.generate_connection_log_report")
 def generate_connection_log_report(
     server_id: str | None = None,

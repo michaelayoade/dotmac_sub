@@ -75,6 +75,19 @@ def _get_operation(db: Session, operation_id: str) -> NetworkOperation:
     return op
 
 
+def _get_active_operation_by_correlation(
+    db: Session, correlation_key: str | None
+) -> NetworkOperation | None:
+    """Return the active operation for a dedup key, if one exists."""
+    if not correlation_key:
+        return None
+    stmt = select(NetworkOperation).where(
+        NetworkOperation.correlation_key == correlation_key,
+        NetworkOperation.status.in_(_ACTIVE_STATUSES),
+    )
+    return db.scalars(stmt).first()
+
+
 def _check_not_terminal(op: NetworkOperation) -> None:
     """Reject transitions from terminal statuses."""
     if op.status in _TERMINAL_STATUSES:
@@ -118,22 +131,17 @@ class NetworkOperations(ListResponseMixin):
             HTTPException: 409 if an active operation with the same
                 correlation_key already exists.
         """
-        if correlation_key:
-            stmt = select(NetworkOperation).where(
-                NetworkOperation.correlation_key == correlation_key,
-                NetworkOperation.status.in_(_ACTIVE_STATUSES),
+        existing = _get_active_operation_by_correlation(db, correlation_key)
+        if existing:
+            logger.warning(
+                "Duplicate operation blocked: %s (existing=%s)",
+                correlation_key,
+                existing.id,
             )
-            existing = db.scalars(stmt).first()
-            if existing:
-                logger.warning(
-                    "Duplicate operation blocked: %s (existing=%s)",
-                    correlation_key,
-                    existing.id,
-                )
-                raise HTTPException(
-                    status_code=409,
-                    detail="Operation already in progress",
-                )
+            raise HTTPException(
+                status_code=409,
+                detail="Operation already in progress",
+            )
 
         op = NetworkOperation(
             operation_type=operation_type,
@@ -485,9 +493,25 @@ def run_tracked_action(
         )
     except HTTPException as exc:
         if exc.status_code == 409:
+            existing = _get_active_operation_by_correlation(db, correlation_key)
+            if existing and existing.status == NetworkOperationStatus.waiting:
+                waiting_reason = existing.waiting_reason or "next_inform"
+                return ActionResult(
+                    success=False,
+                    message="This operation is already waiting for the ONT to inform ACS.",
+                    data={
+                        "operation_id": str(existing.id),
+                        "waiting_reason": waiting_reason,
+                    },
+                    waiting=True,
+                )
             return ActionResult(
                 success=False,
                 message="This operation is already in progress.",
+                data={
+                    "operation_id": str(existing.id) if existing else None,
+                    "conflict": True,
+                },
             )
         raise
     network_operations.mark_running(db, str(op.id))
@@ -496,7 +520,12 @@ def run_tracked_action(
     try:
         result = action_fn()
         try:
-            if getattr(result, "success", False):
+            if getattr(result, "waiting", False):
+                waiting_reason = (
+                    getattr(result, "data", None) or {}
+                ).get("waiting_reason") or "next_inform"
+                network_operations.mark_waiting(db, str(op.id), str(waiting_reason))
+            elif getattr(result, "success", False):
                 network_operations.mark_succeeded(
                     db, str(op.id), output_payload=getattr(result, "data", None)
                 )

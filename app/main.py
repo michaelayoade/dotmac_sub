@@ -33,7 +33,6 @@ from app.api.connectors import router as connectors_router
 from app.api.customers import router as customers_router
 from app.api.defaults import router as defaults_router
 from app.api.deps import require_role, require_user_auth
-from app.api.domains import router as domains_router
 from app.api.domains_monitoring import router as domains_monitoring_router
 from app.api.domains_network_access import router as domains_network_access_router
 from app.api.domains_network_fiber import router as domains_network_fiber_router
@@ -729,7 +728,6 @@ _include_api_router(search_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(subscriber_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(support_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(tables_router, dependencies=[Depends(require_user_auth)])
-_include_api_router(domains_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(
     domains_provisioning_router, dependencies=[Depends(require_user_auth)]
 )

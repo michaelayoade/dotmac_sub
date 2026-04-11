@@ -5,11 +5,15 @@ from __future__ import annotations
 import json
 import logging
 import uuid
+from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import cast
 
+from fastapi import HTTPException, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
+from starlette.requests import Request
 
 from app.models.catalog import NasDevice, Subscription
 from app.models.network import NetworkZone
@@ -20,7 +24,10 @@ from app.models.wireless_mast import WirelessMast
 from app.schemas.wireless_mast import WirelessMastCreate
 from app.services import nas as nas_service
 from app.services import wireless_mast as wireless_mast_service
+from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
 from app.services.common import coerce_uuid
+from app.services.file_storage import build_content_disposition, file_uploads
+from app.services.object_storage import ObjectNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +38,62 @@ DOCUMENT_CATEGORY_LABELS = {
     "asbuilt": "As-Built Drawing",
     "other": "Other",
 }
+
+
+@dataclass
+class PopSiteFormResult:
+    pop_site: PopSite | None = None
+    form_context: dict[str, object] | None = None
+    error: str | None = None
+    not_found: bool = False
+
+
+@dataclass
+class PopSiteUploadResult:
+    uploaded: bool = False
+    not_found: bool = False
+
+
+@dataclass
+class PopSiteStreamResult:
+    chunks: Iterator[bytes] | None = None
+    media_type: str = "application/octet-stream"
+    headers: dict[str, str] | None = None
+    not_found: bool = False
+
+
+def _actor_id_from_request(request: Request | None) -> str | None:
+    if request is None:
+        return None
+    from app.services import web_admin as web_admin_service
+
+    return web_admin_service.get_actor_id(request)
+
+
+def _actor_owner_subscriber_id(db: Session, request: Request | None) -> uuid.UUID | None:
+    actor_id = _actor_id_from_request(request)
+    return file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
+
+
+def _log_pop_site_audit(
+    db: Session,
+    *,
+    request: Request | None,
+    action: str,
+    entity_id: object,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    if request is None:
+        return
+    log_audit_event(
+        db=db,
+        request=request,
+        action=action,
+        entity_type="pop_site",
+        entity_id=str(entity_id),
+        actor_id=_actor_id_from_request(request),
+        metadata=metadata,
+    )
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -277,6 +340,30 @@ def build_form_context(
     return context
 
 
+def _form_result_context(
+    *,
+    pop_site: PopSite | dict[str, object] | None,
+    action_url: str,
+    reference_data: dict[str, object],
+    error: str | None = None,
+    mast_error: str | None = None,
+    mast_enabled: bool = False,
+    mast_defaults: dict[str, object] | None = None,
+) -> PopSiteFormResult:
+    return PopSiteFormResult(
+        form_context=build_form_context(
+            pop_site=pop_site,
+            action_url=action_url,
+            error=error,
+            mast_error=mast_error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        ),
+        error=error or mast_error,
+    )
+
+
 def create_site(db: Session, values: dict[str, object]) -> PopSite:
     """Create and persist POP site."""
     pop_site = PopSite(
@@ -300,6 +387,88 @@ def create_site(db: Session, values: dict[str, object]) -> PopSite:
     db.commit()
     db.refresh(pop_site)
     return pop_site
+
+
+def create_site_from_form(
+    db: Session, form: FormData, *, request: Request | None = None
+) -> PopSiteFormResult:
+    reference_data = form_reference_data(db)
+    values = parse_site_form_values(form)
+    normalized, error = validate_site_values(values)
+    lat_value = _coerce_site_float(normalized.get("latitude")) if normalized else None
+    lon_value = _coerce_site_float(normalized.get("longitude")) if normalized else None
+    mast_enabled, mast_data, mast_error, mast_defaults = parse_mast_form(
+        form, lat_value, lon_value
+    )
+
+    if error:
+        return _form_result_context(
+            pop_site=None,
+            action_url="/admin/network/pop-sites",
+            error=error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+    if mast_error:
+        return _form_result_context(
+            pop_site=None,
+            action_url="/admin/network/pop-sites",
+            mast_error=mast_error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+    if normalized is None:
+        return _form_result_context(
+            pop_site=None,
+            action_url="/admin/network/pop-sites",
+            error="Please correct the highlighted fields.",
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+
+    normalized, error = resolve_site_relationships(db, normalized)
+    if error:
+        return _form_result_context(
+            pop_site=None,
+            action_url="/admin/network/pop-sites",
+            error=error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+    if normalized is None:
+        return _form_result_context(
+            pop_site=None,
+            action_url="/admin/network/pop-sites",
+            error="Please correct the highlighted fields.",
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+
+    pop_site = create_site(db, normalized)
+    _log_pop_site_audit(
+        db,
+        request=request,
+        action="create",
+        entity_id=pop_site.id,
+        metadata={"name": pop_site.name, "code": pop_site.code},
+    )
+    if mast_enabled:
+        maybe_create_mast(db, str(pop_site.id), mast_data)
+    return PopSiteFormResult(pop_site=pop_site)
+
+
+def _coerce_site_float(value: object | None) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def apply_site_update(pop_site: PopSite, values: dict[str, object]) -> None:
@@ -329,6 +498,100 @@ def commit_site_update(
     """Apply values and commit POP site update."""
     apply_site_update(pop_site, values)
     db.flush()
+
+
+def update_site_from_form(
+    db: Session,
+    pop_site_id: str,
+    form: FormData,
+    *,
+    request: Request | None = None,
+) -> PopSiteFormResult:
+    pop_site = get_pop_site(db, pop_site_id)
+    if not pop_site:
+        return PopSiteFormResult(not_found=True)
+
+    reference_data = form_reference_data(db)
+    values = parse_site_form_values(form)
+    normalized, error = validate_site_values(values)
+    fallback_lat = (
+        _coerce_site_float(normalized.get("latitude"))
+        if normalized
+        else pop_site.latitude
+    )
+    fallback_lon = (
+        _coerce_site_float(normalized.get("longitude"))
+        if normalized
+        else pop_site.longitude
+    )
+    mast_enabled, mast_data, mast_error, mast_defaults = parse_mast_form(
+        form, fallback_lat, fallback_lon
+    )
+
+    action_url = f"/admin/network/pop-sites/{pop_site.id}"
+    if error:
+        return _form_result_context(
+            pop_site=pop_site,
+            action_url=action_url,
+            error=error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+    if normalized is None:
+        return _form_result_context(
+            pop_site=pop_site,
+            action_url=action_url,
+            error="Please correct the highlighted fields.",
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+    if mast_error:
+        return _form_result_context(
+            pop_site=pop_site,
+            action_url=action_url,
+            mast_error=mast_error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+
+    normalized, error = resolve_site_relationships(db, normalized)
+    if error:
+        return _form_result_context(
+            pop_site=pop_site,
+            action_url=action_url,
+            error=error,
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+    if normalized is None:
+        return _form_result_context(
+            pop_site=pop_site,
+            action_url=action_url,
+            error="Please correct the highlighted fields.",
+            mast_enabled=mast_enabled,
+            mast_defaults=mast_defaults,
+            reference_data=reference_data,
+        )
+
+    before_snapshot = model_to_dict(pop_site)
+    commit_site_update(db, pop_site, normalized)
+    after_snapshot = model_to_dict(pop_site)
+    changes = diff_dicts(before_snapshot, after_snapshot)
+    metadata_payload = {"changes": changes} if changes else None
+    _log_pop_site_audit(
+        db,
+        request=request,
+        action="update",
+        entity_id=pop_site.id,
+        metadata=metadata_payload,
+    )
+    if mast_enabled:
+        maybe_create_mast(db, str(pop_site.id), mast_data)
+    return PopSiteFormResult(pop_site=pop_site)
 
 
 def get_pop_site(db: Session, pop_site_id: str) -> PopSite | None:
@@ -549,6 +812,121 @@ def get_site_file_or_none(db: Session, file_id: str) -> StoredFile | None:
     ):
         return None
     return record
+
+
+def upload_photo(
+    db: Session,
+    *,
+    pop_site_id: str,
+    file: UploadFile,
+    request: Request | None = None,
+) -> PopSiteUploadResult:
+    pop_site = get_pop_site(db, pop_site_id)
+    if not pop_site:
+        return PopSiteUploadResult(not_found=True)
+    if not file.filename:
+        return PopSiteUploadResult(uploaded=False)
+    payload = file.file.read()
+    if not payload:
+        return PopSiteUploadResult(uploaded=False)
+    actor_id = _actor_id_from_request(request)
+    file_uploads.upload(
+        db=db,
+        domain="branding",
+        entity_type="pop_site_photo",
+        entity_id=str(pop_site_id),
+        original_filename=file.filename,
+        content_type=file.content_type,
+        data=payload,
+        uploaded_by=actor_id,
+        owner_subscriber_id=_actor_owner_subscriber_id(db, request),
+    )
+    return PopSiteUploadResult(uploaded=True)
+
+
+def normalize_document_category(category: str) -> str:
+    return category if category in DOCUMENT_CATEGORY_LABELS else "other"
+
+
+def upload_document(
+    db: Session,
+    *,
+    pop_site_id: str,
+    category: str,
+    file: UploadFile,
+    request: Request | None = None,
+) -> PopSiteUploadResult:
+    pop_site = get_pop_site(db, pop_site_id)
+    if not pop_site:
+        return PopSiteUploadResult(not_found=True)
+    if not file.filename:
+        return PopSiteUploadResult(uploaded=False)
+    payload = file.file.read()
+    if not payload:
+        return PopSiteUploadResult(uploaded=False)
+    normalized_category = normalize_document_category(category)
+    actor_id = _actor_id_from_request(request)
+    file_uploads.upload(
+        db=db,
+        domain="attachments",
+        entity_type=f"pop_site_document_{normalized_category}",
+        entity_id=str(pop_site_id),
+        original_filename=file.filename,
+        content_type=file.content_type,
+        data=payload,
+        uploaded_by=actor_id,
+        owner_subscriber_id=_actor_owner_subscriber_id(db, request),
+    )
+    return PopSiteUploadResult(uploaded=True)
+
+
+def stream_site_file(
+    db: Session,
+    *,
+    pop_site_id: str,
+    file_id: str,
+    request: Request | None = None,
+    as_attachment: bool = False,
+) -> PopSiteStreamResult:
+    record = get_site_file_or_none(db, file_id)
+    if not record or record.entity_id != str(pop_site_id):
+        return PopSiteStreamResult(not_found=True)
+    try:
+        file_uploads.assert_owner_access(record, _actor_owner_subscriber_id(db, request))
+        stream = file_uploads.stream_file(record)
+    except (HTTPException, ObjectNotFoundError):
+        return PopSiteStreamResult(not_found=True)
+
+    headers: dict[str, str] = {}
+    if as_attachment:
+        headers["Content-Disposition"] = build_content_disposition(
+            record.original_filename
+        )
+    if stream.content_length is not None:
+        headers["Content-Length"] = str(stream.content_length)
+    return PopSiteStreamResult(
+        chunks=stream.chunks,
+        media_type=stream.content_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+def delete_site_file(
+    db: Session,
+    *,
+    pop_site_id: str,
+    file_id: str,
+    request: Request | None = None,
+) -> bool:
+    record = get_site_file_or_none(db, file_id)
+    if not record or record.entity_id != str(pop_site_id):
+        return False
+    try:
+        file_uploads.assert_owner_access(record, _actor_owner_subscriber_id(db, request))
+    except HTTPException:
+        return False
+    file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)
+    return True
 
 
 def create_contact(

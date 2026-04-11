@@ -185,6 +185,11 @@ def handle_update(
     )
 
 
+def handle_delete(db: Session, capability_id: str) -> None:
+    """Soft-delete a vendor capability."""
+    vendor_capabilities.delete(db, capability_id)
+
+
 def parse_param_map_form(form: FormData) -> dict[str, object]:
     """Parse TR-069 parameter map form fields."""
     return {
@@ -222,3 +227,8 @@ def handle_param_map_create(
         else None,
         notes=str(form_data["notes"]) if form_data.get("notes") else None,
     )
+
+
+def handle_param_map_delete(db: Session, param_map_id: str) -> None:
+    """Delete a TR-069 parameter map."""
+    tr069_parameter_maps.delete(db, param_map_id)

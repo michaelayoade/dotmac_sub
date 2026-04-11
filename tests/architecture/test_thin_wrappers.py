@@ -16,7 +16,6 @@ DISALLOWED_PATTERNS = [
 # Files that legitimately need direct DB access (health checks, helpers)
 EXCLUDED_FILES = {
     "health.py",  # Health checks require direct DB access
-    "network_onts.py",  # Has _resolve_splitter_port_id helper (to be refactored)
 }
 
 

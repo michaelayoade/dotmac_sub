@@ -424,12 +424,25 @@ def _save_jobs(db: Session, jobs: list[dict[str, Any]]) -> None:
     )
 
 
-def list_jobs(db: Session, *, limit: int = 20) -> list[dict[str, Any]]:
-    return _jobs(db)[: max(1, limit)]
+def _filter_jobs_by_actor(
+    jobs: list[dict[str, Any]], actor_id: str | None
+) -> list[dict[str, Any]]:
+    actor = _normalize(actor_id)
+    if actor is None:
+        return jobs
+    return [job for job in jobs if str(job.get("actor_id") or "") == actor]
 
 
-def get_job(db: Session, job_id: str) -> dict[str, Any] | None:
-    return job_log_store.get_job(_jobs(db), job_id)
+def list_jobs(
+    db: Session, *, limit: int = 20, actor_id: str | None = None
+) -> list[dict[str, Any]]:
+    return _filter_jobs_by_actor(_jobs(db), actor_id)[: max(1, limit)]
+
+
+def get_job(
+    db: Session, job_id: str, *, actor_id: str | None = None
+) -> dict[str, Any] | None:
+    return job_log_store.get_job(_filter_jobs_by_actor(_jobs(db), actor_id), job_id)
 
 
 def upsert_job(db: Session, payload: dict[str, Any]) -> dict[str, Any]:
@@ -691,7 +704,7 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
     return final
 
 
-def page_options(db: Session) -> dict[str, Any]:
+def page_options(db: Session, *, actor_id: str | None = None) -> dict[str, Any]:
     from app.models.catalog import NasDevice
 
     offers = db.scalars(
@@ -726,5 +739,5 @@ def page_options(db: Session) -> dict[str, Any]:
         "ip_pools": ip_pools,
         "pon_ports": pon_ports,
         "subscriber_statuses": [status.value for status in SubscriberStatus],
-        "jobs": list_jobs(db, limit=20),
+        "jobs": list_jobs(db, limit=20, actor_id=actor_id),
     }
