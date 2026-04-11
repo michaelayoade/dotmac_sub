@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date, timedelta
 
+from pydantic import ValidationError
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
@@ -1148,6 +1149,87 @@ def update_offer_with_audit(
         )
 
     return updated_offer
+
+
+def handle_offer_create_form(
+    db: Session,
+    *,
+    form: FormData,
+    request: object,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Validate and create a catalog offer from the admin form."""
+    return_to_raw = form.get("return_to")
+    return_to = return_to_raw.strip() if isinstance(return_to_raw, str) else ""
+    offer = parse_offer_form(form)
+    error = validate_offer_form(offer)
+    if error:
+        return {
+            "form_context": offer_form_context(
+                db,
+                offer,
+                error or "Please correct the highlighted fields.",
+            ),
+        }
+
+    try:
+        create_offer_with_audit(db, offer, form, request, actor_id)
+        return {"redirect_url": return_to or "/admin/catalog/offers"}
+    except ValidationError as exc:
+        error = exc.errors()[0]["msg"]
+
+    return {
+        "form_context": offer_form_context(
+            db,
+            offer,
+            error or "Please correct the highlighted fields.",
+        ),
+    }
+
+
+def handle_offer_update_form(
+    db: Session,
+    *,
+    offer_id: str,
+    form: FormData,
+    request: object,
+    actor_id: str | None,
+) -> dict[str, object]:
+    """Validate and update a catalog offer from the admin form."""
+    existing_offer = get_offer_or_none(db, offer_id)
+    if existing_offer is None:
+        return {"not_found": True}
+
+    offer_data = parse_offer_form(form)
+    error = validate_offer_form(offer_data)
+    if error:
+        context = offer_form_context(db, offer_data, error)
+        context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
+        return {"form_context": context}
+
+    try:
+        update_offer_with_audit(
+            db,
+            offer_id,
+            existing_offer,
+            offer_data,
+            form,
+            request,
+            actor_id,
+        )
+        return {"redirect_url": f"/admin/catalog/offers/{offer_id}"}
+    except ValidationError as exc:
+        error = exc.errors()[0]["msg"]
+    except Exception as exc:
+        error = str(exc)
+
+    context = offer_form_context(
+        db,
+        offer_data,
+        error or "Please correct the highlighted fields.",
+    )
+    context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
+    return {"form_context": context}
 
 
 def plan_usage_graph_data(

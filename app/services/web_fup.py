@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import time
+from datetime import UTC, datetime, time
 from typing import TYPE_CHECKING
 
 from fastapi import Request
@@ -16,7 +16,7 @@ from app.models.fup import (
     FupDirection,
 )
 from app.services import catalog as catalog_service
-from app.services.fup import fup_policies
+from app.services.fup import fup_policies, simulate_fup
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -110,6 +110,16 @@ def fup_context(request: Request, db: Session, offer_id: str) -> dict:
         "data_unit_labels": DATA_UNIT_LABELS,
         "action_labels": ACTION_LABELS,
     }
+
+
+def redirect_to_fup_context(form: FormData, offer_id: str) -> str:
+    """Resolve the post-action return URL for FUP forms."""
+    return_to_raw = form.get("return_to")
+    if isinstance(return_to_raw, str):
+        return_to = return_to_raw.strip()
+        if return_to.startswith("/admin/"):
+            return return_to
+    return f"/admin/catalog/offers/{offer_id}/fup"
 
 
 def _parse_time(value: str) -> time | None:
@@ -347,4 +357,32 @@ def handle_clone_rules(db: Session, source_offer_id: str, target_offer_id: str) 
         "Cloned FUP rules from offer %s to offer %s",
         source_offer_id,
         target_offer_id,
+    )
+
+
+def _form_scalar(form: FormData, key: str, default: str) -> str:
+    value = form.get(key, default)
+    return value if isinstance(value, str) else default
+
+
+def simulate_offer_fup(db: Session, offer_id: str, form: FormData) -> dict[str, object]:
+    """Run a FUP simulation from submitted form values."""
+    try:
+        usage_gb = float(_form_scalar(form, "usage_gb", "0"))
+        hour = int(_form_scalar(form, "hour", "12"))
+        day = int(_form_scalar(form, "day", "-1"))
+        billing_day = int(_form_scalar(form, "billing_day_elapsed", "15"))
+        cycle_days = int(_form_scalar(form, "billing_cycle_days", "30"))
+    except (ValueError, TypeError):
+        return {"error": "Invalid parameters"}
+
+    sim_time = datetime.now(UTC).replace(hour=hour, minute=0, second=0, microsecond=0)
+    return simulate_fup(
+        db,
+        offer_id,
+        current_usage_gb=usage_gb,
+        current_time=sim_time,
+        current_day=day if day >= 0 else None,
+        billing_day_elapsed=billing_day,
+        billing_cycle_days=cycle_days,
     )

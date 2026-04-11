@@ -1,28 +1,23 @@
 """Admin catalog management web routes."""
 
 import logging
-from typing import cast
-from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from pydantic import ValidationError
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.db import get_db
-from app.models.catalog import SubscriptionStatus
-from app.models.subscriber import SubscriberCategory
-from app.services import catalog as catalog_service
-from app.services import subscriber as subscriber_service
 from app.services import web_admin as web_admin_service
 from app.services import web_bulk_tariff_change as web_bulk_tariff_change_service
 from app.services import web_catalog_calculator as web_catalog_calculator_service
 from app.services import web_catalog_offers as web_catalog_offers_service
+from app.services import (
+    web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
+)
 from app.services import web_catalog_subscriptions as web_catalog_subscriptions_service
 from app.services import web_fup as web_fup_service
-from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.web.request_parsing import parse_form_data, parse_form_data_sync
 
@@ -47,22 +42,6 @@ def _base_context(
 
 def _get_actor_id(request: Request) -> str | None:
     return web_admin_service.get_actor_id(request)
-
-
-def _customer_detail_url_for_subscriber_id(db: Session, subscriber_id: str) -> str:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=subscriber_id)
-    if subscriber.category == SubscriberCategory.business:
-        return f"/admin/customers/business/{subscriber.id}#subscriptions"
-    return f"/admin/customers/person/{subscriber.id}#subscriptions"
-
-
-def _redirect_to_fup_context(form: FormData, offer_id: str) -> str:
-    return_to_raw = form.get("return_to")
-    if isinstance(return_to_raw, str):
-        return_to = return_to_raw.strip()
-        if return_to.startswith("/admin/"):
-            return return_to
-    return f"/admin/catalog/offers/{offer_id}/fup"
 
 
 @router.get(
@@ -142,34 +121,16 @@ def catalog_offers_create_post(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    return_to_raw = form.get("return_to")
-    return_to = return_to_raw.strip() if isinstance(return_to_raw, str) else ""
-    offer = web_catalog_offers_service.parse_offer_form(form)
-    error = web_catalog_offers_service.validate_offer_form(offer)
-    if error:
-        context = _base_context(request, db, active_page="catalog")
-        context.update(
-            web_catalog_offers_service.offer_form_context(
-                db, offer, error or "Please correct the highlighted fields."
-            )
-        )
-        return templates.TemplateResponse("admin/catalog/offer_form.html", context)
-
-    try:
-        actor_id = _get_actor_id(request)
-        web_catalog_offers_service.create_offer_with_audit(
-            db, offer, form, request, actor_id
-        )
-        return RedirectResponse(return_to or "/admin/catalog/offers", status_code=303)
-    except ValidationError as exc:
-        error = exc.errors()[0]["msg"]
-
-    context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_catalog_offers_service.offer_form_context(
-            db, offer, error or "Please correct the highlighted fields."
-        )
+    result = web_catalog_offers_service.handle_offer_create_form(
+        db,
+        form=form,
+        request=request,
+        actor_id=_get_actor_id(request),
     )
+    if result.get("redirect_url"):
+        return RedirectResponse(str(result["redirect_url"]), status_code=303)
+    context = _base_context(request, db, active_page="catalog")
+    context.update(result["form_context"])
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
@@ -219,8 +180,14 @@ def catalog_offer_edit_post(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    existing_offer = web_catalog_offers_service.get_offer_or_none(db, offer_id)
-    if existing_offer is None:
+    result = web_catalog_offers_service.handle_offer_update_form(
+        db,
+        offer_id=offer_id,
+        form=form,
+        request=request,
+        actor_id=_get_actor_id(request),
+    )
+    if result.get("not_found"):
         context = _base_context(request, db, active_page="catalog")
         context.update({"message": "Offer not found"})
         return templates.TemplateResponse(
@@ -228,35 +195,10 @@ def catalog_offer_edit_post(
             context,
             status_code=404,
         )
-
-    offer_data = web_catalog_offers_service.parse_offer_form(form)
-    error = web_catalog_offers_service.validate_offer_form(offer_data)
-    if error:
-        context = _base_context(request, db, active_page="catalog")
-        context.update(
-            web_catalog_offers_service.offer_form_context(db, offer_data, error)
-        )
-        context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
-        return templates.TemplateResponse("admin/catalog/offer_form.html", context)
-
-    try:
-        actor_id = _get_actor_id(request)
-        web_catalog_offers_service.update_offer_with_audit(
-            db, offer_id, existing_offer, offer_data, form, request, actor_id
-        )
-        return RedirectResponse(f"/admin/catalog/offers/{offer_id}", status_code=303)
-    except ValidationError as exc:
-        error = exc.errors()[0]["msg"]
-    except Exception as exc:
-        error = str(exc)
-
+    if result.get("redirect_url"):
+        return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog")
-    context.update(
-        web_catalog_offers_service.offer_form_context(
-            db, offer_data, error or "Please correct the highlighted fields."
-        )
-    )
-    context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
+    context.update(result["form_context"])
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
@@ -292,7 +234,8 @@ def offer_fup_settings_update(
     form = parse_form_data_sync(request)
     web_fup_service.handle_policy_update(db, offer_id, form)
     return RedirectResponse(
-        url=_redirect_to_fup_context(form, offer_id), status_code=303
+        url=web_fup_service.redirect_to_fup_context(form, offer_id),
+        status_code=303,
     )
 
 
@@ -308,7 +251,8 @@ def offer_fup_add_rule(
     form = parse_form_data_sync(request)
     web_fup_service.handle_add_rule(db, offer_id, form)
     return RedirectResponse(
-        url=_redirect_to_fup_context(form, offer_id), status_code=303
+        url=web_fup_service.redirect_to_fup_context(form, offer_id),
+        status_code=303,
     )
 
 
@@ -324,7 +268,8 @@ def offer_fup_update_rule(
     form = parse_form_data_sync(request)
     web_fup_service.handle_update_rule(db, rule_id, form)
     return RedirectResponse(
-        url=_redirect_to_fup_context(form, offer_id), status_code=303
+        url=web_fup_service.redirect_to_fup_context(form, offer_id),
+        status_code=303,
     )
 
 
@@ -340,7 +285,8 @@ def offer_fup_delete_rule(
     form = parse_form_data_sync(request)
     web_fup_service.handle_delete_rule(db, rule_id)
     return RedirectResponse(
-        url=_redirect_to_fup_context(form, offer_id), status_code=303
+        url=web_fup_service.redirect_to_fup_context(form, offer_id),
+        status_code=303,
     )
 
 
@@ -357,7 +303,8 @@ def offer_fup_clone_rules(
     source_offer_id = str(form.get("source_offer_id", ""))
     web_fup_service.handle_clone_rules(db, source_offer_id, offer_id)
     return RedirectResponse(
-        url=_redirect_to_fup_context(form, offer_id), status_code=303
+        url=web_fup_service.redirect_to_fup_context(form, offer_id),
+        status_code=303,
     )
 
 
@@ -367,42 +314,9 @@ def offer_fup_clone_rules(
 )
 def offer_fup_simulate(offer_id: str, request: Request, db: Session = Depends(get_db)):
     """Simulate FUP rules for a given usage scenario. Returns JSON for HTMX."""
-    from app.services.fup import simulate_fup
-
     form = parse_form_data_sync(request)
-
-    def _form_scalar(key: str, default: str) -> str:
-        value = form.get(key, default)
-        return value if isinstance(value, str) else default
-
-    try:
-        usage_gb = float(_form_scalar("usage_gb", "0"))
-        hour = int(_form_scalar("hour", "12"))
-        day = int(_form_scalar("day", "-1"))
-        billing_day = int(_form_scalar("billing_day_elapsed", "15"))
-        cycle_days = int(_form_scalar("billing_cycle_days", "30"))
-    except (ValueError, TypeError):
-        from fastapi.responses import JSONResponse
-
-        return JSONResponse({"error": "Invalid parameters"}, status_code=400)
-
-    from datetime import UTC, datetime
-
-    sim_time = datetime.now(UTC).replace(hour=hour, minute=0, second=0, microsecond=0)
-
-    result = simulate_fup(
-        db,
-        offer_id,
-        current_usage_gb=usage_gb,
-        current_time=sim_time,
-        current_day=day if day >= 0 else None,
-        billing_day_elapsed=billing_day,
-        billing_cycle_days=cycle_days,
-    )
-
-    from fastapi.responses import JSONResponse
-
-    return JSONResponse(result)
+    result = web_fup_service.simulate_offer_fup(db, offer_id, form)
+    return JSONResponse(result, status_code=400 if result.get("error") else 200)
 
 
 # ---------------------------------------------------------------------------
@@ -487,69 +401,16 @@ def catalog_subscription_create(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    subscription = web_catalog_subscriptions_service.parse_subscription_form(form)
-    error = web_catalog_subscriptions_service.resolve_account_id(db, subscription)
-    if not error:
-        error = web_catalog_subscriptions_service.validate_subscription_form(
-            subscription, for_create=True
-        )
-    if not error:
-        try:
-            web_catalog_subscriptions_service.ensure_ipv4_blocks_allocatable(
-                db,
-                [
-                    str(value).strip()
-                    for value in form.getlist("ipv4_block_ids")
-                    if str(value).strip()
-                ],
-                [
-                    str(value).strip()
-                    for value in form.getlist("ipv4_addresses")
-                    if str(value).strip()
-                ],
-            )
-        except Exception as exc:
-            error = web_catalog_subscriptions_service.error_message(exc)
-    if error:
-        context = _base_context(request, db, active_page="catalog-subscriptions")
-        context.update(
-            web_catalog_subscriptions_service.subscription_form_context(
-                db, subscription, error
-            )
-        )
-        return templates.TemplateResponse(
-            "admin/catalog/subscription_form.html", context
-        )
-
-    subscriber_id = str(
-        subscription.get("subscriber_id") or subscription.get("account_id") or ""
+    result = web_catalog_subscription_workflows_service.handle_subscription_create_form(
+        db,
+        form=form,
+        request=request,
+        actor_id=_get_actor_id(request),
     )
-    payload_data = web_catalog_subscriptions_service.build_payload_data(subscription)
-
-    try:
-        actor_id = _get_actor_id(request)
-        web_catalog_subscriptions_service.create_subscription_with_audit(
-            db, payload_data, form, request, actor_id
-        )
-        if subscriber_id:
-            return RedirectResponse(
-                _customer_detail_url_for_subscriber_id(db, subscriber_id),
-                status_code=303,
-            )
-        return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
-    except ValidationError as exc:
-        db.rollback()
-        error = exc.errors()[0]["msg"]
-    except Exception as exc:
-        db.rollback()
-        error = web_catalog_subscriptions_service.error_message(exc)
-
+    if result.get("redirect_url"):
+        return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(
-        web_catalog_subscriptions_service.subscription_form_context(
-            db, subscription, error or "Please correct the highlighted fields."
-        )
-    )
+    context.update(result["form_context"])
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -557,12 +418,12 @@ def catalog_subscription_create(
 def catalog_subscription_edit(
     request: Request, subscription_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    try:
-        subscription_obj = catalog_service.subscriptions.get(
-            db=db,
-            subscription_id=subscription_id,
+    form_context = (
+        web_catalog_subscription_workflows_service.subscription_edit_form_context(
+            db, subscription_id
         )
-    except Exception:
+    )
+    if form_context is None:
         context = _base_context(request, db, active_page="catalog-subscriptions")
         context.update({"message": "Subscription not found"})
         return templates.TemplateResponse(
@@ -571,17 +432,8 @@ def catalog_subscription_edit(
             status_code=404,
         )
 
-    subscription = web_catalog_subscriptions_service.edit_form_data(
-        db, subscription_obj
-    )
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(
-        web_catalog_subscriptions_service.subscription_form_context(db, subscription)
-    )
-    context["activities"] = build_audit_activities(
-        db, "subscription", str(subscription_id)
-    )
-    context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
+    context.update(form_context)
     context["notice"] = request.query_params.get("notice")
     context["error"] = request.query_params.get("error") or context.get("error")
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
@@ -591,12 +443,12 @@ def catalog_subscription_edit(
 def catalog_subscription_detail(
     request: Request, subscription_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
-    try:
-        subscription = catalog_service.subscriptions.get(
-            db=db,
-            subscription_id=subscription_id,
+    detail_context = (
+        web_catalog_subscription_workflows_service.subscription_detail_page_context(
+            db, subscription_id
         )
-    except Exception:
+    )
+    if detail_context is None:
         context = _base_context(request, db, active_page="catalog-subscriptions")
         context.update({"message": "Subscription not found"})
         return templates.TemplateResponse(
@@ -605,17 +457,7 @@ def catalog_subscription_detail(
             status_code=404,
         )
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(
-        {
-            "subscription": subscription,
-            "activities": build_audit_activities(
-                db, "subscription", str(subscription_id)
-            ),
-        }
-    )
-    context.update(
-        web_catalog_subscriptions_service.subscription_detail_context(db, subscription)
-    )
+    context.update(detail_context)
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 
@@ -626,62 +468,17 @@ def catalog_subscription_update(
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    subscription = web_catalog_subscriptions_service.parse_subscription_form(
-        form, subscription_id=subscription_id
+    result = web_catalog_subscription_workflows_service.handle_subscription_update_form(
+        db,
+        subscription_id=subscription_id,
+        form=form,
+        request=request,
+        actor_id=_get_actor_id(request),
     )
-    error = web_catalog_subscriptions_service.validate_subscription_form(
-        subscription, for_create=False
-    )
-    if error:
-        context = _base_context(request, db, active_page="catalog-subscriptions")
-        context.update(
-            web_catalog_subscriptions_service.subscription_form_context(
-                db, subscription, error
-            )
-        )
-        context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
-        return templates.TemplateResponse(
-            "admin/catalog/subscription_form.html", context
-        )
-
-    payload_data = web_catalog_subscriptions_service.build_payload_data(subscription)
-
-    try:
-        actor_id = _get_actor_id(request)
-        ipv4_block_ids = cast(list[object], subscription.get("ipv4_block_ids") or [])
-        ipv4_addresses = cast(list[object], subscription.get("ipv4_addresses") or [])
-        updated = web_catalog_subscriptions_service.update_subscription_with_audit(
-            db,
-            subscription_id,
-            payload_data,
-            str(subscription.get("service_password") or ""),
-            [str(value).strip() for value in ipv4_block_ids if str(value).strip()],
-            [str(value).strip() for value in ipv4_addresses if str(value).strip()],
-            request,
-            actor_id,
-        )
-        # Redirect to subscriber detail (services tab) for better context
-        subscriber_id = getattr(updated, "subscriber_id", None)
-        if subscriber_id:
-            return RedirectResponse(
-                _customer_detail_url_for_subscriber_id(db, str(subscriber_id)),
-                status_code=303,
-            )
-        return RedirectResponse("/admin/catalog/subscriptions", status_code=303)
-    except ValidationError as exc:
-        db.rollback()
-        error = exc.errors()[0]["msg"]
-    except Exception as exc:
-        db.rollback()
-        error = web_catalog_subscriptions_service.error_message(exc)
-
+    if result.get("redirect_url"):
+        return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(
-        web_catalog_subscriptions_service.subscription_form_context(
-            db, subscription, error or "Please correct the highlighted fields."
-        )
-    )
-    context["action_url"] = f"/admin/catalog/subscriptions/{subscription_id}/edit"
+    context.update(result["form_context"])
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -694,27 +491,13 @@ def catalog_subscription_send_credentials(
     subscription_id: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    try:
-        result = web_catalog_subscriptions_service.send_subscription_credentials(
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.send_subscription_credentials_redirect(
             db,
             subscription_id=subscription_id,
-        )
-        notice = (
-            f"Sent credentials to {result['email_sent']} email target(s) "
-            f"and {result['sms_sent']} SMS target(s)."
-        )
-        return RedirectResponse(
-            f"/admin/catalog/subscriptions/{subscription_id}/edit?notice={quote_plus(notice)}",
-            status_code=303,
-        )
-    except Exception as exc:
-        logger.error(
-            "Failed to send credentials for subscription %s: %s", subscription_id, exc
-        )
-        return RedirectResponse(
-            f"/admin/catalog/subscriptions/{subscription_id}/edit?error={quote_plus(str(exc))}",
-            status_code=303,
-        )
+        ),
+        status_code=303,
+    )
 
 
 @router.post(
@@ -727,16 +510,14 @@ def subscription_bulk_activate(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk activate subscriptions."""
-    actor_id = _get_actor_id(request)
-    count = web_catalog_subscriptions_service.bulk_update_status(
-        db,
-        subscription_ids,
-        target_status=SubscriptionStatus.active,
-        allowed_from=[SubscriptionStatus.pending, SubscriptionStatus.suspended],
-        request=request,
-        actor_id=actor_id,
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.bulk_activate_response(
+            db,
+            subscription_ids=subscription_ids,
+            request=request,
+            actor_id=_get_actor_id(request),
+        )
     )
-    return JSONResponse({"message": f"Activated {count} subscriptions", "count": count})
 
 
 @router.post(
@@ -749,16 +530,14 @@ def subscription_bulk_suspend(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk suspend subscriptions."""
-    actor_id = _get_actor_id(request)
-    count = web_catalog_subscriptions_service.bulk_update_status(
-        db,
-        subscription_ids,
-        target_status=SubscriptionStatus.suspended,
-        allowed_from=[SubscriptionStatus.active],
-        request=request,
-        actor_id=actor_id,
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.bulk_suspend_response(
+            db,
+            subscription_ids=subscription_ids,
+            request=request,
+            actor_id=_get_actor_id(request),
+        )
     )
-    return JSONResponse({"message": f"Suspended {count} subscriptions", "count": count})
 
 
 @router.post(
@@ -771,20 +550,14 @@ def subscription_bulk_cancel(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk cancel subscriptions."""
-    actor_id = _get_actor_id(request)
-    count = web_catalog_subscriptions_service.bulk_update_status(
-        db,
-        subscription_ids,
-        target_status=SubscriptionStatus.canceled,
-        allowed_from=[
-            SubscriptionStatus.active,
-            SubscriptionStatus.pending,
-            SubscriptionStatus.suspended,
-        ],
-        request=request,
-        actor_id=actor_id,
+    return JSONResponse(
+        web_catalog_subscription_workflows_service.bulk_cancel_response(
+            db,
+            subscription_ids=subscription_ids,
+            request=request,
+            actor_id=_get_actor_id(request),
+        )
     )
-    return JSONResponse({"message": f"Canceled {count} subscriptions", "count": count})
 
 
 @router.post(
@@ -798,16 +571,14 @@ def subscription_bulk_change_plan(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Bulk change plan/offer for subscriptions."""
-    actor_id = _get_actor_id(request)
-    count = web_catalog_subscriptions_service.bulk_change_plan(
-        db,
-        subscription_ids,
-        target_offer_id,
-        request=request,
-        actor_id=actor_id,
-    )
     return JSONResponse(
-        {"message": f"Changed plan for {count} subscriptions", "count": count}
+        web_catalog_subscription_workflows_service.bulk_change_plan_response(
+            db,
+            subscription_ids=subscription_ids,
+            target_offer_id=target_offer_id,
+            request=request,
+            actor_id=_get_actor_id(request),
+        )
     )
 
 

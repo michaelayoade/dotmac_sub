@@ -1306,9 +1306,7 @@ def _password_sync_evidence(credential: AccessCredential | None) -> dict[str, st
     }
 
 
-def _ip_assignment_mode(
-    db: Session, subscription: Subscription
-) -> tuple[str, str]:
+def _ip_assignment_mode(db: Session, subscription: Subscription) -> tuple[str, str]:
     mode = str(subscription.service_status_raw or "").strip().lower()
     if mode == "dynamic":
         return ("Dynamic pool", "IP is assigned from RADIUS/DHCP pool at session time.")
