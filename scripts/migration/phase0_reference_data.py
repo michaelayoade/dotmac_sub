@@ -407,38 +407,128 @@ def migrate_tariff_availability(
     db.flush()
 
 
+def _encrypt_if_present(value: str | None) -> str | None:
+    """Encrypt a credential value if present and non-empty."""
+    if not value or not value.strip():
+        return None
+    from app.services.credential_crypto import encrypt_credential
+    return encrypt_credential(value)
+
+
+def _map_nas_vendor(nas_type: str | None, model: str | None) -> str:
+    """Map Splynx nas_type/model to NasVendor enum value."""
+    if not nas_type:
+        return "other"
+    nas_type_lower = nas_type.lower()
+    if "mikrotik" in nas_type_lower or "routeros" in nas_type_lower:
+        return "mikrotik"
+    if "cisco" in nas_type_lower:
+        return "cisco"
+    if "juniper" in nas_type_lower:
+        return "juniper"
+    if "huawei" in nas_type_lower:
+        return "huawei"
+    if "ubiquiti" in nas_type_lower or "ubnt" in nas_type_lower:
+        return "ubiquiti"
+    # Check model string as fallback
+    if model:
+        model_lower = model.lower()
+        if "mikrotik" in model_lower or "ccr" in model_lower or "rb" in model_lower:
+            return "mikrotik"
+        if "huawei" in model_lower:
+            return "huawei"
+    return "other"
+
+
 def migrate_routers(
     conn, db,
     location_mapping: dict[int, uuid.UUID],
 ) -> dict[int, uuid.UUID]:
-    """Migrate Splynx routers → NasDevice."""
-    from app.models.catalog import NasDevice, NasDeviceStatus
+    """Migrate Splynx routers → NasDevice.
+
+    Migrates:
+    - Basic info: name, model, vendor
+    - Network: ip_address, nas_ip
+    - RADIUS: shared_secret
+    - SSH credentials: login → ssh_username, password → ssh_password
+    - API credentials: api_login → api_username, api_password → api_password
+    - SNMP: snmp_community
+    """
+    from app.models.catalog import NasDevice, NasDeviceStatus, NasVendor
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
 
     rows = fetch_all(conn, "SELECT * FROM routers ORDER BY id")
     mapping: dict[int, uuid.UUID] = {}
     created = 0
+    updated = 0
 
     for row in rows:
-        existing = db.scalars(
+        existing_mapping = db.scalars(
             select(SplynxIdMapping).where(
                 SplynxIdMapping.entity_type == SplynxEntityType.router,
                 SplynxIdMapping.splynx_id == row["id"],
             )
         ).first()
-        if existing:
-            mapping[row["id"]] = existing.dotmac_id
-            continue
 
         is_deleted = row.get("deleted") == "1"
         pop_site_id = location_mapping.get(row.get("location_id"))
+        vendor_str = _map_nas_vendor(row.get("nas_type"), row.get("model"))
+
+        # Extract credentials from Splynx (standard column names)
+        ssh_username = row.get("login") or row.get("ssh_login")
+        ssh_password = row.get("password") or row.get("ssh_password")
+        api_username = row.get("api_login")
+        api_password = row.get("api_password")
+        snmp_community = row.get("snmp_community")
+
+        if existing_mapping:
+            # Update existing NAS device with any missing credentials
+            nas = db.get(NasDevice, existing_mapping.dotmac_id)
+            if nas:
+                needs_update = False
+                # Only update if credential is missing in DotMac but present in Splynx
+                if not nas.ssh_username and ssh_username:
+                    nas.ssh_username = ssh_username
+                    needs_update = True
+                if not nas.ssh_password and ssh_password:
+                    nas.ssh_password = _encrypt_if_present(ssh_password)
+                    needs_update = True
+                if not nas.api_username and api_username:
+                    nas.api_username = api_username
+                    needs_update = True
+                if not nas.api_password and api_password:
+                    nas.api_password = _encrypt_if_present(api_password)
+                    needs_update = True
+                if not nas.snmp_community and snmp_community:
+                    nas.snmp_community = _encrypt_if_present(snmp_community)
+                    needs_update = True
+                if not nas.model and row.get("model"):
+                    nas.model = row.get("model")
+                    needs_update = True
+                if needs_update:
+                    updated += 1
+            mapping[row["id"]] = existing_mapping.dotmac_id
+            continue
+
+        # Create new NAS device with full credential set
+        try:
+            vendor_enum = NasVendor(vendor_str)
+        except ValueError:
+            vendor_enum = NasVendor.other
 
         nas = NasDevice(
             name=row["title"],
+            model=row.get("model"),
+            vendor=vendor_enum,
             ip_address=row.get("ip"),
             nas_ip=row.get("nas_ip"),
             pop_site_id=pop_site_id,
-            shared_secret=row.get("radius_secret"),
+            shared_secret=_encrypt_if_present(row.get("radius_secret")),
+            ssh_username=ssh_username,
+            ssh_password=_encrypt_if_present(ssh_password),
+            api_username=api_username,
+            api_password=_encrypt_if_present(api_password),
+            snmp_community=_encrypt_if_present(snmp_community),
             status=NasDeviceStatus.decommissioned if is_deleted else NasDeviceStatus.active,
             is_active=not is_deleted,
         )
@@ -453,9 +543,12 @@ def migrate_routers(
                 "title": row["title"],
                 "ip": row.get("ip"),
                 "nas_ip": row.get("nas_ip"),
+                "model": row.get("model"),
+                "nas_type": row.get("nas_type"),
                 "auth_method": row.get("authorization_method"),
                 "acct_method": row.get("accounting_method"),
-                "radius_secret": row.get("radius_secret"),
+                "has_ssh_creds": bool(ssh_username and ssh_password),
+                "has_api_creds": bool(api_username and api_password),
                 "deleted": is_deleted,
             },
         ))
@@ -463,26 +556,50 @@ def migrate_routers(
         created += 1
 
     db.flush()
-    logger.info("Routers/NAS: %d created, %d total", created, len(mapping))
+    logger.info("Routers/NAS: %d created, %d updated, %d total", created, updated, len(mapping))
     return mapping
 
 
-def migrate_ip_pools(conn, db) -> None:
-    """Migrate Splynx ipv4_networks → IpPool (one per network)."""
-    from app.models.network import IpPool, IPVersion
+def migrate_ip_pools(conn, db) -> dict[int, uuid.UUID]:
+    """Migrate Splynx ipv4_networks → IpPool + IPv4Address.
+
+    Creates pools from network CIDRs and populates individual addresses.
+    """
+    import ipaddress
+
+    from app.models.network import IpPool, IPv4Address, IPVersion
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
 
     rows = fetch_all(conn, "SELECT * FROM ipv4_networks WHERE deleted='0' ORDER BY id")
-    created = 0
+    mapping: dict[int, uuid.UUID] = {}
+    pools_created = 0
+    addresses_created = 0
 
     for row in rows:
         network = row.get("network", "")
         if not network:
             continue
 
+        # Check if already migrated
+        existing = db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.ip_network,
+                SplynxIdMapping.splynx_id == row["id"],
+            )
+        ).first()
+        if existing:
+            mapping[row["id"]] = existing.dotmac_id
+            continue
+
         # Determine CIDR — Splynx stores network without mask
-        # Most are /24, use network column as-is with /24 default
-        cidr = network if "/" in network else f"{network}/24"
-        name = f"Pool-{row['id']}-{network}"
+        # Check for netmask column, otherwise default to /24
+        netmask = row.get("netmask") or row.get("mask") or "24"
+        if "/" in network:
+            cidr = network
+        else:
+            cidr = f"{network}/{netmask}"
+
+        name = row.get("name") or f"Pool-{row['id']}-{network}"
 
         pool = IpPool(
             name=name[:120],
@@ -492,10 +609,278 @@ def migrate_ip_pools(conn, db) -> None:
             notes=f"Migrated from Splynx ipv4_networks.id={row['id']}",
         )
         db.add(pool)
-        created += 1
+        db.flush()
+
+        # Create SplynxIdMapping
+        db.add(SplynxIdMapping(
+            entity_type=SplynxEntityType.ip_network,
+            splynx_id=row["id"],
+            dotmac_id=pool.id,
+            metadata_={"network": network, "name": name},
+        ))
+        mapping[row["id"]] = pool.id
+        pools_created += 1
+
+        # Populate individual IPv4 addresses from CIDR
+        try:
+            ip_net = ipaddress.ip_network(cidr, strict=False)
+            # Skip network and broadcast addresses, limit to /24 or smaller
+            if ip_net.prefixlen >= 24:
+                hosts = list(ip_net.hosts())
+                for host in hosts:
+                    addr = IPv4Address(
+                        pool_id=pool.id,
+                        address=str(host),
+                        is_reserved=False,
+                    )
+                    db.add(addr)
+                    addresses_created += 1
+            else:
+                # For larger networks, just log - don't populate all addresses
+                logger.info(
+                    "  Large network %s (%d hosts) - not populating individual addresses",
+                    cidr, ip_net.num_addresses - 2
+                )
+        except ValueError as e:
+            logger.warning("  Invalid CIDR %s: %s", cidr, e)
 
     db.flush()
-    logger.info("IP pools: %d created", created)
+    logger.info("IP pools: %d created, %d addresses populated", pools_created, addresses_created)
+    return mapping
+
+
+def migrate_radius_profiles(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> dict[int, uuid.UUID]:
+    """Create RadiusProfile records from Splynx tariff speed data.
+
+    Links profiles to offers via OfferRadiusProfile.
+    """
+    from app.models.catalog import (
+        ConnectionType,
+        NasVendor,
+        OfferRadiusProfile,
+        RadiusProfile,
+    )
+    from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    rows = fetch_all(conn, "SELECT * FROM tariffs_internet ORDER BY id")
+    mapping: dict[int, uuid.UUID] = {}
+    profiles_created = 0
+    links_created = 0
+
+    for row in rows:
+        offer_id = tariff_mapping.get(row["id"])
+        if not offer_id:
+            continue
+
+        # Check if profile already exists for this tariff
+        existing = db.scalars(
+            select(SplynxIdMapping).where(
+                SplynxIdMapping.entity_type == SplynxEntityType.radius_profile,
+                SplynxIdMapping.splynx_id == row["id"],
+            )
+        ).first()
+        if existing:
+            mapping[row["id"]] = existing.dotmac_id
+            continue
+
+        # Extract speed data (Splynx stores in Kbps)
+        speed_download = row.get("speed_download") or 0
+        speed_upload = row.get("speed_upload") or 0
+        burst_download = row.get("burst_download_speed") or row.get("burst_download")
+        burst_upload = row.get("burst_upload_speed") or row.get("burst_upload")
+        burst_threshold = row.get("burst_threshold")
+        burst_time = row.get("burst_time")
+
+        # Skip if no speed data
+        if not speed_download and not speed_upload:
+            continue
+
+        # Build MikroTik rate limit string if speeds present
+        # Format: rx/tx [burst_rx/burst_tx] [threshold] [time]
+        rate_parts = []
+        if speed_download or speed_upload:
+            rate_parts.append(f"{speed_upload or 0}k/{speed_download or 0}k")
+        if burst_download or burst_upload:
+            rate_parts.append(f"{burst_upload or 0}k/{burst_download or 0}k")
+        if burst_threshold:
+            rate_parts.append(f"{burst_threshold}k/{burst_threshold}k")
+        if burst_time:
+            rate_parts.append(f"{burst_time}/{burst_time}")
+        mikrotik_rate_limit = " ".join(rate_parts) if rate_parts else None
+
+        profile = RadiusProfile(
+            name=f"{row['title']} Profile",
+            code=f"spl-{row['id']}",
+            vendor=NasVendor.mikrotik,  # Default to MikroTik for Splynx
+            connection_type=ConnectionType.pppoe,
+            download_speed=speed_download or None,
+            upload_speed=speed_upload or None,
+            burst_download=burst_download,
+            burst_upload=burst_upload,
+            burst_threshold=burst_threshold,
+            burst_time=burst_time,
+            ip_pool_name=row.get("pool_name") or row.get("pool"),
+            mikrotik_rate_limit=mikrotik_rate_limit,
+            simultaneous_use=row.get("simultaneous_sessions") or 1,
+            is_active=row.get("deleted") != "1",
+        )
+        db.add(profile)
+        db.flush()
+
+        # Create mapping
+        db.add(SplynxIdMapping(
+            entity_type=SplynxEntityType.radius_profile,
+            splynx_id=row["id"],
+            dotmac_id=profile.id,
+            metadata_={
+                "tariff_title": row["title"],
+                "speed_down": speed_download,
+                "speed_up": speed_upload,
+            },
+        ))
+        mapping[row["id"]] = profile.id
+        profiles_created += 1
+
+        # Link profile to offer
+        link = OfferRadiusProfile(
+            offer_id=offer_id,
+            profile_id=profile.id,
+            is_default=True,
+        )
+        db.add(link)
+        links_created += 1
+
+    db.flush()
+    logger.info("RADIUS profiles: %d created, %d linked to offers", profiles_created, links_created)
+    return mapping
+
+
+def migrate_fup_policies(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> None:
+    """Migrate Splynx FUP settings from tariffs_internet to FupPolicy/FupRule.
+
+    Splynx stores FUP config in tariffs_internet table:
+    - fup_policy_id, fup_rules (JSON), fup_cap_*, etc.
+    """
+    from app.models.fup import (
+        FupAction,
+        FupConsumptionPeriod,
+        FupDataUnit,
+        FupDirection,
+        FupPolicy,
+        FupRule,
+    )
+
+    rows = fetch_all(conn, "SELECT * FROM tariffs_internet ORDER BY id")
+    policies_created = 0
+    rules_created = 0
+
+    for row in rows:
+        offer_id = tariff_mapping.get(row["id"])
+        if not offer_id:
+            continue
+
+        # Check if this tariff has FUP data
+        # Splynx uses various column names depending on version
+        fup_enabled = row.get("fup_enabled") == "1" or row.get("fup") == "1"
+        fup_cap_download = row.get("fup_cap_download") or row.get("fup_download")
+        fup_cap_upload = row.get("fup_cap_upload") or row.get("fup_upload")
+        fup_cap_total = row.get("fup_cap_total") or row.get("fup_traffic")
+        fup_speed_percent = row.get("fup_speed_percent") or row.get("fup_speed_reduction")
+
+        # Skip if no FUP config
+        if not fup_enabled and not any([fup_cap_download, fup_cap_upload, fup_cap_total]):
+            continue
+
+        # Check if policy already exists for this offer
+        existing_policy = db.scalars(
+            select(FupPolicy).where(FupPolicy.offer_id == offer_id)
+        ).first()
+        if existing_policy:
+            continue
+
+        # Create FUP policy
+        policy = FupPolicy(
+            offer_id=offer_id,
+            is_active=fup_enabled,
+            notes=f"Migrated from Splynx tariff {row['id']}",
+        )
+        db.add(policy)
+        db.flush()
+        policies_created += 1
+
+        # Create FUP rules based on cap data
+        rule_order = 0
+
+        # Download cap rule
+        if fup_cap_download:
+            try:
+                cap_gb = float(fup_cap_download) / 1024  # MB to GB
+                if cap_gb > 0:
+                    rule = FupRule(
+                        policy_id=policy.id,
+                        name=f"Download Cap {cap_gb:.1f} GB",
+                        sort_order=rule_order,
+                        consumption_period=FupConsumptionPeriod.monthly,
+                        direction=FupDirection.down,
+                        threshold_amount=cap_gb,
+                        threshold_unit=FupDataUnit.gb,
+                        action=FupAction.reduce_speed,
+                        speed_reduction_percent=float(fup_speed_percent or 50),
+                        is_active=True,
+                    )
+                    db.add(rule)
+                    rules_created += 1
+                    rule_order += 1
+            except (ValueError, TypeError):
+                pass
+
+        # Upload cap rule
+        if fup_cap_upload:
+            try:
+                cap_gb = float(fup_cap_upload) / 1024
+                if cap_gb > 0:
+                    rule = FupRule(
+                        policy_id=policy.id,
+                        name=f"Upload Cap {cap_gb:.1f} GB",
+                        sort_order=rule_order,
+                        consumption_period=FupConsumptionPeriod.monthly,
+                        direction=FupDirection.up,
+                        threshold_amount=cap_gb,
+                        threshold_unit=FupDataUnit.gb,
+                        action=FupAction.reduce_speed,
+                        speed_reduction_percent=float(fup_speed_percent or 50),
+                        is_active=True,
+                    )
+                    db.add(rule)
+                    rules_created += 1
+                    rule_order += 1
+            except (ValueError, TypeError):
+                pass
+
+        # Total cap rule
+        if fup_cap_total:
+            try:
+                cap_gb = float(fup_cap_total) / 1024
+                if cap_gb > 0:
+                    rule = FupRule(
+                        policy_id=policy.id,
+                        name=f"Total Cap {cap_gb:.1f} GB",
+                        sort_order=rule_order,
+                        consumption_period=FupConsumptionPeriod.monthly,
+                        direction=FupDirection.up_down,
+                        threshold_amount=cap_gb,
+                        threshold_unit=FupDataUnit.gb,
+                        action=FupAction.reduce_speed,
+                        speed_reduction_percent=float(fup_speed_percent or 50),
+                        is_active=True,
+                    )
+                    db.add(rule)
+                    rules_created += 1
+            except (ValueError, TypeError):
+                pass
+
+    db.flush()
+    logger.info("FUP policies: %d created, %d rules", policies_created, rules_created)
 
 
 def run_phase0(dry_run: bool = True) -> None:
@@ -534,7 +919,13 @@ def run_phase0(dry_run: bool = True) -> None:
                 conn, db, tariff_mapping, partner_mapping, location_mapping,
             )
             router_mapping = migrate_routers(conn, db, location_mapping)
-            migrate_ip_pools(conn, db)
+            ip_pool_mapping = migrate_ip_pools(conn, db)
+
+            # Migrate RADIUS profiles from tariff speed data
+            radius_profile_mapping = migrate_radius_profiles(conn, db, tariff_mapping)
+
+            # Migrate FUP policies from tariff FUP settings
+            migrate_fup_policies(conn, db, tariff_mapping)
 
             db.commit()
             logger.info("=== Phase 0 complete — committed ===")

@@ -36,6 +36,8 @@ class SplynxEntityType(enum.Enum):
     sms = "sms"
     scheduling_task = "scheduling_task"
     inventory_item = "inventory_item"
+    ip_network = "ip_network"
+    radius_profile = "radius_profile"
 
 
 class SplynxIdMapping(Base):
