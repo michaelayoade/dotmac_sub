@@ -328,7 +328,10 @@ def migrate_tariff_availability(
     partner_mapping: dict[int, uuid.UUID],
     location_mapping: dict[int, uuid.UUID],
 ) -> None:
-    """Migrate tariff junction tables → Offer availability."""
+    """Migrate tariff junction tables → Offer availability.
+
+    Idempotent: checks for existing records before inserting.
+    """
     from app.models.catalog import BillingMode
     from app.models.offer_availability import (
         OfferBillingModeAvailability,
@@ -338,6 +341,24 @@ def migrate_tariff_availability(
     )
     from app.models.subscriber import SubscriberCategory
 
+    # Load existing records to avoid duplicates
+    existing_reseller = {
+        (r.offer_id, r.reseller_id)
+        for r in db.scalars(select(OfferResellerAvailability)).all()
+    }
+    existing_location = {
+        (r.offer_id, r.pop_site_id)
+        for r in db.scalars(select(OfferLocationAvailability)).all()
+    }
+    existing_category = {
+        (r.offer_id, r.subscriber_category.value)
+        for r in db.scalars(select(OfferCategoryAvailability)).all()
+    }
+    existing_billing = {
+        (r.offer_id, r.billing_mode.value)
+        for r in db.scalars(select(OfferBillingModeAvailability)).all()
+    }
+
     # tariffs_internet_to_partners → OfferResellerAvailability
     rows = fetch_all(conn, "SELECT * FROM tariffs_internet_to_partners")
     reseller_count = 0
@@ -345,11 +366,14 @@ def migrate_tariff_availability(
         offer_id = tariff_mapping.get(row["tariff_id"])
         reseller_id = partner_mapping.get(row["partner_id"])
         if offer_id and reseller_id:
+            if (offer_id, reseller_id) in existing_reseller:
+                continue
             db.add(OfferResellerAvailability(
                 offer_id=offer_id, reseller_id=reseller_id,
             ))
+            existing_reseller.add((offer_id, reseller_id))
             reseller_count += 1
-    logger.info("Offer-reseller availability: %d", reseller_count)
+    logger.info("Offer-reseller availability: %d new", reseller_count)
 
     # tariffs_internet_to_locations → OfferLocationAvailability
     rows = fetch_all(conn, "SELECT * FROM tariffs_internet_to_locations")
@@ -358,11 +382,14 @@ def migrate_tariff_availability(
         offer_id = tariff_mapping.get(row["tariff_id"])
         pop_site_id = location_mapping.get(row["location_id"])
         if offer_id and pop_site_id:
+            if (offer_id, pop_site_id) in existing_location:
+                continue
             db.add(OfferLocationAvailability(
                 offer_id=offer_id, pop_site_id=pop_site_id,
             ))
+            existing_location.add((offer_id, pop_site_id))
             location_count += 1
-    logger.info("Offer-location availability: %d", location_count)
+    logger.info("Offer-location availability: %d new", location_count)
 
     # tariffs_internet_to_customer_categories → OfferCategoryAvailability
     category_map = {
@@ -375,11 +402,14 @@ def migrate_tariff_availability(
         offer_id = tariff_mapping.get(row["tariff_id"])
         cat = category_map.get(row.get("customer_category"))
         if offer_id and cat:
+            if (offer_id, cat.value) in existing_category:
+                continue
             db.add(OfferCategoryAvailability(
                 offer_id=offer_id, subscriber_category=cat,
             ))
+            existing_category.add((offer_id, cat.value))
             cat_count += 1
-    logger.info("Offer-category availability: %d", cat_count)
+    logger.info("Offer-category availability: %d new", cat_count)
 
     # tariffs_internet_to_billing_types → OfferBillingModeAvailability
     billing_map = {
@@ -389,20 +419,18 @@ def migrate_tariff_availability(
     }
     rows = fetch_all(conn, "SELECT * FROM tariffs_internet_to_billing_types")
     billing_count = 0
-    seen_billing: set[tuple] = set()
     for row in rows:
         offer_id = tariff_mapping.get(row["tariff_id"])
         mode = billing_map.get(row.get("billing_type"))
         if offer_id and mode:
-            key = (offer_id, mode.value)
-            if key in seen_billing:
+            if (offer_id, mode.value) in existing_billing:
                 continue
-            seen_billing.add(key)
             db.add(OfferBillingModeAvailability(
                 offer_id=offer_id, billing_mode=mode,
             ))
+            existing_billing.add((offer_id, mode.value))
             billing_count += 1
-    logger.info("Offer-billing mode availability: %d", billing_count)
+    logger.info("Offer-billing mode availability: %d new", billing_count)
 
     db.flush()
 
@@ -415,11 +443,13 @@ def _encrypt_if_present(value: str | None) -> str | None:
     return encrypt_credential(value)
 
 
-def _map_nas_vendor(nas_type: str | None, model: str | None) -> str:
+def _map_nas_vendor(nas_type: str | int | None, model: str | None) -> str:
     """Map Splynx nas_type/model to NasVendor enum value."""
     if not nas_type:
         return "other"
-    nas_type_lower = nas_type.lower()
+    # Convert to string if integer
+    nas_type_str = str(nas_type) if isinstance(nas_type, int) else nas_type
+    nas_type_lower = nas_type_str.lower()
     if "mikrotik" in nas_type_lower or "routeros" in nas_type_lower:
         return "mikrotik"
     if "cisco" in nas_type_lower:
@@ -564,11 +594,17 @@ def migrate_ip_pools(conn, db) -> dict[int, uuid.UUID]:
     """Migrate Splynx ipv4_networks → IpPool + IPv4Address.
 
     Creates pools from network CIDRs and populates individual addresses.
+    Idempotent: checks for existing pools and addresses.
     """
     import ipaddress
 
     from app.models.network import IpPool, IPv4Address, IPVersion
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
+    # Load existing addresses to avoid duplicates
+    existing_addresses = {
+        addr.address for addr in db.scalars(select(IPv4Address)).all()
+    }
 
     rows = fetch_all(conn, "SELECT * FROM ipv4_networks WHERE deleted='0' ORDER BY id")
     mapping: dict[int, uuid.UUID] = {}
@@ -628,12 +664,16 @@ def migrate_ip_pools(conn, db) -> dict[int, uuid.UUID]:
             if ip_net.prefixlen >= 24:
                 hosts = list(ip_net.hosts())
                 for host in hosts:
+                    addr_str = str(host)
+                    if addr_str in existing_addresses:
+                        continue  # Skip if address already exists
                     addr = IPv4Address(
                         pool_id=pool.id,
-                        address=str(host),
+                        address=addr_str,
                         is_reserved=False,
                     )
                     db.add(addr)
+                    existing_addresses.add(addr_str)
                     addresses_created += 1
             else:
                 # For larger networks, just log - don't populate all addresses
@@ -745,7 +785,6 @@ def migrate_radius_profiles(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> d
         link = OfferRadiusProfile(
             offer_id=offer_id,
             profile_id=profile.id,
-            is_default=True,
         )
         db.add(link)
         links_created += 1

@@ -22,15 +22,20 @@ from sshtunnel import SSHTunnelForwarder
 
 logger = logging.getLogger(__name__)
 
-# --- Splynx MySQL via SSH tunnel ---
-SPLYNX_SSH_HOST = os.environ.get("SPLYNX_SSH_HOST", "138.68.165.175")
-SPLYNX_SSH_USER = os.environ.get("SPLYNX_SSH_USER", "root")
-SPLYNX_SSH_KEY = os.path.expanduser(os.environ.get("SPLYNX_SSH_KEY", "~/.ssh/id_ed25519"))
+# --- Splynx MySQL connection ---
+# Direct connection (preferred) or SSH tunnel fallback
+SPLYNX_MYSQL_HOST = os.environ.get("SPLYNX_MYSQL_HOST", "")  # Direct connection host
+SPLYNX_MYSQL_PORT = int(os.environ.get("SPLYNX_MYSQL_PORT", "3306"))
 SPLYNX_MYSQL_DB = os.environ.get("SPLYNX_MYSQL_DB", "splynx")
 SPLYNX_MYSQL_USER = os.environ.get("SPLYNX_MYSQL_USER", "migration")
 SPLYNX_MYSQL_PASS = os.environ.get(
     "SPLYNX_MYSQL_PASS", os.environ.get("SPLYNX_MYSQL_PASSWORD", "")
 )
+
+# SSH tunnel settings (used when SPLYNX_MYSQL_HOST is not set)
+SPLYNX_SSH_HOST = os.environ.get("SPLYNX_SSH_HOST", "138.68.165.175")
+SPLYNX_SSH_USER = os.environ.get("SPLYNX_SSH_USER", "root")
+SPLYNX_SSH_KEY = os.path.expanduser(os.environ.get("SPLYNX_SSH_KEY", "~/.ssh/id_ed25519"))
 
 # --- DotMac Sub PostgreSQL ---
 DOTMAC_DATABASE_URL = os.environ.get("DATABASE_URL", "")
@@ -40,7 +45,10 @@ DOTMAC_DATABASE_URL = os.environ.get("DATABASE_URL", "")
 def splynx_connection(
     dict_cursor: bool = True,
 ) -> Generator[pymysql.Connection, None, None]:
-    """Open an SSH-tunneled connection to Splynx MySQL.
+    """Open a connection to Splynx MySQL.
+
+    Uses direct connection if SPLYNX_MYSQL_HOST is set, otherwise falls back
+    to SSH tunnel.
 
     Usage::
 
@@ -54,6 +62,33 @@ def splynx_connection(
             "SPLYNX_MYSQL_PASS/SPLYNX_MYSQL_PASSWORD not set. "
             "Set it via environment or .env before opening a Splynx connection."
         )
+
+    cursor_class = (
+        pymysql.cursors.DictCursor if dict_cursor else pymysql.cursors.Cursor
+    )
+
+    # Direct connection if SPLYNX_MYSQL_HOST is set
+    if SPLYNX_MYSQL_HOST:
+        logger.info("Connecting directly to Splynx MySQL at %s:%d", SPLYNX_MYSQL_HOST, SPLYNX_MYSQL_PORT)
+        conn = pymysql.connect(
+            host=SPLYNX_MYSQL_HOST,
+            port=SPLYNX_MYSQL_PORT,
+            user=SPLYNX_MYSQL_USER,
+            password=SPLYNX_MYSQL_PASS,
+            database=SPLYNX_MYSQL_DB,
+            charset="utf8mb4",
+            cursorclass=cursor_class,
+            connect_timeout=30,
+            read_timeout=300,
+        )
+        try:
+            yield conn
+        finally:
+            conn.close()
+            logger.info("Splynx MySQL connection closed")
+        return
+
+    # Fall back to SSH tunnel
     tunnel = SSHTunnelForwarder(
         SPLYNX_SSH_HOST,
         ssh_username=SPLYNX_SSH_USER,
@@ -65,9 +100,6 @@ def splynx_connection(
         "SSH tunnel to %s open on local port %d",
         SPLYNX_SSH_HOST,
         tunnel.local_bind_port,
-    )
-    cursor_class = (
-        pymysql.cursors.DictCursor if dict_cursor else pymysql.cursors.Cursor
     )
     conn = pymysql.connect(
         host="127.0.0.1",
