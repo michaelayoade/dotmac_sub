@@ -33,15 +33,42 @@ def verify_ont_authorized(
 ) -> OltWriteVerification:
     """Verify an ONT appears on the OLT after an authorization write.
 
-    Uses 'display ont info by-sn' for reliable verification, avoiding the
-    SSH command spacing issues present in other lookup methods.
+    Uses a direct ONT status query when the write response includes an ONT-ID,
+    otherwise falls back to scanning registered ONT serials.
     """
-    from app.services.network.olt_ssh_ont import find_ont_by_serial
+    from app.services.network import olt_ssh_ont
 
     normalized_serial = _normalize_serial(serial_number)
 
-    # Use find_ont_by_serial which uses 'display ont info by-sn' - more reliable
-    ok, msg, entry = find_ont_by_serial(olt, serial_number)
+    if ont_id is not None:
+        ok, msg, status_entry = olt_ssh_ont.get_ont_status(olt, fsp, ont_id)
+        if not ok:
+            return OltWriteVerification(
+                False,
+                f"OLT accepted the authorization write, but readback failed: {msg}",
+                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+            )
+        if (
+            status_entry is None
+            or _normalize_serial(status_entry.serial_number) != normalized_serial
+        ):
+            return OltWriteVerification(
+                False,
+                "OLT accepted the authorization write, but the ONT was not present on readback.",
+                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+            )
+        return OltWriteVerification(
+            True,
+            f"Verified ONT {serial_number} on {fsp} with ONT-ID {ont_id}.",
+            {
+                "fsp": fsp,
+                "ont_id": ont_id,
+                "serial_number": status_entry.serial_number,
+                "run_state": status_entry.run_state,
+            },
+        )
+
+    ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
     if not ok:
         return OltWriteVerification(
             False,
@@ -49,50 +76,36 @@ def verify_ont_authorized(
             {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
         )
 
-    if entry is None:
+    for registered_entry in entries:
+        if _normalize_serial(registered_entry.real_serial) != normalized_serial:
+            continue
+        if registered_entry.fsp != fsp:
+            return OltWriteVerification(
+                False,
+                "ONT serial was found on the OLT, but on a different port than expected.",
+                {
+                    "expected_fsp": fsp,
+                    "observed_fsp": registered_entry.fsp,
+                    "ont_id": registered_entry.onu_id,
+                    "serial_number": registered_entry.real_serial,
+                    "run_state": registered_entry.run_state,
+                },
+            )
         return OltWriteVerification(
-            False,
-            "OLT accepted the authorization write, but the ONT was not present on readback.",
-            {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
-        )
-
-    # Verify the ONT is on the expected port
-    if entry.fsp != fsp:
-        return OltWriteVerification(
-            False,
-            "ONT serial was found on the OLT, but on a different port than expected.",
+            True,
+            f"Verified ONT {serial_number} on {fsp} with ONT-ID {registered_entry.onu_id}.",
             {
-                "expected_fsp": fsp,
-                "observed_fsp": entry.fsp,
-                "ont_id": entry.onu_id,
-                "serial_number": entry.real_serial,
-                "run_state": entry.run_state,
-            },
-        )
-
-    # Verify the ONT-ID matches if we expected a specific one
-    if ont_id is not None and entry.onu_id != ont_id:
-        return OltWriteVerification(
-            False,
-            "ONT serial was found on the expected port, but with a different ONT-ID than the write response.",
-            {
-                "expected_ont_id": ont_id,
-                "observed_ont_id": entry.onu_id,
-                "fsp": entry.fsp,
-                "serial_number": entry.real_serial,
-                "run_state": entry.run_state,
+                "fsp": registered_entry.fsp,
+                "ont_id": registered_entry.onu_id,
+                "serial_number": registered_entry.real_serial,
+                "run_state": registered_entry.run_state,
             },
         )
 
     return OltWriteVerification(
-        True,
-        f"Verified ONT {serial_number} on {fsp} with ONT-ID {entry.onu_id}.",
-        {
-            "fsp": entry.fsp,
-            "ont_id": entry.onu_id,
-            "serial_number": entry.real_serial,
-            "run_state": entry.run_state,
-        },
+        False,
+        "OLT accepted the authorization write, but the ONT was not present on readback.",
+        {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
     )
 
 
@@ -105,30 +118,31 @@ def verify_ont_absent(
 ) -> OltWriteVerification:
     """Verify an ONT no longer appears on the OLT after a delete write.
 
-    Uses 'display ont info by-sn' for reliable verification when serial is provided.
+    Uses registered ONT serial scanning when serial is provided.
     """
-    from app.services.network.olt_ssh_ont import find_ont_by_serial
+    from app.services.network import olt_ssh_ont
 
-    # If we have a serial number, use the reliable by-sn lookup
     if serial_number:
-        ok, msg, entry = find_ont_by_serial(olt, serial_number)
+        normalized_serial = _normalize_serial(serial_number)
+        ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
         if not ok:
             return OltWriteVerification(
                 False,
                 f"OLT accepted the delete write, but readback failed: {msg}",
             )
 
-        if entry is not None:
-            return OltWriteVerification(
-                False,
-                "ONT still appears on the OLT after the delete write.",
-                {
-                    "fsp": entry.fsp,
-                    "ont_id": entry.onu_id,
-                    "serial_number": entry.real_serial,
-                    "run_state": entry.run_state,
-                },
-            )
+        for entry in entries:
+            if _normalize_serial(entry.real_serial) == normalized_serial:
+                return OltWriteVerification(
+                    False,
+                    "ONT still appears on the OLT after the delete write.",
+                    {
+                        "fsp": entry.fsp,
+                        "ont_id": entry.onu_id,
+                        "serial_number": entry.real_serial,
+                        "run_state": entry.run_state,
+                    },
+                )
 
         return OltWriteVerification(
             True,
@@ -154,9 +168,9 @@ def verify_service_port_present(
     gem_index: int | None = None,
 ) -> OltWriteVerification:
     """Verify a service-port exists on the OLT after a create/update write."""
-    from app.services.network.olt_ssh_service_ports import get_service_ports_for_ont
+    from app.services.network import olt_ssh_service_ports
 
-    ok, msg, ports = get_service_ports_for_ont(olt, fsp, ont_id)
+    ok, msg, ports = olt_ssh_service_ports.get_service_ports_for_ont(olt, fsp, ont_id)
     if not ok:
         return OltWriteVerification(
             False,
@@ -195,9 +209,9 @@ def verify_service_port_absent(
     service_port_index: int,
 ) -> OltWriteVerification:
     """Verify a service-port no longer exists after a delete write."""
-    from app.services.network.olt_ssh_service_ports import get_service_ports_for_ont
+    from app.services.network import olt_ssh_service_ports
 
-    ok, msg, ports = get_service_ports_for_ont(olt, fsp, ont_id)
+    ok, msg, ports = olt_ssh_service_ports.get_service_ports_for_ont(olt, fsp, ont_id)
     if not ok:
         return OltWriteVerification(
             False,
@@ -234,9 +248,9 @@ def verify_iphost_config(
     ip_address: str | None = None,
 ) -> OltWriteVerification:
     """Verify IPHOST configuration read back from the OLT."""
-    from app.services.network.olt_ssh_ont import get_ont_iphost_config
+    from app.services.network import olt_ssh_ont
 
-    ok, msg, config = get_ont_iphost_config(olt, fsp, ont_id)
+    ok, msg, config = olt_ssh_ont.get_ont_iphost_config(olt, fsp, ont_id)
     if not ok:
         return OltWriteVerification(
             False,

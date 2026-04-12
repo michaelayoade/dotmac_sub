@@ -270,14 +270,7 @@ class NetworkOperations(ListResponseMixin):
         db.flush()
         extra = _operation_extra(op)
         extra["waiting_reason"] = reason
-        logger.info(
-            "Operation %s waiting on %s %s: %s",
-            op.operation_type.value,
-            op.target_type.value,
-            op.target_id,
-            reason,
-            extra=extra,
-        )
+        logger.info("Operation waiting", extra=extra)
         return op
 
     @staticmethod

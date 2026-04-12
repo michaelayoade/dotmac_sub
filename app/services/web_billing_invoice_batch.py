@@ -5,8 +5,10 @@ from __future__ import annotations
 import csv
 import io
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import Any
 from uuid import UUID
 
 from app.models.billing import BillingRunSchedule, BillingRunStatus
@@ -31,12 +33,17 @@ def parse_billing_cycle(value: str | None) -> BillingCycle | None:
         raise ValueError("Invalid billing cycle") from exc
 
 
-def run_batch(db, *, billing_cycle: str | None) -> str:
+def run_batch(
+    db,
+    *,
+    billing_cycle: str | None,
+    parse_cycle_fn: Callable[[str | None], Any] = parse_billing_cycle,
+) -> str:
     """Run invoice cycle and return user-facing note."""
     try:
         summary = billing_automation_service.run_invoice_cycle(
             db=db,
-            billing_cycle=parse_billing_cycle(billing_cycle),
+            billing_cycle=parse_cycle_fn(billing_cycle),
             dry_run=False,
         )
         return (
@@ -49,13 +56,19 @@ def run_batch(db, *, billing_cycle: str | None) -> str:
         return f"Batch run failed: {exc}"
 
 
-def retry_batch_run(db, *, run_id: str) -> str:
+def retry_batch_run(
+    db,
+    *,
+    run_id: str,
+    parse_cycle_fn: Callable[[str | None], Any] = parse_billing_cycle,
+) -> str:
     """Retry a previous billing run using its billing cycle."""
     run = billing_service.billing_runs.get(db, run_id)
     cycle_value = run.billing_cycle or None
     return run_batch(
         db,
         billing_cycle=cycle_value,
+        parse_cycle_fn=parse_cycle_fn,
     )
 
 
@@ -71,13 +84,14 @@ def preview_batch(
     billing_cycle: str | None,
     billing_date: str | None,
     separate_by_partner: bool = False,
+    parse_cycle_fn: Callable[[str | None], Any] = parse_billing_cycle,
 ) -> dict[str, object]:
     """Run dry-run invoice preview and return JSON payload."""
     run_date = _parse_run_date(billing_date)
 
     summary = billing_automation_service.run_invoice_cycle(
         db=db,
-        billing_cycle=parse_billing_cycle(billing_cycle),
+        billing_cycle=parse_cycle_fn(billing_cycle),
         dry_run=True,
         run_at=run_date,
     )
@@ -184,12 +198,13 @@ def run_batch_with_date(
     *,
     billing_cycle: str | None,
     billing_date: str | None,
+    parse_cycle_fn: Callable[[str | None], Any] = parse_billing_cycle,
 ) -> str:
     """Run invoice cycle honoring billing date when provided."""
     try:
         summary = billing_automation_service.run_invoice_cycle(
             db=db,
-            billing_cycle=parse_billing_cycle(billing_cycle),
+            billing_cycle=parse_cycle_fn(billing_cycle),
             dry_run=False,
             run_at=_parse_run_date(billing_date),
         )

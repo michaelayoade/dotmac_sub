@@ -304,8 +304,16 @@ class OntProvisioningProfiles:
         OntProvisioningProfiles._validate_profile_vlan_scope(
             db,
             olt_device_id=str(merged_olt_device_id) if merged_olt_device_id else None,
-            mgmt_vlan_tag=kwargs.get("mgmt_vlan_tag", profile.mgmt_vlan_tag),
-            pppoe_omci_vlan=kwargs.get("pppoe_omci_vlan", profile.pppoe_omci_vlan),
+            mgmt_vlan_tag=(
+                int(str(kwargs.get("mgmt_vlan_tag", profile.mgmt_vlan_tag)))
+                if kwargs.get("mgmt_vlan_tag", profile.mgmt_vlan_tag) is not None
+                else None
+            ),
+            pppoe_omci_vlan=(
+                int(str(kwargs.get("pppoe_omci_vlan", profile.pppoe_omci_vlan)))
+                if kwargs.get("pppoe_omci_vlan", profile.pppoe_omci_vlan) is not None
+                else None
+            ),
             profile_id=profile_id,
         )
 

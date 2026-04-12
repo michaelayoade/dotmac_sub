@@ -944,6 +944,62 @@ from app.services.network.olt_ssh_profiles import (
 )
 
 
+def _auto_bind_tr069_after_authorize(
+    olt: OLTDevice, fsp: str, ont_id: int | None
+) -> None:
+    """Backward-compatible TR-069 auto-bind helper.
+
+    Kept here so legacy callers and tests that monkeypatch this module's profile
+    helpers continue to influence the binding flow.
+    """
+    from app.services.network.olt_ssh_ont import (
+        _load_linked_acs_payload,
+        _safe_profile_name,
+    )
+    from app.services.network.tr069_profile_matching import match_tr069_profile
+
+    if ont_id is None:
+        return
+    payload = _load_linked_acs_payload(olt)
+    if payload is None or not str(payload.get("acs_url") or "").strip():
+        return
+
+    ok, _msg, profiles = get_tr069_server_profiles(olt)
+    if not ok:
+        return
+    target_username = str(payload.get("username") or "").strip()
+    profile = match_tr069_profile(
+        profiles,
+        acs_url=str(payload["acs_url"]),
+        acs_username=target_username,
+    )
+    profile_id = profile.profile_id if profile else None
+
+    if profile_id is None:
+        ok, _msg = create_tr069_server_profile(
+            olt,
+            profile_name=f"ACS {_safe_profile_name(str(payload.get('name') or ''))}",
+            acs_url=str(payload["acs_url"]),
+            username=target_username,
+            password=str(payload.get("password") or ""),
+            inform_interval=int(str(payload.get("inform_interval") or 300)),
+        )
+        if not ok:
+            return
+        ok, _msg, profiles = get_tr069_server_profiles(olt)
+        if not ok:
+            return
+        profile = match_tr069_profile(
+            profiles,
+            acs_url=str(payload["acs_url"]),
+            acs_username=target_username,
+        )
+        profile_id = profile.profile_id if profile else None
+
+    if profile_id is not None:
+        bind_tr069_server_profile(olt, fsp=fsp, ont_id=ont_id, profile_id=profile_id)
+
+
 def test_connection(olt: OLTDevice) -> tuple[bool, str, str | None]:
     try:
         policy_key, output = run_version_probe(olt)

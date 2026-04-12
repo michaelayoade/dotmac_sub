@@ -72,19 +72,26 @@ def _rotate_value(
 
     Handles edge cases:
     - Value already encrypted with new key: returns unchanged
-    - Value not encrypted (no enc: prefix): returns unchanged
-    - Value corrupted/unrecoverable: logs warning, returns unchanged
+    - Plain/legacy values are encrypted with the new key
+    - Corrupted/unrecoverable encrypted values raise ValueError
     """
     if not value:
         return value, False
 
-    # Skip values without enc: prefix (plain text or legacy format)
+    if value.startswith("plain:"):
+        plain_value = value[6:]
+        rotated = encrypt_credential_with_key(plain_value, new_key)
+        return rotated, rotated != value
+
     if not value.startswith("enc:"):
-        return value, False
+        rotated = encrypt_credential_with_key(value, new_key)
+        return rotated, rotated != value
 
     # Try decrypting with old key first
     try:
-        plaintext = decrypt_credential_with_key(value, old_key)
+        decrypted_plaintext = decrypt_credential_with_key(value, old_key)
+        if decrypted_plaintext is None:
+            return value, False
     except ValueError:
         # Old key didn't work - check if already encrypted with new key
         try:
@@ -93,14 +100,10 @@ def _rotate_value(
             logger.debug("Value already encrypted with new key, skipping")
             return value, False
         except ValueError:
-            # Neither key works - value is corrupted or encrypted with unknown key
-            logger.warning(
-                "Cannot decrypt value with either old or new key, skipping rotation"
-            )
-            return value, False
+            raise ValueError("Cannot decrypt value with either old or new key") from None
 
     # Re-encrypt with new key
-    rotated = encrypt_credential_with_key(plaintext, new_key)
+    rotated = encrypt_credential_with_key(decrypted_plaintext, new_key)
     if rotated == value:
         return value, False
     return rotated, True
@@ -138,9 +141,15 @@ def _rotate_model_fields(
         row_changed = False
         for field in fields:
             current = getattr(row, field, None)
-            rotated, changed = _rotate_value(
-                current, old_key=old_key, new_key=new_key
-            )
+            try:
+                rotated, changed = _rotate_value(
+                    current, old_key=old_key, new_key=new_key
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Failed to rotate {model.__name__}.{field} "
+                    f"id={_record_identity(row)}"
+                ) from exc
             if not changed:
                 continue
             max_length = column_lengths.get(field)
@@ -176,7 +185,12 @@ def _rotate_domain_settings(
     for row in rows:
         current = str(row.value_text or "")
         # Note: _rotate_value now checks for enc: prefix internally
-        rotated, changed = _rotate_value(current, old_key=old_key, new_key=new_key)
+        try:
+            rotated, changed = _rotate_value(current, old_key=old_key, new_key=new_key)
+        except ValueError as exc:
+            raise ValueError(
+                f"Failed to rotate DomainSetting {row.domain.value}.{row.key}"
+            ) from exc
         if not changed:
             continue
         row.value_text = rotated
@@ -200,9 +214,14 @@ def _rotate_integration_hooks(
         for key, value in auth_config.items():
             if key not in _INTEGRATION_HOOK_SECRET_KEYS or value is None:
                 continue
-            rotated_value, value_changed = _rotate_value(
-                str(value), old_key=old_key, new_key=new_key
-            )
+            try:
+                rotated_value, value_changed = _rotate_value(
+                    str(value), old_key=old_key, new_key=new_key
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    f"Failed to rotate IntegrationHook auth_config.{key}"
+                ) from exc
             if not value_changed:
                 continue
             rotated[key] = rotated_value

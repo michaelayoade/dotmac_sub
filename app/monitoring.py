@@ -65,14 +65,9 @@ def _setup_loki(
         # Add to root logger so all logs are pushed
         root_logger = logging.getLogger()
         if _has_matching_loki_handler(root_logger, loki_url):
-            logger.info("Loki handler already configured for url=%s", loki_url)
             return True
         handler.setLevel(logging.INFO)
         root_logger.addHandler(handler)
-        logger.info(
-            f"Loki logging enabled: app={app_name}, server={server}, "
-            f"environment={environment}, url={loki_url}"
-        )
         return True
     except Exception as e:
         logger.warning(f"Failed to configure Loki handler: {e}")
