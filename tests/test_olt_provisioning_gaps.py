@@ -1477,6 +1477,9 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/location-details" in route_paths
         assert "/network/onts/{ont_id}/device-info" in route_paths
         assert "/network/onts/{ont_id}/gpon-channel" in route_paths
+        assert "/network/onts/{ont_id}/operational-health" in action_paths
+        assert "/network/onts/{ont_id}/reconcile" in action_paths
+        assert "/network/onts/{ont_id}/config-snapshot" in action_paths
         assert "/network/onts/{ont_id}/edit" not in all_paths
 
         # Phase 3: OLT profile routes remain, provisioning UI routes do not
@@ -1515,10 +1518,24 @@ class TestProvisioningUiTemplates:
         assert "Board" in template
         assert "GPON Channel" in template
 
+    def test_ont_detail_template_includes_operational_health_actions(self) -> None:
+        detail_template = Path("templates/admin/network/onts/detail.html").read_text()
+        health_template = Path(
+            "templates/admin/network/onts/_operational_health.html"
+        ).read_text()
+
+        assert 'id="operational-health-container"' in detail_template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"' in detail_template
+        assert 'hx-trigger="load"' in detail_template
+        assert "Rediscover / Reconcile" in health_template
+        assert "/admin/network/onts/{{ ont_id }}/reconcile" in health_template
+        assert "/admin/network/onts/{{ ont_id }}/config-snapshot" in health_template
+        assert "Force ACS Inform" in health_template
+
 
 class TestOntLocationDetailsHelpers:
     def test_resolve_splitter_port_id_by_number(self, db_session) -> None:
-        from app.web.admin.network_onts import _resolve_splitter_port_id
+        from app.services.network.ont_web_forms import resolve_splitter_port_id
 
         splitter = Splitter(name="ODB-A", splitter_ratio="1:8")
         db_session.add(splitter)
@@ -1533,7 +1550,7 @@ class TestOntLocationDetailsHelpers:
         )
         db_session.commit()
 
-        resolved = _resolve_splitter_port_id(
+        resolved = resolve_splitter_port_id(
             db_session,
             splitter_id=splitter.id,
             splitter_port_number=8,
@@ -1542,10 +1559,10 @@ class TestOntLocationDetailsHelpers:
         assert resolved is not None
 
     def test_resolve_splitter_port_id_rejects_port_without_splitter(self, db_session) -> None:
-        from app.web.admin.network_onts import _resolve_splitter_port_id
+        from app.services.network.ont_web_forms import resolve_splitter_port_id
 
         try:
-            _resolve_splitter_port_id(
+            resolve_splitter_port_id(
                 db_session,
                 splitter_id=None,
                 splitter_port_number=3,

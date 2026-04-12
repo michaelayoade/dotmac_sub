@@ -31,6 +31,10 @@ def _classify_signal(dbm: float | None) -> str | None:
     return "critical"
 
 
+def _blank_unknown_status(value: str | None) -> str | None:
+    return None if value == "unknown" else value
+
+
 class OntReadFacade:
     """Unified ONT reader composing multiple data sources."""
 
@@ -57,17 +61,17 @@ class OntReadFacade:
 
         # Base fields from DB
         status_snapshot = resolve_ont_status_for_model(ont)
+        olt_status = _blank_unknown_status(status_snapshot.olt_status.value)
+        effective_status = _blank_unknown_status(status_snapshot.effective_status.value)
         result: dict[str, Any] = {
             "id": ont.id,
             "serial_number": ont.serial_number,
             "vendor": ont.vendor,
             "model": ont.model,
             "firmware_version": ont.firmware_version,
-            "online_status": (
-                status_snapshot.olt_status.value if status_snapshot.olt_status else None
-            ),
+            "online_status": olt_status,
             "acs_status": status_snapshot.acs_status.value,
-            "effective_status": status_snapshot.effective_status.value,
+            "effective_status": effective_status,
             "effective_status_source": status_snapshot.effective_status_source.value,
             "acs_last_inform_at": status_snapshot.acs_last_inform_at,
             "name": ont.name,

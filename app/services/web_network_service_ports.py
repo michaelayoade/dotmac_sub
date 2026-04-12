@@ -205,6 +205,19 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
     return context
 
 
+def coerce_user_vlan(value: str) -> tuple[int | str | None, str | None]:
+    """Normalize service-port user VLAN form input."""
+    raw_user_vlan = value.strip()
+    if not raw_user_vlan:
+        return None, None
+    if raw_user_vlan == "untagged":
+        return "untagged", None
+    try:
+        return int(raw_user_vlan), None
+    except ValueError:
+        return None, "User VLAN must be a number or 'untagged'"
+
+
 def handle_create(
     db: Session,
     ont_id: str,

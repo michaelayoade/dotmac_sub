@@ -98,14 +98,7 @@ def refresh_ont_status(ont_id: str, db: Session = Depends(get_db)) -> OntActionR
 )
 def get_running_config(ont_id: str, db: Session = Depends(get_db)) -> OntActionResponse:
     result = ont_actions.get_running_config(db, ont_id)
-    if not result.success:
-        raise HTTPException(status_code=422, detail=result.message)
-    # DeviceConfig → dict for data field
-    config_data = result.data
-    if hasattr(result, "data") and result.data is None:
-        # get_running_config returns ActionResult with DeviceConfig in data
-        config_data = None
-    return OntActionResponse(success=True, message=result.message, data=config_data)
+    return _action_response(result)
 
 
 @router.post(

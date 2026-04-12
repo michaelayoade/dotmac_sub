@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
+import hashlib
 from datetime import UTC, datetime
 from difflib import unified_diff
 from pathlib import Path
@@ -454,12 +455,14 @@ def run_test_backup(db: Session, olt_id: str) -> tuple[OltConfigBackup | None, s
         olt_dir.mkdir(parents=True, exist_ok=True)
         filepath = olt_dir / filename
         filepath.write_text(config_text)
+        config_bytes = config_text.encode()
         backup = OltConfigBackup(
             id=uuid.uuid4(),
             olt_device_id=olt.id,
             backup_type=OltConfigBackupType.manual,
             file_path=str(filepath.relative_to(base)),
-            file_size_bytes=len(config_text.encode()),
+            file_size_bytes=len(config_bytes),
+            file_hash=hashlib.sha256(config_bytes).hexdigest(),
         )
         db.add(backup)
         db.commit()
@@ -490,7 +493,7 @@ def validate_cli_command(command: str) -> str | None:
 
 
 def execute_cli_command(
-    db: Session, olt_id: str, command: str
+    db: Session, olt_id: str, command: str, *, request: Request | None = None
 ) -> tuple[bool, str, str]:
     olt = get_olt_or_none(db, olt_id)
     if not olt:
@@ -498,6 +501,15 @@ def execute_cli_command(
 
     error = validate_cli_command(command)
     if error:
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="run_cli_command",
+            entity_id=olt_id,
+            metadata={"result": "error", "message": error, "command": command.strip()},
+            status_code=400,
+            is_success=False,
+        )
         return False, error, ""
 
     ok, message, output = olt_ssh_service.run_cli_command(olt, command.strip())
@@ -506,6 +518,19 @@ def execute_cli_command(
         olt.name,
         command.strip(),
         "ok" if ok else "failed",
+    )
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="run_cli_command",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "command": command.strip(),
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
     )
     return ok, message, output
 
@@ -533,12 +558,14 @@ def backup_running_config_ssh(
         olt_dir.mkdir(parents=True, exist_ok=True)
         filepath = olt_dir / filename
         filepath.write_text(config_text)
+        config_bytes = config_text.encode()
         backup = OltConfigBackup(
             id=uuid.uuid4(),
             olt_device_id=olt.id,
             backup_type=OltConfigBackupType.manual,
             file_path=str(filepath.relative_to(base)),
-            file_size_bytes=len(config_text.encode()),
+            file_size_bytes=len(config_bytes),
+            file_hash=hashlib.sha256(config_bytes).hexdigest(),
         )
         db.add(backup)
         db.commit()

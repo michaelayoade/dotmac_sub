@@ -270,8 +270,9 @@ def _resolve_existing_cpe_for_ont(
     linked_cpe_ids = {
         cpe_id
         for cpe_id in db.scalars(
-            select(Tr069CpeDevice.cpe_device_id)
-            .where(Tr069CpeDevice.cpe_device_id.in_(match_ids))
+            select(Tr069CpeDevice.cpe_device_id).where(
+                Tr069CpeDevice.cpe_device_id.in_(match_ids)
+            )
         ).all()
         if cpe_id is not None
     }
@@ -592,10 +593,29 @@ class Vlans(CRUDManager[Vlan]):
         return CRUDManager._payload_dict(payload, exclude_unset=exclude_unset)
 
     @classmethod
-    def _validate_olt_scope(cls, db: Session, data: dict, *, vlan_id: str | None = None) -> None:
+    def _validate_olt_scope(
+        cls, db: Session, data: dict, *, vlan_id: str | None = None
+    ) -> None:
         olt_device_id = data.get("olt_device_id")
         if not olt_device_id:
-            raise HTTPException(status_code=400, detail="OLT is required for VLANs")
+            region_id = data.get("region_id")
+            tag = data.get("tag")
+            if region_id is None or tag is None:
+                return
+            stmt = select(Vlan).where(
+                Vlan.region_id == coerce_uuid(region_id),
+                Vlan.olt_device_id.is_(None),
+                Vlan.tag == int(tag),
+            )
+            if vlan_id:
+                stmt = stmt.where(Vlan.id != coerce_uuid(vlan_id))
+            existing = db.scalars(stmt).first()
+            if existing and existing.is_active:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"VLAN {tag} already exists in this region",
+                )
+            return
         olt = db.get(OLTDevice, str(olt_device_id))
         if not olt or not olt.is_active:
             raise HTTPException(status_code=400, detail="Active OLT not found")

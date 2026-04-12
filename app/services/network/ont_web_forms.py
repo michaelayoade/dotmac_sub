@@ -32,6 +32,8 @@ from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dic
 from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_provisioning_profiles import ont_provisioning_profiles
 
+_LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
+
 
 @dataclass
 class OntFormResult:
@@ -119,7 +121,10 @@ def initial_iphost_form(ont: Any, config: dict[str, str]) -> dict[str, str]:
     gateway = _iphost_value(config, "gateway") or ""
 
     fallback_vlan = ""
-    if getattr(ont, "mgmt_vlan", None) and getattr(ont.mgmt_vlan, "tag", None) is not None:
+    if (
+        getattr(ont, "mgmt_vlan", None)
+        and getattr(ont.mgmt_vlan, "tag", None) is not None
+    ):
         fallback_vlan = str(ont.mgmt_vlan.tag)
 
     return {
@@ -327,6 +332,19 @@ def build_location_address_or_comment(address: str, _contact: str) -> str | None
     return address_clean or None
 
 
+def split_location_metadata(value: str | None) -> tuple[str, str]:
+    """Split legacy embedded location-contact metadata from address text."""
+    raw = (value or "").strip()
+    if not raw:
+        return "", ""
+    if raw.startswith("---\nLocation Contact: "):
+        return "", raw.removeprefix("---\nLocation Contact: ").strip()
+    if _LOCATION_CONTACT_MARKER not in raw:
+        return raw, ""
+    address_part, contact_part = raw.split(_LOCATION_CONTACT_MARKER, 1)
+    return address_part.strip(), contact_part.strip()
+
+
 def location_form_values(form: FormData) -> dict[str, object]:
     return {
         "zone_id": form_uuid_or_none(form, "zone_id"),
@@ -464,6 +482,151 @@ def onu_mode_modal_context(db: Session, ont_id: str) -> dict[str, object]:
         "config_methods": [e.value for e in ConfigMethod],
         "ip_protocols": [e.value for e in IpProtocol],
         "onu_modes": [e.value for e in OnuMode],
+    }
+
+
+def location_modal_context(
+    db: Session,
+    ont: Any,
+    *,
+    error: str | None = None,
+    form_values: dict[str, Any] | None = None,
+) -> dict[str, object]:
+    address_value, contact_value = split_location_metadata(
+        getattr(ont, "address_or_comment", None)
+    )
+    contact_value = str(getattr(ont, "contact", None) or contact_value)
+    initial_port_number = (
+        ont.splitter_port_rel.port_number
+        if getattr(ont, "splitter_port_rel", None) is not None
+        else None
+    )
+    form = {
+        "zone_id": str(form_values["zone_id"])
+        if form_values and form_values.get("zone_id")
+        else str(ont.zone_id)
+        if getattr(ont, "zone_id", None)
+        else "",
+        "splitter_id": str(form_values["splitter_id"])
+        if form_values and form_values.get("splitter_id")
+        else str(ont.splitter_id)
+        if getattr(ont, "splitter_id", None)
+        else "",
+        "splitter_port_number": str(form_values["splitter_port_number"])
+        if form_values and form_values.get("splitter_port_number") is not None
+        else str(initial_port_number)
+        if initial_port_number is not None
+        else "",
+        "name": str(form_values["name"])
+        if form_values and form_values.get("name") is not None
+        else str(getattr(ont, "name", "") or ""),
+        "address_or_comment": str(form_values["address_or_comment"])
+        if form_values and form_values.get("address_or_comment") is not None
+        else address_value,
+        "contact": str(form_values["contact"])
+        if form_values and form_values.get("contact") is not None
+        else contact_value,
+        "gps_latitude": str(form_values["gps_latitude"])
+        if form_values and form_values.get("gps_latitude") is not None
+        else str(getattr(ont, "gps_latitude", "") or ""),
+        "gps_longitude": str(form_values["gps_longitude"])
+        if form_values and form_values.get("gps_longitude") is not None
+        else str(getattr(ont, "gps_longitude", "") or ""),
+    }
+    return {
+        "ont": ont,
+        "zones": web_onts_service.get_zones(db),
+        "splitters": web_onts_service.get_splitters(db),
+        "form": form,
+        "error": error,
+    }
+
+
+def device_info_modal_context(
+    db: Session,
+    ont: Any,
+    *,
+    error: str | None = None,
+    form_values: dict[str, Any] | None = None,
+) -> dict[str, object]:
+    form = {
+        "vendor": str(form_values["vendor"])
+        if form_values and form_values.get("vendor") is not None
+        else str(getattr(ont, "vendor", "") or ""),
+        "model": str(form_values["model"])
+        if form_values and form_values.get("model") is not None
+        else str(getattr(ont, "model", "") or ""),
+        "firmware_version": str(form_values["firmware_version"])
+        if form_values and form_values.get("firmware_version") is not None
+        else str(getattr(ont, "firmware_version", "") or ""),
+        "onu_type_id": str(form_values["onu_type_id"])
+        if form_values and form_values.get("onu_type_id")
+        else str(ont.onu_type_id)
+        if getattr(ont, "onu_type_id", None)
+        else "",
+    }
+    return {
+        "ont": ont,
+        "onu_types": web_onts_service.get_onu_types(db),
+        "form": form,
+        "error": error,
+    }
+
+
+def gpon_channel_modal_context(
+    ont: Any,
+    *,
+    error: str | None = None,
+    form_value: str | None = None,
+) -> dict[str, object]:
+    current_channel = (
+        ont.gpon_channel.value
+        if getattr(ont, "gpon_channel", None) is not None
+        and getattr(ont.gpon_channel, "value", None) is not None
+        else getattr(ont, "gpon_channel", None)
+    )
+    return {
+        "ont": ont,
+        "gpon_channels": [e.value for e in GponChannel],
+        "form": {
+            "gpon_channel": form_value
+            if form_value is not None
+            else (current_channel or "gpon")
+        },
+        "error": error,
+    }
+
+
+def wifi_controls_context(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services.network.ont_read import OntReadFacade
+
+    tr069_summary = OntReadFacade.get_tr069_summary(db, ont_id)
+    current_ssid = None
+    no_tr069 = True
+    if tr069_summary.get("available"):
+        no_tr069 = False
+        wireless = tr069_summary.get("wireless") or {}
+        current_ssid = wireless.get("SSID") or wireless.get("ssid")
+
+    return {
+        "ont_id": ont_id,
+        "current_ssid": current_ssid,
+        "no_tr069": no_tr069,
+    }
+
+
+def firmware_form_context(db: Session, ont_id: str) -> dict[str, object]:
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    ont_vendor = str(getattr(ont, "vendor", "") or "").strip() if ont else ""
+    available_firmware = web_onts_service.get_active_firmware_images(
+        db,
+        vendor_contains=ont_vendor or None,
+        limit=20,
+    )
+    return {
+        "ont_id": ont_id,
+        "available_firmware": available_firmware,
+        "ont_vendor": ont_vendor,
     }
 
 

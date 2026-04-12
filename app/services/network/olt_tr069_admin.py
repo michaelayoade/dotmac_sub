@@ -65,7 +65,11 @@ def resolve_operational_acs_server(
     )
     if len(active_servers) == 1:
         return active_servers[0]
-    return active_servers[0] if active_servers else None
+    if active_servers:
+        logger.warning(
+            "Multiple active ACS servers are configured without an OLT link or default ACS setting; refusing ambiguous fallback."
+        )
+    return None
 
 
 def apply_default_acs_server(
@@ -260,13 +264,16 @@ def queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     if not onts:
         return stats
 
+    inform_interval = str(server.periodic_inform_interval or 300)
     acs_params: dict[str, str] = {
         "Device.ManagementServer.URL": server.cwmp_url,
         "Device.ManagementServer.PeriodicInformEnable": "true",
-        "Device.ManagementServer.PeriodicInformInterval": "3600",
+        "Device.ManagementServer.PeriodicInformInterval": inform_interval,
         "InternetGatewayDevice.ManagementServer.URL": server.cwmp_url,
         "InternetGatewayDevice.ManagementServer.PeriodicInformEnable": "true",
-        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": "3600",
+        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": (
+            inform_interval
+        ),
     }
     if server.cwmp_username:
         acs_params["Device.ManagementServer.Username"] = server.cwmp_username

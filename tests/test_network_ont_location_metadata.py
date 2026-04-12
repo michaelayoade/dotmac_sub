@@ -1,17 +1,17 @@
 from types import SimpleNamespace
 
 from app.schemas.network import OntUnitUpdate
-from app.web.admin import network_onts as network_onts_admin
+from app.services.network import ont_web_forms
 
 
 def test_location_modal_context_prefers_dedicated_contact(monkeypatch) -> None:
     monkeypatch.setattr(
-        network_onts_admin.web_network_onts_service,
+        ont_web_forms.web_onts_service,
         "get_zones",
         lambda _db: [],
     )
     monkeypatch.setattr(
-        network_onts_admin.web_network_onts_service,
+        ont_web_forms.web_onts_service,
         "get_splitters",
         lambda _db: [],
     )
@@ -26,8 +26,7 @@ def test_location_modal_context_prefers_dedicated_contact(monkeypatch) -> None:
         gps_longitude=None,
     )
 
-    context = network_onts_admin._location_modal_context(
-        request=SimpleNamespace(),
+    context = ont_web_forms.location_modal_context(
         db=None,
         ont=ont,
     )
@@ -37,7 +36,7 @@ def test_location_modal_context_prefers_dedicated_contact(monkeypatch) -> None:
 
 
 def test_build_location_address_or_comment_drops_legacy_contact_encoding() -> None:
-    value = network_onts_admin._build_location_address_or_comment(
+    value = ont_web_forms.build_location_address_or_comment(
         "123 Fiber St",
         "Dedicated Contact",
     )

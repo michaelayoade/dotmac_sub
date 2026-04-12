@@ -31,7 +31,6 @@ from app.web.request_parsing import parse_form_data_sync
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-inventory"])
 logger = logging.getLogger(__name__)
-_LOCATION_CONTACT_MARKER = "\n---\nLocation Contact: "
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -65,18 +64,6 @@ def _ont_feedback_from_request(request: Request) -> dict[str, str] | None:
     if not status or not message:
         return None
     return {"status": str(status), "message": str(message)}
-
-
-def _split_location_metadata(value: str | None) -> tuple[str, str]:
-    raw = (value or "").strip()
-    if not raw:
-        return "", ""
-    if raw.startswith("---\nLocation Contact: "):
-        return "", raw.removeprefix("---\nLocation Contact: ").strip()
-    if _LOCATION_CONTACT_MARKER not in raw:
-        return raw, ""
-    address_part, contact_part = raw.split(_LOCATION_CONTACT_MARKER, 1)
-    return address_part.strip(), contact_part.strip()
 
 
 def _ont_redirect(
@@ -220,26 +207,19 @@ def onts_bulk_action(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Execute a bulk action on selected ONTs."""
-    stats = web_network_onts_service.execute_bulk_action(
-        db, ont_ids, action, firmware_image_id=firmware_image_id or None
+    context = {
+        "request": request,
+        **web_network_onts_service.bulk_action_summary_context(
+            db,
+            ont_ids,
+            action,
+            firmware_image_id=firmware_image_id or None,
+        ),
+    }
+    return templates.TemplateResponse(
+        "admin/network/onts/_bulk_action_summary.html",
+        context,
     )
-    error = stats.get("error")
-    if error:
-        summary = f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{error}</div>'
-    else:
-        skipped_text = (
-            f", {stats.get('skipped', 0)} skipped (max 50)"
-            if stats.get("skipped")
-            else ""
-        )
-        summary = (
-            f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 '
-            f'dark:border-emerald-800 dark:bg-emerald-900/20 dark:text-emerald-400">'
-            f"Bulk <strong>{action}</strong>: {stats['succeeded']} succeeded, {stats['failed']} failed"
-            f"{skipped_text}."
-            f"</div>"
-        )
-    return HTMLResponse(summary)
 
 
 @router.get(
@@ -327,7 +307,7 @@ def ont_detail(
         operations = []
 
     context = _base_context(request, db, active_page="onts")
-    address_value, contact_value = _split_location_metadata(
+    address_value, contact_value = ont_web_forms_service.split_location_metadata(
         getattr(page_data["ont"], "address_or_comment", None)
     )
     contact_value = str(getattr(page_data["ont"], "contact", None) or contact_value)

@@ -131,14 +131,13 @@ def resolve_ont_status_snapshot(
     elif normalized_olt == OnuOnlineStatus.online:
         effective_status = OnuOnlineStatus.online
         source = OntStatusSource.olt
-    else:
-        # No recent ACS and OLT not online = offline
+    elif normalized_olt == OnuOnlineStatus.offline:
         effective_status = OnuOnlineStatus.offline
-        source = (
-            OntStatusSource.olt
-            if normalized_olt == OnuOnlineStatus.offline
-            else OntStatusSource.derived
-        )
+        source = OntStatusSource.olt
+    else:
+        # No recent ACS and no usable OLT status means there is no observed state.
+        effective_status = OnuOnlineStatus.unknown
+        source = OntStatusSource.derived
 
     return OntStatusSnapshot(
         olt_status=normalized_olt,

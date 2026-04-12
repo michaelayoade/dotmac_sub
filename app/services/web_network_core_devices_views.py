@@ -1576,8 +1576,10 @@ def onts_list_page_data(
             ont, acs_last_inform_at=acs_last_inform_at, now=now
         )
         status_val = status_snapshot.effective_status.value
+        status_display_val = None if status_val == "unknown" else status_val
         status_source = status_snapshot.effective_status_source.value
         olt_status_val = status_snapshot.olt_status.value
+        olt_status_display_val = None if olt_status_val == "unknown" else olt_status_val
         acs_status_val = status_snapshot.acs_status.value
         reason = getattr(ont, "offline_reason", None)
         reason_val = reason.value if reason else None
@@ -1587,16 +1589,22 @@ def onts_list_page_data(
                 quality, SIGNAL_QUALITY_CLASSES["unknown"]
             ),
             "status_class": ONLINE_STATUS_CLASSES.get(
-                status_val, ONLINE_STATUS_CLASSES["unknown"]
+                status_display_val or "unknown", ONLINE_STATUS_CLASSES["unknown"]
             ),
-            "status_display": status_val.replace("_", " ").title()
-            if status_val
-            else "Unknown",
+            "status_display": (
+                status_display_val.replace("_", " ").title()
+                if status_display_val
+                else ""
+            ),
             "status_source": status_source,
-            "olt_status": olt_status_val,
-            "olt_status_display": olt_status_val.replace("_", " ").title(),
+            "olt_status": olt_status_display_val,
+            "olt_status_display": (
+                olt_status_display_val.replace("_", " ").title()
+                if olt_status_display_val
+                else ""
+            ),
             "olt_status_class": ONLINE_STATUS_CLASSES.get(
-                olt_status_val, ONLINE_STATUS_CLASSES["unknown"]
+                olt_status_display_val or "unknown", ONLINE_STATUS_CLASSES["unknown"]
             ),
             "acs_status": acs_status_val,
             "acs_status_display": acs_status_val.replace("_", " ").title(),
@@ -1863,8 +1871,10 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         ont, acs_last_inform_at=acs_last_inform_at
     )
     status_val = status_snapshot.effective_status.value
+    status_display_val = None if status_val == "unknown" else status_val
     status_source = status_snapshot.effective_status_source.value
     olt_status_val = status_snapshot.olt_status.value
+    olt_status_display_val = None if olt_status_val == "unknown" else olt_status_val
     acs_status_val = status_snapshot.acs_status.value
     reason = getattr(ont, "offline_reason", None)
     reason_val = reason.value if reason else None
@@ -1882,14 +1892,24 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         ),
         "distance_meters": getattr(ont, "distance_meters", None),
         "signal_updated_at": getattr(ont, "signal_updated_at", None),
-        "online_status": status_val,
+        "online_status": status_display_val,
+        "online_status_display": (
+            status_display_val.replace("_", " ").title()
+            if status_display_val
+            else ""
+        ),
         "online_status_class": ONLINE_STATUS_CLASSES.get(
-            status_val, ONLINE_STATUS_CLASSES["unknown"]
+            status_display_val or "unknown", ONLINE_STATUS_CLASSES["unknown"]
         ),
         "online_status_source": status_source,
-        "olt_status": olt_status_val,
+        "olt_status": olt_status_display_val,
+        "olt_status_display": (
+            olt_status_display_val.replace("_", " ").title()
+            if olt_status_display_val
+            else ""
+        ),
         "olt_status_class": ONLINE_STATUS_CLASSES.get(
-            olt_status_val, ONLINE_STATUS_CLASSES["unknown"]
+            olt_status_display_val or "unknown", ONLINE_STATUS_CLASSES["unknown"]
         ),
         "acs_status": acs_status_val,
         "acs_status_class": ACS_STATUS_CLASSES.get(

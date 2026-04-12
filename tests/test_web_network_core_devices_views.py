@@ -182,6 +182,24 @@ def test_ont_detail_page_data_uses_recent_acs_inform_for_effective_online_status
     assert payload["signal_info"]["acs_status"] == "online"
 
 
+def test_ont_detail_page_data_blanks_unknown_online_status(db_session):
+    ont = OntUnit(
+        serial_number="ONT-UNKNOWN-BLANK",
+        is_active=True,
+        online_status=OnuOnlineStatus.unknown,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["signal_info"]["online_status"] is None
+    assert payload["signal_info"]["online_status_display"] == ""
+    assert payload["signal_info"]["olt_status"] is None
+    assert payload["signal_info"]["olt_status_display"] == ""
+
+
 def test_onts_list_page_data_online_filter_includes_recent_acs_devices(db_session):
     olt = OLTDevice(name="OLT-ACS-FILTER", mgmt_ip="198.51.100.214")
     db_session.add(olt)
@@ -228,6 +246,23 @@ def test_onts_list_page_data_online_filter_includes_recent_acs_devices(db_sessio
     assert payload["signal_data"][str(ont.id)]["status_source"] == "acs"
     assert payload["signal_data"][str(ont.id)]["olt_status"] == "offline"
     assert payload["signal_data"][str(ont.id)]["acs_status"] == "online"
+
+
+def test_onts_list_page_data_blanks_unknown_online_status(db_session):
+    ont = OntUnit(
+        serial_number="ONT-LIST-UNKNOWN-BLANK",
+        is_active=True,
+        online_status=OnuOnlineStatus.unknown,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.onts_list_page_data(db_session, per_page=50)
+    signal = payload["signal_data"][str(ont.id)]
+
+    assert signal["status_display"] == ""
+    assert signal["olt_status"] is None
+    assert signal["olt_status_display"] == ""
 
 
 def test_ont_detail_page_data_includes_recent_provisioning_runs(db_session):

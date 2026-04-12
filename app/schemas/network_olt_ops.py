@@ -23,6 +23,7 @@ class OltOperationResponse(BaseModel):
 class OltAuthorizeOntRequest(BaseModel):
     fsp: str = Field(description="Frame/Slot/Port e.g. 0/1/0")
     serial_number: str = Field(min_length=8, max_length=32)
+    force_reauthorize: bool = False
 
 
 class OltServicePortCreateRequest(BaseModel):

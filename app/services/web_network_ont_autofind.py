@@ -61,6 +61,41 @@ def sync_olt_autofind_candidates(
     return True, message, stats
 
 
+def scan_olt_autofind_results_context(
+    db: Session,
+    olt_id: str,
+    *,
+    request: Request | None = None,
+) -> dict[str, object]:
+    """Scan an OLT, persist autofind entries, and return template context."""
+    from app.services.network import olt_autofind as olt_autofind_service
+
+    ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
+        db, olt_id, request=request
+    )
+    if ok:
+        sync_olt_autofind_entries(db, olt_id=olt_id, entries=entries)
+    return {
+        "olt_id": olt_id,
+        "autofind_ok": ok,
+        "autofind_message": message,
+        "autofind_entries": [
+            {
+                "fsp": getattr(entry, "fsp", None),
+                "serial_number": getattr(entry, "serial_number", None),
+                "serial_hex": getattr(entry, "serial_hex", None),
+                "vendor_id": getattr(entry, "vendor_id", None),
+                "model": getattr(entry, "model", None),
+                "software_version": getattr(entry, "software_version", None),
+                "mac": getattr(entry, "mac", None),
+                "equipment_sn": getattr(entry, "equipment_sn", None),
+                "autofind_time": getattr(entry, "autofind_time", None),
+            }
+            for entry in entries
+        ],
+    }
+
+
 def sync_olt_autofind_entries(
     db: Session,
     *,

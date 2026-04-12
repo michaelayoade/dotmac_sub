@@ -159,7 +159,10 @@ def authorize_autofind_ont(
     """
     from app.services.network import olt_ssh as olt_ssh_service
     from app.services.network import olt_ssh_ont as olt_ssh_ont_service
-    from app.services.network.olt_write_reconciliation import verify_ont_authorized
+    from app.services.network.olt_write_reconciliation import (
+        verify_ont_absent,
+        verify_ont_authorized,
+    )
     from app.services.web_network_ont_autofind import sync_olt_autofind_candidates
 
     steps: list[AuthorizationStepResult] = []
@@ -277,10 +280,22 @@ def authorize_autofind_ont(
                     f"Failed to delete existing registration on {existing.fsp}: {delete_msg}",
                     step_started_at=force_started_at,
                 )
+            absence = verify_ont_absent(
+                olt,
+                fsp=existing.fsp,
+                ont_id=existing.onu_id,
+                serial_number=serial_number,
+            )
+            if not absence.success:
+                return _fail(
+                    "Verify existing ONT removal",
+                    absence.message,
+                    step_started_at=force_started_at,
+                )
             _append_step(
                 "Delete existing ONT registration",
                 True,
-                f"Deleted existing registration from {existing.fsp} (ONT-ID {existing.onu_id})",
+                f"Deleted existing registration from {existing.fsp} (ONT-ID {existing.onu_id}). {absence.message}",
                 step_started_at=force_started_at,
             )
         else:
@@ -559,9 +574,19 @@ def authorize_autofind_ont(
         fsp=fsp,
         serial_number=serial_number,
     )
+    if not resolve_ok:
+        return _fail(
+            "Resolve autofind candidate",
+            resolve_msg,
+            step_started_at=resolve_started_at,
+            ont_unit_id=ont_unit_id,
+            ont_id_on_olt=ont_id,
+            status="warning",
+            completed_authorization=True,
+        )
     _append_step(
         "Resolve autofind candidate",
-        resolve_ok,
+        True,
         resolve_msg,
         step_started_at=resolve_started_at,
     )
@@ -746,7 +771,9 @@ def run_post_authorization_follow_up(
             ont_unit_id,
             exc,
         )
-        _add_step("Wait for ACS inform", False, f"Failed to queue ACS wait: {exc}")
+        message = f"Failed to queue ACS wait: {exc}"
+        _add_step("Wait for ACS inform", False, message)
+        return False, message, steps
 
     return True, "Post-authorization sync completed successfully.", steps
 

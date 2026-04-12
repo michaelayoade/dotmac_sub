@@ -316,6 +316,30 @@ def execute_bulk_action(
     }
 
 
+def bulk_action_summary_context(
+    db: Session,
+    ont_ids: list[str],
+    action: str,
+    *,
+    firmware_image_id: str | None = None,
+) -> dict[str, Any]:
+    """Execute a bulk ONT action and return display-ready summary data."""
+    stats = execute_bulk_action(
+        db,
+        ont_ids,
+        action,
+        firmware_image_id=firmware_image_id,
+    )
+    error = stats.get("error")
+    skipped = int(stats.get("skipped", 0) or 0)
+    return {
+        "stats": stats,
+        "action": action,
+        "error": error,
+        "skipped_text": f", {skipped} skipped (max 50)" if skipped else "",
+    }
+
+
 # ---------------------------------------------------------------------------
 # Provisioning profile helpers
 # ---------------------------------------------------------------------------
@@ -328,9 +352,7 @@ def get_provisioning_profiles(
     return get_profile_templates(db, olt_device_id=olt_device_id)
 
 
-def provision_wizard_context(
-    request: Any, db: Session, ont_id: str
-) -> dict[str, Any]:
+def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str, Any]:
     """Build template context for the ONT provisioning wizard page."""
     from app.services import network as network_service
     from app.services import web_admin as web_admin_service

@@ -166,14 +166,8 @@ def ont_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Fetch and display running config from ONT."""
-    result = web_network_ont_actions_service.fetch_running_config(db, ont_id)
     context = _base_context(request, db, active_page="onts")
-    context.update(
-        {
-            "ont_id": ont_id,
-            "config_result": result,
-        }
-    )
+    context.update(web_network_ont_actions_service.running_config_context(db, ont_id))
     return templates.TemplateResponse(
         "admin/network/onts/_config_partial.html", context
     )
@@ -188,42 +182,14 @@ def ont_olt_side_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Fetch ONT config from OLT side via SSH (works without GenieACS)."""
-    import html as html_mod
-
-    result = web_network_ont_actions_service.fetch_olt_side_config(db, ont_id)
-    if not result.success:
-        return HTMLResponse(
-            f'<div class="rounded-lg border border-rose-200 bg-rose-50 p-4 '
-            f'dark:border-rose-800/50 dark:bg-rose-900/20">'
-            f'<p class="text-sm text-rose-700 dark:text-rose-300">'
-            f"{html_mod.escape(result.message)}</p></div>"
-        )
-
-    sections = result.data or {}
-    parts = [
-        '<div class="space-y-4">',
-        f'<p class="text-xs text-slate-500 dark:text-slate-400">{html_mod.escape(result.message)}</p>',
-    ]
-    section_labels = {
-        "ont_info": "ONT Info",
-        "ont_wan": "WAN Info",
-        "service_ports": "Service Ports",
+    context = {
+        "request": request,
+        **web_network_ont_actions_service.olt_side_config_context(db, ont_id),
     }
-    for key, label in section_labels.items():
-        content = sections.get(key)
-        if not content:
-            continue
-        parts.append(
-            f"<div>"
-            f'<h4 class="text-xs font-semibold uppercase tracking-wide text-slate-500 '
-            f'dark:text-slate-400 mb-2">{label}</h4>'
-            f'<pre class="whitespace-pre-wrap break-words text-xs font-mono '
-            f"text-emerald-800 dark:text-emerald-300 bg-slate-900 dark:bg-slate-950 "
-            f'rounded-lg p-3 overflow-x-auto">{html_mod.escape(content)}</pre>'
-            f"</div>"
-        )
-    parts.append("</div>")
-    return HTMLResponse("\n".join(parts))
+    return templates.TemplateResponse(
+        "admin/network/onts/_olt_side_config.html",
+        context,
+    )
 
 
 @router.get(
@@ -235,84 +201,13 @@ def ont_olt_status(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Query the OLT directly for ONT registration state (GPON layer)."""
-    import html as html_mod
-
-    result = web_network_ont_actions_service.fetch_olt_status(db, ont_id)
-    if not result["success"]:
-        return HTMLResponse(
-            f'<div class="rounded-lg border border-rose-200 bg-rose-50 p-4 '
-            f'dark:border-rose-800/50 dark:bg-rose-900/20">'
-            f'<p class="text-sm text-rose-700 dark:text-rose-300">'
-            f"{html_mod.escape(result['message'])}</p></div>"
-        )
-
-    entry = result.get("entry")
-    if not entry:
-        return HTMLResponse(
-            '<div class="rounded-lg border border-slate-200 bg-slate-50 p-4 '
-            'dark:border-slate-700 dark:bg-slate-800">'
-            '<p class="text-sm text-slate-500 dark:text-slate-400">'
-            "No status data returned.</p></div>"
-        )
-
-    run_state = entry["run_state"]
-
-    _RUN_STATE_CLASSES = {
-        "online": (
-            "inline-flex items-center rounded-full px-2 py-0.5 "
-            "text-xs font-medium bg-emerald-100 text-emerald-800 "
-            "dark:bg-emerald-900/40 dark:text-emerald-300"
-        ),
-        "offline": (
-            "inline-flex items-center rounded-full px-2 py-0.5 "
-            "text-xs font-medium bg-rose-100 text-rose-800 "
-            "dark:bg-rose-900/40 dark:text-rose-300"
-        ),
-        "_default": (
-            "inline-flex items-center rounded-full px-2 py-0.5 "
-            "text-xs font-medium bg-slate-100 text-slate-800 "
-            "dark:bg-slate-900/40 dark:text-slate-300"
-        ),
+    context = {
+        "request": request,
+        **web_network_ont_actions_service.olt_status_context(db, ont_id),
     }
-
-    rows = [
-        ("Run State", entry["run_state"]),
-        ("Config State", entry["config_state"]),
-        ("Match State", entry["match_state"]),
-        ("Serial", entry["serial_number"]),
-        ("F/S/P", entry["fsp"]),
-        ("ONT-ID", str(entry["ont_id"])),
-        ("Last Down Cause", entry["last_down_cause"] or "—"),
-        ("Last Down Time", entry["last_down_time"] or "—"),
-        ("Last Up Time", entry["last_up_time"] or "—"),
-        ("Description", entry["description"] or "—"),
-    ]
-
-    html_rows = []
-    for label, value in rows:
-        escaped_val = html_mod.escape(str(value))
-        if label == "Run State":
-            badge_classes = _RUN_STATE_CLASSES.get(
-                run_state, _RUN_STATE_CLASSES["_default"]
-            )
-            escaped_val = f'<span class="{badge_classes}">{escaped_val}</span>'
-        html_rows.append(
-            f"<tr>"
-            f'<td class="py-1.5 pr-4 text-xs font-medium text-slate-500 '
-            f'dark:text-slate-400 whitespace-nowrap">{html_mod.escape(label)}</td>'
-            f'<td class="py-1.5 text-sm text-slate-900 dark:text-white font-mono">'
-            f"{escaped_val}</td>"
-            f"</tr>"
-        )
-
-    return HTMLResponse(
-        f'<div class="space-y-3">'
-        f'<p class="text-xs text-slate-500 dark:text-slate-400">'
-        f"{html_mod.escape(result['message'])}</p>"
-        f'<table class="w-full">'
-        f'<tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">'
-        f"{''.join(html_rows)}"
-        f"</tbody></table></div>"
+    return templates.TemplateResponse(
+        "admin/network/onts/_olt_status.html",
+        context,
     )
 
 
@@ -738,6 +633,63 @@ def ont_charts(
     return templates.TemplateResponse(
         "admin/network/onts/_charts_partial.html", context
     )
+
+
+@router.get(
+    "/onts/{ont_id}/operational-health",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_operational_health(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: operational readiness/actions for the ONT detail page."""
+    context: dict[str, object] = {"request": request}
+    context.update(web_network_ont_actions_service.operational_health_context(db, ont_id))
+    return templates.TemplateResponse(
+        "admin/network/onts/_operational_health.html", context
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/reconcile",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_reconcile(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Run OLT/ACS reconciliation and return refreshed operational panel."""
+    result = web_network_ont_actions_service.reconcile_operational_state(
+        db,
+        ont_id,
+        request=request,
+    )
+    context: dict[str, object] = {"request": request}
+    context.update(
+        web_network_ont_actions_service.operational_health_context(
+            db,
+            ont_id,
+            message=result.message,
+            message_type="success" if result.success else "error",
+        )
+    )
+    response = templates.TemplateResponse(
+        "admin/network/onts/_operational_health.html", context
+    )
+    response.headers["HX-Trigger"] = json.dumps(
+        {
+            "showToast": {
+                "message": result.message,
+                "type": "success" if result.success else "error",
+            }
+        }
+    )
+    return response
 
 
 @router.post(

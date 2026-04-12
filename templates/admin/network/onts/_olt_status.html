@@ -1,0 +1,29 @@
+{% if not result.success %}
+<div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800/50 dark:bg-rose-900/20">
+    <p class="text-sm text-rose-700 dark:text-rose-300">{{ result.message }}</p>
+</div>
+{% elif not entry %}
+<div class="rounded-lg border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+    <p class="text-sm text-slate-500 dark:text-slate-400">No status data returned.</p>
+</div>
+{% else %}
+<div class="space-y-3">
+    <p class="text-xs text-slate-500 dark:text-slate-400">{{ result.message }}</p>
+    <table class="w-full">
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
+            {% for label, value in rows %}
+            <tr>
+                <td class="py-1.5 pr-4 text-xs font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">{{ label }}</td>
+                <td class="py-1.5 text-sm text-slate-900 dark:text-white font-mono">
+                    {% if label == "Run State" and run_state %}
+                    <span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium {% if run_state == 'online' %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300{% elif run_state == 'offline' %}bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300{% else %}bg-slate-100 text-slate-800 dark:bg-slate-900/40 dark:text-slate-300{% endif %}">{{ value }}</span>
+                    {% else %}
+                    {{ value }}
+                    {% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}

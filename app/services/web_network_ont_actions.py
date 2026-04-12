@@ -15,6 +15,7 @@ from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.models.tr069 import Tr069CpeDevice
 from app.services import network as network_service
 from app.services.audit_helpers import log_audit_event
 from app.services.events import emit_event
@@ -92,6 +93,11 @@ def _parse_ont_id_on_olt(external_id: str | None) -> int | None:
         if suffix.isdigit():
             return int(suffix)
     return None
+
+
+def _display_olt_value(value: object | None) -> object | str:
+    text = str(value or "").strip()
+    return "—" if not text or text.lower() == "unknown" else value
 
 
 def _resolve_return_olt_context(
@@ -176,6 +182,34 @@ def execute_refresh(
 def fetch_running_config(db: Session, ont_id: str) -> ActionResult:
     """Fetch running config and return structured result."""
     return OntActions.get_running_config(db, ont_id)
+
+
+def running_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    """Build display context for an ONT ACS running-config read."""
+    result = fetch_running_config(db, ont_id)
+    labels = {
+        "device_info": "Device Info",
+        "wan": "WAN / IP",
+        "optical": "Optical",
+        "wifi": "WiFi",
+    }
+    sections: list[dict[str, object]] = []
+    for key, label in labels.items():
+        values = (result.data or {}).get(key) if result.success else None
+        if not isinstance(values, dict):
+            continue
+        rows = [
+            {"key": row_key, "value": row_value}
+            for row_key, row_value in values.items()
+            if row_value is not None and str(row_value).strip() != ""
+        ]
+        if rows:
+            sections.append({"key": key, "label": label, "rows": rows})
+    return {
+        "ont_id": ont_id,
+        "config_result": result,
+        "config_sections": sections,
+    }
 
 
 def execute_factory_reset(
@@ -534,6 +568,293 @@ def iphost_config_context(db: Session, ont_id: str) -> dict[str, object]:
     }
 
 
+def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    """Build context for the unified ONT configuration partial."""
+    from app.services import web_network_onts as web_network_onts_service
+    from app.services import web_network_service_ports as web_service_ports_service
+    from app.services.network import ont_web_forms as ont_web_forms_service
+
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    linked_tr069 = (
+        db.execute(
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.ont_unit_id == ont.id)
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .order_by(Tr069CpeDevice.updated_at.desc())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+    )
+    ok, msg, iphost_config = fetch_iphost_config(db, ont_id)
+    vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
+    tr069_profiles, tr069_profiles_error = (
+        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    )
+    initial_form = ont_web_forms_service.initial_iphost_form(ont, iphost_config)
+    service_ports_count = 0
+    try:
+        service_ports_data = web_service_ports_service.list_context(db, ont_id)
+        service_ports_count = len(service_ports_data.get("service_ports", []))
+    except Exception:
+        logger.exception("Failed to load service-port count for ONT %s", ont_id)
+
+    snapshot = getattr(ont, "tr069_last_snapshot", None) or {}
+    wireless_snapshot = snapshot.get("wireless") if isinstance(snapshot, dict) else {}
+    current_ssid = None
+    if isinstance(wireless_snapshot, dict):
+        current_ssid = wireless_snapshot.get("SSID") or wireless_snapshot.get("ssid")
+
+    return {
+        "ont": ont,
+        "iphost_config": iphost_config,
+        "iphost_ok": ok,
+        "iphost_msg": msg,
+        "initial_iphost_form": initial_form,
+        "vlans": vlans,
+        "tr069_profiles": tr069_profiles,
+        "tr069_profiles_error": tr069_profiles_error,
+        "mgmt_ip_summary": {
+            "mode": initial_form.get("ip_mode"),
+            "vlan": initial_form.get("vlan_id"),
+            "ip": initial_form.get("ip_address")
+            if initial_form.get("ip_mode") == "static"
+            else None,
+        },
+        "service_ports_count": service_ports_count,
+        "wan_summary": {
+            "pppoe_user": getattr(ont, "pppoe_username", None),
+            "wan_ip": getattr(ont, "observed_wan_ip", None),
+            "status": getattr(ont, "observed_pppoe_status", None),
+        },
+        "wifi_summary": {"ssid": current_ssid},
+        "has_tr069": bool(
+            linked_tr069 and str(getattr(linked_tr069, "genieacs_device_id", "") or "")
+        ),
+    }
+
+
+def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services import web_network_ont_tr069 as web_tr069_service
+
+    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+    wan = getattr(tr069, "wan", None) if tr069 else None
+    return {
+        "ont_id": ont_id,
+        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "wan_info": wan,
+        "current_pppoe_user": (wan or {}).get("Username"),
+    }
+
+
+def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services import web_network_ont_tr069 as web_tr069_service
+
+    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+    wireless = getattr(tr069, "wireless", None) if tr069 else None
+    return {
+        "ont_id": ont_id,
+        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "wireless_info": wireless,
+        "current_ssid": (wireless or {}).get("SSID"),
+    }
+
+
+def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services import web_network_onts as web_network_onts_service
+
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    tr069_profiles, tr069_profiles_error = (
+        web_network_onts_service.get_tr069_profiles_for_ont(db, ont)
+    )
+    return {
+        "ont_id": ont_id,
+        "tr069_profiles": tr069_profiles,
+        "tr069_profiles_error": tr069_profiles_error,
+        "current_profile": None,
+        "current_profile_id": None,
+    }
+
+
+def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services import web_network_ont_tr069 as web_tr069_service
+
+    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+    return {
+        "ont_id": ont_id,
+        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "lan_info": getattr(tr069, "lan", None) if tr069 else None,
+        "ethernet_ports": getattr(tr069, "ethernet_ports", None) if tr069 else None,
+        "lan_hosts": getattr(tr069, "lan_hosts", None) if tr069 else None,
+    }
+
+
+def diagnostics_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    from app.services import web_network_ont_tr069 as web_tr069_service
+
+    tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
+    tr069 = tr069_data.get("tr069")
+    return {
+        "ont_id": ont_id,
+        "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+    }
+
+
+def operational_health_context(
+    db: Session,
+    ont_id: str,
+    *,
+    message: str | None = None,
+    message_type: str = "info",
+    limit: int = 5,
+) -> dict[str, object]:
+    """Build ONT operational action/readiness context for the detail page."""
+    ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
+    linked_tr069 = (
+        db.execute(
+            select(Tr069CpeDevice)
+            .where(Tr069CpeDevice.ont_unit_id == ont.id)
+            .where(Tr069CpeDevice.is_active.is_(True))
+            .order_by(Tr069CpeDevice.last_inform_at.desc().nullslast())
+            .limit(1)
+        )
+        .scalars()
+        .first()
+        if ont
+        else None
+    )
+    snapshots = []
+    try:
+        snapshots = _config_snapshot_service().list_for_ont(db, ont_id, limit=limit)
+    except HTTPException:
+        snapshots = []
+
+    checks = [
+        {
+            "label": "OLT linked",
+            "ok": bool(olt),
+            "message": getattr(olt, "name", None) if olt else "No OLT on ONT record",
+        },
+        {
+            "label": "F/S/P known",
+            "ok": bool(fsp),
+            "message": fsp or "Board/port missing",
+        },
+        {
+            "label": "OLT ONT-ID known",
+            "ok": ont_id_on_olt is not None,
+            "message": str(ont_id_on_olt) if ont_id_on_olt is not None else "external_id missing",
+        },
+        {
+            "label": "ACS linked",
+            "ok": bool(linked_tr069 and linked_tr069.genieacs_device_id),
+            "message": (
+                str(linked_tr069.genieacs_device_id)
+                if linked_tr069 and linked_tr069.genieacs_device_id
+                else "Waiting for ACS inform"
+            ),
+        },
+        {
+            "label": "Connection request URL",
+            "ok": bool(linked_tr069 and linked_tr069.connection_request_url),
+            "message": "Ready" if linked_tr069 and linked_tr069.connection_request_url else "Not captured",
+        },
+        {
+            "label": "PPPoE stored",
+            "ok": bool(getattr(ont, "pppoe_username", None)),
+            "message": getattr(ont, "pppoe_username", None) or "No PPPoE username",
+        },
+    ]
+    return {
+        "ont": ont,
+        "ont_id": ont_id,
+        "olt": olt,
+        "fsp": fsp,
+        "ont_id_on_olt": ont_id_on_olt,
+        "linked_tr069": linked_tr069,
+        "operational_checks": checks,
+        "operation_message": message,
+        "operation_message_type": message_type,
+        "config_snapshots": snapshots,
+        "return_impact": {
+            "service_ports": "OLT service ports will be removed when reachable.",
+            "olt_registration": "ONT authorization will be removed from the OLT.",
+            "assignment": "Active assignment will be closed.",
+            "credentials": "Local PPPoE and management config will be cleared.",
+            "acs": "ACS link remains discoverable by serial after the next inform.",
+        },
+    }
+
+
+def reconcile_operational_state(
+    db: Session,
+    ont_id: str,
+    *,
+    request: Request | None = None,
+) -> ActionResult:
+    """Run the safest available ONT rediscovery/reconciliation path."""
+    ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
+    if not ont:
+        return ActionResult(success=False, message="ONT not found")
+    if not olt:
+        return ActionResult(success=False, message="ONT has no associated OLT")
+
+    messages: list[str] = []
+    success = False
+    if fsp and ont_id_on_olt is not None:
+        from app.services.network.olt_snmp_sync import sync_authorized_ont_from_olt_snmp
+
+        ok, msg, _stats = sync_authorized_ont_from_olt_snmp(
+            db,
+            olt_id=str(olt.id),
+            ont_unit_id=str(ont.id),
+            fsp=fsp,
+            ont_id_on_olt=ont_id_on_olt,
+            serial_number=ont.serial_number,
+        )
+        messages.append(msg)
+        success = ok
+    else:
+        messages.append("Skipped targeted SNMP sync: F/S/P or OLT ONT-ID missing.")
+
+    try:
+        from app.services import web_network_ont_autofind as autofind_service
+
+        ok, msg, stats = autofind_service.sync_olt_autofind_candidates(db, str(olt.id))
+        discovered = stats.get("discovered", 0) if stats else 0
+        messages.append(f"{msg} ({discovered} autofind entries)")
+        success = success or ok
+    except Exception as exc:
+        logger.exception("Failed to refresh autofind during ONT reconcile %s", ont_id)
+        messages.append(f"Autofind refresh failed: {exc}")
+
+    if getattr(ont, "tr069_acs_server_id", None) or getattr(olt, "tr069_acs_server_id", None):
+        try:
+            from app.services.network.ont_provision_steps import (
+                queue_wait_tr069_bootstrap,
+            )
+
+            wait_result = queue_wait_tr069_bootstrap(db, ont_id)
+            messages.append(wait_result.message)
+            success = success or wait_result.success
+        except Exception as exc:
+            logger.exception("Failed to queue TR-069 bootstrap wait for ONT %s", ont_id)
+            messages.append(f"ACS inform wait failed: {exc}")
+
+    _log_action_audit(
+        db,
+        request=request,
+        action="reconcile_operational_state",
+        ont_id=ont_id,
+        metadata={"messages": messages},
+        is_success=success,
+    )
+    return ActionResult(success=success, message="; ".join(messages))
+
+
 def return_to_inventory_for_web(
     db: Session,
     ont_id: str,
@@ -847,27 +1168,103 @@ def execute_connection_request(
 
 
 def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
-    """Fetch ONT config from OLT side via SSH (works without GenieACS).
+    """Fetch ONT config/state from OLT side via SSH-backed services."""
+    ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
+    if not ont:
+        return ActionResult(success=False, message="ONT not found")
+    if not olt:
+        return ActionResult(success=False, message="ONT has no associated OLT")
+    if not fsp or ont_id_on_olt is None:
+        return ActionResult(
+            success=False,
+            message="ONT is missing a usable F/S/P or OLT ONT-ID.",
+        )
 
-    Returns an ActionResult with data dict containing ont_info, ont_wan,
-    and service_ports sections.
-    """
-    from app.services.network.ont_action_device import get_running_config
+    status_text = ""
+    iphost_text = ""
+    service_ports_text = ""
 
-    result = get_running_config(db, ont_id)
-    if not result.success:
-        return ActionResult(success=False, message=result.message)
+    try:
+        from app.services.network.olt_ssh_ont import get_ont_status
 
-    data = result.data or {}
+        ok, msg, status = get_ont_status(olt, fsp, ont_id_on_olt)
+        if ok and status:
+            status_text = "\n".join(
+                [
+                    f"Serial Number: {_display_olt_value(status.serial_number)}",
+                    f"F/S/P: {fsp}",
+                    f"ONT-ID: {ont_id_on_olt}",
+                    f"Run State: {_display_olt_value(status.run_state)}",
+                    f"Config State: {_display_olt_value(status.config_state)}",
+                    f"Match State: {_display_olt_value(status.match_state)}",
+                ]
+            )
+        else:
+            status_text = msg
+    except Exception as exc:
+        logger.exception("Failed to read OLT ONT status for ONT %s", ont_id)
+        status_text = f"Status read failed: {exc}"
+
+    ok, msg, iphost = fetch_iphost_config(db, ont_id)
+    if ok and iphost:
+        iphost_text = "\n".join(f"{key}: {value}" for key, value in iphost.items())
+    else:
+        iphost_text = msg
+
+    try:
+        from app.services import web_network_service_ports as service_ports_service
+
+        ports_data = service_ports_service.list_context(db, ont_id)
+        ports = ports_data.get("service_ports") or []
+        if ports:
+            lines = []
+            for port in ports:
+                if isinstance(port, dict):
+                    lines.append(
+                        " ".join(
+                            str(part)
+                            for part in [
+                                f"index={port.get('index', '-')}",
+                                f"vlan={port.get('vlan', port.get('vlan_id', '-'))}",
+                                f"gem={port.get('gem', port.get('gem_index', '-'))}",
+                                f"state={port.get('state', port.get('status', '-'))}",
+                            ]
+                        )
+                    )
+                else:
+                    lines.append(str(port))
+            service_ports_text = "\n".join(lines)
+        else:
+            service_ports_text = "No service ports returned for this ONT."
+    except Exception as exc:
+        logger.exception("Failed to read OLT service ports for ONT %s", ont_id)
+        service_ports_text = f"Service-port read failed: {exc}"
+
     return ActionResult(
         success=True,
-        message="OLT-side config retrieved",
+        message="OLT-side config retrieved.",
         data={
-            "ont_info": data.get("device_info", ""),
-            "ont_wan": data.get("wan", ""),
-            "service_ports": data.get("service_ports", ""),
+            "ont_info": status_text,
+            "ont_wan": iphost_text,
+            "service_ports": service_ports_text,
         },
     )
+
+
+def olt_side_config_context(db: Session, ont_id: str) -> dict[str, object]:
+    """Build display context for OLT-side ONT config."""
+    result = fetch_olt_side_config(db, ont_id)
+    section_labels = {
+        "ont_info": "ONT Info",
+        "ont_wan": "WAN Info",
+        "service_ports": "Service Ports",
+    }
+    sections = []
+    for key, label in section_labels.items():
+        content = (result.data or {}).get(key) if result.success else None
+        if content:
+            sections.append({"key": key, "label": label, "content": content})
+    return {"result": result, "sections": sections}
 
 
 def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
@@ -875,24 +1272,65 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
 
     Returns a dict with success, message, and optional entry data.
     """
-    from app.models.network import OntUnit
-
-    ont = db.get(OntUnit, ont_id)
+    ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
     if not ont:
         return {"success": False, "message": "ONT not found"}
-
-    olt = getattr(ont, "olt_device", None)
     if not olt:
         return {"success": False, "message": "ONT has no associated OLT"}
+    if not fsp or ont_id_on_olt is None:
+        return {
+            "success": False,
+            "message": "ONT is missing a usable F/S/P or OLT ONT-ID.",
+        }
+
+    from app.services.network.olt_ssh_ont import get_ont_status
+
+    ok, msg, status = get_ont_status(olt, fsp, ont_id_on_olt)
+    if not ok or status is None:
+        return {"success": False, "message": msg}
 
     return {
         "success": True,
-        "message": "ONT status retrieved",
+        "message": msg,
         "entry": {
-            "online_status": getattr(ont, "online_status", None),
+            "run_state": status.run_state,
+            "config_state": status.config_state,
+            "match_state": status.match_state,
+            "serial_number": status.serial_number,
+            "fsp": fsp,
+            "ont_id": ont_id_on_olt,
             "onu_rx_signal_dbm": getattr(ont, "onu_rx_signal_dbm", None),
             "olt_rx_signal_dbm": getattr(ont, "olt_rx_signal_dbm", None),
         },
+    }
+
+
+def olt_status_context(db: Session, ont_id: str) -> dict[str, object]:
+    """Build display context for OLT-side ONT status."""
+    result = fetch_olt_status(db, ont_id)
+    entry = result.get("entry") or {}
+    raw_run_state = str(entry.get("run_state") or entry.get("online_status") or "").lower()
+    run_state = "" if raw_run_state == "unknown" else raw_run_state
+    rows = [
+        (
+            "Run State",
+            _display_olt_value(entry.get("run_state") or entry.get("online_status")),
+        ),
+        ("Config State", _display_olt_value(entry.get("config_state"))),
+        ("Match State", _display_olt_value(entry.get("match_state"))),
+        ("Serial", _display_olt_value(entry.get("serial_number"))),
+        ("F/S/P", entry.get("fsp") or "—"),
+        ("ONT-ID", entry.get("ont_id") or "—"),
+        ("Last Down Cause", entry.get("last_down_cause") or "—"),
+        ("Last Down Time", entry.get("last_down_time") or "—"),
+        ("Last Up Time", entry.get("last_up_time") or "—"),
+        ("Description", entry.get("description") or "—"),
+    ]
+    return {
+        "result": result,
+        "entry": entry,
+        "run_state": run_state,
+        "rows": rows,
     }
 
 

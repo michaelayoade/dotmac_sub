@@ -45,8 +45,8 @@ def test_resolve_ont_status_snapshot_marks_unmanaged_when_no_acs() -> None:
     )
 
     assert snapshot.acs_status == OntAcsStatus.unmanaged
-    # When OLT is unknown and no ACS, effective status is offline (can't confirm online)
-    assert snapshot.effective_status == OnuOnlineStatus.offline
+    # Unknown OLT and no ACS means no observed status, not confirmed offline.
+    assert snapshot.effective_status == OnuOnlineStatus.unknown
     assert snapshot.effective_status_source == OntStatusSource.derived
 
 
@@ -113,8 +113,8 @@ def test_resolve_ont_status_for_model_treats_olt_acs_as_managed() -> None:
     snapshot = resolve_ont_status_for_model(ont, now=now)
 
     assert snapshot.acs_status == OntAcsStatus.unknown
-    # When OLT is unknown and ACS has no recent inform, effective status is offline
-    assert snapshot.effective_status == OnuOnlineStatus.offline
+    # Unknown OLT and no recent ACS inform means no observed status.
+    assert snapshot.effective_status == OnuOnlineStatus.unknown
     assert snapshot.effective_status_source == OntStatusSource.derived
 
 

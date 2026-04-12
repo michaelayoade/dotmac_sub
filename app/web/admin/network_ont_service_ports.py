@@ -81,22 +81,17 @@ def ont_service_port_create(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Create a single service-port on the OLT for this ONT."""
-    resolved_user_vlan: int | str | None = None
-    raw_user_vlan = user_vlan.strip()
-    if raw_user_vlan:
-        if raw_user_vlan == "untagged":
-            resolved_user_vlan = "untagged"
-        else:
-            try:
-                resolved_user_vlan = int(raw_user_vlan)
-            except ValueError:
-                return _service_ports_partial_response(
-                    request,
-                    db,
-                    ont_id,
-                    toast_message="User VLAN must be a number or 'untagged'",
-                    toast_type="error",
-                )
+    resolved_user_vlan, error = web_network_service_ports_service.coerce_user_vlan(
+        user_vlan
+    )
+    if error:
+        return _service_ports_partial_response(
+            request,
+            db,
+            ont_id,
+            toast_message=error,
+            toast_type="error",
+        )
 
     ok, msg = web_network_service_ports_service.handle_create(
         db,

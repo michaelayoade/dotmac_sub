@@ -336,6 +336,8 @@ class ServicePortEntry:
     flow_type: str  # e.g. "vlan"
     flow_para: str  # e.g. "203"
     state: str  # "up" or "down"
+    fsp: str = ""
+    tag_transform: str = ""
 
 
 def _parse_service_port_table_legacy(output: str) -> list[ServicePortEntry]:
@@ -363,11 +365,15 @@ def _parse_service_port_table_legacy(output: str) -> list[ServicePortEntry]:
         except ValueError:
             continue
         # After "gpon" and the F/S/P tokens, next two ints are ONT-ID and GEM index
+        fsp_tokens: list[str] = []
         nums_after_gpon: list[int] = []
         for token in parts[gpon_idx + 1 :]:
             # Skip F/S/P fragments like "0/2" or "/1"
             cleaned = token.strip("/").replace("/", "")
-            if cleaned.isdigit() and "/" not in token:
+            if "/" in token:
+                fsp_tokens.append(token)
+                continue
+            if cleaned.isdigit():
                 nums_after_gpon.append(int(cleaned))
             if len(nums_after_gpon) == 2:
                 break
@@ -393,6 +399,7 @@ def _parse_service_port_table_legacy(output: str) -> list[ServicePortEntry]:
                 flow_type=flow_type,
                 flow_para=flow_para,
                 state=state,
+                fsp="".join(fsp_tokens).replace(" ", ""),
             )
         )
     return entries
@@ -419,6 +426,8 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
                         flow_type=e.flow_type,
                         flow_para=e.flow_para,
                         state=e.state,
+                        fsp=e.fsp.replace(" ", ""),
+                        tag_transform=e.tag_transform,
                     )
                     for e in result.data
                 ]

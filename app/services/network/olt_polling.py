@@ -1133,7 +1133,15 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
         "sfp_updated": 0,
     }
 
-    # Ping check first - updates reachability status
+    snmp_cfg = _get_olt_snmp_config(db, olt)
+    community = (
+        str(snmp_cfg.get("community")).strip()
+        if snmp_cfg.get("community") is not None
+        else None
+    )
+
+    # Ping check first updates reachability, but SNMP remains authoritative for
+    # polling status because some operator networks block ICMP to OLTs.
     host = olt.mgmt_ip or olt.hostname
     if host:
         ping_ok = _ping_host(host)
@@ -1141,25 +1149,7 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
         olt.last_ping_ok = ping_ok
         if not ping_ok:
             logger.warning("OLT %s (%s) not reachable via ping", olt.name, host)
-            olt.last_poll_status = PollStatus.failed
-            olt.last_poll_error = "Ping failed - host unreachable"
-            olt.consecutive_poll_failures = (olt.consecutive_poll_failures or 0) + 1
-            olt.last_poll_at = datetime.now(UTC)
-            db.commit()
-            return {
-                "olt_name": olt.name,
-                "polled": 0,
-                "updated": 0,
-                "errors": 1,
-                "ping_failed": 1,
-            }
-
-    snmp_cfg = _get_olt_snmp_config(db, olt)
-    community = (
-        str(snmp_cfg.get("community")).strip()
-        if snmp_cfg.get("community") is not None
-        else None
-    )
+            result["ping_failed"] = 1
 
     # Track polling status for reachability
     poll_failed = False
@@ -1193,6 +1183,8 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
     except Exception as e:
         logger.error("Failed to poll health for OLT %s: %s", olt.name, e)
         result["errors"] = int(result.get("errors", 0)) + 1
+        poll_failed = True
+        poll_error_msg = f"Health poll failed: {str(e)[:450]}"
 
     # Auto-detect firmware/software version via sysDescr
     if community and olt.mgmt_ip:
@@ -1224,6 +1216,11 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
     except Exception as e:
         logger.error("Failed to poll SFP modules for OLT %s: %s", olt.name, e)
         result["errors"] = int(result.get("errors", 0)) + 1
+        poll_failed = True
+        if poll_error_msg:
+            poll_error_msg = f"{poll_error_msg}; SFP poll failed: {str(e)[:250]}"
+        else:
+            poll_error_msg = f"SFP poll failed: {str(e)[:450]}"
 
     # Update OLT polling status for reachability tracking
     olt.last_poll_at = datetime.now(UTC)

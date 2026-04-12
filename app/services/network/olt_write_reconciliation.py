@@ -238,6 +238,41 @@ def verify_service_port_absent(
     )
 
 
+def verify_service_port_index_absent(
+    olt: OLTDevice,
+    *,
+    service_port_index: int,
+) -> OltWriteVerification:
+    """Verify a global service-port index no longer exists after a delete write."""
+    from app.services.network import olt_ssh_service_ports
+
+    ok, msg, port = olt_ssh_service_ports.get_service_port_by_index(
+        olt, service_port_index
+    )
+    if not ok:
+        return OltWriteVerification(
+            False,
+            f"OLT accepted the service-port delete, but readback failed: {msg}",
+        )
+    if port is not None:
+        return OltWriteVerification(
+            False,
+            f"Service-port {service_port_index} still appears on the OLT after delete.",
+            {
+                "index": port.index,
+                "fsp": port.fsp,
+                "vlan_id": port.vlan_id,
+                "ont_id": port.ont_id,
+                "gem_index": port.gem_index,
+            },
+        )
+    return OltWriteVerification(
+        True,
+        f"Verified service-port {service_port_index} is absent on the OLT.",
+        {"service_port_index": service_port_index},
+    )
+
+
 def verify_iphost_config(
     olt: OLTDevice,
     *,

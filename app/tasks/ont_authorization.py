@@ -28,7 +28,7 @@ def run_post_authorization_follow_up_task(
     db = SessionLocal()
     try:
         network_operations.mark_running(db, operation_id)
-        db.flush()
+        db.commit()
 
         try:
             success, message, steps = run_post_authorization_follow_up(

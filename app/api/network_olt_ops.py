@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -22,6 +22,7 @@ from app.schemas.network_olt_ops import (
 )
 from app.services.auth_dependencies import require_permission
 from app.services.network.olt import OLTDevices
+from app.services.network import olt_api_operations
 
 logger = logging.getLogger(__name__)
 
@@ -69,20 +70,25 @@ def discover_onts(olt_id: str, db: Session = Depends(get_db)) -> OltOperationRes
     dependencies=[Depends(require_permission("network:write"))],
 )
 def authorize_ont(
+    request: Request,
     olt_id: str,
     payload: OltAuthorizeOntRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh import authorize_ont as ssh_authorize
-
-    olt = _load_olt(db, olt_id)
-    success, message, ont_number = ssh_authorize(
-        olt, payload.fsp, payload.serial_number
+    result = olt_api_operations.authorize_ont(
+        db,
+        olt_id,
+        fsp=payload.fsp,
+        serial_number=payload.serial_number,
+        force_reauthorize=payload.force_reauthorize,
+        request=request,
     )
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
+    if not result.success and result.status != "warning":
+        raise HTTPException(status_code=422, detail=result.message)
     return OltOperationResponse(
-        success=True, message=message, data={"ont_number": ont_number}
+        success=result.success,
+        message=result.message,
+        data=result.to_dict(),
     )
 
 
@@ -129,21 +135,19 @@ def create_service_port(
     payload: OltServicePortCreateRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh_service_ports import create_single_service_port
-
-    olt = _load_olt(db, olt_id)
-    success, message = create_single_service_port(
-        olt,
-        payload.fsp,
-        payload.ont_id,
-        payload.gem_index,
-        payload.vlan_id,
+    result = olt_api_operations.create_service_port(
+        db,
+        olt_id,
+        fsp=payload.fsp,
+        ont_id=payload.ont_id,
+        gem_index=payload.gem_index,
+        vlan_id=payload.vlan_id,
         user_vlan=payload.user_vlan,
         tag_transform=payload.tag_transform,
     )
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    return OltOperationResponse(success=True, message=message)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(success=True, message=result.message, data=result.data)
 
 
 @router.delete(
@@ -154,15 +158,10 @@ def create_service_port(
 def delete_service_port(
     olt_id: str, index: int, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh_service_ports import (
-        delete_service_port as ssh_delete,
-    )
-
-    olt = _load_olt(db, olt_id)
-    success, message = ssh_delete(olt, index)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    return OltOperationResponse(success=True, message=message)
+    result = olt_api_operations.delete_service_port(db, olt_id, index=index)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(success=True, message=result.message, data=result.data)
 
 
 @router.get(
@@ -281,20 +280,18 @@ def create_tr069_profile(
     payload: OltTr069ProfileCreateRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh import create_tr069_server_profile
-
-    olt = _load_olt(db, olt_id)
-    success, message = create_tr069_server_profile(
-        olt,
+    result = olt_api_operations.create_tr069_profile(
+        db,
+        olt_id,
         profile_name=payload.name,
         acs_url=payload.acs_url,
         username=payload.username,
         password=payload.password,
         inform_interval=payload.inform_interval,
     )
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    return OltOperationResponse(success=True, message=message)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(success=True, message=result.message, data=result.data)
 
 
 # ── Config & Connectivity ─────────────────────────────────────────────
@@ -308,15 +305,10 @@ def create_tr069_profile(
 def fetch_config_backup(
     olt_id: str, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh import fetch_running_config_ssh
-
-    olt = _load_olt(db, olt_id)
-    success, message, config_text = fetch_running_config_ssh(olt)
-    if not success:
-        raise HTTPException(status_code=422, detail=message)
-    return OltOperationResponse(
-        success=True, message=message, data={"config": config_text}
-    )
+    result = olt_api_operations.run_config_backup(db, olt_id)
+    if not result.success:
+        raise HTTPException(status_code=422, detail=result.message)
+    return OltOperationResponse(success=True, message=result.message, data=result.data)
 
 
 @router.post(
@@ -325,16 +317,18 @@ def fetch_config_backup(
     dependencies=[Depends(require_permission("network:read"))],
 )
 def test_olt_connection(
+    request: Request,
     olt_id: str, db: Session = Depends(get_db)
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh import test_connection
-
-    olt = _load_olt(db, olt_id)
-    success, message, version_info = test_connection(olt)
+    success, message, policy_key = olt_api_operations.test_ssh_connection(
+        db, olt_id, request=request
+    )
     if not success:
         raise HTTPException(status_code=422, detail=message)
     return OltOperationResponse(
-        success=True, message=message, data={"version": version_info}
+        success=True,
+        message=message,
+        data={"version": policy_key, "policy_key": policy_key},
     )
 
 
@@ -344,14 +338,16 @@ def test_olt_connection(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def run_cli_command(
+    request: Request,
     olt_id: str,
     payload: OltCliCommandRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    from app.services.network.olt_ssh import run_cli_command as ssh_run
+    from app.services.network.olt_operations import execute_cli_command
 
-    olt = _load_olt(db, olt_id)
-    success, message, output = ssh_run(olt, payload.command)
+    success, message, output = execute_cli_command(
+        db, olt_id, payload.command, request=request
+    )
     if not success:
         raise HTTPException(status_code=422, detail=message)
     return OltOperationResponse(success=True, message=message, data={"output": output})

@@ -57,11 +57,10 @@
                     {{ ont.vendor or '' }} {{ ont.model or '' }}
                     {% if olt %} &middot; {{ olt.name }}{% endif %}
                     {% if pon_label %} &middot; {{ pon_label }}{% endif %}
-                    &middot;
                     {% if signal_info.online_status == 'online' %}
-                    <span class="text-emerald-600 dark:text-emerald-400">Online</span>
-                    {% else %}
-                    <span class="text-rose-600 dark:text-rose-400">{{ signal_info.online_status | title }}</span>
+                    &middot; <span class="text-emerald-600 dark:text-emerald-400">Online</span>
+                    {% elif signal_info.online_status == 'offline' %}
+                    &middot; <span class="text-rose-600 dark:text-rose-400">Offline</span>
                     {% endif %}
                     {% if signal_info.olt_rx_dbm is not none %} &middot; {{ "%.1f"|format(signal_info.olt_rx_dbm) }} dBm{% endif %}
                 </p>

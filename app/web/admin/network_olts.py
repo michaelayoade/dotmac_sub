@@ -30,7 +30,6 @@ from app.services.auth_dependencies import require_permission
 from app.services.network import (
     olt_authorization_workflow as olt_authorization_workflow_service,
 )
-from app.services.network import olt_autofind as olt_autofind_service
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
@@ -556,38 +555,15 @@ def olt_autofind_scan(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Scan OLT for unregistered ONTs via SSH autofind."""
-    ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
-        db, olt_id, request=request
+    context = web_network_ont_autofind_service.scan_olt_autofind_results_context(
+        db,
+        olt_id,
+        request=request,
     )
-    if ok:
-        web_network_ont_autofind_service.sync_olt_autofind_entries(
-            db,
-            olt_id=olt_id,
-            entries=entries,
-        )
-    autofind_data = [
-        {
-            "fsp": e.fsp,
-            "serial_number": e.serial_number,
-            "serial_hex": e.serial_hex,
-            "vendor_id": e.vendor_id,
-            "model": e.model,
-            "software_version": e.software_version,
-            "mac": e.mac,
-            "equipment_sn": e.equipment_sn,
-            "autofind_time": e.autofind_time,
-        }
-        for e in entries
-    ]
+    context["request"] = request
     return templates.TemplateResponse(
         "admin/network/olts/_autofind_results.html",
-        {
-            "request": request,
-            "olt_id": olt_id,
-            "autofind_ok": ok,
-            "autofind_message": message,
-            "autofind_entries": autofind_data,
-        },
+        context,
     )
 
 

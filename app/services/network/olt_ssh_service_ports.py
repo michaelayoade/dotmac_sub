@@ -27,6 +27,38 @@ def get_service_ports_for_ont(
     return True, f"Found {len(filtered)} service-port(s) for ONT {ont_id}", filtered
 
 
+def get_service_port_by_index(
+    olt: OLTDevice, index: int
+) -> tuple[bool, str, ServicePortEntry | None]:
+    """Read one service-port by global OLT index."""
+    from app.services.network import olt_ssh as core
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (core.SSHException, OSError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+    except Exception as exc:
+        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
+        return False, f"Unexpected error: {type(exc).__name__}", None
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        output = core._run_huawei_paged_cmd(channel, f"display service-port {index}")
+        if core.is_error_output(output):
+            return False, f"OLT rejected: {output.strip()[-150:]}", None
+        entries = core._parse_service_port_table(output)
+        for entry in entries:
+            if entry.index == index:
+                return True, f"Found service-port {index}", entry
+        return True, f"Service-port {index} was not found", None
+    except Exception as exc:
+        logger.error("Error reading service-port %d on OLT %s: %s", index, olt.name, exc)
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()
+
+
 def clone_service_ports(
     db: Session, olt_id: str, fsp: str, ont_id: int
 ) -> tuple[bool, str]:

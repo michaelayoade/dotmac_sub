@@ -1,0 +1,101 @@
+{% from "components/ui/macros.html" import card %}
+
+{% call card("Operational Health", color="blue") %}
+<div class="space-y-4" id="ont-operational-panel">
+    {% if operation_message %}
+    <div class="rounded-lg border px-3 py-2 text-xs {% if operation_message_type == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800/50 dark:bg-emerald-900/20 dark:text-emerald-300{% elif operation_message_type == 'error' %}border-rose-200 bg-rose-50 text-rose-700 dark:border-rose-800/50 dark:bg-rose-900/20 dark:text-rose-300{% else %}border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-800/50 dark:bg-blue-900/20 dark:text-blue-300{% endif %}">
+        {{ operation_message }}
+    </div>
+    {% endif %}
+
+    <div>
+        <p class="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Readiness</p>
+        <div class="space-y-2">
+            {% for check in operational_checks %}
+            <div class="flex items-start justify-between gap-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 dark:border-slate-700 dark:bg-slate-800/60">
+                <div>
+                    <p class="text-xs font-medium text-slate-700 dark:text-slate-200">{{ check.label }}</p>
+                    <p class="mt-0.5 break-all text-xs text-slate-500 dark:text-slate-400">{{ check.message }}</p>
+                </div>
+                <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {% if check.ok %}bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300{% else %}bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300{% endif %}">
+                    {{ "OK" if check.ok else "Needs attention" }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+        <button
+            hx-post="/admin/network/onts/{{ ont_id }}/reconcile"
+            hx-target="#operational-health-container"
+            hx-swap="innerHTML"
+            hx-confirm="Run OLT/ACS reconciliation for this ONT?"
+            class="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-700"
+        >
+            Rediscover / Reconcile
+        </button>
+        <button
+            hx-post="/admin/network/onts/{{ ont_id }}/connection-request"
+            hx-swap="none"
+            class="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-300 bg-white px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:bg-slate-800 dark:text-blue-300"
+        >
+            Force ACS Inform
+        </button>
+    </div>
+
+    <div class="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800/60">
+        <p class="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500 dark:text-slate-400">Config Snapshots</p>
+        <form
+            hx-post="/admin/network/onts/{{ ont_id }}/config-snapshot"
+            hx-target="#snapshot-list"
+            hx-swap="innerHTML"
+            class="mb-3 flex gap-2"
+        >
+            {% include "components/forms/csrf_input.html" %}
+            <input
+                type="text"
+                name="label"
+                maxlength="80"
+                placeholder="Optional label"
+                class="min-w-0 flex-1 rounded-lg border border-slate-300 px-3 py-2 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+            >
+            <button type="submit" class="rounded-lg bg-slate-900 px-3 py-2 text-xs font-semibold text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900">
+                Capture
+            </button>
+        </form>
+        <div id="snapshot-list" class="space-y-2">
+            {% include "admin/network/onts/_config_snapshot_list.html" %}
+        </div>
+    </div>
+
+    <details class="rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800/50 dark:bg-amber-900/20">
+        <summary class="cursor-pointer text-xs font-semibold text-amber-800 dark:text-amber-300">Return-to-inventory impact</summary>
+        <dl class="mt-2 space-y-1 text-xs text-amber-800 dark:text-amber-300">
+            {% for label, value in return_impact.items() %}
+            <div>
+                <dt class="inline font-semibold">{{ label | replace("_", " ") | title }}:</dt>
+                <dd class="inline">{{ value }}</dd>
+            </div>
+            {% endfor %}
+        </dl>
+    </details>
+
+    <div
+        x-data="{ open: false }"
+        x-on:open-modal.window="if ($event.detail.name === 'so-snapshot') open = true"
+        x-show="open"
+        x-cloak
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+        @keydown.escape.window="open = false"
+    >
+        <div class="max-h-[85vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-xl dark:bg-slate-900" @click.outside="open = false">
+            <div class="mb-4 flex items-center justify-between">
+                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Config Snapshot</h3>
+                <button type="button" @click="open = false" class="rounded-md p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-800">Close</button>
+            </div>
+            <div id="so-snapshot-body"></div>
+        </div>
+    </div>
+</div>
+{% endcall %}

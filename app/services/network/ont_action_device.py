@@ -15,6 +15,7 @@ from app.services.network.ont_action_common import (
     get_ont_strict_or_error,
     persist_data_model_root,
 )
+from app.services.network.ont_tr069 import PARAM_GROUPS, _extract_first
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,21 @@ _WIFI_PARAMS = [
     "Device.WiFi.Radio.1.Channel",
     "Device.WiFi.Radio.1.OperatingStandards",
 ]
+
+_OPTICAL_CONFIG_PARAMS: dict[str, list[str]] = {
+    "Optical Signal Level": [
+        "Device.Optical.Interface.1.OpticalSignalLevel",
+        "InternetGatewayDevice.WANDevice.*.X_HW_WANPONInterfaceConfig.RXPower",
+        "InternetGatewayDevice.WANDevice.1.X_HW_WANPONInterfaceConfig.RXPower",
+    ],
+    "Lower Optical Threshold": ["Device.Optical.Interface.1.LowerOpticalThreshold"],
+    "Upper Optical Threshold": ["Device.Optical.Interface.1.UpperOpticalThreshold"],
+    "Transmit Optical Level": [
+        "Device.Optical.Interface.1.TransmitOpticalLevel",
+        "InternetGatewayDevice.WANDevice.*.X_HW_WANPONInterfaceConfig.TXPower",
+        "InternetGatewayDevice.WANDevice.1.X_HW_WANPONInterfaceConfig.TXPower",
+    ],
+}
 
 _RUNTIME_REFRESH_PARAMS = {
     "Device": [
@@ -154,17 +170,23 @@ def get_running_config(db: Session, ont_id: str) -> ActionResult:
         logger.error("Config fetch failed for ONT %s: %s", ont.serial_number, exc)
         return ActionResult(success=False, message=f"Failed to fetch config: {exc}")
 
-    def _extract(params: list[str]) -> dict[str, object]:
+    def _extract_group(group_name: str) -> dict[str, object]:
         return {
-            p.rsplit(".", 1)[-1]: client.extract_parameter_value(device, p)
-            for p in params
+            label: _extract_first(client, device, paths)
+            for label, paths in PARAM_GROUPS.get(group_name, {}).items()
+        }
+
+    def _extract_custom_group(params: dict[str, list[str]]) -> dict[str, object]:
+        return {
+            label: _extract_first(client, device, paths)
+            for label, paths in params.items()
         }
 
     config = DeviceConfig(
-        device_info=_extract(_DEVICE_INFO_PARAMS),
-        wan=_extract(_WAN_PARAMS),
-        optical=_extract(_OPTICAL_PARAMS),
-        wifi=_extract(_WIFI_PARAMS),
+        device_info=_extract_group("system"),
+        wan=_extract_group("wan"),
+        optical=_extract_custom_group(_OPTICAL_CONFIG_PARAMS),
+        wifi=_extract_group("wireless"),
         raw=device,
     )
     return ActionResult(

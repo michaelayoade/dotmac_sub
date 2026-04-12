@@ -18,10 +18,15 @@ from app.models.network import (
     PonPort,
     WanMode,
 )
+from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network import OntAssignmentCreate
 from app.services import network as network_service
 from app.services.network.ont_action_common import get_ont_client_or_error
-from app.services.web_network_ont_actions import return_to_inventory
+from app.services.network.ont_action_device import get_running_config
+from app.services.web_network_ont_actions import (
+    operational_health_context,
+    return_to_inventory,
+)
 
 
 def test_return_to_inventory_releases_ont_on_olt_and_marks_inventory_inactive(
@@ -139,6 +144,129 @@ def test_tr069_resolution_waits_for_first_inform(db_session, monkeypatch):
     assert error.waiting is True
     assert error.data == {"waiting_reason": "next_inform", "serial": "WAIT-ACS-001"}
     assert "waiting for its first GenieACS inform" in error.message
+
+
+def test_running_config_reads_internet_gateway_device_paths(db_session, monkeypatch):
+    ont = OntUnit(serial_number="IGD-CONFIG-001", is_active=True)
+    db_session.add(ont)
+    db_session.commit()
+    db_session.refresh(ont)
+
+    device_doc = {
+        "InternetGatewayDevice": {
+            "DeviceInfo": {
+                "Manufacturer": {"_value": "Huawei"},
+                "ModelName": {"_value": "HG8245H"},
+                "SerialNumber": {"_value": "IGD-CONFIG-001"},
+            },
+            "WANDevice": {
+                "1": {
+                    "WANConnectionDevice": {
+                        "1": {
+                            "WANPPPConnection": {
+                                "1": {
+                                    "ExternalIPAddress": {"_value": "100.64.1.10"},
+                                    "Username": {"_value": "cust@example"},
+                                    "ConnectionStatus": {"_value": "Connected"},
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            "LANDevice": {
+                "1": {
+                    "WLANConfiguration": {
+                        "1": {
+                            "SSID": {"_value": "DotMac"},
+                            "TotalAssociations": {"_value": 3},
+                        }
+                    }
+                }
+            },
+        }
+    }
+
+    class FakeClient:
+        def get_device(self, _device_id):
+            return device_doc
+
+        def extract_parameter_value(self, device, parameter_path):
+            current = device
+            for part in parameter_path.split("."):
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(part)
+                if current is None:
+                    return None
+            if isinstance(current, dict):
+                return current.get("_value")
+            return current
+
+    monkeypatch.setattr(
+        "app.services.network.ont_action_common.resolve_genieacs_with_reason",
+        lambda *_args: ((FakeClient(), "igd-device-id"), "resolved"),
+    )
+
+    result = get_running_config(db_session, str(ont.id))
+
+    assert result.success is True
+    assert result.data["device_info"]["Manufacturer"] == "Huawei"
+    assert result.data["wan"]["WAN IP"] == "100.64.1.10"
+    assert result.data["wan"]["Username"] == "cust@example"
+    assert result.data["wifi"]["SSID"] == "DotMac"
+    assert result.data["wifi"]["Connected Clients"] == 3
+
+
+def test_operational_health_context_surfaces_olt_acs_and_pppoe_state(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="OLT-Health", mgmt_ip="198.51.100.55", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    ont = OntUnit(
+        serial_number="HEALTH-ONT-001",
+        is_active=True,
+        olt_device_id=olt.id,
+        board="0/1",
+        port="2",
+        external_id="11",
+        pppoe_username="health@example",
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    acs = Tr069AcsServer(name="ACS", base_url="http://acs.example.test")
+    db_session.add(acs)
+    db_session.commit()
+
+    db_session.add(
+        Tr069CpeDevice(
+            acs_server_id=acs.id,
+            ont_unit_id=ont.id,
+            serial_number=ont.serial_number,
+            genieacs_device_id="HEALTH-ACS-ID",
+            connection_request_url="http://198.51.100.10:7547/",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_actions._config_snapshot_service",
+        lambda: SimpleNamespace(list_for_ont=lambda *_args, **_kwargs: []),
+    )
+
+    context = operational_health_context(db_session, str(ont.id))
+    checks = {check["label"]: check for check in context["operational_checks"]}
+
+    assert checks["OLT linked"]["ok"] is True
+    assert checks["F/S/P known"]["message"] == "0/1/2"
+    assert checks["OLT ONT-ID known"]["message"] == "11"
+    assert checks["ACS linked"]["message"] == "HEALTH-ACS-ID"
+    assert checks["Connection request URL"]["ok"] is True
+    assert checks["PPPoE stored"]["message"] == "health@example"
 
 
 def test_return_to_inventory_keeps_local_state_when_olt_delete_fails(
