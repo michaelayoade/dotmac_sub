@@ -48,7 +48,7 @@
                             <div class="relative flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 shadow-lg shadow-emerald-500/25">
                                 <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12l4-4m-4 4l4 4"/></svg>
                                 <span class="absolute -right-0.5 -top-0.5 flex h-3.5 w-3.5">
-                                    <span class="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span class="absolute inline-flex h-full w-full animate-ping motion-reduce:animate-none rounded-full bg-emerald-400 opacity-75"></span>
                                     <span class="relative inline-flex h-3.5 w-3.5 rounded-full bg-emerald-500 ring-2 ring-white dark:ring-slate-800"></span>
                                 </span>
                             </div>
@@ -183,7 +183,7 @@
                 </div>
                 <div class="min-w-0 flex-1">
                     <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Runtime</p>
-                    <p class="truncate text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if signal_info and signal_info.online_status == 'online' else 'text-rose-700 dark:text-rose-300' if signal_info and signal_info.online_status == 'offline' else 'text-slate-700 dark:text-slate-300' }}">{{ signal_info.online_status | replace("_", " ") | title if signal_info else 'Unknown' }}</p>
+                    <p class="truncate text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if signal_info and signal_info.online_status == 'online' else 'text-rose-700 dark:text-rose-300' if signal_info and signal_info.online_status == 'offline' else 'text-slate-700 dark:text-slate-300' }}">{{ signal_info.online_status_display if signal_info else "" }}</p>
                 </div>
             </div>
             {% if signal_info and signal_info.offline_reason_display %}
@@ -391,6 +391,7 @@
 
     {# Tab Navigation - Responsive: icons-only on mobile, full labels on larger screens #}
     <div x-data="{
+            tabs: ['overview', 'network', 'history', 'tr069', 'charts', 'service-ports', 'configuration'],
             showTabTooltip: false,
             tabTooltipLabel: '',
             tabTooltipTop: 0,
@@ -404,8 +405,26 @@
             },
             closeTabTooltip() {
                 this.showTabTooltip = false;
+            },
+            focusTab(tabName) {
+                const tabEl = document.getElementById('tab-' + tabName);
+                if (tabEl) tabEl.focus();
+            },
+            nextTab() {
+                const idx = this.tabs.indexOf(activeTab);
+                const next = this.tabs[(idx + 1) % this.tabs.length];
+                activeTab = next;
+                this.focusTab(next);
+            },
+            prevTab() {
+                const idx = this.tabs.indexOf(activeTab);
+                const prev = this.tabs[(idx - 1 + this.tabs.length) % this.tabs.length];
+                activeTab = prev;
+                this.focusTab(prev);
             }
          }"
+         @keydown.right.prevent="nextTab()"
+         @keydown.left.prevent="prevTab()"
          class="relative z-50 overflow-x-auto border-b border-slate-200 dark:border-slate-700 -mx-4 px-4 sm:mx-0 sm:px-0 scrollbar-thin">
         <nav class="flex min-w-max gap-1 sm:gap-4 lg:gap-6 -mb-px" role="tablist" aria-label="ONT detail tabs">
             <button @click="activeTab = 'overview'"
@@ -534,7 +553,7 @@
     </div>
 
     {# ===================== OVERVIEW TAB ===================== #}
-    <div x-show="activeTab === 'overview'" x-transition>
+    <div x-show="activeTab === 'overview'" x-transition role="tabpanel" id="panel-overview" aria-labelledby="tab-overview">
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-3"
              {% if preview_mode %}
              x-data='{
@@ -1436,7 +1455,31 @@
                                     >
                                         <svg x-show="!loadingConfig" class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4"/></svg>
                                         <svg x-show="loadingConfig" x-cloak class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                                        <span x-text="loadingConfig ? 'Loading...' : 'View Config'"></span>
+                                        <span x-text="loadingConfig ? 'Loading...' : 'ACS Config'"></span>
+                                    </button>
+                                </div>
+                                <div class="grid grid-cols-2 gap-2">
+                                    <button
+                                        data-action="config"
+                                        hx-get="/admin/network/onts/{{ ont.id }}/olt-status"
+                                        hx-target="#ont-config-panel"
+                                        hx-swap="innerHTML"
+                                        :disabled="loadingConfig"
+                                        :class="loadingConfig && 'opacity-75 cursor-wait'"
+                                        class="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 transition-colors"
+                                    >
+                                        OLT Status
+                                    </button>
+                                    <button
+                                        data-action="config"
+                                        hx-get="/admin/network/onts/{{ ont.id }}/olt-config"
+                                        hx-target="#ont-config-panel"
+                                        hx-swap="innerHTML"
+                                        :disabled="loadingConfig"
+                                        :class="loadingConfig && 'opacity-75 cursor-wait'"
+                                        class="inline-flex items-center justify-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-700 dark:text-slate-300 transition-colors"
+                                    >
+                                        OLT Config
                                     </button>
                                 </div>
                                 <button
@@ -1494,6 +1537,18 @@
                 {% include "admin/network/onts/_capabilities_badges.html" %}
                 {% endcall %}
                 {% endif %}
+
+                <div id="operational-health-container"
+                     hx-get="/admin/network/onts/{{ ont.id }}/operational-health"
+                     hx-trigger="load"
+                     hx-swap="innerHTML">
+                    <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+                        <div class="flex items-center justify-center py-4">
+                            <svg class="h-4 w-4 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span class="ml-2 text-xs text-slate-400">Loading operational health...</span>
+                        </div>
+                    </div>
+                </div>
 
                 {# ── NETWORK CONFIG (default: closed) ───────────────────────────── #}
                 <div x-data="{ open: false }" class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -1622,7 +1677,7 @@
     </div>
 
     {# ===================== NETWORK TAB ===================== #}
-    <div x-show="activeTab === 'network'" x-transition x-cloak>
+    <div x-show="activeTab === 'network'" x-transition x-cloak role="tabpanel" id="panel-network" aria-labelledby="tab-network">
         <div class="space-y-6">
             {# Observed Runtime Snapshot #}
             {% call card("Full Runtime Information", color="indigo") %}
@@ -1734,13 +1789,21 @@
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Online Status</dt>
                     <dd class="mt-1">
-                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ signal_info.online_status_class }}">{{ signal_info.online_status | replace("_", " ") | title }}</span>
+                        {% if signal_info.online_status %}
+                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ signal_info.online_status_class }}">{{ signal_info.online_status_display }}</span>
+                        {% else %}
+                        <span class="text-sm text-slate-400">&mdash;</span>
+                        {% endif %}
                     </dd>
                 </div>
                 <div>
                     <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">PON Status</dt>
                     <dd class="mt-1">
-                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ signal_info.olt_status_class }}">{{ signal_info.olt_status | replace("_", " ") | title }}</span>
+                        {% if signal_info.olt_status %}
+                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ signal_info.olt_status_class }}">{{ signal_info.olt_status_display }}</span>
+                        {% else %}
+                        <span class="text-sm text-slate-400">&mdash;</span>
+                        {% endif %}
                     </dd>
                 </div>
                 <div>
@@ -1805,7 +1868,7 @@
     </div>
 
     {# ===================== HISTORY TAB ===================== #}
-    <div x-show="activeTab === 'history'" x-transition x-cloak>
+    <div x-show="activeTab === 'history'" x-transition x-cloak role="tabpanel" id="panel-history" aria-labelledby="tab-history">
         <div class="space-y-6">
             {# Past Assignments #}
             {% if past_assignments %}
@@ -1866,8 +1929,8 @@
     </div>
 
     {# ===================== TR-069 TAB ===================== #}
-    <div x-show="activeTab === 'tr069'" x-transition x-cloak>
-        <div id="tr069-content">
+    <div x-show="activeTab === 'tr069'" x-transition x-cloak role="tabpanel" id="panel-tr069" aria-labelledby="tab-tr069">
+        <div id="tr069-content" aria-live="polite" aria-atomic="false">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                 <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading TR-069 data...</span>
@@ -1876,8 +1939,8 @@
     </div>
 
     {# ===================== CHARTS TAB ===================== #}
-    <div x-show="activeTab === 'charts'" x-transition x-cloak>
-        <div id="charts-content">
+    <div x-show="activeTab === 'charts'" x-transition x-cloak role="tabpanel" id="panel-charts" aria-labelledby="tab-charts">
+        <div id="charts-content" aria-live="polite" aria-atomic="false">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                 <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading chart data...</span>
@@ -1886,8 +1949,8 @@
     </div>
 
     {# ===================== SERVICE PORTS TAB ===================== #}
-    <div x-show="activeTab === 'service-ports'" x-transition x-cloak>
-        <div id="service-ports-content">
+    <div x-show="activeTab === 'service-ports'" x-transition x-cloak role="tabpanel" id="panel-service-ports" aria-labelledby="tab-service-ports">
+        <div id="service-ports-content" aria-live="polite" aria-atomic="false">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                 <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading service-port data...</span>
@@ -1896,8 +1959,8 @@
     </div>
 
     {# ===================== CONFIGURATION TAB ===================== #}
-    <div x-show="activeTab === 'configuration'" x-transition x-cloak>
-        <div id="configuration-content">
+    <div x-show="activeTab === 'configuration'" x-transition x-cloak role="tabpanel" id="panel-configuration" aria-labelledby="tab-configuration">
+        <div id="configuration-content" aria-live="polite" aria-atomic="false">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                 <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading configuration data...</span>

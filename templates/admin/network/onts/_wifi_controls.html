@@ -33,7 +33,7 @@
         {% include "components/forms/csrf_input.html" %}
         <label for="wifi-pw-input" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Password</label>
         <div class="flex gap-2">
-            <input type="password" id="wifi-pw-input" name="password" required minlength="8" maxlength="63" placeholder="Min 8 characters"
+            <input type="password" id="wifi-pw-input" name="password" required minlength="8" maxlength="63" placeholder="Min 8 characters" autocomplete="new-password"
                 class="flex-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm hover:bg-indigo-700 transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-1">Set</button>
         </div>

@@ -3,7 +3,8 @@
      aria-modal="true"
      aria-labelledby="location-details-modal-title"
      x-data="{ open: true }"
-     x-show="open" x-transition>
+     x-show="open" x-transition
+     @keydown.escape.window="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())">
     <div class="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-2xl dark:bg-slate-800"
          @click.outside="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())">
         <div class="mb-4 flex items-center justify-between">
@@ -13,7 +14,7 @@
             </div>
             <button @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"
                     aria-label="Close modal"
-                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                    class="rounded-lg p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>

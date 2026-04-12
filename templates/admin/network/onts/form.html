@@ -287,13 +287,17 @@
 
         {# ── Card 5: GPS Location ──────────────────────────────────── #}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
-            <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700 cursor-pointer" @click="useGps = !useGps">
+            <button type="button"
+                    class="w-full border-b border-slate-200 px-6 py-4 dark:border-slate-700 cursor-pointer text-left focus:outline-none focus:ring-2 focus:ring-inset focus:ring-blue-500"
+                    @click="useGps = !useGps"
+                    :aria-expanded="useGps"
+                    aria-controls="gps-location-panel">
                 <div class="flex items-center justify-between">
                     <h2 class="font-semibold text-slate-900 dark:text-white">GPS Location</h2>
-                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="{ 'rotate-180': useGps }" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                    <svg class="h-5 w-5 text-slate-400 transition-transform duration-200" :class="{ 'rotate-180': useGps }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                 </div>
-            </div>
-            <div class="p-6 space-y-6" x-show="useGps" x-transition>
+            </button>
+            <div id="gps-location-panel" class="p-6 space-y-6" x-show="useGps" x-transition>
                 <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                     <div class="sm:col-span-2">
                         <label class="flex items-center gap-2">

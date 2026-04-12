@@ -108,14 +108,14 @@
 
                 {# Expand filters toggle #}
                 <button type="button" @click="filtersOpen = !filtersOpen"
-                        class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700/50 dark:text-slate-300 dark:hover:bg-slate-600">
+                        class="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-slate-50/50 px-3 py-2 text-sm text-slate-600 transition-colors hover:bg-slate-100 dark:border-slate-600 dark:bg-slate-700/50 dark:text-slate-300 dark:hover:bg-slate-600 min-h-[44px]">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4"/></svg>
                     <span>More</span>
                 </button>
 
                 {# Clear filters #}
                 {% if filters.olt_id or filters.pon_port_id or filters.pon_hint or filters.zone_id or filters.online_status or filters.signal_quality or filters.search or filters.vendor %}
-                    <a href="/admin/network/onts?view={{ filters.view or 'list' }}" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50">
+                    <a href="/admin/network/onts?view={{ filters.view or 'list' }}" class="flex items-center gap-1 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-600 transition-colors hover:bg-rose-100 dark:border-rose-800 dark:bg-rose-900/30 dark:text-rose-400 dark:hover:bg-rose-900/50 min-h-[44px]">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     Clear
                 </a>
@@ -362,7 +362,7 @@
                         <input type="hidden" name="firmware_image_id" :value="firmwareImageId || ''">
                         <button type="submit" :disabled="!bulkAction || (bulkAction === 'firmware_upgrade' && !firmwareImageId)"
                             x-on:click="if (bulkAction === 'factory_reset' && !confirm('Factory reset will ERASE ALL configuration on ' + selected.length + ' ONTs. Continue?')) $event.preventDefault(); if (bulkAction === 'return_to_inventory' && !confirm('Return ' + selected.length + ' ONTs to inventory?')) $event.preventDefault(); if (bulkAction === 'firmware_upgrade' && !confirm('Push firmware to ' + selected.length + ' ONTs? Each will download and reboot.')) $event.preventDefault()"
-                            class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed">
+                            class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed min-h-[44px]">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                             Execute
                         </button>
@@ -370,9 +370,9 @@
                             <svg class="inline h-4 w-4 animate-spin text-blue-500" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
                         </span>
                     </form>
-                    <button @click="selected = []" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400">Clear</button>
+                    <button @click="selected = []" class="text-xs text-blue-600 hover:text-blue-800 dark:text-blue-400 px-2 py-2 min-h-[44px]">Clear</button>
                 </div>
-                <div id="bulk-result" class="px-4"></div>
+                <div id="bulk-result" class="px-4" aria-live="polite" aria-atomic="true"></div>
 
             <div class="overflow-x-auto">
                 <table class="min-w-full">
@@ -432,7 +432,7 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if sd.get("status_display") and sd.status_display != "Unknown" %}
+                                {% if sd.get("status_display") %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
                                     {% if sd.status_display == "Online" %}
                                     <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
@@ -614,7 +614,7 @@
                                 {% endif %}
                             </td>
                             <td class="px-3 py-2 whitespace-nowrap">
-                                {% if sd.get("status_display") and sd.status_display != "Unknown" %}
+                                {% if sd.get("status_display") %}
                                 <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {{ sd.status_class }}">
                                     {% if sd.status_display == "Online" %}
                                     <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse"></span>

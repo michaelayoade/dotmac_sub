@@ -39,22 +39,22 @@
             {# VLAN #}
             <div>
                 <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">Management VLAN</dt>
-                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ vlan_id if vlan_id else '&mdash;' | safe }}</dd>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ vlan_id | default('—') }}</dd>
             </div>
             {# IP Address #}
             <div>
                 <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">IP Address</dt>
-                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ ip_addr if ip_addr else '&mdash;' | safe }}</dd>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ ip_addr | default('—') }}</dd>
             </div>
             {# Subnet #}
             <div>
                 <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">Subnet Mask</dt>
-                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ subnet if subnet else '&mdash;' | safe }}</dd>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ subnet | default('—') }}</dd>
             </div>
             {# Gateway #}
             <div>
                 <dt class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-0.5">Gateway</dt>
-                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ gateway if gateway else '&mdash;' | safe }}</dd>
+                <dd class="text-sm font-mono text-slate-900 dark:text-white">{{ gateway | default('—') }}</dd>
             </div>
         </div>
     </div>

@@ -1,12 +1,17 @@
 <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
      x-data='{ open: true, wanMode: "{{ ont.wan_mode.value if ont.wan_mode else "dhcp" }}" }'
-     x-show="open" x-transition>
+     x-show="open" x-transition
+     @keydown.escape.window="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="onu-mode-modal-title">
     <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
          @click.outside="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)">
         <div class="flex items-center justify-between mb-4">
-            <h3 class="text-lg font-bold text-slate-900 dark:text-white">ONU Mode Configuration</h3>
+            <h3 id="onu-mode-modal-title" class="text-lg font-bold text-slate-900 dark:text-white">ONU Mode Configuration</h3>
             <button @click="open = false; setTimeout(() => { document.getElementById('modal-container').innerHTML = '' }, 200)"
-                    class="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300">
+                    aria-label="Close dialog"
+                    class="rounded-lg p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
