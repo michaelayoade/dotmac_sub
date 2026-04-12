@@ -226,6 +226,7 @@ def get_vlan(vlan_id: str, db: Session = Depends(get_db)):
 )
 def list_vlans(
     region_id: str | None = None,
+    olt_device_id: str | None = None,
     is_active: bool | None = None,
     order_by: str = Query(default="tag"),
     order_dir: str = Query(default="asc", pattern="^(asc|desc)$"),
@@ -234,7 +235,14 @@ def list_vlans(
     db: Session = Depends(get_db),
 ):
     return network_service.vlans.list_response(
-        db, region_id, is_active, order_by, order_dir, limit, offset
+        db,
+        region_id,
+        is_active,
+        order_by,
+        order_dir,
+        limit,
+        offset,
+        olt_device_id=olt_device_id,
     )
 
 

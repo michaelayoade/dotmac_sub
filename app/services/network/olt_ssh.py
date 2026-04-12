@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import re
 import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
@@ -18,28 +18,16 @@ from paramiko.transport import Transport
 
 logger = logging.getLogger(__name__)
 
+# Specific SSH-related exceptions that can occur during OLT operations
+_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
+
 from app.models.network import OLTDevice
 from app.services.credential_crypto import decrypt_credential
 from app.services.network.olt_command_gen import build_service_port_command
-from app.services.network.olt_validators import (
-    ValidationError,
-    validate_ip_address,
-    validate_ont_id,
-    validate_subnet_mask,
-    validate_vlan_id,
-)
-from app.services.network.tr069_profile_matching import (
-    match_tr069_profile,
-    normalize_acs_url,
-)
 
 # TextFSM-based parsers (preferred)
 try:
     from app.services.network.parsers import parse_autofind as _textfsm_parse_autofind
-    from app.services.network.parsers import parse_key_value as _textfsm_parse_key_value
-    from app.services.network.parsers import (
-        parse_profile_table as _textfsm_parse_profile_table,
-    )
     from app.services.network.parsers import (
         parse_service_port_table as _textfsm_parse_service_port_table,
     )
@@ -164,140 +152,6 @@ def run_version_probe(olt: OLTDevice) -> tuple[str, str]:
 
 _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
-
-
-def _safe_profile_name(name: str | None) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9 ._-]+", " ", str(name or "ACS")).strip()
-    cleaned = re.sub(r"\s+", " ", cleaned)
-    return (cleaned or "ACS")[:48]
-
-
-def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
-    server = None
-    try:
-        server = getattr(olt, "tr069_acs_server", None)
-    except Exception:
-        server = None
-
-    if server is None and getattr(olt, "tr069_acs_server_id", None):
-        try:
-            from app.db import SessionLocal
-            from app.models.tr069 import Tr069AcsServer
-
-            with SessionLocal() as db:
-                server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
-                if server is None:
-                    return None
-                password = (
-                    decrypt_credential(server.cwmp_password)
-                    if server.cwmp_password
-                    else ""
-                )
-                return {
-                    "name": server.name,
-                    "acs_url": server.cwmp_url or "",
-                    "username": server.cwmp_username or "",
-                    "password": password or "",
-                    "inform_interval": server.periodic_inform_interval or 300,
-                }
-        except Exception as exc:
-            logger.warning("Failed to load linked ACS for OLT %s: %s", olt.name, exc)
-            return None
-
-    if server is None or not getattr(server, "cwmp_url", None):
-        return None
-    password = (
-        decrypt_credential(server.cwmp_password)
-        if getattr(server, "cwmp_password", None)
-        else ""
-    )
-    return {
-        "name": getattr(server, "name", "ACS"),
-        "acs_url": server.cwmp_url or "",
-        "username": server.cwmp_username or "",
-        "password": password or "",
-        "inform_interval": getattr(server, "periodic_inform_interval", None) or 300,
-    }
-
-
-def _auto_bind_tr069_after_authorize(
-    olt: OLTDevice, fsp: str, ont_id: int | None
-) -> None:
-    """Best-effort: bind a newly authorized ONT to the OLT's linked ACS profile.
-
-    Called after successful ONT authorization. Skips when the OLT has no linked
-    ACS, and creates the OLT profile if the linked ACS profile does not exist.
-    """
-    if ont_id is None:
-        return
-    try:
-        payload = _load_linked_acs_payload(olt)
-        if payload is None or not str(payload.get("acs_url") or "").strip():
-            logger.info("Skipping TR-069 auto-bind for OLT %s: no linked ACS", olt.name)
-            return
-
-        ok, _msg, profiles = get_tr069_server_profiles(olt)
-        if not ok:
-            return
-        target_url = normalize_acs_url(str(payload["acs_url"]))
-        target_username = str(payload.get("username") or "").strip()
-        profile = match_tr069_profile(
-            profiles,
-            acs_url=str(payload["acs_url"]),
-            acs_username=target_username,
-        )
-        profile_id = profile.profile_id if profile else None
-
-        if profile_id is None:
-            profile_name = f"ACS {_safe_profile_name(str(payload.get('name') or ''))}"
-            ok, msg = create_tr069_server_profile(
-                olt,
-                profile_name=profile_name,
-                acs_url=str(payload["acs_url"]),
-                username=target_username,
-                password=str(payload.get("password") or ""),
-                inform_interval=int(payload.get("inform_interval") or 300),
-            )
-            if not ok:
-                logger.warning(
-                    "Auto-create TR-069 profile failed for OLT %s: %s",
-                    olt.name,
-                    msg,
-                )
-                return
-            ok, _msg, profiles = get_tr069_server_profiles(olt)
-            if not ok:
-                return
-            profile = match_tr069_profile(
-                profiles,
-                acs_url=str(payload["acs_url"]),
-                acs_username=target_username,
-            )
-            profile_id = profile.profile_id if profile else None
-        if profile_id is None:
-            logger.warning(
-                "Could not resolve TR-069 profile for linked ACS %s on OLT %s",
-                target_url,
-                olt.name,
-            )
-            return
-
-        ok, msg = bind_tr069_server_profile(
-            olt, fsp=fsp, ont_id=ont_id, profile_id=profile_id
-        )
-        if ok:
-            logger.info(
-                "Auto-bound ONT %d on %s to TR-069 profile %d",
-                ont_id,
-                fsp,
-                profile_id,
-            )
-        else:
-            logger.warning(
-                "Auto-bind TR-069 failed for ONT %d on %s: %s", ont_id, fsp, msg
-            )
-    except Exception as exc:
-        logger.warning("Auto-bind TR-069 error for ONT %d: %s", ont_id, exc)
 
 
 def _validate_fsp(fsp: str) -> tuple[bool, str]:
@@ -427,7 +281,7 @@ def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
                 ]
             if result.warnings:
                 logger.debug("TextFSM autofind warnings: %s", result.warnings)
-        except Exception as e:
+        except (ValueError, KeyError, IndexError, AttributeError) as e:
             logger.debug("TextFSM autofind parse failed, using legacy: %s", e)
 
     # Fallback to legacy regex parsing
@@ -442,11 +296,8 @@ def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
     """
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", []
 
     try:
         # Enter enable mode and set terminal length
@@ -467,136 +318,9 @@ def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
         count = len(entries)
         msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
         return True, msg, entries
-    except Exception as exc:
-        logger.error("Error reading autofind from OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error reading autofind: {exc}", []
-    finally:
-        transport.close()
-
-
-def authorize_ont(
-    olt: OLTDevice,
-    fsp: str,
-    serial_number: str,
-    *,
-    line_profile_id: int | None = None,
-    service_profile_id: int | None = None,
-) -> tuple[bool, str, int | None]:
-    """SSH into OLT and register an ONT via sn-auth on the given port.
-
-    Args:
-        olt: The OLT device to connect to.
-        fsp: Frame/Slot/Port string, e.g. "0/2/1".
-        serial_number: ONT serial in vendor format, e.g. "HWTC-7D4733C3".
-        line_profile_id: OLT-local line profile ID resolved before authorization.
-        service_profile_id: OLT-local service profile ID resolved before authorization.
-
-    Returns:
-        Tuple of (success, message, assigned_ont_id).
-    """
-    if line_profile_id is None or service_profile_id is None:
-        return (
-            False,
-            "OLT authorization profiles were not resolved; refusing to use static profile defaults.",
-            None,
-        )
-    line_pid = line_profile_id
-    srv_pid = service_profile_id
-    ok, err = _validate_fsp(fsp)
-    if not ok:
-        return False, err, None
-    ok, err = _validate_serial(serial_number)
-    if not ok:
-        return False, err, None
-
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", None
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", None
-
-    try:
-        # Enter enable mode
-        channel.send("enable\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-
-        # Enter config mode
-        config_prompt = r"[#)]\s*$"
-        channel.send("config\n")
-        _read_until_prompt(channel, config_prompt, timeout_sec=5)
-
-        # Enter GPON interface for the frame/slot
-        parts = fsp.split("/")
-        frame_slot = f"{parts[0]}/{parts[1]}"
-        port_num = parts[2]
-
-        channel.send(f"interface gpon {frame_slot}\n")
-        _read_until_prompt(channel, config_prompt, timeout_sec=5)
-
-        # Authorize the ONT — sn-auth uses the serial without dashes
-        sn_clean = serial_number.replace("-", "")
-        channel.send(
-            f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid}\n"
-        )
-        # Huawei may prompt "{ <cr>|desc<K>|ont-type<K> }:" — send CR to confirm
-        initial = _read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
-        if "<cr>" in initial:
-            channel.send("\n")
-            output = _read_until_prompt(channel, r"[#)]\s*$", timeout_sec=10)
-        else:
-            output = initial
-
-        # Exit config mode
-        channel.send("quit\n")
-        _read_until_prompt(channel, config_prompt, timeout_sec=3)
-        channel.send("quit\n")
-        _read_until_prompt(channel, config_prompt, timeout_sec=3)
-
-        # Check for success indicators
-        ont_id_match = re.search(r"ont-?id\D+(\d+)", output, flags=re.IGNORECASE)
-        ont_id = int(ont_id_match.group(1)) if ont_id_match else None
-
-        if "success" in output.lower() or "ont-id" in output.lower():
-            logger.info(
-                "Authorized ONT %s on OLT %s port %s",
-                serial_number,
-                olt.name,
-                fsp,
-            )
-            # Auto-bind to the OLT's linked ACS TR-069 profile if configured.
-            _auto_bind_tr069_after_authorize(olt, fsp, ont_id)
-
-            message = f"ONT {serial_number} authorized on port {fsp}"
-            if ont_id is not None:
-                message += f" (ONT-ID {ont_id})"
-            return True, message, ont_id
-        if is_error_output(output):
-            logger.warning(
-                "Failed to authorize ONT %s on OLT %s: %s",
-                serial_number,
-                olt.name,
-                output.strip(),
-            )
-            return False, f"OLT rejected command: {output.strip()[-200:]}", None
-
-        # Ambiguous — return output for inspection
-        logger.info(
-            "ONT authorize command sent for %s on OLT %s, output: %s",
-            serial_number,
-            olt.name,
-            output.strip(),
-        )
-        return True, f"Command sent for {serial_number} on port {fsp}", ont_id
-    except Exception as exc:
-        logger.error(
-            "Error authorizing ONT %s on OLT %s: %s",
-            serial_number,
-            olt.name,
-            exc,
-        )
-        return False, f"Error: {exc}", None
     finally:
         transport.close()
 
@@ -700,7 +424,7 @@ def _parse_service_port_table(output: str) -> list[ServicePortEntry]:
                 ]
             if result.warnings:
                 logger.debug("TextFSM service-port warnings: %s", result.warnings)
-        except Exception as e:
+        except (ValueError, KeyError, IndexError, AttributeError) as e:
             logger.debug("TextFSM service-port parse failed, using legacy: %s", e)
 
     # Fallback to legacy regex parsing
@@ -783,11 +507,8 @@ def get_service_ports(
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", []
 
     try:
         channel.send("enable\n")
@@ -795,11 +516,11 @@ def get_service_ports(
         channel.send("screen-length 0 temporary\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
-        output = _run_huawei_cmd(channel, f"display service-port port {fsp}")
+        output = _run_huawei_paged_cmd(channel, f"display service-port port {fsp}")
         entries = _parse_service_port_table(output)
         return True, f"Found {len(entries)} service-ports on {fsp}", entries
-    except Exception as exc:
-        logger.error("Error reading service-ports from OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error reading service-ports from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", []
     finally:
         transport.close()
@@ -830,11 +551,8 @@ def create_service_ports(
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -886,8 +604,8 @@ def create_service_ports(
             msg += f" ({errors} failed)"
         logger.info(msg)
         return errors == 0, msg
-    except Exception as exc:
-        logger.error("Error creating service-ports on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error creating service-ports on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -912,13 +630,8 @@ def upgrade_firmware(
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error(
-            "Error connecting to OLT %s for firmware upgrade: %s", olt.name, exc
-        )
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -953,8 +666,8 @@ def upgrade_firmware(
             output.strip()[-200:],
         )
         return True, "Firmware upgrade command sent"
-    except Exception as exc:
-        logger.error("Error during firmware upgrade on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error during firmware upgrade on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -967,11 +680,8 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
     """
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", ""
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", ""
 
     try:
         channel.send("enable\n")
@@ -995,8 +705,8 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
                 config_text,
             )
         return True, "Configuration retrieved", config_text
-    except Exception as exc:
-        logger.error("Error fetching config from OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", ""
     finally:
         transport.close()
@@ -1014,11 +724,8 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
     """
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", ""
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", ""
 
     try:
         channel.send("enable\n")
@@ -1036,8 +743,8 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
             lines = lines[:-1]
         clean_output = "\n".join(lines).strip()
         return True, "Command executed", clean_output
-    except Exception as exc:
-        logger.error("Error running CLI command on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", ""
     finally:
         transport.close()
@@ -1077,11 +784,8 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
     """
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -1107,8 +811,8 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
 
         logger.info("Deleted service-port %d on OLT %s", index, olt.name)
         return True, f"Service-port {index} deleted"
-    except Exception as exc:
-        logger.error("Error deleting service-port on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error deleting service-port on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -1142,11 +846,8 @@ def create_single_service_port(
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -1184,705 +885,70 @@ def create_single_service_port(
             fsp,
         )
         return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})"
-    except Exception as exc:
-        logger.error("Error creating service-port on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error creating service-port on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
 
 
-def configure_ont_iphost(
-    olt: OLTDevice,
-    fsp: str,
-    ont_id: int,
-    *,
-    vlan_id: int,
-    ip_mode: str = "dhcp",
-    ip_address: str | None = None,
-    subnet: str | None = None,
-    gateway: str | None = None,
-) -> tuple[bool, str]:
-    """Configure ONT management IP (IPHOST) via OLT SSH.
-
-    Args:
-        olt: The OLT device.
-        fsp: Frame/Slot/Port e.g. "0/2/1".
-        ont_id: The ONT-ID.
-        vlan_id: Management VLAN ID.
-        ip_mode: "dhcp" or "static".
-        ip_address: Static IP (required if ip_mode="static").
-        subnet: Subnet mask (required if ip_mode="static").
-        gateway: Default gateway (required if ip_mode="static").
-
-    Returns:
-        Tuple of (success, message).
-    """
-    ok, err = _validate_fsp(fsp)
-    if not ok:
-        return False, err
-
-    # SECURITY: Validate numeric parameters before CLI interpolation
-    try:
-        validate_ont_id(ont_id)
-        validate_vlan_id(vlan_id)
-    except ValidationError as e:
-        return False, e.message
-
-    # Validate IP addresses for static mode before CLI interpolation
-    if ip_mode != "dhcp":
-        if not ip_address or not subnet or not gateway:
-            return False, "Static IP mode requires ip_address, subnet, and gateway"
-        try:
-            ip_address = validate_ip_address(ip_address, "ip_address")
-            subnet = validate_subnet_mask(subnet, "subnet_mask")
-            gateway = validate_ip_address(gateway, "gateway")
-        except ValidationError as e:
-            return False, e.message
-
-    parts = fsp.split("/")
-    frame_slot = f"{parts[0]}/{parts[1]}"
-    port_num = parts[2]
-
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        config_prompt = r"[#)]\s*$"
-        _run_huawei_cmd(channel, "config", prompt=config_prompt)
-        _run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
-
-        if ip_mode == "dhcp":
-            cmd = f"ont ipconfig {port_num} {ont_id} ip-index 0 dhcp vlan {vlan_id}"
-        else:
-            # ip_address, subnet, gateway already validated above
-            cmd = (
-                f"ont ipconfig {port_num} {ont_id} "
-                f"ip-index 0 static ip-address {ip_address} "
-                f"mask {subnet} gateway {gateway} vlan {vlan_id}"
-            )
-
-        output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
-
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-
-        if is_error_output(output):
-            logger.warning(
-                "IPHOST config failed for ONT %d on OLT %s: %s",
-                ont_id,
-                olt.name,
-                output.strip()[-150:],
-            )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
-
-        logger.info(
-            "Configured IPHOST for ONT %d on OLT %s (%s VLAN %d)",
-            ont_id,
-            olt.name,
-            ip_mode,
-            vlan_id,
-        )
-        return True, f"Management IP configured ({ip_mode} on VLAN {vlan_id})"
-    except Exception as exc:
-        logger.error("Error configuring IPHOST on OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}"
-    finally:
-        transport.close()
-
-
-def get_ont_iphost_config(
-    olt: OLTDevice, fsp: str, ont_id: int
-) -> tuple[bool, str, dict[str, str]]:
-    """Query current ONT IPHOST configuration from OLT.
-
-    Args:
-        olt: The OLT device.
-        fsp: Frame/Slot/Port e.g. "0/2/1".
-        ont_id: The ONT-ID.
-
-    Returns:
-        Tuple of (success, message, config_dict).
-    """
-    ok, err = _validate_fsp(fsp)
-    if not ok:
-        return False, err, {}
-
-    parts = fsp.split("/")
-    port_num = parts[2]
-
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", {}
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", {}
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        cmd = f"display ont ipconfig {parts[0]}/{parts[1]} {port_num} {ont_id}"
-        output = _run_huawei_cmd(channel, cmd)
-
-        config: dict[str, str] = {}
-        for line in output.splitlines():
-            if ":" in line:
-                key, _, value = line.partition(":")
-                config[key.strip()] = value.strip()
-
-        return True, "IPHOST config retrieved", config
-    except Exception as exc:
-        logger.error("Error getting IPHOST config from OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}", {}
-    finally:
-        transport.close()
-
-
-def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
-    """Reboot an ONT via OMCI from the OLT.
-
-    Args:
-        olt: The OLT device.
-        fsp: Frame/Slot/Port e.g. "0/2/1".
-        ont_id: The ONT-ID.
-
-    Returns:
-        Tuple of (success, message).
-    """
-    ok, err = _validate_fsp(fsp)
-    if not ok:
-        return False, err
-
-    parts = fsp.split("/")
-    frame_slot = f"{parts[0]}/{parts[1]}"
-    port_num = parts[2]
-
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        config_prompt = r"[#)]\s*$"
-        _run_huawei_cmd(channel, "config", prompt=config_prompt)
-        _run_huawei_cmd(channel, f"interface gpon {frame_slot}", prompt=config_prompt)
-
-        # ont reset may ask for Y/N confirmation
-        channel.send(f"ont reset {port_num} {ont_id}\n")
-        output = _read_until_prompt(
-            channel, rf"{config_prompt}|y/n|Y/N", timeout_sec=10
-        )
-        if "y/n" in output.lower():
-            channel.send("y\n")
-            output += _read_until_prompt(channel, config_prompt, timeout_sec=10)
-
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-
-        if is_error_output(output):
-            logger.warning(
-                "ONT reset failed for %d on OLT %s: %s",
-                ont_id,
-                olt.name,
-                output.strip()[-150:],
-            )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
-
-        logger.info("ONT %d reset via OMCI on OLT %s", ont_id, olt.name)
-        return True, f"ONT {ont_id} reboot command sent via OMCI"
-    except Exception as exc:
-        logger.error("Error resetting ONT on OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}"
-    finally:
-        transport.close()
-
-
-def bind_tr069_server_profile(
-    olt: OLTDevice, fsp: str, ont_id: int, profile_id: int
-) -> tuple[bool, str]:
-    """Bind a TR-069 server profile to an ONT via OLT SSH.
-
-    Args:
-        olt: The OLT device.
-        fsp: Frame/Slot/Port e.g. "0/2/1".
-        ont_id: The ONT-ID.
-        profile_id: OLT TR-069 server profile ID.
-
-    Returns:
-        Tuple of (success, message).
-    """
-    ok, err = _validate_fsp(fsp)
-    if not ok:
-        return False, err
-
-    parts = fsp.split("/")
-    frame_slot = f"{parts[0]}/{parts[1]}"
-    port_num = parts[2]
-
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        config_prompt = r"[#)]\s*$"
-        _run_huawei_cmd(channel, "config", prompt=config_prompt)
-
-        # Enter the interface context using /slot syntax.
-        # Try frame/slot first; if it fails (Board type is invalid),
-        # try common alternate slots (0/0, 0/1).
-        iface_entered = False
-        for candidate_slot in [frame_slot, f"{parts[0]}/1", f"{parts[0]}/0"]:
-            output = _run_huawei_cmd(
-                channel, f"interface gpon {candidate_slot}", prompt=config_prompt
-            )
-            if "invalid" not in output.lower() and "error" not in output.lower():
-                iface_entered = True
-                break
-
-        if not iface_entered:
-            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            return False, f"Could not enter interface gpon context for {fsp}"
-
-        cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
-        output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
-
-        if is_error_output(output):
-            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            logger.warning(
-                "TR-069 profile bind failed for ONT %d on OLT %s: %s",
-                ont_id,
-                olt.name,
-                output.strip()[-150:],
-            )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
-
-        # Reset the ONT to force an immediate bootstrap inform to the new ACS.
-        # The OLT prompts "Are you sure? (y/n)" — send 'y' to confirm.
-        reset_out = _run_huawei_cmd(
-            channel, f"ont reset {port_num} {ont_id}", prompt=r"[#)]\s*$|y/n"
-        )
-        if "y/n" in reset_out:
-            channel.send("y\n")
-            reset_out += _read_until_prompt(channel, config_prompt, timeout_sec=8)
-
-        if "failure" in reset_out.lower() or "error" in reset_out.lower():
-            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            logger.warning(
-                "TR-069 profile bound but ONT reset failed for ONT %d on OLT %s: %s",
-                ont_id,
-                olt.name,
-                reset_out.strip()[-150:],
-            )
-            return (
-                False,
-                f"TR-069 profile bound but reset failed: {reset_out.strip()[-150:]}",
-            )
-
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-
-        logger.info(
-            "Bound TR-069 profile %d to ONT %d on OLT %s (reset triggered)",
-            profile_id,
-            ont_id,
-            olt.name,
-        )
-        return (
-            True,
-            f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)",
-        )
-    except Exception as exc:
-        logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}"
-    finally:
-        transport.close()
-
-
-@dataclass
-class OltProfileEntry:
-    """A single OLT profile entry (line, service, TR-069, or WAN)."""
-
-    profile_id: int
-    name: str
-    type: str = ""
-    binding_count: int = 0
-    extra: dict[str, str] = field(default_factory=dict)
-
-
-def _parse_profile_table_legacy(
-    output: str, id_col: int = 0, name_col: int = 1
-) -> list[OltProfileEntry]:
-    """Legacy regex parser for Huawei profile display output.
-
-    Used as fallback when TextFSM parsing fails.
-    """
-    entries: list[OltProfileEntry] = []
-    for line in output.splitlines():
-        line = line.strip()
-        if not line or line.startswith("-") or line.startswith("="):
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        try:
-            pid = int(parts[id_col])
-        except (ValueError, IndexError):
-            continue
-        name = parts[name_col] if len(parts) > name_col else ""
-        entries.append(OltProfileEntry(profile_id=pid, name=name))
-    return entries
-
-
-def _parse_profile_table(
-    output: str, id_col: int = 0, name_col: int = 1
-) -> list[OltProfileEntry]:
-    """Parse Huawei profile display output into structured entries.
-
-    Uses TextFSM template for robust parsing with fallback to legacy regex.
-    """
-    if _TEXTFSM_AVAILABLE:
-        try:
-            result = _textfsm_parse_profile_table(output)
-            if result.success and result.data:
-                # Convert from parser dataclass to local dataclass
-                return [
-                    OltProfileEntry(
-                        profile_id=e.profile_id,
-                        name=e.name,
-                        type=e.type,
-                        binding_count=e.binding_count,
-                    )
-                    for e in result.data
-                ]
-            if result.warnings:
-                logger.debug("TextFSM profile warnings: %s", result.warnings)
-        except Exception as e:
-            logger.debug("TextFSM profile parse failed, using legacy: %s", e)
-
-    # Fallback to legacy regex parsing
-    return _parse_profile_table_legacy(output, id_col, name_col)
-
-
-def get_line_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]:
-    """Query OLT for GPON line profiles.
-
-    Returns:
-        Tuple of (success, message, list of profiles).
-    """
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", []
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        output = _run_huawei_cmd(channel, "display ont-lineprofile gpon all")
-        entries = _parse_profile_table(output)
-        return True, f"Found {len(entries)} line profile(s)", entries
-    except Exception as exc:
-        logger.error("Error reading line profiles from OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}", []
-    finally:
-        transport.close()
-
-
-def get_service_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]:
-    """Query OLT for GPON service profiles.
-
-    Returns:
-        Tuple of (success, message, list of profiles).
-    """
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", []
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        output = _run_huawei_cmd(channel, "display ont-srvprofile gpon all")
-        entries = _parse_profile_table(output)
-        return True, f"Found {len(entries)} service profile(s)", entries
-    except Exception as exc:
-        logger.error("Error reading service profiles from OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}", []
-    finally:
-        transport.close()
-
-
-@dataclass
-class Tr069ServerProfile:
-    """A TR-069 server profile with detail fields."""
-
-    profile_id: int
-    name: str
-    acs_url: str = ""
-    acs_username: str = ""
-    inform_interval: int = 0
-    binding_count: int = 0
-
-
-_TR069_PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-. ]{1,64}$")
-
-
-def _parse_tr069_profile_detail_legacy(output: str) -> dict[str, str]:
-    """Legacy parser for TR-069 profile detail key-value output.
-
-    Used as fallback when TextFSM parsing fails.
-    """
-    result: dict[str, str] = {}
-    for line in output.splitlines():
-        if ":" not in line:
-            continue
-        key, _, value = line.partition(":")
-        result[key.strip().lower()] = value.strip()
-    return result
-
-
-def _parse_tr069_profile_detail(output: str) -> dict[str, str]:
-    """Parse ``display ont tr069-server-profile profile-id N`` key-value output.
-
-    Uses TextFSM key-value parser with fallback to legacy regex.
-    """
-    if _TEXTFSM_AVAILABLE:
-        try:
-            return _textfsm_parse_key_value(output)
-        except Exception as e:
-            logger.debug("TextFSM key-value parse failed, using legacy: %s", e)
-
-    # Fallback to legacy regex parsing
-    return _parse_tr069_profile_detail_legacy(output)
-
-
-def get_tr069_server_profiles(
-    olt: OLTDevice,
-) -> tuple[bool, str, list[Tr069ServerProfile]]:
-    """Query OLT for TR-069 server profiles with per-profile detail.
-
-    Returns:
-        Tuple of (success, message, list of Tr069ServerProfile).
-    """
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", []
-
-    try:
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        output = _run_huawei_cmd(channel, "display ont tr069-server-profile all")
-        summary = _parse_profile_table(output)
-
-        profiles: list[Tr069ServerProfile] = []
-        for entry in summary:
-            detail_output = _run_huawei_cmd(
-                channel,
-                f"display ont tr069-server-profile profile-id {entry.profile_id}",
-            )
-            detail = _parse_tr069_profile_detail(detail_output)
-            profiles.append(
-                Tr069ServerProfile(
-                    profile_id=entry.profile_id,
-                    name=detail.get("profile-name", entry.name),
-                    acs_url=detail.get(
-                        "url", detail.get("acs url", detail.get("acs-url", ""))
-                    ),
-                    acs_username=detail.get(
-                        "user name", detail.get("acs username", "")
-                    ),
-                    inform_interval=int(detail.get("inform interval", "0") or "0"),
-                    binding_count=int(
-                        detail.get("binding times", detail.get("bindnumber", "0"))
-                        or "0"
-                    ),
-                )
-            )
-
-        return True, f"Found {len(profiles)} TR-069 server profile(s)", profiles
-    except Exception as exc:
-        logger.error("Error reading TR-069 profiles from OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}", []
-    finally:
-        transport.close()
-
-
-def create_tr069_server_profile(
-    olt: OLTDevice,
-    *,
-    profile_name: str,
-    acs_url: str,
-    username: str = "",
-    password: str = "",
-    inform_interval: int = 300,
-) -> tuple[bool, str]:
-    """Create a new TR-069 server profile on the OLT via SSH.
-
-    Args:
-        olt: The OLT device.
-        profile_name: Name for the new profile (alphanumeric, dashes, dots, spaces).
-        acs_url: The ACS URL (e.g. http://oss.dotmac.ng:7547).
-        username: CWMP ACS username.
-        password: CWMP ACS password.
-        inform_interval: Periodic inform interval in seconds.
-
-    Returns:
-        Tuple of (success, message).
-    """
-    if not _TR069_PROFILE_NAME_RE.match(profile_name):
-        return (
-            False,
-            "Invalid profile name (alphanumeric, dashes, dots, spaces, max 64 chars)",
-        )
-    if (
-        not acs_url
-        or "\n" in acs_url
-        or "\r" in acs_url
-        or ";" in acs_url
-        or "|" in acs_url
-    ):
-        return False, "Invalid ACS URL"
-    if username and ("\n" in username or ";" in username or "|" in username):
-        return False, "Invalid username"
-    if password and ("\n" in password or ";" in password or "|" in password):
-        return False, "Invalid password"
-
-    try:
-        transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
-
-    try:
-        import time
-
-        channel.send("enable\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-
-        config_prompt = r"[#)]\s*$"
-        _run_huawei_cmd(channel, "config", prompt=config_prompt)
-
-        # Huawei MA56xx uses an interactive wizard for `add`.
-        # Each prompt looks like: { url<K> }: or { user-password<S> }:
-        # We extract the prompt text between { } to determine the response.
-        # Key: match ONLY the { } prompt content, not echoed output.
-        channel.send(f'ont tr069-server-profile add profile-name "{profile_name}"\n')
-
-        for _attempt in range(8):
-            time.sleep(2)
-            raw = b""
-            while channel.recv_ready():
-                raw += channel.recv(4096)
-                time.sleep(0.1)
-            decoded = raw.decode("ascii", errors="replace")
-
-            # Extract the wizard prompt: { ... }:
-            prompt_match = re.search(r"\{([^}]+)\}\s*:", decoded)
-            if prompt_match:
-                prompt_text = prompt_match.group(1).lower().strip()
-
-                if "url" in prompt_text and "user" not in prompt_text:
-                    channel.send(f'url "{acs_url}"\n')
-                elif "user-password" in prompt_text or "password" in prompt_text:
-                    # <S> type prompt — send raw value, no keyword prefix
-                    channel.send(f"{password}\n" if password else "\n")
-                elif "user" in prompt_text:
-                    channel.send(f'user "{username}"\n' if username else "\n")
-                elif "interval" in prompt_text or "inform" in prompt_text:
-                    channel.send(f"{inform_interval}\n" if inform_interval else "\n")
-                elif "<cr>" in prompt_text:
-                    channel.send("\n")
-                else:
-                    channel.send("\n")
-            elif re.search(config_prompt, decoded):
-                break  # Back at config prompt — wizard complete
-
-        # Drain remaining output
-        time.sleep(1)
-        while channel.recv_ready():
-            channel.recv(4096)
-
-        # Verify profile was created
-        verify_output = _run_huawei_cmd(
-            channel, "display ont tr069-server-profile all", prompt=config_prompt
-        )
-        if profile_name.lower() not in verify_output.lower():
-            _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-            return (
-                False,
-                f"Profile '{profile_name}' not found after creation. OLT may have rejected it.",
-            )
-
-        _run_huawei_cmd(channel, "quit", prompt=config_prompt)
-
-        logger.info(
-            "Created TR-069 profile '%s' on OLT %s with ACS URL %s",
-            profile_name,
-            olt.name,
-            acs_url,
-        )
-        return True, f"TR-069 profile '{profile_name}' created successfully"
-    except Exception as exc:
-        logger.error("Error creating TR-069 profile on OLT %s: %s", olt.name, exc)
-        return False, f"Error: {exc}"
-    finally:
-        transport.close()
+# Backward compatibility re-exports (functions moved to olt_ssh_ont.py)
+# These functions are now defined in olt_ssh_ont.py but re-exported here
+# to maintain backward compatibility with existing imports.
+from app.services.network.olt_ssh_ont import (
+    authorize_ont as authorize_ont,
+)
+from app.services.network.olt_ssh_ont import (
+    bind_tr069_server_profile as bind_tr069_server_profile,
+)
+from app.services.network.olt_ssh_ont import (
+    configure_ont_iphost as configure_ont_iphost,
+)
+from app.services.network.olt_ssh_ont import (
+    get_ont_iphost_config as get_ont_iphost_config,
+)
+from app.services.network.olt_ssh_ont import (
+    reboot_ont_omci as reboot_ont_omci,
+)
+
+# Backward compatibility re-exports (profile functions moved to olt_ssh_profiles.py)
+from app.services.network.olt_ssh_profiles import (
+    OltProfileEntry as OltProfileEntry,
+)
+from app.services.network.olt_ssh_profiles import (
+    Tr069ServerProfile as Tr069ServerProfile,
+)
+from app.services.network.olt_ssh_profiles import (
+    _parse_profile_table as _parse_profile_table,
+)
+from app.services.network.olt_ssh_profiles import (
+    _parse_profile_table_legacy as _parse_profile_table_legacy,
+)
+from app.services.network.olt_ssh_profiles import (
+    _parse_tr069_profile_detail as _parse_tr069_profile_detail,
+)
+from app.services.network.olt_ssh_profiles import (
+    _parse_tr069_profile_detail_legacy as _parse_tr069_profile_detail_legacy,
+)
+from app.services.network.olt_ssh_profiles import (
+    create_tr069_server_profile as create_tr069_server_profile,
+)
+from app.services.network.olt_ssh_profiles import (
+    get_line_profiles as get_line_profiles,
+)
+from app.services.network.olt_ssh_profiles import (
+    get_service_profiles as get_service_profiles,
+)
+from app.services.network.olt_ssh_profiles import (
+    get_tr069_server_profiles as get_tr069_server_profiles,
+)
 
 
 def test_connection(olt: OLTDevice) -> tuple[bool, str, str | None]:
     try:
         policy_key, output = run_version_probe(olt)
-    except (SSHException, OSError) as exc:
+    except (SSHException, OSError, TimeoutError) as exc:
         return False, f"Connection failed: {type(exc).__name__}: {exc}", None
-    except Exception as exc:
-        logger.error("Unexpected error testing OLT %s connection: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", None
     if not output.strip():
         return False, "SSH connected but no CLI output returned", policy_key
     return True, "SSH connection test successful", policy_key

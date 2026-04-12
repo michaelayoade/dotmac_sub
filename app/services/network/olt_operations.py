@@ -358,6 +358,7 @@ def test_olt_netconf_connection(
     from app.services.network import olt_netconf
 
     olt = get_olt_or_none(db, olt_id)
+    capabilities: list[str]
     if not olt:
         ok, message, capabilities = False, "OLT not found", []
     else:

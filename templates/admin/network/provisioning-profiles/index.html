@@ -78,6 +78,7 @@
         columns=[
             {"key": "name",          "label": "Profile"},
             {"key": "profile_type",  "label": "Type"},
+            {"key": "olt_scope",     "label": "OLT Scope"},
             {"key": "config_method", "label": "Config Method"},
             {"key": "onu_mode",      "label": "ONU Mode"},
             {"key": "wan_services",  "label": "WAN Services"},
@@ -115,6 +116,11 @@
         {% endcall %}
         {{ cell_badge("profile_type", row.profile_type.value|title,
             "info" if row.profile_type.value == "residential" else "purple" if row.profile_type.value == "business" else "default") }}
+        {% call cell_custom("olt_scope") %}
+            <span class="text-xs text-slate-500 dark:text-slate-400">
+                {% if row.olt_device %}{{ row.olt_device.name }}{% else %}No OLT scope{% endif %}
+            </span>
+        {% endcall %}
         {{ cell_badge("config_method", row.config_method.value|upper if row.config_method else "Not Set",
             "info" if row.config_method and row.config_method.value == "tr069" else "purple" if row.config_method and row.config_method.value == "omci" else "default") }}
         {{ cell_badge("onu_mode", row.onu_mode.value|title if row.onu_mode else "Not Set",

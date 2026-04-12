@@ -279,6 +279,7 @@ def ont_create(request: Request, db: Session = Depends(get_db)):
         )
         return templates.TemplateResponse("admin/network/onts/form.html", context)
 
+    assert result.ont is not None
     return RedirectResponse(f"/admin/network/onts/{result.ont.id}", status_code=303)
 
 
@@ -362,6 +363,7 @@ def ont_assign_new(
             status_code=404,
         )
 
+    assert result.ont is not None
     context = _assignment_form_context(
         request,
         db,
@@ -391,6 +393,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
         )
 
     if result.error:
+        assert result.ont is not None
         context = _assignment_form_context(
             request,
             db,
@@ -402,6 +405,7 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
         )
         return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
+    assert result.ont is not None
     return _ont_redirect(
         str(result.ont.id),
         status="success",
@@ -432,6 +436,8 @@ def ont_assignment_edit(
             status_code=404,
         )
 
+    assert result.ont is not None
+    assert result.assignment is not None
     context = _assignment_form_context(
         request,
         db,
@@ -469,6 +475,8 @@ def ont_assignment_update(
         )
 
     if result.error:
+        assert result.ont is not None
+        assert result.assignment is not None
         context = _assignment_form_context(
             request,
             db,
@@ -481,6 +489,7 @@ def ont_assignment_update(
         )
         return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
+    assert result.ont is not None
     return _ont_redirect(
         str(result.ont.id),
         tab="operations",
@@ -512,6 +521,7 @@ def ont_assignment_remove(
             status_code=404,
         )
 
+    assert result.ont is not None
     return _ont_redirect(
         str(result.ont.id),
         tab="operations",

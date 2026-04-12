@@ -517,14 +517,7 @@ def compute_account_status(db: Session, subscriber_id: str) -> SubscriberStatus:
     """
     subscriber = db.get(Subscriber, subscriber_id)
     if not subscriber:
-        # Orphan subscriptions may exist if subscriber was deleted without cascade.
-        # Return canceled status to allow operations to continue gracefully.
-        logger.warning(
-            "compute_account_status: subscriber %s not found (orphan record?), "
-            "returning canceled status",
-            subscriber_id,
-        )
-        return SubscriberStatus.canceled
+        raise ValueError(f"Subscriber {subscriber_id} not found")
 
     subs = list(
         db.scalars(

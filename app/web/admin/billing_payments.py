@@ -669,10 +669,11 @@ def payment_import_submit(
             request,
             body,
         )
-        if int(result.get("status_code", 200)) != 200:
+        status_code = int(cast(int | str, result.get("status_code", 200)))
+        if status_code != 200:
             return JSONResponse(
                 cast(dict[str, object], result),
-                status_code=int(result.get("status_code", 400)),
+                status_code=status_code,
             )
 
         return JSONResponse(cast(dict[str, object], result.get("payload") or {}))

@@ -3,7 +3,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_
+from sqlalchemy import and_, false, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice
@@ -651,7 +651,7 @@ class CpeDevices(ListResponseMixin):
                             serial_candidates
                         )
                         if serial_candidates
-                        else False
+                        else false()
                     ),
                 )
             )
@@ -713,7 +713,9 @@ class CpeDevices(ListResponseMixin):
             )
             if device:
                 device.is_active = True
-                device.serial_number = (ont.serial_number or device.serial_number)[:120]
+                device.serial_number = str(ont.serial_number or device.serial_number or "")[
+                    :120
+                ]
                 reactivated += 1
             else:
                 device = Tr069CpeDevice(

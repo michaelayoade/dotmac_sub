@@ -535,10 +535,11 @@ def _sync_onts_from_olt_snmp_impl(
         distance = _parse_distance_m(distance_rows.get(idx))
 
         vs_key = vendor_serial or ""
+        fsp_onu_key = (fsp, onu) if fsp is not None else None
         matched_ont: OntUnit | None = None
         if vendor_key == "huawei":
             matched_ont = (
-                by_fsp_onu.get((fsp, onu))
+                (by_fsp_onu.get(fsp_onu_key) if fsp_onu_key else None)
                 or by_external_id.get(external_id)
                 or (vs_key and by_vendor_serial.get(vs_key))
                 or by_normalized_serial.get(vs_key)
@@ -547,7 +548,7 @@ def _sync_onts_from_olt_snmp_impl(
         else:
             matched_ont = (
                 by_external_id.get(external_id)
-                or by_fsp_onu.get((fsp, onu))
+                or (by_fsp_onu.get(fsp_onu_key) if fsp_onu_key else None)
                 or (vs_key and by_vendor_serial.get(vs_key))
                 or by_normalized_serial.get(vs_key)
                 or by_serial.get(synthetic_serial)
@@ -778,7 +779,7 @@ def _sync_onts_from_olt_snmp_impl(
                 "errors": 1,
             }
 
-    result_stats = {
+    result_stats: dict[str, object] = {
         "discovered": len(all_indexes),
         "created": created,
         "updated": updated,

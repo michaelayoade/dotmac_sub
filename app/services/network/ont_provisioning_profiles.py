@@ -6,7 +6,7 @@ import logging
 import re
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import (
@@ -18,6 +18,7 @@ from app.models.network import (
     OntProvisioningProfile,
     OnuMode,
     PppoePasswordMode,
+    Vlan,
     VlanMode,
     WanConnectionType,
     WanServiceType,
@@ -63,6 +64,8 @@ class OntProvisioningProfiles:
         profile_type: str | None = None,
         config_method: str | None = None,
         onu_mode: str | None = None,
+        olt_device_id: str | None = None,
+        include_global: bool = False,
         is_active: bool | None = None,
         search: str | None = None,
         order_by: str = "name",
@@ -73,6 +76,7 @@ class OntProvisioningProfiles:
         """List provisioning profiles with optional filtering."""
         stmt = select(OntProvisioningProfile).options(
             selectinload(OntProvisioningProfile.wan_services),
+            selectinload(OntProvisioningProfile.olt_device),
             selectinload(OntProvisioningProfile.download_speed_profile),
             selectinload(OntProvisioningProfile.upload_speed_profile),
         )
@@ -81,6 +85,17 @@ class OntProvisioningProfiles:
                 OntProvisioningProfile.owner_subscriber_id
                 == coerce_uuid(owner_subscriber_id)
             )
+        if olt_device_id:
+            olt_uuid = coerce_uuid(olt_device_id)
+            if include_global:
+                stmt = stmt.where(
+                    or_(
+                        OntProvisioningProfile.olt_device_id == olt_uuid,
+                        OntProvisioningProfile.olt_device_id.is_(None),
+                    )
+                )
+            else:
+                stmt = stmt.where(OntProvisioningProfile.olt_device_id == olt_uuid)
         if is_active is not None:
             stmt = stmt.where(OntProvisioningProfile.is_active.is_(is_active))
         if profile_type:
@@ -106,6 +121,7 @@ class OntProvisioningProfiles:
 
         allowed_columns = {
             "name": OntProvisioningProfile.name,
+            "olt": OntProvisioningProfile.olt_device_id,
             "profile_type": OntProvisioningProfile.profile_type,
             "config_method": OntProvisioningProfile.config_method,
             "created_at": OntProvisioningProfile.created_at,
@@ -121,6 +137,7 @@ class OntProvisioningProfiles:
             select(OntProvisioningProfile)
             .options(
                 selectinload(OntProvisioningProfile.wan_services),
+                selectinload(OntProvisioningProfile.olt_device),
                 selectinload(OntProvisioningProfile.download_speed_profile),
                 selectinload(OntProvisioningProfile.upload_speed_profile),
             )
@@ -146,6 +163,7 @@ class OntProvisioningProfiles:
         ip_protocol: IpProtocol | None = None,
         download_speed_profile_id: str | None = None,
         upload_speed_profile_id: str | None = None,
+        olt_device_id: str | None = None,
         mgmt_ip_mode: MgmtIpMode | None = None,
         mgmt_vlan_tag: int | None = None,
         mgmt_remote_access: bool = False,
@@ -177,6 +195,7 @@ class OntProvisioningProfiles:
             ip_protocol=ip_protocol,
             download_speed_profile_id=coerce_uuid(download_speed_profile_id),
             upload_speed_profile_id=coerce_uuid(upload_speed_profile_id),
+            olt_device_id=coerce_uuid(olt_device_id),
             mgmt_ip_mode=mgmt_ip_mode,
             mgmt_vlan_tag=mgmt_vlan_tag,
             mgmt_remote_access=mgmt_remote_access,
@@ -248,6 +267,38 @@ class WanServices:
     """CRUD operations for WAN services within a provisioning profile."""
 
     @staticmethod
+    def _validate_vlan_scope(
+        db: Session,
+        *,
+        profile_id: str,
+        s_vlan: int | None,
+    ) -> None:
+        if s_vlan is None:
+            return
+        profile = db.get(OntProvisioningProfile, coerce_uuid(profile_id))
+        if not profile:
+            raise HTTPException(
+                status_code=404, detail="Provisioning profile not found"
+            )
+        if not profile.olt_device_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Provisioning profile must be scoped to an OLT before VLAN services can be added.",
+            )
+        vlan = db.scalars(
+            select(Vlan).where(
+                Vlan.olt_device_id == profile.olt_device_id,
+                Vlan.tag == int(s_vlan),
+                Vlan.is_active.is_(True),
+            )
+        ).first()
+        if not vlan:
+            raise HTTPException(
+                status_code=400,
+                detail=f"VLAN {s_vlan} is not defined on this profile's OLT.",
+            )
+
+    @staticmethod
     def list_for_profile(db: Session, profile_id: str) -> list[OntProfileWanService]:
         """List all WAN services for a profile."""
         stmt = (
@@ -294,6 +345,7 @@ class WanServices:
         """Create a new WAN service for a profile."""
         if pppoe_username_template:
             validate_template_string(pppoe_username_template, "pppoe_username_template")
+        WanServices._validate_vlan_scope(db, profile_id=profile_id, s_vlan=s_vlan)
 
         # Encrypt static PPPoE password if provided
         encrypted_password = None
@@ -339,6 +391,13 @@ class WanServices:
         pppoe_tmpl = kwargs.get("pppoe_username_template")
         if pppoe_tmpl and isinstance(pppoe_tmpl, str):
             validate_template_string(pppoe_tmpl, "pppoe_username_template")
+        profile_id = str(service.profile_id)
+        s_vlan = kwargs.get("s_vlan", service.s_vlan)
+        WanServices._validate_vlan_scope(
+            db,
+            profile_id=profile_id,
+            s_vlan=int(str(s_vlan)) if s_vlan is not None else None,
+        )
 
         # Encrypt static password if being updated
         if "pppoe_static_password" in kwargs and kwargs["pppoe_static_password"]:

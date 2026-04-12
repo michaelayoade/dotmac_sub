@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy.exc import IntegrityError
@@ -20,8 +21,8 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class AssignmentFormResult:
-    ont: object | None = None
-    assignment: object | None = None
+    ont: Any | None = None
+    assignment: Any | None = None
     values: dict[str, object] | None = None
     error: str | None = None
     not_found: bool = False

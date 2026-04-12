@@ -46,6 +46,10 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ vlan.region.name if vlan.region else '-' }}</dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ vlan.olt_device.name if vlan.olt_device else '-' }}</dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Purpose</dt>
                             <dd class="mt-1">
                                 {% if vlan.purpose %}

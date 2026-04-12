@@ -66,6 +66,18 @@ _PROFILE_TO_ONT_FIELDS = {
 }
 
 
+def _profile_matches_ont_scope(
+    profile: OntProvisioningProfile,
+    ont: OntUnit,
+) -> bool:
+    """Return true when a profile is scoped to the ONT's OLT."""
+    profile_olt_id = getattr(profile, "olt_device_id", None)
+    ont_olt_id = getattr(ont, "olt_device_id", None)
+    if not profile_olt_id or not ont_olt_id:
+        return profile_olt_id == ont_olt_id
+    return profile_olt_id == ont_olt_id
+
+
 def resolve_profile_for_ont(
     db: Session,
     ont_id: str,
@@ -90,8 +102,16 @@ def resolve_profile_for_ont(
             .where(OntProvisioningProfile.id == ont.provisioning_profile_id)
         )
         profile = db.scalars(stmt).first()
-        if profile and profile.is_active:
+        if profile and profile.is_active and _profile_matches_ont_scope(profile, ont):
             return profile
+        if profile and profile.is_active:
+            logger.warning(
+                "Ignoring ONT %s profile %s because it is scoped to OLT %s, not %s",
+                ont.serial_number,
+                profile.name,
+                profile.olt_device_id,
+                ont.olt_device_id,
+            )
 
     # 2. Business account default (need business subscriber from assignment)
     from app.models.network import OntAssignment
@@ -117,6 +137,7 @@ def resolve_profile_for_ont(
                         == owner_subscriber_id,
                         OntProvisioningProfile.is_default.is_(True),
                         OntProvisioningProfile.is_active.is_(True),
+                        OntProvisioningProfile.olt_device_id == ont.olt_device_id,
                     )
                 )
                 profile = db.scalars(stmt).first()
@@ -148,6 +169,14 @@ def apply_profile_to_ont(
     profile = db.scalars(stmt).first()
     if not profile:
         return ApplyResult(success=False, message="Provisioning profile not found")
+    if not _profile_matches_ont_scope(profile, ont):
+        return ApplyResult(
+            success=False,
+            message=(
+                f"Profile '{profile.name}' is scoped to another OLT and cannot be "
+                "applied to this ONT."
+            ),
+        )
 
     fields_updated = 0
     for profile_field, ont_field in _PROFILE_TO_ONT_FIELDS.items():

@@ -23,6 +23,30 @@ class ValidationError(Exception):
         self.message = message
 
 
+class OltSshError(Exception):
+    """Base exception for OLT SSH operations."""
+
+    pass
+
+
+class OltConnectionError(OltSshError):
+    """Failed to establish SSH connection to OLT."""
+
+    pass
+
+
+class OltCommandError(OltSshError):
+    """OLT rejected or failed to execute command."""
+
+    pass
+
+
+class OltTimeoutError(OltSshError):
+    """SSH operation timed out."""
+
+    pass
+
+
 @dataclass(frozen=True)
 class ValidationResult:
     """Result of a validation check."""

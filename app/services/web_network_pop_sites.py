@@ -466,7 +466,7 @@ def _coerce_site_float(value: object | None) -> float | None:
     if value is None or value == "":
         return None
     try:
-        return float(value)
+        return float(str(value))
     except (TypeError, ValueError):
         return None
 
@@ -581,7 +581,7 @@ def update_site_from_form(
     commit_site_update(db, pop_site, normalized)
     after_snapshot = model_to_dict(pop_site)
     changes = diff_dicts(before_snapshot, after_snapshot)
-    metadata_payload = {"changes": changes} if changes else None
+    metadata_payload: dict[str, object] | None = {"changes": changes} if changes else None
     _log_pop_site_audit(
         db,
         request=request,

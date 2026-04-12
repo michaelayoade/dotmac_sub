@@ -397,7 +397,8 @@ def require_permission(permission_key: str):
                 auth.get("principal_id"),
             )
             raise HTTPException(
-                status_code=403, detail=f"Permission '{permission_key}' not configured"
+                status_code=403,
+                detail=f"Permission not found: '{permission_key}' not configured",
             )
         if not has_permission(auth, db, permission_key):
             logger.warning(

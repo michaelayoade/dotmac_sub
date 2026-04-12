@@ -857,6 +857,8 @@ def queue_bulk_action(
     else:
         if not isinstance(device_ids, list):
             raise ValueError("No devices selected for bulk action")
+        if not isinstance(db, Session):
+            raise ValueError("Database session is required")
         registered_ids = [
             str(row.id)
             for row in db.query(Tr069CpeDevice)

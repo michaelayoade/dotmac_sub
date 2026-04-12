@@ -105,7 +105,7 @@ def propagate_acs_to_onts(
         request=request,
         action="propagate_acs",
         entity_id=olt_id,
-        metadata=stats,
+        metadata=dict(stats),
     )
     updated = stats["updated"]
     total = stats["total"]
@@ -131,7 +131,7 @@ def enforce_provisioning(
         request=request,
         action="enforce_provisioning",
         entity_id=olt_id,
-        metadata=stats,
+        metadata=dict(stats),
     )
 
     gaps = stats.get("gaps_detected", {})
@@ -156,7 +156,7 @@ def backfill_pon_ports(
         request=request,
         action="backfill_pon_ports",
         entity_id=olt_id,
-        metadata=stats,
+        metadata=dict(stats),
     )
 
     created = stats["ports_created"]

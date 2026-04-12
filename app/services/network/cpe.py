@@ -15,6 +15,7 @@ from app.models.network import (
     CPEDevice,
     DeviceStatus,
     DeviceType,
+    OLTDevice,
     OntAssignment,
     OntUnit,
     Port,
@@ -587,6 +588,37 @@ class Vlans(CRUDManager[Vlan]):
     soft_delete_value = False
 
     @staticmethod
+    def _payload_dict(payload, *, exclude_unset: bool) -> dict:
+        return CRUDManager._payload_dict(payload, exclude_unset=exclude_unset)
+
+    @classmethod
+    def _validate_olt_scope(cls, db: Session, data: dict, *, vlan_id: str | None = None) -> None:
+        olt_device_id = data.get("olt_device_id")
+        if not olt_device_id:
+            raise HTTPException(status_code=400, detail="OLT is required for VLANs")
+        olt = db.get(OLTDevice, str(olt_device_id))
+        if not olt or not olt.is_active:
+            raise HTTPException(status_code=400, detail="Active OLT not found")
+
+        region_id = data.get("region_id")
+        tag = data.get("tag")
+        if region_id is None or tag is None:
+            return
+        stmt = select(Vlan).where(
+            Vlan.region_id == coerce_uuid(region_id),
+            Vlan.olt_device_id == coerce_uuid(olt_device_id),
+            Vlan.tag == int(tag),
+        )
+        if vlan_id:
+            stmt = stmt.where(Vlan.id != coerce_uuid(vlan_id))
+        existing = db.scalars(stmt).first()
+        if existing and existing.is_active:
+            raise HTTPException(
+                status_code=400,
+                detail=f"VLAN {tag} already exists on this OLT",
+            )
+
+    @staticmethod
     def list(
         db: Session,
         region_id: str | None,
@@ -595,9 +627,11 @@ class Vlans(CRUDManager[Vlan]):
         order_dir: str,
         limit: int,
         offset: int,
+        olt_device_id: str | None = None,
     ):
         query = db.query(Vlan)
         query = apply_optional_equals(query, {Vlan.region_id: region_id})
+        query = apply_optional_equals(query, {Vlan.olt_device_id: olt_device_id})
         query = apply_active_state(query, Vlan.is_active, is_active)
         query = _apply_ordering(
             query,
@@ -608,12 +642,35 @@ class Vlans(CRUDManager[Vlan]):
         return _apply_pagination(query, limit, offset).all()
 
     @classmethod
+    def create(cls, db: Session, payload):
+        data = cls._payload_dict(payload, exclude_unset=False)
+        cls._validate_olt_scope(db, data)
+        entity = Vlan(**data)
+        db.add(entity)
+        db.commit()
+        db.refresh(entity)
+        return entity
+
+    @classmethod
     def get(cls, db: Session, vlan_id: str):
         return super().get(db, vlan_id)
 
     @classmethod
     def update(cls, db: Session, vlan_id: str, payload: VlanUpdate):
-        return super().update(db, vlan_id, payload)
+        entity = cls.get(db, vlan_id)
+        data = cls._payload_dict(payload, exclude_unset=True)
+        merged = {
+            "region_id": entity.region_id,
+            "olt_device_id": entity.olt_device_id,
+            "tag": entity.tag,
+            **data,
+        }
+        cls._validate_olt_scope(db, merged, vlan_id=vlan_id)
+        for key, value in data.items():
+            setattr(entity, key, value)
+        db.commit()
+        db.refresh(entity)
+        return entity
 
     @classmethod
     def delete(cls, db: Session, vlan_id: str):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import socket
 from dataclasses import dataclass
 
 from paramiko.ssh_exception import SSHException
@@ -11,6 +12,9 @@ from paramiko.ssh_exception import SSHException
 from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
+
+# Specific SSH-related exceptions that can occur during OLT operations
+_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
 
 
 @dataclass(frozen=True)
@@ -78,11 +82,8 @@ def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc, exc_info=True)
-        return False, f"Unexpected error: {type(exc).__name__}", []
 
     try:
         # Enter enable mode
@@ -101,7 +102,7 @@ def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
         count = len(entries)
         msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
         return True, msg, entries
-    except Exception as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error("Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error reading autofind: {exc}", []
     finally:

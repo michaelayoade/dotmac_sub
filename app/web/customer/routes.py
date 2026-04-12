@@ -110,7 +110,7 @@ def customer_support_create(
     subscriber_id, _subscription_id = customer_portal.resolve_customer_account(
         customer, db
     )
-    subscriber_lookup = str(subscriber_id or _resolve_subscriber_id(customer) or "")
+    subscriber_lookup = str(subscriber_id or customer.get("subscriber_id") or "")
     result = crm_portal.handle_ticket_create(
         db,
         customer,

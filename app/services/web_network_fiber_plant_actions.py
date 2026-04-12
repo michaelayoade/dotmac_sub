@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import cast
 
 from fastapi import Request
 
+from app.models.network import FdhCabinet, Splitter
 from app.services import web_network_fdh as fdh_service
 from app.services import web_network_fiber_plant as fiber_plant_service
 from app.services.audit_helpers import build_audit_activities, log_audit_event
@@ -123,7 +125,7 @@ def bulk_approve_change_requests_from_form(request: Request, db, form) -> str:
         reviewer_person_id=_current_person_id(request),
         force_apply=force_apply,
     )
-    for request_id in result["approved_request_ids"]:
+    for request_id in cast(list[object], result["approved_request_ids"]):
         _log_fiber_audit_event(
             db,
             request,
@@ -143,13 +145,16 @@ def create_cabinet_from_form(request: Request, db, form) -> FiberWebActionResult
         db, form, action_url="/admin/network/fdh-cabinets"
     )
     if result["error"]:
-        return FiberWebActionResult(success=False, form_context=result["form_context"])
+        return FiberWebActionResult(
+            success=False,
+            form_context=cast(dict[str, object], result["form_context"]),
+        )
 
-    cabinet = result["cabinet"]
+    cabinet = cast(FdhCabinet | None, result["cabinet"])
     if cabinet is None:
         return FiberWebActionResult(
             success=False,
-            form_context=result["form_context"],
+            form_context=cast(dict[str, object] | None, result["form_context"]),
             status_code=400,
         )
 
@@ -182,7 +187,10 @@ def update_cabinet_from_form(
         action_url=f"/admin/network/fdh-cabinets/{cabinet.id}",
     )
     if result["error"]:
-        return FiberWebActionResult(success=False, form_context=result["form_context"])
+        return FiberWebActionResult(
+            success=False,
+            form_context=cast(dict[str, object], result["form_context"]),
+        )
 
     _log_fiber_audit_event(
         db,
@@ -190,7 +198,7 @@ def update_cabinet_from_form(
         action="update",
         entity_type="fdh_cabinet",
         entity_id=str(cabinet.id),
-        metadata=result["metadata"],
+        metadata=cast(dict[str, object] | None, result["metadata"]),
     )
     return FiberWebActionResult(
         success=True, redirect_url=f"/admin/network/fdh-cabinets/{cabinet.id}"
@@ -202,13 +210,16 @@ def create_splitter_from_form(request: Request, db, form) -> FiberWebActionResul
         db, form, action_url="/admin/network/splitters"
     )
     if result["error"]:
-        return FiberWebActionResult(success=False, form_context=result["form_context"])
+        return FiberWebActionResult(
+            success=False,
+            form_context=cast(dict[str, object], result["form_context"]),
+        )
 
-    splitter = result["splitter"]
+    splitter = cast(Splitter | None, result["splitter"])
     if splitter is None:
         return FiberWebActionResult(
             success=False,
-            form_context=result["form_context"],
+            form_context=cast(dict[str, object] | None, result["form_context"]),
             status_code=400,
         )
 
@@ -244,7 +255,10 @@ def update_splitter_from_form(
         action_url=f"/admin/network/splitters/{splitter.id}",
     )
     if result["error"]:
-        return FiberWebActionResult(success=False, form_context=result["form_context"])
+        return FiberWebActionResult(
+            success=False,
+            form_context=cast(dict[str, object], result["form_context"]),
+        )
 
     _log_fiber_audit_event(
         db,
@@ -252,7 +266,7 @@ def update_splitter_from_form(
         action="update",
         entity_type="splitter",
         entity_id=str(splitter.id),
-        metadata=result["metadata"],
+        metadata=cast(dict[str, object] | None, result["metadata"]),
     )
     return FiberWebActionResult(
         success=True, redirect_url=f"/admin/network/splitters/{splitter.id}"

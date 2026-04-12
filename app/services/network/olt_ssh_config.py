@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import logging
 import re
+import socket
 
 from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
+
+# Specific SSH-related exceptions that can occur during OLT operations
+_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
 
 
 def upgrade_firmware(
@@ -38,13 +42,8 @@ def upgrade_firmware(
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error(
-            "Error connecting to OLT %s for firmware upgrade: %s", olt.name, exc
-        )
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -79,7 +78,7 @@ def upgrade_firmware(
             output.strip()[-200:],
         )
         return True, "Firmware upgrade command sent"
-    except Exception as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error("Error during firmware upgrade on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
@@ -99,11 +98,8 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", ""
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc, exc_info=True)
-        return False, f"Unexpected error: {type(exc).__name__}", ""
 
     try:
         channel.send("enable\n")
@@ -128,7 +124,7 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
                 config_text,
             )
         return True, "Configuration retrieved", config_text
-    except Exception as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error("Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", ""
     finally:
@@ -153,11 +149,8 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
 
     try:
         transport, channel, policy = _open_shell(olt)
-    except (SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", ""
-    except Exception as exc:
-        logger.error("Unexpected error connecting to OLT %s: %s", olt.name, exc, exc_info=True)
-        return False, f"Unexpected error: {type(exc).__name__}", ""
 
     try:
         channel.send("enable\n")
@@ -176,7 +169,7 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
             lines = lines[:-1]
         clean_output = "\n".join(lines).strip()
         return True, "Command executed", clean_output
-    except Exception as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error("Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", ""
     finally:

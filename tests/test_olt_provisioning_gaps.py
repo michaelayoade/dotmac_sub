@@ -28,7 +28,10 @@ from app.models.network import (
     PppoePasswordMode,
     Splitter,
     SplitterPort,
+    Vlan,
     VlanMode,
+    WanConnectionType,
+    WanServiceType,
 )
 from app.models.ont_autofind import OltAutofindCandidate
 from app.models.subscriber import Subscriber, SubscriberCategory
@@ -1380,6 +1383,64 @@ class TestGetProfileTemplates:
         assert "Active Profile Test" in profile_names
         assert "Inactive Profile Test" not in profile_names
 
+    def test_get_profile_templates_filters_to_olt_scope(self, db_session) -> None:
+        from app.services.web_network_onts import get_profile_templates
+
+        olt_a = OLTDevice(name="Template Scope A", vendor="Huawei", model="MA5608T")
+        olt_b = OLTDevice(name="Template Scope B", vendor="Huawei", model="MA5608T")
+        db_session.add_all([olt_a, olt_b])
+        db_session.commit()
+        db_session.refresh(olt_a)
+        db_session.refresh(olt_b)
+
+        scoped_a = OntProvisioningProfile(
+            name="Scoped Template A",
+            olt_device_id=olt_a.id,
+            is_active=True,
+        )
+        scoped_b = OntProvisioningProfile(
+            name="Scoped Template B",
+            olt_device_id=olt_b.id,
+            is_active=True,
+        )
+        global_profile = OntProvisioningProfile(
+            name="Global Template",
+            is_active=True,
+        )
+        db_session.add_all([scoped_a, scoped_b, global_profile])
+        db_session.commit()
+
+        profiles = get_profile_templates(db_session, str(olt_a.id))
+        names = {profile.name for profile in profiles}
+        assert "Scoped Template A" in names
+        assert "Global Template" not in names
+        assert "Scoped Template B" not in names
+
+    def test_apply_profile_rejects_other_olt_scope(self, db_session) -> None:
+        from app.services.network.ont_profile_apply import apply_profile_to_ont
+
+        ont_olt = OLTDevice(name="ONT Scope OLT", vendor="Huawei", model="MA5608T")
+        profile_olt = OLTDevice(name="Profile Scope OLT", vendor="Huawei", model="MA5608T")
+        db_session.add_all([ont_olt, profile_olt])
+        db_session.commit()
+        db_session.refresh(ont_olt)
+        db_session.refresh(profile_olt)
+
+        ont = OntUnit(serial_number="SCOPE-REJECT", olt_device_id=ont_olt.id)
+        profile = OntProvisioningProfile(
+            name="Wrong OLT Profile",
+            olt_device_id=profile_olt.id,
+            is_active=True,
+        )
+        db_session.add_all([ont, profile])
+        db_session.commit()
+        db_session.refresh(ont)
+        db_session.refresh(profile)
+
+        result = apply_profile_to_ont(db_session, str(ont.id), str(profile.id))
+        assert result.success is False
+        assert "another OLT" in result.message
+
 
 # ---------------------------------------------------------------------------
 # Route registration (all phases)
@@ -1595,6 +1656,180 @@ class TestOltSshFunctionExistence:
         from app.services.network.olt_ssh import get_tr069_server_profiles
 
         assert callable(get_tr069_server_profiles)
+
+
+# ---------------------------------------------------------------------------
+# OLT live profile reconciliation
+# ---------------------------------------------------------------------------
+
+
+class TestOltProvisioningProfileReconcile:
+    """Test OLT-scoped provisioning profile inference from live samples."""
+
+    def test_infer_profile_from_iphost_and_service_ports(self) -> None:
+        from app.services.network.olt_provisioning_profile_reconcile import (
+            infer_profile_from_samples,
+        )
+
+        olt = OLTDevice(name="Infer Huawei OLT", vendor="Huawei", model="MA5608T")
+        service_ports = [
+            [
+                ServicePortEntry(
+                    index=1,
+                    vlan_id=201,
+                    ont_id=8,
+                    gem_index=2,
+                    flow_type="vlan",
+                    flow_para="201",
+                    state="up",
+                ),
+                ServicePortEntry(
+                    index=2,
+                    vlan_id=203,
+                    ont_id=8,
+                    gem_index=1,
+                    flow_type="vlan",
+                    flow_para="203",
+                    state="up",
+                ),
+            ]
+        ]
+        iphosts = [{"vlan": "201", "priority": "2"}]
+
+        observed = infer_profile_from_samples(
+            olt=olt,
+            service_port_samples=service_ports,
+            iphost_samples=iphosts,
+        )
+
+        assert observed is not None
+        assert observed.mgmt_vlan_tag == 201
+        assert observed.mgmt_priority == 2
+        assert observed.services[0].vlan_id == 203
+        assert observed.services[0].gem_port_id == 1
+        assert observed.services[1].vlan_id == 201
+        assert observed.services[1].gem_port_id == 2
+
+    def test_parse_service_port_observations_keeps_fsp(self) -> None:
+        from app.services.network.olt_provisioning_profile_reconcile import (
+            parse_service_port_observations,
+        )
+
+        output = """
+       31  201 common   gpon 0/1 /2  0    2     vlan  201        25   25   up
+       32  203 common   gpon 0/1 /2  0    1     vlan  203        27   26   up
+        """
+
+        observations = parse_service_port_observations(output)
+
+        assert len(observations) == 2
+        assert observations[0].fsp == "0/1/2"
+        assert observations[0].entry.vlan_id == 201
+        assert observations[0].entry.ont_id == 0
+        assert observations[0].entry.gem_index == 2
+
+    def test_apply_observed_profile_updates_services(self, db_session) -> None:
+        from app.services.network.olt_provisioning_profile_reconcile import (
+            ObservedOltProvisioningProfile,
+            ObservedWanService,
+            apply_observed_profile,
+        )
+
+        olt = OLTDevice(name="Apply Huawei OLT", vendor="Huawei", model="MA5608T")
+        profile = OntProvisioningProfile(
+            name="Apply Old",
+            olt_device=olt,
+            mgmt_vlan_tag=100,
+            is_active=True,
+        )
+        db_session.add_all([olt, profile])
+        db_session.commit()
+        db_session.refresh(profile)
+
+        observed = ObservedOltProvisioningProfile(
+            olt_id=str(olt.id),
+            olt_name=olt.name,
+            mgmt_vlan_tag=201,
+            mgmt_priority=2,
+            mgmt_config_mode="DHCP",
+            sampled_onts=1,
+            services=[
+                ObservedWanService(
+                    service_type=WanServiceType.internet,
+                    name="Internet PPPoE",
+                    vlan_id=203,
+                    gem_port_id=1,
+                    connection_type=WanConnectionType.pppoe,
+                    priority=1,
+                ),
+                ObservedWanService(
+                    service_type=WanServiceType.management,
+                    name="TR-069 Management",
+                    vlan_id=201,
+                    gem_port_id=2,
+                    connection_type=WanConnectionType.dhcp,
+                    priority=2,
+                    cos_priority=2,
+                ),
+            ],
+        )
+
+        changed = apply_observed_profile(db_session, profile, observed)
+        db_session.commit()
+        db_session.refresh(profile)
+
+        assert changed is True
+        assert profile.name == "Apply PPPoE mgmt201 internet203"
+        assert profile.mgmt_vlan_tag == 201
+        services = {service.service_type: service for service in profile.wan_services}
+        assert services[WanServiceType.internet].s_vlan == 203
+        assert services[WanServiceType.internet].gem_port_id == 1
+        assert services[WanServiceType.management].s_vlan == 201
+        assert services[WanServiceType.management].gem_port_id == 2
+        assert services[WanServiceType.management].cos_priority == 2
+
+
+class TestProfileWanServiceVlanScope:
+    """Test profile WAN services are tied to the profile OLT VLAN catalog."""
+
+    def test_wan_service_requires_vlan_on_profile_olt(self, db_session) -> None:
+        from fastapi import HTTPException
+
+        from app.models.catalog import RegionZone
+        from app.services.network.ont_provisioning_profiles import wan_services
+
+        region = RegionZone(name="VLAN Scope Region")
+        olt = OLTDevice(name="VLAN Scope OLT", vendor="Huawei", model="MA5608T")
+        profile = OntProvisioningProfile(name="Scoped Profile", olt_device=olt)
+        db_session.add_all([region, olt, profile])
+        db_session.commit()
+        db_session.refresh(profile)
+
+        try:
+            wan_services.create(
+                db_session,
+                profile_id=str(profile.id),
+                service_type=WanServiceType.internet,
+                s_vlan=203,
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "not defined" in str(exc.detail)
+        else:
+            raise AssertionError("Expected missing OLT VLAN to be rejected")
+
+        db_session.add(
+            Vlan(region_id=region.id, olt_device_id=olt.id, tag=203, is_active=True)
+        )
+        db_session.commit()
+
+        service = wan_services.create(
+            db_session,
+            profile_id=str(profile.id),
+            service_type=WanServiceType.internet,
+            s_vlan=203,
+        )
+        assert service.s_vlan == 203
 
 
 # ---------------------------------------------------------------------------

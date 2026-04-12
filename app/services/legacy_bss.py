@@ -64,7 +64,7 @@ def set_customer_id(subscriber: Subscriber, value: int | str | None) -> None:
             raise ValueError("Legacy external BSS customer id must be an integer") from exc
     if getattr(subscriber, "id", None) is None:
         subscriber.id = uuid.uuid4()
-    subscriber._legacy_bss_customer_id = normalized
+    object.__setattr__(subscriber, "_legacy_bss_customer_id", normalized)
     session = object_session(subscriber)
     subscriber_id = getattr(subscriber, "id", None)
     if session is None or subscriber_id is None:

@@ -16,6 +16,7 @@ from app.models.network import (
     Vlan,
 )
 from app.models.tr069 import Tr069AcsServer
+from app.services.common import coerce_uuid
 from app.services.network.onu_types import onu_types
 from app.services.network.speed_profiles import speed_profiles
 from app.services.network.zones import network_zones
@@ -142,7 +143,7 @@ def get_tr069_servers(db: Session) -> list[Tr069AcsServer]:
     return list(db.scalars(stmt).all())
 
 
-def get_profile_templates(db: Session) -> list[Any]:
+def get_profile_templates(db: Session, olt_device_id: str | None = None) -> list[Any]:
     """Fetch active ONT profile templates for form dropdowns."""
     from app.models.network import OntProvisioningProfile
 
@@ -151,6 +152,9 @@ def get_profile_templates(db: Session) -> list[Any]:
         .where(OntProvisioningProfile.is_active.is_(True))
         .order_by(OntProvisioningProfile.name)
     )
+    if olt_device_id:
+        olt_uuid = coerce_uuid(olt_device_id)
+        stmt = stmt.where(OntProvisioningProfile.olt_device_id == olt_uuid)
     return list(db.scalars(stmt).all())
 
 
@@ -317,9 +321,11 @@ def execute_bulk_action(
 # ---------------------------------------------------------------------------
 
 
-def get_provisioning_profiles(db: Session) -> list[Any]:
+def get_provisioning_profiles(
+    db: Session, olt_device_id: str | None = None
+) -> list[Any]:
     """Fetch active ONT provisioning profiles for form dropdowns."""
-    return get_profile_templates(db)
+    return get_profile_templates(db, olt_device_id=olt_device_id)
 
 
 def provision_wizard_context(
@@ -349,7 +355,9 @@ def provision_wizard_context(
         "provisioning_profile": profile,
         "tr069_profile": tr069_profile,
         "tr069_profile_error": tr069_error,
-        "profiles": get_profile_templates(db),
+        "profiles": get_profile_templates(
+            db, str(ont.olt_device_id) if ont.olt_device_id else None
+        ),
         "vlans": get_vlans_for_ont(db, ont),
         "tr069_servers": get_tr069_servers(db),
     }

@@ -1,5 +1,6 @@
 """Admin NAS device management web routes."""
 
+from typing import cast
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -262,7 +263,7 @@ def device_create(
         device = nas_service.create_nas_device_with_audit(
             db,
             request=request,
-            payload=payload,
+            payload=cast(nas_service.NasDeviceCreate, payload),
         )
         return RedirectResponse(
             f"/admin/network/nas/devices/{device.id}", status_code=303
@@ -483,7 +484,7 @@ def device_update(
             db,
             request=request,
             device_id=device_id,
-            payload=payload,
+            payload=cast(nas_service.NasDeviceUpdate, payload),
         )
         return RedirectResponse(
             f"/admin/network/nas/devices/{device_id}", status_code=303
@@ -812,7 +813,7 @@ def template_create(
         template = nas_service.create_provisioning_template_with_audit(
             db,
             request=request,
-            payload=payload,
+            payload=cast(nas_service.ProvisioningTemplateCreate, payload),
         )
         return RedirectResponse(
             f"/admin/network/nas/templates/{template.id}", status_code=303
@@ -908,7 +909,7 @@ def template_update(
             db,
             request=request,
             template_id=template_id,
-            payload=payload,
+            payload=cast(nas_service.ProvisioningTemplateUpdate, payload),
         )
         return RedirectResponse(
             f"/admin/network/nas/templates/{template_id}", status_code=303

@@ -236,7 +236,7 @@ def send_sms(
         True if SMS was sent successfully
     """
     # Check if SMS is disabled
-    sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true")
+    sms_enabled = _get_setting(db, "sms_enabled", "SMS_ENABLED", "true") or "true"
     if sms_enabled.lower() in ("false", "0", "no", "disabled"):
         logger.debug("SMS sending is disabled")
         return False

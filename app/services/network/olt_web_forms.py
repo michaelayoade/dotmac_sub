@@ -263,9 +263,8 @@ def sync_monitoring_device(
         str(values.get("serial_number") or olt.serial_number or "").strip() or None
     )
     linked.snmp_enabled = bool(values.get("snmp_enabled"))
-    linked.snmp_port = (
-        values.get("snmp_port") if isinstance(values.get("snmp_port"), int) else 161
-    )
+    snmp_port = values.get("snmp_port")
+    linked.snmp_port = snmp_port if isinstance(snmp_port, int) else 161
     linked.snmp_version = str(values.get("snmp_version") or "v2c")
     snmp_community_encrypted = _encrypt_if_set(values, "snmp_community")
     if snmp_community_encrypted is not None:
@@ -559,7 +558,7 @@ def update_olt_with_audit(
     after_obj = network_service.olt_devices.get(db=db, device_id=olt_id)
     after_snapshot = model_to_dict(after_obj)
     changes = diff_dicts(before_snapshot, after_snapshot)
-    metadata_payload = {"changes": changes} if changes else None
+    metadata_payload: dict[str, object] | None = {"changes": changes} if changes else None
     log_olt_audit_event(
         db,
         request=request,

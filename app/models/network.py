@@ -1872,7 +1872,15 @@ class OntProvisioningProfile(Base):
         ForeignKey("speed_profiles.id"),
     )
 
-    # Management plane (VLAN tag as integer, not FK — profile is region-agnostic)
+    # Scope. Null means a global fallback; OLT-specific profiles should be used
+    # for any VLAN/service-port/GEM settings that depend on site uplinks.
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="SET NULL"),
+        index=True,
+    )
+
+    # Management plane
     mgmt_ip_mode: Mapped[MgmtIpMode | None] = mapped_column(
         Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
     )
@@ -1933,6 +1941,7 @@ class OntProvisioningProfile(Base):
         backref="ont_provisioning_profiles",
         foreign_keys=[owner_subscriber_id],
     )
+    olt_device = relationship("OLTDevice")
     download_speed_profile = relationship(
         "SpeedProfile", foreign_keys=[download_speed_profile_id]
     )

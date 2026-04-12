@@ -25,6 +25,7 @@ def invoice_bulk_issue(
 ):
     updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
+        request,
         action="issue",
         invoice_ids_csv=invoice_ids,
     )
@@ -43,6 +44,7 @@ def invoice_bulk_send(
 ):
     queued_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
+        request,
         action="send",
         invoice_ids_csv=invoice_ids,
     )
@@ -63,6 +65,7 @@ def invoice_bulk_void(
 ):
     updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
+        request,
         action="void",
         invoice_ids_csv=invoice_ids,
     )
@@ -81,6 +84,7 @@ def invoice_bulk_mark_paid(
 ):
     updated_ids = web_billing_invoice_bulk_service.execute_audited_bulk_action(
         db,
+        request,
         action="mark_paid",
         invoice_ids_csv=invoice_ids,
     )

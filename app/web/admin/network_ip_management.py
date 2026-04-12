@@ -762,6 +762,25 @@ def vlan_new(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse("admin/network/vlans/form.html", context)
 
 
+@router.post(
+    "/vlans",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def vlan_create(request: Request, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    try:
+        vlan = web_network_vlans_service.handle_vlan_create(db, form)
+    except Exception as exc:
+        context = _base_context(request, db, active_page="vlans")
+        context.update(web_network_vlans_service.build_vlan_new_form_data(db))
+        context.update({"error": str(exc), "form_values": dict(form)})
+        return templates.TemplateResponse(
+            "admin/network/vlans/form.html", context, status_code=400
+        )
+    return RedirectResponse(f"/admin/network/vlans/{vlan.id}", status_code=303)
+
+
 @router.get(
     "/vlans/{vlan_id}",
     response_class=HTMLResponse,
@@ -800,3 +819,41 @@ def vlan_edit(request: Request, vlan_id: str, db: Session = Depends(get_db)):
     context = _base_context(request, db, active_page="vlans")
     context.update(state)
     return templates.TemplateResponse("admin/network/vlans/form.html", context)
+
+
+@router.post(
+    "/vlans/{vlan_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def vlan_update(request: Request, vlan_id: str, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    try:
+        vlan = web_network_vlans_service.handle_vlan_update(
+            db, vlan_id=vlan_id, form=form
+        )
+    except Exception as exc:
+        state = web_network_vlans_service.build_vlan_edit_form_data(db, vlan_id=vlan_id)
+        if state is None:
+            return templates.TemplateResponse(
+                "admin/errors/404.html",
+                {"request": request, "message": "VLAN not found"},
+                status_code=404,
+            )
+        context = _base_context(request, db, active_page="vlans")
+        context.update(state)
+        context.update({"error": str(exc), "form_values": dict(form)})
+        return templates.TemplateResponse(
+            "admin/network/vlans/form.html", context, status_code=400
+        )
+    return RedirectResponse(f"/admin/network/vlans/{vlan.id}", status_code=303)
+
+
+@router.post(
+    "/vlans/{vlan_id}/delete",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def vlan_delete(vlan_id: str, db: Session = Depends(get_db)):
+    web_network_vlans_service.handle_vlan_delete(db, vlan_id=vlan_id)
+    return RedirectResponse("/admin/network/vlans", status_code=303)

@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import logging
 import re
+import socket
 from dataclasses import dataclass
+
+from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
 from app.services.network.olt_validators import (
@@ -16,6 +19,9 @@ from app.services.network.olt_validators import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Specific SSH-related exceptions that can occur during OLT operations
+_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
 
 
 @dataclass
@@ -53,11 +59,8 @@ def get_ont_status(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", None
 
     try:
         channel.send("enable\n")
@@ -85,8 +88,8 @@ def get_ont_status(
             match_state=kv.get("match state", "unknown"),
         )
         return True, "ONT status retrieved", entry
-    except Exception as exc:
-        logger.error("Error getting ONT status from OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error getting ONT status from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", None
     finally:
         transport.close()
@@ -100,11 +103,8 @@ def get_registered_ont_serials(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", []
 
     try:
         channel.send("enable\n")
@@ -135,9 +135,9 @@ def get_registered_ont_serials(
                     )
                 )
         return True, f"Found {len(entries)} registered ONTs", entries
-    except Exception as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
-            "Error getting registered ONT serials from OLT %s: %s", olt.name, exc
+            "Error getting registered ONT serials from OLT %s: %s", olt.name, exc, exc_info=True
         )
         return False, f"Error: {exc}", []
     finally:
@@ -164,11 +164,8 @@ def find_ont_by_serial(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", None
 
     try:
         channel.send("enable\n")
@@ -230,12 +227,13 @@ def find_ont_by_serial(
         )
         return True, f"ONT {serial_number} is not registered on {olt.name}", None
 
-    except Exception as exc:
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
             "Error finding ONT by serial %s on OLT %s: %s",
             serial_number,
             olt.name,
             exc,
+            exc_info=True,
         )
         return False, f"Error: {exc}", None
     finally:
@@ -261,11 +259,8 @@ def _run_ont_config_command(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -288,8 +283,8 @@ def _run_ont_config_command(
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
         return True, success_message
-    except Exception as exc:
-        logger.error("Error running ONT config command on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error running ONT config command on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -338,11 +333,8 @@ def configure_ont_iphost(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -399,8 +391,8 @@ def configure_ont_iphost(
             vlan_id,
         )
         return True, f"Management IP configured ({ip_mode} on VLAN {vlan_id})"
-    except Exception as exc:
-        logger.error("Error configuring IPHOST on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error configuring IPHOST on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -471,11 +463,8 @@ def get_ont_iphost_config(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", {}
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}", {}
 
     try:
         channel.send("enable\n")
@@ -491,8 +480,8 @@ def get_ont_iphost_config(
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         config = parse_iphost_config_output(output)
         return True, "IPHOST config retrieved", config
-    except Exception as exc:
-        logger.error("Error getting IPHOST config from OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error getting IPHOST config from OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}", {}
     finally:
         transport.close()
@@ -518,11 +507,8 @@ def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -556,8 +542,8 @@ def reboot_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 
         logger.info("ONT %d reset via OMCI on OLT %s", ont_id, olt.name)
         return True, f"ONT {ont_id} reboot command sent via OMCI"
-    except Exception as exc:
-        logger.error("Error resetting ONT on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error resetting ONT on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -583,11 +569,8 @@ def configure_ont_internet_config(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -620,8 +603,8 @@ def configure_ont_internet_config(
             ip_index,
         )
         return True, f"Internet config activated (ip-index {ip_index})"
-    except Exception as exc:
-        logger.error("Error configuring internet-config on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error configuring internet-config on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -666,11 +649,8 @@ def configure_ont_wan_config(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -707,8 +687,8 @@ def configure_ont_wan_config(
             True,
             f"WAN route+NAT mode set (ip-index {ip_index}, profile-id {profile_id})",
         )
-    except Exception as exc:
-        logger.error("Error configuring wan-config on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error configuring wan-config on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -756,11 +736,8 @@ def configure_ont_pppoe_omci(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -798,8 +775,8 @@ def configure_ont_pppoe_omci(
             username,
         )
         return True, f"PPPoE configured via OMCI (VLAN {vlan_id}, user {username})"
-    except Exception as exc:
-        logger.error("Error configuring PPPoE OMCI on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error configuring PPPoE OMCI on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -827,11 +804,8 @@ def configure_ont_port_native_vlan(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -869,8 +843,8 @@ def configure_ont_port_native_vlan(
             olt.name,
         )
         return True, f"Native VLAN {vlan_id} set on eth port {eth_port}"
-    except Exception as exc:
-        logger.error("Error setting port native-vlan on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error setting port native-vlan on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -896,11 +870,8 @@ def factory_reset_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool,
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -934,8 +905,8 @@ def factory_reset_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool,
 
         logger.info("Factory reset ONT %d via OMCI on OLT %s", ont_id, olt.name)
         return True, f"ONT {ont_id} factory reset command sent via OMCI"
-    except Exception as exc:
-        logger.error("Error factory-resetting ONT on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error factory-resetting ONT on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -964,11 +935,8 @@ def remote_ping_ont(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -999,8 +967,8 @@ def remote_ping_ont(
             "Remote ping from ONT %d on OLT %s to %s", ont_id, olt.name, ip_address
         )
         return True, f"Remote ping to {ip_address}: {output.strip()[-200:]}"
-    except Exception as exc:
-        logger.error("Error running remote ping on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error running remote ping on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -1026,11 +994,8 @@ def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -1067,8 +1032,8 @@ def deauthorize_ont(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool, str]:
 
         logger.info("Deleted ONT %d from OLT %s on %s", ont_id, olt.name, fsp)
         return True, f"ONT {ont_id} deleted from OLT"
-    except Exception as exc:
-        logger.error("Error deleting ONT on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error deleting ONT on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -1097,11 +1062,8 @@ def bind_tr069_server_profile(
 
     try:
         transport, channel, _policy = core._open_shell(olt)
-    except (core.SSHException, OSError, ValueError) as exc:
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
-    except Exception as exc:
-        logger.error("Error connecting to OLT %s: %s", olt.name, exc)
-        return False, f"Unexpected error: {type(exc).__name__}"
 
     try:
         channel.send("enable\n")
@@ -1185,8 +1147,8 @@ def bind_tr069_server_profile(
             True,
             f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)",
         )
-    except Exception as exc:
-        logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc)
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc, exc_info=True)
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -1210,3 +1172,298 @@ def unbind_tr069_server_profile(
 
 # Alias for backwards compatibility
 delete_ont_registration = deauthorize_ont
+
+
+# ---------------------------------------------------------------------------
+# ONT Authorization Functions
+# ---------------------------------------------------------------------------
+
+_FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
+_SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
+
+
+def _validate_fsp(fsp: str) -> tuple[bool, str]:
+    """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1')."""
+    if not _FSP_RE.match(fsp):
+        return False, f"Invalid F/S/P format: {fsp!r} (expected digits/digits/digits)"
+    return True, ""
+
+
+def _validate_serial(serial_number: str) -> tuple[bool, str]:
+    """Validate ONT serial number contains only alphanumeric chars and dashes."""
+    if not serial_number or not _SERIAL_RE.match(serial_number):
+        return False, f"Invalid serial number format: {serial_number!r}"
+    return True, ""
+
+
+def _safe_profile_name(name: str | None) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9 ._-]+", " ", str(name or "ACS")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    return (cleaned or "ACS")[:48]
+
+
+def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
+    """Load the linked TR-069 ACS server config for an OLT."""
+    from app.services.credential_crypto import decrypt_credential
+
+    server = None
+    try:
+        server = getattr(olt, "tr069_acs_server", None)
+    except AttributeError:
+        server = None
+
+    if server is None and getattr(olt, "tr069_acs_server_id", None):
+        try:
+            from app.db import SessionLocal
+            from app.models.tr069 import Tr069AcsServer
+
+            with SessionLocal() as db:
+                server = db.get(Tr069AcsServer, str(olt.tr069_acs_server_id))
+                if server is None:
+                    return None
+                password = (
+                    decrypt_credential(server.cwmp_password)
+                    if server.cwmp_password
+                    else ""
+                )
+                return {
+                    "name": server.name,
+                    "acs_url": server.cwmp_url or "",
+                    "username": server.cwmp_username or "",
+                    "password": password or "",
+                    "inform_interval": server.periodic_inform_interval or 300,
+                }
+        except (ImportError, LookupError, AttributeError) as exc:
+            logger.warning("Failed to load linked ACS for OLT %s: %s", olt.name, exc)
+            return None
+
+    if server is None or not getattr(server, "cwmp_url", None):
+        return None
+    password = (
+        decrypt_credential(server.cwmp_password)
+        if getattr(server, "cwmp_password", None)
+        else ""
+    )
+    return {
+        "name": getattr(server, "name", "ACS"),
+        "acs_url": server.cwmp_url or "",
+        "username": server.cwmp_username or "",
+        "password": password or "",
+        "inform_interval": getattr(server, "periodic_inform_interval", None) or 300,
+    }
+
+
+def _auto_bind_tr069_after_authorize(
+    olt: OLTDevice, fsp: str, ont_id: int | None
+) -> None:
+    """Best-effort: bind a newly authorized ONT to the OLT's linked ACS profile.
+
+    Called after successful ONT authorization. Skips when the OLT has no linked
+    ACS, and creates the OLT profile if the linked ACS profile does not exist.
+    """
+    from app.services.network.olt_ssh_profiles import (
+        create_tr069_server_profile,
+        get_tr069_server_profiles,
+    )
+    from app.services.network.tr069_profile_matching import (
+        match_tr069_profile,
+        normalize_acs_url,
+    )
+
+    if ont_id is None:
+        return
+    try:
+        payload = _load_linked_acs_payload(olt)
+        if payload is None or not str(payload.get("acs_url") or "").strip():
+            logger.info("Skipping TR-069 auto-bind for OLT %s: no linked ACS", olt.name)
+            return
+
+        ok, _msg, profiles = get_tr069_server_profiles(olt)
+        if not ok:
+            return
+        target_url = normalize_acs_url(str(payload["acs_url"]))
+        target_username = str(payload.get("username") or "").strip()
+        profile = match_tr069_profile(
+            profiles,
+            acs_url=str(payload["acs_url"]),
+            acs_username=target_username,
+        )
+        profile_id = profile.profile_id if profile else None
+
+        if profile_id is None:
+            profile_name = f"ACS {_safe_profile_name(str(payload.get('name') or ''))}"
+            ok, msg = create_tr069_server_profile(
+                olt,
+                profile_name=profile_name,
+                acs_url=str(payload["acs_url"]),
+                username=target_username,
+                password=str(payload.get("password") or ""),
+                inform_interval=int(str(payload.get("inform_interval") or 300)),
+            )
+            if not ok:
+                logger.warning(
+                    "Auto-create TR-069 profile failed for OLT %s: %s",
+                    olt.name,
+                    msg,
+                )
+                return
+            ok, _msg, profiles = get_tr069_server_profiles(olt)
+            if not ok:
+                return
+            profile = match_tr069_profile(
+                profiles,
+                acs_url=str(payload["acs_url"]),
+                acs_username=target_username,
+            )
+            profile_id = profile.profile_id if profile else None
+        if profile_id is None:
+            logger.warning(
+                "Could not resolve TR-069 profile for linked ACS %s on OLT %s",
+                target_url,
+                olt.name,
+            )
+            return
+
+        ok, msg = bind_tr069_server_profile(
+            olt, fsp=fsp, ont_id=ont_id, profile_id=profile_id
+        )
+        if ok:
+            logger.info(
+                "Auto-bound ONT %d on %s to TR-069 profile %d",
+                ont_id,
+                fsp,
+                profile_id,
+            )
+        else:
+            logger.warning(
+                "Auto-bind TR-069 failed for ONT %d on %s: %s", ont_id, fsp, msg
+            )
+    except (*_SSH_CONNECTION_ERRORS, ValueError, RuntimeError) as exc:
+        logger.warning("Auto-bind TR-069 error for ONT %d: %s", ont_id, exc)
+
+
+def authorize_ont(
+    olt: OLTDevice,
+    fsp: str,
+    serial_number: str,
+    *,
+    line_profile_id: int | None = None,
+    service_profile_id: int | None = None,
+) -> tuple[bool, str, int | None]:
+    """SSH into OLT and register an ONT via sn-auth on the given port.
+
+    Args:
+        olt: The OLT device to connect to.
+        fsp: Frame/Slot/Port string, e.g. "0/2/1".
+        serial_number: ONT serial in vendor format, e.g. "HWTC-7D4733C3".
+        line_profile_id: OLT-local line profile ID resolved before authorization.
+        service_profile_id: OLT-local service profile ID resolved before authorization.
+
+    Returns:
+        Tuple of (success, message, assigned_ont_id).
+    """
+    from app.services.network import olt_ssh as core
+
+    if line_profile_id is None or service_profile_id is None:
+        return (
+            False,
+            "OLT authorization profiles were not resolved; refusing to use static profile defaults.",
+            None,
+        )
+    line_pid = line_profile_id
+    srv_pid = service_profile_id
+    ok, err = _validate_fsp(fsp)
+    if not ok:
+        return False, err, None
+    ok, err = _validate_serial(serial_number)
+    if not ok:
+        return False, err, None
+
+    try:
+        transport, channel, policy = core._open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", None
+
+    try:
+        # Enter enable mode
+        channel.send("enable\n")
+        core._read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+
+        # Enter config mode
+        config_prompt = r"[#)]\s*$"
+        channel.send("config\n")
+        core._read_until_prompt(channel, config_prompt, timeout_sec=5)
+
+        # Enter GPON interface for the frame/slot
+        parts = fsp.split("/")
+        frame_slot = f"{parts[0]}/{parts[1]}"
+        port_num = parts[2]
+
+        channel.send(f"interface gpon {frame_slot}\n")
+        core._read_until_prompt(channel, config_prompt, timeout_sec=5)
+
+        # Authorize the ONT — sn-auth uses the serial without dashes
+        sn_clean = serial_number.replace("-", "")
+        channel.send(
+            f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid}\n"
+        )
+        # Huawei may prompt "{ <cr>|desc<K>|ont-type<K> }:" — send CR to confirm
+        initial = core._read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
+        if "<cr>" in initial:
+            channel.send("\n")
+            output = core._read_until_prompt(channel, r"[#)]\s*$", timeout_sec=10)
+        else:
+            output = initial
+
+        # Exit config mode
+        channel.send("quit\n")
+        core._read_until_prompt(channel, config_prompt, timeout_sec=3)
+        channel.send("quit\n")
+        core._read_until_prompt(channel, config_prompt, timeout_sec=3)
+
+        # Check for success indicators
+        ont_id_match = re.search(r"ont-?id\D+(\d+)", output, flags=re.IGNORECASE)
+        ont_id = int(ont_id_match.group(1)) if ont_id_match else None
+
+        if "success" in output.lower() or "ont-id" in output.lower():
+            logger.info(
+                "Authorized ONT %s on OLT %s port %s",
+                serial_number,
+                olt.name,
+                fsp,
+            )
+            # Auto-bind to the OLT's linked ACS TR-069 profile if configured.
+            _auto_bind_tr069_after_authorize(olt, fsp, ont_id)
+
+            message = f"ONT {serial_number} authorized on port {fsp}"
+            if ont_id is not None:
+                message += f" (ONT-ID {ont_id})"
+            return True, message, ont_id
+        if core.is_error_output(output):
+            logger.warning(
+                "Failed to authorize ONT %s on OLT %s: %s",
+                serial_number,
+                olt.name,
+                output.strip(),
+            )
+            return False, f"OLT rejected command: {output.strip()[-200:]}", None
+
+        # Ambiguous — return output for inspection
+        logger.info(
+            "ONT authorize command sent for %s on OLT %s, output: %s",
+            serial_number,
+            olt.name,
+            output.strip(),
+        )
+        return True, f"Command sent for {serial_number} on port {fsp}", ont_id
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error authorizing ONT %s on OLT %s: %s",
+            serial_number,
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}", None
+    finally:
+        transport.close()

@@ -200,6 +200,7 @@ class Tr069ParameterMapRead(Tr069ParameterMapBase):
 class OntProvisioningProfileRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: UUID
+    olt_device_id: UUID | None = None
     name: str
     profile_type: str | None = None
     config_method: str | None = None

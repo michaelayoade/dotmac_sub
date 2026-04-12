@@ -307,7 +307,7 @@ def update_onu_mode_from_form(
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
-    metadata = {"changes": changes} if changes else None
+    metadata: dict[str, object] | None = {"changes": changes} if changes else None
     _log_ont_audit_event(
         db,
         request=request,
@@ -381,7 +381,7 @@ def update_location_details_from_form(
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
-    metadata = {"changes": changes} if changes else None
+    metadata: dict[str, object] | None = {"changes": changes} if changes else None
     _log_ont_audit_event(
         db,
         request=request,
@@ -439,7 +439,7 @@ def update_gpon_channel_from_form(
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
-    metadata = {"changes": changes} if changes else None
+    metadata: dict[str, object] | None = {"changes": changes} if changes else None
     _log_ont_audit_event(
         db,
         request=request,
@@ -490,7 +490,7 @@ def update_mgmt_ip_from_form(
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
     after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     changes = diff_dicts(before_snapshot, model_to_dict(after))
-    metadata = {"changes": changes} if changes else None
+    metadata: dict[str, object] | None = {"changes": changes} if changes else None
     _log_ont_audit_event(
         db,
         request=request,
@@ -514,7 +514,10 @@ def mgmt_ip_modal_context(db: Session, ont_id: str) -> dict[str, object]:
 def profile_form_context(db: Session, ont_id: str) -> dict[str, object]:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     available_profile_templates = ont_provisioning_profiles.list(
-        db, is_active=True, limit=50
+        db,
+        is_active=True,
+        olt_device_id=str(ont.olt_device_id) if ont.olt_device_id else None,
+        limit=50,
     )
     current_profile_id = (
         str(ont.provisioning_profile_id)

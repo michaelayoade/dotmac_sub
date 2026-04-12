@@ -8,11 +8,12 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 from starlette.requests import Request
 
+from app.models.tr069 import Tr069AcsServer
 from app.services import tr069 as tr069_service
 from app.services.tr069_provisions import provisions as provisions_service
 
 
-def _servers(db: Session) -> list[object]:
+def _servers(db: Session) -> list[Tr069AcsServer]:
     return tr069_service.acs_servers.list(
         db=db,
         is_active=None,
@@ -23,7 +24,9 @@ def _servers(db: Session) -> list[object]:
     )
 
 
-def _selected_server_id(servers: list[object], acs_server_id: str | None) -> str | None:
+def _selected_server_id(
+    servers: list[Tr069AcsServer], acs_server_id: str | None
+) -> str | None:
     selected = str(acs_server_id or "").strip() or None
     if not selected and servers:
         selected = str(servers[0].id)
@@ -47,7 +50,7 @@ def list_context(
     error = None
     if selected:
         try:
-            provisions = provisions_service.list(db, selected)
+            provisions = list(provisions_service.list(db, selected))
         except Exception as exc:
             error = str(exc)
 

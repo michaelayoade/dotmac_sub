@@ -44,9 +44,6 @@ def log_olt_audit_event(
 ) -> None:
     if request is None:
         return
-    kwargs: dict[str, object] = {}
-    if status_code is not None:
-        kwargs["status_code"] = status_code
     log_audit_event(
         db=db,
         request=request,
@@ -55,6 +52,6 @@ def log_olt_audit_event(
         entity_id=str(entity_id),
         actor_id=actor_id_from_request(request),
         metadata=metadata,
+        status_code=status_code or 200,
         is_success=is_success,
-        **kwargs,
     )

@@ -1,4 +1,11 @@
-"""OLT infrastructure services."""
+"""OLT infrastructure services.
+
+Transaction Policy:
+- Service methods commit their own transactions via db.commit()
+- Use db.flush() when creating entities that need IDs for related operations
+- Use db.begin_nested() for operations requiring partial rollback capability
+- Routes must NOT call db.commit() (per CLAUDE.md)
+"""
 
 from __future__ import annotations
 

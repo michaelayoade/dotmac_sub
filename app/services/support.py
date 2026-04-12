@@ -693,6 +693,17 @@ class Tickets:
         return ticket
 
     @staticmethod
+    def add_attachments(
+        db: Session, ticket_id: str, attachments: list[dict] | None
+    ) -> Ticket:
+        ticket = Tickets.get(db, ticket_id)
+        ticket.attachments = _merge_attachment_dicts(ticket.attachments, attachments)
+        db.add(ticket)
+        db.commit()
+        db.refresh(ticket)
+        return ticket
+
+    @staticmethod
     def get_by_lookup(db: Session, ticket_lookup: str) -> Ticket:
         lookup = ticket_lookup.strip()
         ticket_uuid = _coerce_uuid(lookup)

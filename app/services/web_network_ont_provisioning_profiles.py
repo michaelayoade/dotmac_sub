@@ -12,6 +12,7 @@ from app.models.network import (
     ConfigMethod,
     IpProtocol,
     MgmtIpMode,
+    OLTDevice,
     OntProfileType,
     OntProfileWanService,
     OntProvisioningProfile,
@@ -57,6 +58,13 @@ def _get_owner_subscriber_id(request: Request) -> str:
     return str(user.get("subscriber_id", ""))
 
 
+def _active_olts(db: Session) -> list[OLTDevice]:
+    from sqlalchemy import select
+
+    stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
+    return list(db.scalars(stmt).all())
+
+
 def list_context(
     request: Request,
     db: Session,
@@ -83,6 +91,7 @@ def list_context(
         "items": items,
         "profile_types": [e.value for e in OntProfileType],
         "config_methods": [e.value for e in ConfigMethod],
+        "olt_devices": _active_olts(db),
         "search": search or "",
         "profile_type_filter": profile_type or "",
         "config_method_filter": config_method or "",
@@ -127,6 +136,7 @@ def form_context(
         "wan_connection_types": [e.value for e in WanConnectionType],
         "pppoe_password_modes": [e.value for e in PppoePasswordMode],
         # FK choices
+        "olt_devices": _active_olts(db),
         "download_speed_profiles": dl_profiles,
         "upload_speed_profiles": ul_profiles,
         "action_url": (
@@ -151,6 +161,7 @@ def parse_profile_form(form: FormData) -> dict[str, object]:
         "download_speed_profile_id": _form_str(form, "download_speed_profile_id")
         or None,
         "upload_speed_profile_id": _form_str(form, "upload_speed_profile_id") or None,
+        "olt_device_id": _form_str(form, "olt_device_id") or None,
         "mgmt_ip_mode": _form_str(form, "mgmt_ip_mode") or None,
         "mgmt_vlan_tag": _form_int(form, "mgmt_vlan_tag"),
         "mgmt_remote_access": _form_bool(form, "mgmt_remote_access"),
@@ -189,6 +200,8 @@ def validate_profile_form(values: dict[str, object]) -> str | None:
             ConfigMethod(str(cm))
         except ValueError:
             return f"Invalid config method: {cm}"
+    if not values.get("olt_device_id"):
+        return "OLT scope is required."
     om = values.get("onu_mode")
     if om:
         try:
@@ -225,6 +238,9 @@ def handle_create(
         else None,
         upload_speed_profile_id=str(form_data["upload_speed_profile_id"])
         if form_data.get("upload_speed_profile_id")
+        else None,
+        olt_device_id=str(form_data["olt_device_id"])
+        if form_data.get("olt_device_id")
         else None,
         mgmt_ip_mode=MgmtIpMode(str(form_data["mgmt_ip_mode"]))
         if form_data.get("mgmt_ip_mode")
@@ -294,6 +310,9 @@ def handle_update(
         else None,
         upload_speed_profile_id=str(form_data["upload_speed_profile_id"])
         if form_data.get("upload_speed_profile_id")
+        else None,
+        olt_device_id=str(form_data["olt_device_id"])
+        if form_data.get("olt_device_id")
         else None,
         mgmt_ip_mode=MgmtIpMode(str(form_data["mgmt_ip_mode"]))
         if form_data.get("mgmt_ip_mode")

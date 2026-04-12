@@ -17,7 +17,11 @@ from app.models.usage import (
     UsageRatingRunStatus,
     UsageRecord,
 )
-from app.schemas.usage import UsageChargePostRequest, UsageRatingRunRequest
+from app.schemas.usage import (
+    UsageChargePostRequest,
+    UsageRatingRunRequest,
+    UsageRatingRunResponse,
+)
 from app.services import catalog as catalog_service
 from app.services import settings_spec
 from app.services import usage as usage_service
@@ -284,7 +288,7 @@ def _parse_date_field(value: object) -> datetime | None:
         return None
 
 
-def run_rating_from_form(db: Session, *, form) -> object:
+def run_rating_from_form(db: Session, *, form) -> UsageRatingRunResponse:
     """Trigger a usage rating run from web form data."""
     payload = UsageRatingRunRequest(
         period_start=_parse_date_field(form.get("period_start")),

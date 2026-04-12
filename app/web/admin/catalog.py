@@ -1,6 +1,7 @@
 """Admin catalog management web routes."""
 
 import logging
+from typing import Any, cast
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -130,7 +131,7 @@ def catalog_offers_create_post(
     if result.get("redirect_url"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog")
-    context.update(result["form_context"])
+    context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
@@ -198,7 +199,7 @@ def catalog_offer_edit_post(
     if result.get("redirect_url"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog")
-    context.update(result["form_context"])
+    context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/offer_form.html", context)
 
 
@@ -333,7 +334,7 @@ def offer_usage_graph_modal(
     offer_id: str, request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
     """Render the usage graph modal partial for HTMX."""
-    context = {"request": request}
+    context: dict[str, Any] = {"request": request}
     context.update(
         web_catalog_offers_service.offer_usage_graph_modal_context(
             db,
@@ -410,7 +411,7 @@ def catalog_subscription_create(
     if result.get("redirect_url"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(result["form_context"])
+    context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
@@ -478,7 +479,7 @@ def catalog_subscription_update(
     if result.get("redirect_url"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
-    context.update(result["form_context"])
+    context.update(cast(dict[str, Any], result["form_context"]))
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 

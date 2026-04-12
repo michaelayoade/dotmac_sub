@@ -59,9 +59,6 @@ def _log_action_audit(
 ) -> None:
     if request is None:
         return
-    kwargs: dict[str, object] = {}
-    if status_code is not None:
-        kwargs["status_code"] = status_code
     log_audit_event(
         db=db,
         request=request,
@@ -70,8 +67,8 @@ def _log_action_audit(
         entity_id=str(ont_id),
         actor_id=_actor_id_from_request(request),
         metadata=metadata,
+        status_code=status_code or 200,
         is_success=is_success,
-        **kwargs,
     )
 
 
