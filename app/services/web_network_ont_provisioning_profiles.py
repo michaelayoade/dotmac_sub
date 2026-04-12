@@ -18,6 +18,7 @@ from app.models.network import (
     OntProvisioningProfile,
     OnuMode,
     PppoePasswordMode,
+    Vlan,
     VlanMode,
     WanConnectionType,
     WanServiceType,
@@ -63,6 +64,26 @@ def _active_olts(db: Session) -> list[OLTDevice]:
 
     stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
     return list(db.scalars(stmt).all())
+
+
+def _active_vlan_options(db: Session) -> list[dict[str, object]]:
+    from sqlalchemy import select
+
+    stmt = (
+        select(Vlan)
+        .where(Vlan.is_active.is_(True), Vlan.olt_device_id.is_not(None))
+        .order_by(Vlan.olt_device_id, Vlan.tag)
+    )
+    return [
+        {
+            "id": str(vlan.id),
+            "olt_device_id": str(vlan.olt_device_id),
+            "tag": vlan.tag,
+            "name": vlan.name or "",
+            "purpose": vlan.purpose.value if vlan.purpose else "",
+        }
+        for vlan in db.scalars(stmt).all()
+    ]
 
 
 def list_context(
@@ -137,6 +158,7 @@ def form_context(
         "pppoe_password_modes": [e.value for e in PppoePasswordMode],
         # FK choices
         "olt_devices": _active_olts(db),
+        "vlan_options": _active_vlan_options(db),
         "download_speed_profiles": dl_profiles,
         "upload_speed_profiles": ul_profiles,
         "action_url": (

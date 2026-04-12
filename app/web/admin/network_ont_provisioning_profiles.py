@@ -81,7 +81,15 @@ def provisioning_profile_create(
             "admin/network/provisioning-profiles/form.html", context
         )
 
-    web_profile_service.handle_create(request, db, values)
+    try:
+        web_profile_service.handle_create(request, db, values)
+    except Exception as exc:
+        context = web_profile_service.form_context(request, db)
+        context["error"] = str(exc)
+        context["form_values"] = values
+        return templates.TemplateResponse(
+            "admin/network/provisioning-profiles/form.html", context, status_code=400
+        )
     return RedirectResponse("/admin/network/provisioning-profiles", status_code=303)
 
 
@@ -131,7 +139,15 @@ def provisioning_profile_update(
             "admin/network/provisioning-profiles/form.html", context
         )
 
-    web_profile_service.handle_update(request, db, profile_id, values)
+    try:
+        web_profile_service.handle_update(request, db, profile_id, values)
+    except Exception as exc:
+        context = web_profile_service.form_context(request, db, profile_id)
+        context["error"] = str(exc)
+        context["form_values"] = values
+        return templates.TemplateResponse(
+            "admin/network/provisioning-profiles/form.html", context, status_code=400
+        )
     return RedirectResponse("/admin/network/provisioning-profiles", status_code=303)
 
 
@@ -175,7 +191,15 @@ def wan_service_create(
             "admin/network/provisioning-profiles/form.html", context
         )
 
-    web_profile_service.handle_wan_service_create(db, profile_id, values)
+    try:
+        web_profile_service.handle_wan_service_create(db, profile_id, values)
+    except Exception as exc:
+        context = web_profile_service.form_context(request, db, profile_id)
+        context["wan_error"] = str(exc)
+        context["wan_form_values"] = values
+        return templates.TemplateResponse(
+            "admin/network/provisioning-profiles/form.html", context, status_code=400
+        )
     return RedirectResponse(
         f"/admin/network/provisioning-profiles/{profile_id}/edit", status_code=303
     )

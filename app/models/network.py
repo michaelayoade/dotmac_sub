@@ -360,7 +360,14 @@ class Port(Base):
 
 class Vlan(Base):
     __tablename__ = "vlans"
-    __table_args__ = (UniqueConstraint("region_id", "tag", name="uq_vlans_region_tag"),)
+    __table_args__ = (
+        UniqueConstraint(
+            "region_id",
+            "olt_device_id",
+            "tag",
+            name="uq_vlans_region_olt_tag",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

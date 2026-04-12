@@ -3,7 +3,23 @@
 {% block title %}{{ 'Edit' if item else 'New' }} Provisioning Profile - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data='{ config_method: "{{ item.config_method.value if item and item.config_method else '' }}", onu_mode: "{{ item.onu_mode.value if item and item.onu_mode else '' }}", wifi_enabled: {{ 'true' if (not item or item.wifi_enabled) else 'false' }}, showWanForm: false, wan_connection_type: "pppoe", wan_pppoe_password_mode: "from_credential" }'>
+<div class="space-y-6" x-data='{
+    config_method: "{{ item.config_method.value if item and item.config_method else '' }}",
+    onu_mode: "{{ item.onu_mode.value if item and item.onu_mode else '' }}",
+    selectedOlt: "{{ form_values.olt_device_id if form_values is defined and form_values else (item.olt_device_id|string if item and item.olt_device_id else '') }}",
+    mgmtVlan: "{{ form_values.mgmt_vlan_tag if form_values is defined and form_values and form_values.mgmt_vlan_tag is not none else (item.mgmt_vlan_tag if item and item.mgmt_vlan_tag else '') }}",
+    pppoeOmciVlan: "{{ form_values.pppoe_omci_vlan if form_values is defined and form_values and form_values.pppoe_omci_vlan is not none else (item.pppoe_omci_vlan if item and item.pppoe_omci_vlan else '') }}",
+    wanSVlan: "{{ wan_form_values.s_vlan if wan_form_values is defined and wan_form_values and wan_form_values.s_vlan is not none else '' }}",
+    wifi_enabled: {{ 'true' if (not item or item.wifi_enabled) else 'false' }},
+    showWanForm: {{ 'true' if wan_error else 'false' }},
+    wan_connection_type: "{{ wan_form_values.connection_type if wan_form_values is defined and wan_form_values and wan_form_values.connection_type else 'pppoe' }}",
+    wan_pppoe_password_mode: "{{ wan_form_values.pppoe_password_mode if wan_form_values is defined and wan_form_values and wan_form_values.pppoe_password_mode else 'from_credential' }}",
+    vlanOptions: {{ vlan_options|tojson }},
+    filteredVlans() { return this.vlanOptions.filter((vlan) => vlan.olt_device_id === this.selectedOlt); },
+    vlanLabel(vlan) {
+        return `${vlan.tag}${vlan.purpose ? " - " + vlan.purpose : ""}${vlan.name ? " (" + vlan.name + ")" : ""}`;
+    }
+}'>
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
             <nav class="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400 mb-2">
@@ -60,7 +76,7 @@
 
                     <div>
                         <label for="olt_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Scope <span class="text-red-500">*</span></label>
-                        <select name="olt_device_id" id="olt_device_id" required
+                        <select name="olt_device_id" id="olt_device_id" required x-model="selectedOlt" @change="mgmtVlan = ''; pppoeOmciVlan = ''; wanSVlan = ''"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% set selected_olt_id = (form_values.olt_device_id if form_values is defined and form_values else (item.olt_device_id|string if item and item.olt_device_id else "")) %}
                             <option value="" {% if not selected_olt_id %}selected{% endif %} disabled>Select OLT</option>
@@ -188,10 +204,14 @@
                     </div>
                     <div>
                         <label for="mgmt_vlan_tag" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management VLAN Tag</label>
-                        <input type="number" name="mgmt_vlan_tag" id="mgmt_vlan_tag" min="1" max="4094"
-                            value="{{ item.mgmt_vlan_tag or '' if item else '' }}"
-                            placeholder="e.g. 100"
+                        <select name="mgmt_vlan_tag" id="mgmt_vlan_tag" x-model="mgmtVlan"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Not Set</option>
+                            <template x-for="vlan in filteredVlans()" :key="`mgmt-${vlan.id}`">
+                                <option :value="vlan.tag" x-text="vlanLabel(vlan)"></option>
+                            </template>
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Only active VLANs defined on the selected OLT are available.</p>
                     </div>
                     <div>
                         <label class="flex items-center gap-2 mt-7">
@@ -229,10 +249,13 @@
                     </div>
                     <div>
                         <label for="pppoe_omci_vlan" class="block text-sm font-medium text-slate-700 dark:text-slate-300">PPPoE OMCI VLAN</label>
-                        <input type="number" name="pppoe_omci_vlan" id="pppoe_omci_vlan" min="1" max="4094"
-                            value="{{ item.pppoe_omci_vlan or '' if item else '' }}"
-                            placeholder="Leave empty to skip"
+                        <select name="pppoe_omci_vlan" id="pppoe_omci_vlan" x-model="pppoeOmciVlan"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Leave empty to skip</option>
+                            <template x-for="vlan in filteredVlans()" :key="`pppoe-${vlan.id}`">
+                                <option :value="vlan.tag" x-text="vlanLabel(vlan)"></option>
+                            </template>
+                        </select>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">VLAN for PPPoE via OMCI (OLT-side). Empty = skip OMCI PPPoE, use TR-069 only.</p>
                     </div>
                 </div>
@@ -450,8 +473,13 @@
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">S-VLAN <span class="text-xs text-slate-400">(OLT)</span></label>
-                        <input type="number" name="s_vlan" min="1" max="4094" placeholder="Service VLAN"
+                        <select name="s_vlan" x-model="wanSVlan"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">None</option>
+                            <template x-for="vlan in filteredVlans()" :key="`wan-${vlan.id}`">
+                                <option :value="vlan.tag" x-text="vlanLabel(vlan)"></option>
+                            </template>
+                        </select>
                     </div>
                     <div>
                         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">C-VLAN <span class="text-xs text-slate-400">(ONT)</span></label>

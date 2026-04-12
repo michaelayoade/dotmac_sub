@@ -1792,6 +1792,69 @@ class TestOltProvisioningProfileReconcile:
 class TestProfileWanServiceVlanScope:
     """Test profile WAN services are tied to the profile OLT VLAN catalog."""
 
+    def test_vlan_tag_can_repeat_across_olts_in_same_region(self, db_session) -> None:
+        from app.models.catalog import RegionZone
+
+        region = RegionZone(name="Repeated VLAN Region")
+        olt_a = OLTDevice(name="Repeated VLAN OLT A", vendor="Huawei", model="MA5608T")
+        olt_b = OLTDevice(name="Repeated VLAN OLT B", vendor="Huawei", model="MA5608T")
+        db_session.add_all([region, olt_a, olt_b])
+        db_session.commit()
+
+        db_session.add_all(
+            [
+                Vlan(region_id=region.id, olt_device_id=olt_a.id, tag=203, is_active=True),
+                Vlan(region_id=region.id, olt_device_id=olt_b.id, tag=203, is_active=True),
+            ]
+        )
+        db_session.commit()
+
+        vlans = db_session.query(Vlan).filter(Vlan.tag == 203).all()
+        assert len(vlans) == 2
+
+    def test_profile_management_vlan_requires_profile_olt_vlan(
+        self, db_session
+    ) -> None:
+        from fastapi import HTTPException
+
+        from app.models.catalog import RegionZone
+        from app.services.network.ont_provisioning_profiles import (
+            ont_provisioning_profiles,
+        )
+
+        region = RegionZone(name="Profile VLAN Region")
+        olt = OLTDevice(name="Profile VLAN OLT", vendor="Huawei", model="MA5608T")
+        db_session.add_all([region, olt])
+        db_session.commit()
+
+        try:
+            ont_provisioning_profiles.create(
+                db_session,
+                owner_subscriber_id=None,
+                name="Missing Mgmt VLAN Profile",
+                olt_device_id=str(olt.id),
+                mgmt_vlan_tag=201,
+            )
+        except HTTPException as exc:
+            assert exc.status_code == 400
+            assert "Management VLAN 201" in str(exc.detail)
+        else:
+            raise AssertionError("Expected missing management VLAN to be rejected")
+
+        db_session.add(
+            Vlan(region_id=region.id, olt_device_id=olt.id, tag=201, is_active=True)
+        )
+        db_session.commit()
+
+        profile = ont_provisioning_profiles.create(
+            db_session,
+            owner_subscriber_id=None,
+            name="Valid Mgmt VLAN Profile",
+            olt_device_id=str(olt.id),
+            mgmt_vlan_tag=201,
+        )
+        assert profile.mgmt_vlan_tag == 201
+
     def test_wan_service_requires_vlan_on_profile_olt(self, db_session) -> None:
         from fastapi import HTTPException
 

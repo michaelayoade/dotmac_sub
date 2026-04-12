@@ -57,6 +57,67 @@ class OntProvisioningProfiles:
     """CRUD operations for ONT provisioning profile catalog."""
 
     @staticmethod
+    def _validate_profile_vlan_scope(
+        db: Session,
+        *,
+        olt_device_id: str | None,
+        mgmt_vlan_tag: int | None = None,
+        pppoe_omci_vlan: int | None = None,
+        profile_id: str | None = None,
+    ) -> None:
+        tags = {
+            "Management VLAN": mgmt_vlan_tag,
+            "PPPoE OMCI VLAN": pppoe_omci_vlan,
+        }
+        tags = {label: tag for label, tag in tags.items() if tag is not None}
+        service_tags: set[int] = set()
+        if profile_id:
+            services = WanServices.list_for_profile(db, profile_id)
+            service_tags = {
+                service.s_vlan for service in services if service.s_vlan is not None
+            }
+        if not tags and not service_tags:
+            return
+        if not olt_device_id:
+            raise HTTPException(
+                status_code=400,
+                detail="Provisioning profile must be scoped to an OLT before VLANs can be assigned.",
+            )
+
+        olt_uuid = coerce_uuid(olt_device_id)
+        tags_to_lookup = set(tags.values()) | service_tags
+        available_tags = set(
+            db.scalars(
+                select(Vlan.tag).where(
+                    Vlan.olt_device_id == olt_uuid,
+                    Vlan.is_active.is_(True),
+                    Vlan.tag.in_(tags_to_lookup),
+                )
+            ).all()
+        )
+        for label, tag in tags.items():
+            if tag not in available_tags:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{label} {tag} is not defined on this profile's OLT.",
+                )
+
+        if service_tags:
+            missing_service_vlans = sorted(
+                service_tag
+                for service_tag in service_tags
+                if service_tag not in available_tags
+            )
+            if missing_service_vlans:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Existing WAN service VLANs are not defined on the selected OLT: "
+                        + ", ".join(str(tag) for tag in missing_service_vlans)
+                    ),
+                )
+
+    @staticmethod
     def list(
         db: Session,
         *,
@@ -184,6 +245,12 @@ class OntProvisioningProfiles:
         """Create a new provisioning profile."""
         if wifi_ssid_template:
             validate_template_string(wifi_ssid_template, "wifi_ssid_template")
+        OntProvisioningProfiles._validate_profile_vlan_scope(
+            db,
+            olt_device_id=olt_device_id,
+            mgmt_vlan_tag=mgmt_vlan_tag,
+            pppoe_omci_vlan=pppoe_omci_vlan,
+        )
 
         profile = OntProvisioningProfile(
             owner_subscriber_id=coerce_uuid(owner_subscriber_id),
@@ -233,6 +300,14 @@ class OntProvisioningProfiles:
         wifi_ssid = kwargs.get("wifi_ssid_template")
         if wifi_ssid and isinstance(wifi_ssid, str):
             validate_template_string(wifi_ssid, "wifi_ssid_template")
+        merged_olt_device_id = kwargs.get("olt_device_id", profile.olt_device_id)
+        OntProvisioningProfiles._validate_profile_vlan_scope(
+            db,
+            olt_device_id=str(merged_olt_device_id) if merged_olt_device_id else None,
+            mgmt_vlan_tag=kwargs.get("mgmt_vlan_tag", profile.mgmt_vlan_tag),
+            pppoe_omci_vlan=kwargs.get("pppoe_omci_vlan", profile.pppoe_omci_vlan),
+            profile_id=profile_id,
+        )
 
         for key, value in kwargs.items():
             if hasattr(profile, key):
