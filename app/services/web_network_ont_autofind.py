@@ -6,6 +6,7 @@ import logging
 import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from urllib.parse import quote_plus
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
@@ -354,3 +355,34 @@ def build_unconfigured_onts_page_data(
             "last_seen_at": last_seen,
         },
     }
+
+
+def build_unconfigured_onts_redirect_url(
+    *,
+    search: str | None = None,
+    olt_id: str | None = None,
+    view: str | None = None,
+    resolution: str | None = None,
+    status: str | None = None,
+    message: str | None = None,
+) -> str:
+    """Build the canonical ONT inventory URL for unconfigured ONT filters."""
+    params = ["view=unconfigured"]
+    if view:
+        params.append(f"candidate_view={quote_plus(view)}")
+    if resolution:
+        params.append(f"resolution={quote_plus(resolution)}")
+    if search:
+        params.append(f"search={quote_plus(search)}")
+    if olt_id:
+        params.append(f"olt_id={quote_plus(olt_id)}")
+    if status:
+        params.append(f"status={quote_plus(status)}")
+    if message:
+        params.append(f"message={quote_plus(message)}")
+    return f"/admin/network/onts?{'&'.join(params)}"
+
+
+def build_unconfigured_onts_feedback_url(*, status: str, message: str) -> str:
+    """Build an unconfigured ONT redirect with a status message."""
+    return build_unconfigured_onts_redirect_url(status=status, message=message)

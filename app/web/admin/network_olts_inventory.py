@@ -20,6 +20,9 @@ from app.services import web_network_core_devices as web_network_core_devices_se
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
+from app.services import (
+    web_network_pon_interfaces as web_network_pon_interfaces_service,
+)
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.services.network import olt_autofind as olt_autofind_service
@@ -28,6 +31,7 @@ from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_resources as olt_web_resources_service
+from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.web.request_parsing import parse_form_data_sync
 
@@ -86,6 +90,58 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
             ensure_ascii=True,
         )
     }
+
+
+@router.get(
+    "/pon-interfaces",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def pon_interfaces_list(
+    request: Request,
+    search: str | None = None,
+    status: str | None = None,
+    olt_id: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    context = _base_context(request, db, active_page="pon-interfaces")
+    context.update(
+        web_network_pon_interfaces_service.build_page_data(
+            db,
+            search=search,
+            status=status,
+            olt_id=olt_id,
+        )
+    )
+    return templates.TemplateResponse(
+        "admin/network/pon_interfaces/index.html", context
+    )
+
+
+@router.post(
+    "/pon-interfaces/alias",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def pon_interface_save_alias(
+    olt_id: str = Form(""),
+    interface_name: str = Form(""),
+    alias: str = Form(""),
+    pon_port_id: str = Form(""),
+    return_to: str = Form("/admin/network/pon-interfaces"),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    web_network_pon_interfaces_service.save_alias(
+        db,
+        olt_id=olt_id,
+        interface_name=interface_name,
+        alias=alias,
+        pon_port_id=pon_port_id or None,
+    )
+    return RedirectResponse(
+        url=return_to or "/admin/network/pon-interfaces",
+        status_code=303,
+    )
 
 
 @router.get(
@@ -605,6 +661,35 @@ def olt_sync_onts_get_fallback(olt_id: str) -> RedirectResponse:
 
 
 @router.post(
+    "/olts/{olt_id}/repair-pon-ports",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_repair_pon_ports(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    ok, message, _stats = olt_web_topology_service.repair_pon_ports_for_olt_tracked(
+        db, olt_id, request=request
+    )
+    status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.get(
+    "/olts/{olt_id}/repair-pon-ports",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
+    message = quote_plus("Repair PON ports uses POST. Please click Repair PON Ports again.")
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
+        status_code=303,
+    )
+
+
+@router.post(
     "/olts/{olt_id}/discover-hardware",
     dependencies=[Depends(require_permission("network:write"))],
 )
@@ -708,6 +793,50 @@ def unconfigured_onts_scan_now() -> RedirectResponse:
     return RedirectResponse(
         "/admin/network/onts?view=unconfigured&status=success&message="
         + quote_plus("Aggregated OLT autofind scan queued."),
+        status_code=303,
+    )
+
+
+@router.get(
+    "/unconfigured-onts",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def unconfigured_onts_list(
+    search: str | None = None,
+    olt_id: str | None = None,
+    view: str | None = None,
+    resolution: str | None = None,
+    status: str | None = None,
+    message: str | None = None,
+) -> RedirectResponse:
+    target = web_network_ont_autofind_service.build_unconfigured_onts_redirect_url(
+        search=search,
+        olt_id=olt_id,
+        view=view,
+        resolution=resolution,
+        status=status,
+        message=message,
+    )
+    return RedirectResponse(target, status_code=303)
+
+
+@router.post(
+    "/unconfigured-onts/{candidate_id}/restore",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def restore_autofind_candidate(
+    request: Request, candidate_id: str, db: Session = Depends(get_db)
+) -> RedirectResponse:
+    ok, message = web_network_ont_autofind_service.restore_candidate_audited(
+        db, candidate_id=candidate_id, request=request
+    )
+    status = "success" if ok else "error"
+    target = web_network_ont_autofind_service.build_unconfigured_onts_feedback_url(
+        status=status,
+        message=message,
+    )
+    return RedirectResponse(
+        target,
         status_code=303,
     )
 
