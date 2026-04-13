@@ -8,6 +8,7 @@ service functions in ``app.services.network.ont_provision_steps``.
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -25,6 +26,7 @@ from app.services.network.ont_provisioning.result import StepResult
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-provisioning"])
+logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +53,81 @@ def _toast_headers(message: str, toast_type: str = "success") -> dict[str, str]:
     }
 
 
-def _step_response(result: StepResult) -> JSONResponse:
+def _actor_label(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    try:
+        current_user = web_admin_service.get_current_user(request)
+    except Exception:
+        return "unknown"
+    if not isinstance(current_user, dict):
+        return "unknown"
+    return str(
+        current_user.get("name")
+        or current_user.get("email")
+        or current_user.get("actor_id")
+        or current_user.get("subscriber_id")
+        or "unknown"
+    )
+
+
+def _looks_like_prerequisite_failure(message: str) -> bool:
+    text = str(message or "").lower()
+    markers = [
+        "not found",
+        "no profile selected",
+        "no firmware image selected",
+        "no tr-069 device",
+        "no matching genieacs device",
+        "waiting for",
+        "not bootstrapped",
+        "no connectionrequesturl",
+        "connection request url",
+        "resolution failed",
+        "missing",
+        "required",
+        "no associated olt",
+        "no active assignment",
+        "olt context is incomplete",
+        "cannot determine",
+        "not linked",
+        "not managed via tr-069",
+        "no live acs",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _log_blocked_step(
+    *,
+    request: Request | None,
+    ont_id: str | None,
+    result: StepResult,
+) -> None:
+    if result.waiting or not _looks_like_prerequisite_failure(result.message):
+        return
+    actor = _actor_label(request)
+    logger.error(
+        "ONT provisioning step blocked by missing prerequisite: step=%s ont_id=%s actor=%s reason=%s",
+        result.step_name,
+        ont_id or "unknown",
+        actor,
+        result.message,
+        extra={
+            "event": "ont_provisioning_prerequisite_blocked",
+            "step": result.step_name,
+            "ont_id": ont_id,
+            "actor": actor,
+            "reason": result.message,
+        },
+    )
+
+
+def _step_response(
+    result: StepResult,
+    *,
+    request: Request | None = None,
+    ont_id: str | None = None,
+) -> JSONResponse:
     """Convert a StepResult into a JSONResponse with toast notification."""
     if result.waiting:
         toast_type = "info"
@@ -61,6 +137,8 @@ def _step_response(result: StepResult) -> JSONResponse:
         toast_type = "success" if result.success else "error"
         phase = "succeeded" if result.success else "failed"
         status_code = 200 if result.success else 400
+    if not result.success:
+        _log_blocked_step(request=request, ont_id=ont_id, result=result)
     return JSONResponse(
         content={
             "success": result.success or result.waiting,
@@ -302,7 +380,7 @@ def step_create_service_port(
         },
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -342,7 +420,7 @@ def step_configure_mgmt_ip(
         },
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -361,7 +439,7 @@ def step_activate_internet_config(
         db, ont_id, "activate_internet_config", {"ip_index": ip_index}
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -389,7 +467,7 @@ def step_configure_wan_olt(
         {"ip_index": ip_index, "profile_id": profile_id},
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -415,7 +493,7 @@ def step_bind_tr069(
         {"tr069_olt_profile_id": tr069_olt_profile_id},
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -430,7 +508,7 @@ def step_wait_tr069_bootstrap(
     """Poll GenieACS until the ONT registers after TR-069 binding."""
     result = steps.queue_wait_tr069_bootstrap(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 # ---------------------------------------------------------------------------
@@ -463,7 +541,7 @@ def step_set_cr_credentials(
         {"username": username} if username else {},
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -502,7 +580,7 @@ def step_push_pppoe_omci(
         },
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -533,7 +611,7 @@ def step_push_pppoe_tr069(
         {"username": username, "instance_index": instance_index},
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -579,7 +657,7 @@ def step_configure_wan_tr069(
         },
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -598,7 +676,7 @@ def step_enable_ipv6(
         db, ont_id, "enable_ipv6", {"wan_instance": wan_instance}
     )
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 # ---------------------------------------------------------------------------
@@ -618,7 +696,7 @@ def step_rollback_service_ports(
     """Remove all service-ports for this ONT from the OLT."""
     result = steps.rollback_service_ports(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(
@@ -633,4 +711,4 @@ def step_deprovision(
     """Full deprovision: remove service-ports, deauthorize, clear DB state."""
     result = steps.deprovision(db, ont_id)
     _record_ont_step_action(db, request, ont_id, result)
-    return _step_response(result)
+    return _step_response(result, request=request, ont_id=ont_id)

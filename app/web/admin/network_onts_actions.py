@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -20,6 +21,7 @@ from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-actions"])
+logger = logging.getLogger(__name__)
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -57,11 +59,84 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
     }
 
 
+def _actor_label(request: Request | None) -> str:
+    if request is None:
+        return "unknown"
+    try:
+        current_user = web_admin_service.get_current_user(request)
+    except Exception:
+        return "unknown"
+    if not isinstance(current_user, dict):
+        return "unknown"
+    return str(
+        current_user.get("name")
+        or current_user.get("email")
+        or current_user.get("actor_id")
+        or current_user.get("subscriber_id")
+        or "unknown"
+    )
+
+
+def _looks_like_prerequisite_failure(message: str) -> bool:
+    text = str(message or "").lower()
+    markers = [
+        "not found",
+        "no profile selected",
+        "no firmware image selected",
+        "no tr-069 device",
+        "no matching genieacs device",
+        "waiting for",
+        "not bootstrapped",
+        "no connectionrequesturl",
+        "connection request url",
+        "resolution failed",
+        "missing",
+        "required",
+        "no associated olt",
+        "no active assignment",
+        "olt context is incomplete",
+        "cannot determine",
+        "not linked",
+        "not managed via tr-069",
+        "no live acs",
+    ]
+    return any(marker in text for marker in markers)
+
+
+def _log_blocked_action(
+    *,
+    request: Request | None,
+    ont_id: str | None,
+    action: str,
+    message: str,
+    waiting: bool,
+) -> None:
+    if waiting or not _looks_like_prerequisite_failure(message):
+        return
+    actor = _actor_label(request)
+    logger.error(
+        "ONT action blocked by missing prerequisite: action=%s ont_id=%s actor=%s reason=%s",
+        action,
+        ont_id or "unknown",
+        actor,
+        message,
+        extra={
+            "event": "ont_action_prerequisite_blocked",
+            "action": action,
+            "ont_id": ont_id,
+            "actor": actor,
+            "reason": message,
+        },
+    )
+
+
 def _action_json_response(
     *,
     success: bool,
     message: str,
     action: str,
+    request: Request | None = None,
+    ont_id: str | None = None,
     waiting: bool = False,
     status_code: int | None = None,
     detail: str | None = None,
@@ -69,6 +144,14 @@ def _action_json_response(
     """Return a consistent JSON contract for ONT action requests."""
     toast_type = "success" if success else ("info" if waiting else "error")
     phase = "succeeded" if success else ("waiting" if waiting else "failed")
+    if not success:
+        _log_blocked_action(
+            request=request,
+            ont_id=ont_id,
+            action=action,
+            message=message,
+            waiting=waiting,
+        )
     return JSONResponse(
         {
             "success": success or waiting,
@@ -85,6 +168,32 @@ def _action_json_response(
         if status_code is not None
         else (200 if success else (202 if waiting else 400)),
         headers=_toast_headers(message, toast_type),
+    )
+
+
+def _action_result_response(
+    *,
+    result: object,
+    request: Request,
+    ont_id: str,
+    action: str,
+) -> JSONResponse:
+    """Return a JSON response for legacy ActionResult handlers."""
+    success = bool(getattr(result, "success", False))
+    message = str(getattr(result, "message", "Action failed"))
+    waiting = bool(getattr(result, "waiting", False))
+    if not success:
+        _log_blocked_action(
+            request=request,
+            ont_id=ont_id,
+            action=action,
+            message=message,
+            waiting=waiting,
+        )
+    return JSONResponse(
+        {"success": success, "message": message},
+        status_code=200 if success else 400,
+        headers=_toast_headers(message, "success" if success else "error"),
     )
 
 
@@ -159,6 +268,8 @@ def ont_reboot(
         success=result.success,
         message=result.message,
         action="Reboot ONT",
+        request=request,
+        ont_id=ont_id,
         waiting=result.waiting,
     )
 
@@ -178,6 +289,8 @@ def ont_refresh(
         success=result.success,
         message=result.message,
         action="Refresh ONT",
+        request=request,
+        ont_id=ont_id,
         waiting=result.waiting,
     )
 
@@ -283,12 +396,11 @@ def ont_factory_reset(
     result = web_network_ont_actions_service.execute_factory_reset(
         db, ont_id, request=request
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Factory Reset",
     )
 
 
@@ -303,21 +415,22 @@ def ont_apply_profile(
     form = parse_form_data_sync(request)
     profile_id = _form_str(form, "profile_id")
     if not profile_id:
-        return JSONResponse(
-            {"success": False, "message": "No profile selected"},
-            status_code=400,
-            headers=_toast_headers("No profile selected", "error"),
+        return _action_json_response(
+            success=False,
+            message="No profile selected",
+            action="Apply Provisioning Profile",
+            request=request,
+            ont_id=ont_id,
         )
 
     result = web_network_ont_actions_service.apply_profile(
         db, ont_id, profile_id, request=request
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Apply Provisioning Profile",
     )
 
 
@@ -333,21 +446,22 @@ def ont_firmware_upgrade(
 ) -> JSONResponse:
     """Trigger firmware upgrade on ONT via TR-069 Download RPC."""
     if not firmware_image_id:
-        return JSONResponse(
-            {"success": False, "message": "No firmware image selected"},
-            status_code=400,
-            headers=_toast_headers("No firmware image selected", "error"),
+        return _action_json_response(
+            success=False,
+            message="No firmware image selected",
+            action="Firmware Upgrade",
+            request=request,
+            ont_id=ont_id,
         )
 
     result = web_network_ont_actions_service.firmware_upgrade(
         db, ont_id, firmware_image_id, request=request
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Firmware Upgrade",
     )
 
 
@@ -368,12 +482,11 @@ def ont_set_wifi_ssid(
     result = web_network_ont_actions_service.set_wifi_ssid(
         db, ont_id, ssid, request=request
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WiFi SSID",
     )
 
 
@@ -391,12 +504,11 @@ def ont_set_wifi_password(
     result = web_network_ont_actions_service.set_wifi_password(
         db, ont_id, password, request=request
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WiFi Password",
     )
 
 
@@ -427,12 +539,11 @@ def ont_set_wifi_config(
         security_mode=_form_str(form, "security_mode").strip() or None,
         request=request,
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WiFi Config",
     )
 
 
@@ -455,6 +566,14 @@ def ont_toggle_lan_port(
         db, ont_id, port, enabled, request=request
     )
     if request.headers.get("HX-Request"):
+        if not result.success:
+            _log_blocked_action(
+                request=request,
+                ont_id=ont_id,
+                action="Toggle LAN Port",
+                message=result.message,
+                waiting=getattr(result, "waiting", False),
+            )
         hx_target = request.headers.get("HX-Target", "")
         if hx_target == "ethernet-ports-panel":
             return _ethernet_ports_partial_response(
@@ -471,12 +590,11 @@ def ont_toggle_lan_port(
             toast_message=result.message,
             toast_type="success" if result.success else "error",
         )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Toggle LAN Port",
     )
 
 
@@ -507,12 +625,11 @@ def ont_set_lan_config(
         dhcp_end=dhcp_end,
         request=request,
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set LAN Config",
     )
 
 
@@ -539,12 +656,11 @@ def ont_set_wan_config(
         instance_index=int(instance_raw) if instance_raw.isdigit() else 1,
         request=request,
     )
-    status_code = 200 if result.success else 400
-    headers = _toast_headers(result.message, "success" if result.success else "error")
-    return JSONResponse(
-        {"success": result.success, "message": result.message},
-        status_code=status_code,
-        headers=headers,
+    return _action_result_response(
+        result=result,
+        request=request,
+        ont_id=ont_id,
+        action="Set WAN Config",
     )
 
 
@@ -585,6 +701,8 @@ def ont_set_pppoe_credentials(
         success=result.success,
         message=result.message,
         action="Push PPPoE Credentials",
+        request=request,
+        ont_id=ont_id,
         waiting=getattr(result, "waiting", False),
     )
 
@@ -608,6 +726,8 @@ def ont_ping_diagnostic(
         success=result.success,
         message=result.message,
         action="Run Ping Diagnostic",
+        request=request,
+        ont_id=ont_id,
     )
 
 
@@ -629,6 +749,8 @@ def ont_traceroute_diagnostic(
         success=result.success,
         message=result.message,
         action="Run Traceroute Diagnostic",
+        request=request,
+        ont_id=ont_id,
     )
 
 
@@ -649,6 +771,8 @@ def ont_enable_ipv6(
         success=result.success,
         message=result.message,
         action="Enable IPv6",
+        request=request,
+        ont_id=ont_id,
     )
 
 
@@ -669,6 +793,8 @@ def ont_connection_request(
         success=result.success,
         message=result.message,
         action="Connection Request",
+        request=request,
+        ont_id=ont_id,
         waiting=result.waiting,
     )
 
@@ -821,6 +947,8 @@ def ont_omci_reboot(
         success=ok,
         message=msg,
         action="OMCI Reboot",
+        request=request,
+        ont_id=ont_id,
         status_code=200 if ok else 400,
     )
 
@@ -853,6 +981,8 @@ def ont_configure_mgmt_ip(
         success=ok,
         message=msg,
         action="Configure Management IP",
+        request=request,
+        ont_id=ont_id,
         status_code=200 if ok else 400,
     )
 
@@ -873,6 +1003,8 @@ def ont_bind_tr069_profile(
         success=ok,
         message=msg,
         action="Bind TR-069 Profile",
+        request=request,
+        ont_id=ont_id,
         status_code=200 if ok else 400,
     )
 
