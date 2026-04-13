@@ -31,11 +31,17 @@ _LAN_CONFIG_PATHS = {
     "Device": {
         "ip_address": "IP.Interface.2.IPv4Address.1.IPAddress",
         "subnet_mask": "IP.Interface.2.IPv4Address.1.SubnetMask",
+        "dhcp_enabled": "DHCPv4.Server.Enable",
+        "dhcp_min_address": "DHCPv4.Server.Pool.1.MinAddress",
+        "dhcp_max_address": "DHCPv4.Server.Pool.1.MaxAddress",
         "refresh": "IP.Interface.2.",
     },
     "InternetGatewayDevice": {
         "ip_address": "LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceIPAddress",
         "subnet_mask": "LANDevice.1.LANHostConfigManagement.IPInterface.1.IPInterfaceSubnetMask",
+        "dhcp_enabled": "LANDevice.1.LANHostConfigManagement.DHCPServerEnable",
+        "dhcp_min_address": "LANDevice.1.LANHostConfigManagement.MinAddress",
+        "dhcp_max_address": "LANDevice.1.LANHostConfigManagement.MaxAddress",
         "refresh": "LANDevice.1.LANHostConfigManagement.",
     },
 }
@@ -56,7 +62,9 @@ def _validate_ipv4(value: str, field_name: str) -> str | ActionResult:
     try:
         return str(IPv4Address(value))
     except ValueError:
-        return ActionResult(success=False, message=f"{field_name} must be a valid IPv4 address.")
+        return ActionResult(
+            success=False, message=f"{field_name} must be a valid IPv4 address."
+        )
 
 
 def _validate_subnet_mask(value: str) -> str | ActionResult:
@@ -164,12 +172,21 @@ def set_lan_config(
     *,
     lan_ip: str | None = None,
     lan_subnet: str | None = None,
+    dhcp_enabled: bool | None = None,
+    dhcp_start: str | None = None,
+    dhcp_end: str | None = None,
 ) -> ActionResult:
-    """Set ONT LAN gateway IP/subnet via TR-069."""
-    if not lan_ip and not lan_subnet:
+    """Set ONT LAN gateway and DHCP server settings via TR-069."""
+    if (
+        not lan_ip
+        and not lan_subnet
+        and dhcp_enabled is None
+        and not dhcp_start
+        and not dhcp_end
+    ):
         return ActionResult(
             success=False,
-            message="LAN IP address or subnet mask is required.",
+            message="At least one LAN or DHCP setting is required.",
         )
 
     params_to_set: dict[str, str] = {}
@@ -183,6 +200,18 @@ def set_lan_config(
         if isinstance(normalized_mask, ActionResult):
             return normalized_mask
         params_to_set["subnet_mask"] = normalized_mask
+    if dhcp_enabled is not None:
+        params_to_set["dhcp_enabled"] = "true" if dhcp_enabled else "false"
+    if dhcp_start:
+        normalized_start = _validate_ipv4(str(dhcp_start).strip(), "DHCP start address")
+        if isinstance(normalized_start, ActionResult):
+            return normalized_start
+        params_to_set["dhcp_min_address"] = normalized_start
+    if dhcp_end:
+        normalized_end = _validate_ipv4(str(dhcp_end).strip(), "DHCP end address")
+        if isinstance(normalized_end, ActionResult):
+            return normalized_end
+        params_to_set["dhcp_max_address"] = normalized_end
 
     resolved, error = get_ont_client_or_error(db, ont_id)
     if error:
@@ -213,6 +242,16 @@ def set_lan_config(
             changed.append(f"IP {params_to_set['ip_address']}")
         if "subnet_mask" in params_to_set:
             changed.append(f"subnet {params_to_set['subnet_mask']}")
+        if "dhcp_enabled" in params_to_set:
+            changed.append(
+                "DHCP enabled"
+                if params_to_set["dhcp_enabled"] == "true"
+                else "DHCP disabled"
+            )
+        if "dhcp_min_address" in params_to_set:
+            changed.append(f"DHCP start {params_to_set['dhcp_min_address']}")
+        if "dhcp_max_address" in params_to_set:
+            changed.append(f"DHCP end {params_to_set['dhcp_max_address']}")
         return ActionResult(
             success=True,
             message=f"LAN config updated on {ont.serial_number}: {', '.join(changed)}.",

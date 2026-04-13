@@ -69,6 +69,53 @@ def test_set_lan_config_pushes_detected_tr181_paths(monkeypatch) -> None:
     assert refresh_calls == [("device-1", "Device.IP.Interface.2.", True)]
 
 
+def test_set_lan_config_pushes_dhcp_server_range(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class FakeClient:
+        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+            calls.append((device_id, params))
+            return {"queued": True, "params": params}
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_network,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_network,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_network, "persist_data_model_root", lambda *_: None)
+
+    result = ont_action_network.set_lan_config(
+        None,
+        "ont-1",
+        dhcp_enabled=True,
+        dhcp_start="192.168.10.10",
+        dhcp_end="192.168.10.200",
+    )
+
+    assert result.success is True
+    assert calls == [
+        (
+            "device-1",
+            {
+                "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable": "true",
+                "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MinAddress": "192.168.10.10",
+                "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MaxAddress": "192.168.10.200",
+            },
+        )
+    ]
+
+
 def test_set_lan_config_validates_input_before_resolving(monkeypatch) -> None:
     def _should_not_resolve(*_args, **_kwargs):
         raise AssertionError("resolver should not be called for invalid input")

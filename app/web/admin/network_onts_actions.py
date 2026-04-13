@@ -122,6 +122,31 @@ def _lan_ports_partial_response(
     return response
 
 
+def _ethernet_ports_partial_response(
+    request: Request,
+    db: Session,
+    ont_id: str,
+    *,
+    toast_message: str | None = None,
+    toast_type: str = "success",
+) -> HTMLResponse:
+    """Return the Ethernet ports status partial with current port state."""
+    from app.services.network.ont_read import ont_read
+
+    context = _base_context(request, db, active_page="onts")
+    context["ont_id"] = ont_id
+    context["ethernet_ports"] = ont_read.get_ethernet_ports(db, ont_id)
+    response = templates.TemplateResponse(
+        "admin/network/onts/_ethernet_ports_partial.html", context
+    )
+    if toast_message:
+        response.headers["HX-Trigger"] = json.dumps(
+            {"showToast": {"message": toast_message, "type": toast_type}},
+            ensure_ascii=True,
+        )
+    return response
+
+
 @router.post(
     "/onts/{ont_id}/reboot", dependencies=[Depends(require_permission("network:write"))]
 )
@@ -394,6 +419,15 @@ def ont_toggle_lan_port(
         db, ont_id, port, enabled, request=request
     )
     if request.headers.get("HX-Request"):
+        hx_target = request.headers.get("HX-Target", "")
+        if hx_target == "ethernet-ports-panel":
+            return _ethernet_ports_partial_response(
+                request,
+                db,
+                ont_id,
+                toast_message=result.message,
+                toast_type="success" if result.success else "error",
+            )
         return _lan_ports_partial_response(
             request,
             db,
@@ -417,15 +451,24 @@ def ont_toggle_lan_port(
 def ont_set_lan_config(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Set LAN IP/subnet on ONT via GenieACS TR-069."""
+    """Set LAN gateway and DHCP server settings on ONT via GenieACS TR-069."""
     form = parse_form_data_sync(request)
     lan_ip = _form_str(form, "lan_ip").strip() or None
     lan_subnet = _form_str(form, "lan_subnet").strip() or None
+    dhcp_enabled_raw = _form_str(form, "dhcp_enabled").strip().lower()
+    dhcp_enabled = None
+    if dhcp_enabled_raw:
+        dhcp_enabled = dhcp_enabled_raw in {"true", "1", "yes", "on", "enabled"}
+    dhcp_start = _form_str(form, "dhcp_start").strip() or None
+    dhcp_end = _form_str(form, "dhcp_end").strip() or None
     result = web_network_ont_actions_service.set_lan_config(
         db,
         ont_id,
         lan_ip=lan_ip,
         lan_subnet=lan_subnet,
+        dhcp_enabled=dhcp_enabled,
+        dhcp_start=dhcp_start,
+        dhcp_end=dhcp_end,
         request=request,
     )
     status_code = 200 if result.success else 400
@@ -594,6 +637,7 @@ def ont_ethernet_ports(
 
     ethernet_ports = ont_read.get_ethernet_ports(db, ont_id)
     context = _base_context(request, db, active_page="onts")
+    context["ont_id"] = ont_id
     context["ethernet_ports"] = ethernet_ports
     return templates.TemplateResponse(
         "admin/network/onts/_ethernet_ports_partial.html", context
@@ -647,7 +691,9 @@ def ont_operational_health(
 ) -> HTMLResponse:
     """HTMX partial: operational readiness/actions for the ONT detail page."""
     context: dict[str, object] = {"request": request}
-    context.update(web_network_ont_actions_service.operational_health_context(db, ont_id))
+    context.update(
+        web_network_ont_actions_service.operational_health_context(db, ont_id)
+    )
     return templates.TemplateResponse(
         "admin/network/onts/_operational_health.html", context
     )

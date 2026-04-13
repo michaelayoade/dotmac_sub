@@ -13,6 +13,11 @@
 {% else %}
 
 {# LAN Configuration #}
+{% set lan_ip = lan_info.get('LAN IP') if lan_info else '' %}
+{% set lan_subnet = lan_info.get('Subnet Mask') if lan_info else '' %}
+{% set dhcp_enabled = lan_info.get('DHCP Enabled') if lan_info else '' %}
+{% set dhcp_start = lan_info.get('DHCP Start') if lan_info else '' %}
+{% set dhcp_end = lan_info.get('DHCP End') if lan_info else '' %}
 {% if lan_info %}
 <div class="mb-4">
     <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">LAN Configuration</h4>
@@ -26,6 +31,52 @@
     </div>
 </div>
 {% endif %}
+
+{# LAN / DHCP Configuration Form #}
+<div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+    <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure LAN and DHCP</h4>
+    <form hx-post="/admin/network/onts/{{ ont_id }}/lan-config"
+          hx-swap="none"
+          class="space-y-4">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">LAN Gateway IP</label>
+                <input type="text" name="lan_ip" value="{{ lan_ip or '' }}" placeholder="192.168.100.1"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subnet Mask</label>
+                <input type="text" name="lan_subnet" value="{{ lan_subnet or '' }}" placeholder="255.255.255.0"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP Server</label>
+                <select name="dhcp_enabled" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Leave unchanged</option>
+                    <option value="true" {% if dhcp_enabled == true or dhcp_enabled == '1' or dhcp_enabled == 'true' or dhcp_enabled == 'Yes' %}selected{% endif %}>Enabled</option>
+                    <option value="false" {% if dhcp_enabled == false or dhcp_enabled == '0' or dhcp_enabled == 'false' or dhcp_enabled == 'No' %}selected{% endif %}>Disabled</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP Start</label>
+                <input type="text" name="dhcp_start" value="{{ dhcp_start or '' }}" placeholder="192.168.100.2"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP End</label>
+                <input type="text" name="dhcp_end" value="{{ dhcp_end or '' }}" placeholder="192.168.100.254"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        <button type="submit"
+                class="inline-flex items-center gap-2 rounded-lg bg-cyan-600 px-4 py-2 text-sm font-medium text-white hover:bg-cyan-700">
+            Apply LAN Settings
+        </button>
+    </form>
+</div>
 
 {# Ethernet Ports Table #}
 {% if ethernet_ports %}

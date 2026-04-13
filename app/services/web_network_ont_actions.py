@@ -322,10 +322,21 @@ def set_lan_config(
     *,
     lan_ip: str | None = None,
     lan_subnet: str | None = None,
+    dhcp_enabled: bool | None = None,
+    dhcp_start: str | None = None,
+    dhcp_end: str | None = None,
     request: Request | None = None,
 ) -> ActionResult:
-    """Set LAN IP/subnet on ONT via GenieACS TR-069."""
-    result = OntActions.set_lan_config(db, ont_id, lan_ip=lan_ip, lan_subnet=lan_subnet)
+    """Set LAN gateway and DHCP server config on ONT via GenieACS TR-069."""
+    result = OntActions.set_lan_config(
+        db,
+        ont_id,
+        lan_ip=lan_ip,
+        lan_subnet=lan_subnet,
+        dhcp_enabled=dhcp_enabled,
+        dhcp_start=dhcp_start,
+        dhcp_end=dhcp_end,
+    )
     _log_action_audit(
         db,
         request=request,
@@ -335,6 +346,9 @@ def set_lan_config(
             "success": result.success,
             "lan_ip": lan_ip,
             "lan_subnet": lan_subnet,
+            "dhcp_enabled": dhcp_enabled,
+            "dhcp_start": dhcp_start,
+            "dhcp_end": dhcp_end,
         },
     )
     return result
@@ -746,7 +760,9 @@ def operational_health_context(
         {
             "label": "OLT ONT-ID known",
             "ok": ont_id_on_olt is not None,
-            "message": str(ont_id_on_olt) if ont_id_on_olt is not None else "external_id missing",
+            "message": str(ont_id_on_olt)
+            if ont_id_on_olt is not None
+            else "external_id missing",
         },
         {
             "label": "ACS linked",
@@ -760,7 +776,9 @@ def operational_health_context(
         {
             "label": "Connection request URL",
             "ok": bool(linked_tr069 and linked_tr069.connection_request_url),
-            "message": "Ready" if linked_tr069 and linked_tr069.connection_request_url else "Not captured",
+            "message": "Ready"
+            if linked_tr069 and linked_tr069.connection_request_url
+            else "Not captured",
         },
         {
             "label": "PPPoE stored",
@@ -831,7 +849,9 @@ def reconcile_operational_state(
         logger.exception("Failed to refresh autofind during ONT reconcile %s", ont_id)
         messages.append(f"Autofind refresh failed: {exc}")
 
-    if getattr(ont, "tr069_acs_server_id", None) or getattr(olt, "tr069_acs_server_id", None):
+    if getattr(ont, "tr069_acs_server_id", None) or getattr(
+        olt, "tr069_acs_server_id", None
+    ):
         try:
             from app.services.network.ont_provision_steps import (
                 queue_wait_tr069_bootstrap,
@@ -1309,7 +1329,9 @@ def olt_status_context(db: Session, ont_id: str) -> dict[str, object]:
     """Build display context for OLT-side ONT status."""
     result = fetch_olt_status(db, ont_id)
     entry = result.get("entry") or {}
-    raw_run_state = str(entry.get("run_state") or entry.get("online_status") or "").lower()
+    raw_run_state = str(
+        entry.get("run_state") or entry.get("online_status") or ""
+    ).lower()
     run_state = "" if raw_run_state == "unknown" else raw_run_state
     rows = [
         (

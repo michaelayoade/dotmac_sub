@@ -14,18 +14,24 @@
                 <th class="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">MAC</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Tx</th>
                 <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Rx</th>
+                <th class="px-4 py-3 text-right text-xs font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">Action</th>
             </tr>
         </thead>
         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
             {% for port in ethernet_ports %}
+            {% set port_num = port.get('index', port.get('port', loop.index)) %}
+            {% set enabled = port.get('Enable', port.get('admin_enabled', true)) %}
+            {% set is_enabled = enabled == true or enabled == 'true' or enabled == '1' or enabled == 1 %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-medium text-slate-900 dark:text-white">{{ port.get('name', port.get('Name', loop.index)) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-medium text-slate-900 dark:text-white">ETH {{ port_num }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5">
                     {% set status = port.get('Status', port.get('status', 'Unknown')) %}
-                    {% if status == 'Up' or status == 'up' %}
+                    {% if is_enabled and (status == 'Up' or status == 'up') %}
                     <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
                         <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Up
                     </span>
+                    {% elif not is_enabled %}
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">Disabled</span>
                     {% elif status == 'Down' or status == 'down' %}
                     <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">Down</span>
                     {% else %}
@@ -37,6 +43,25 @@
                 <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ port.get('MACAddress', port.get('mac', '—')) }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesSent', '—') }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5 text-sm tabular-nums text-right text-slate-600 dark:text-slate-300">{{ port.get('BytesReceived', '—') }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-right">
+                    {% if is_enabled %}
+                    <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
+                            hx-target="#ethernet-ports-panel"
+                            hx-swap="innerHTML"
+                            hx-confirm="Disable LAN port {{ port_num }}?"
+                            class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
+                        Disable
+                    </button>
+                    {% else %}
+                    <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
+                            hx-target="#ethernet-ports-panel"
+                            hx-swap="innerHTML"
+                            hx-confirm="Enable LAN port {{ port_num }}?"
+                            class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
+                        Enable
+                    </button>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
