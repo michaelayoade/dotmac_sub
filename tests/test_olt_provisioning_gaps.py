@@ -1587,7 +1587,7 @@ class TestProvisioningUiTemplates:
             "templates/admin/network/onts/_provision_action.html"
         ).read_text()
 
-        assert "Provision ONT" in template
+        assert "Configure ONT" in template
         assert "/admin/network/onts/{{ ont.id }}/provision" in template
         assert "management, internet, LAN, WiFi, and profile selections" in template
 
@@ -1609,22 +1609,23 @@ class TestProvisioningUiTemplates:
         assert "Board" in template
         assert "GPON Channel" in template
 
-    def test_ont_detail_template_includes_operational_health_actions(self) -> None:
+    def test_ont_detail_template_keeps_single_status_section(self) -> None:
         detail_template = Path("templates/admin/network/onts/detail.html").read_text()
-        health_template = Path(
-            "templates/admin/network/onts/_operational_health.html"
-        ).read_text()
 
-        assert 'id="operational-health-container"' in detail_template
-        assert (
-            'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"'
-            in detail_template
-        )
-        assert 'hx-trigger="load"' in detail_template
-        assert "Rediscover / Reconcile" in health_template
-        assert "/admin/network/onts/{{ ont_id }}/reconcile" in health_template
-        assert "/admin/network/onts/{{ ont_id }}/config-snapshot" in health_template
-        assert "Force ACS Inform" in health_template
+        assert "Quick Status Strip" not in detail_template
+        assert 'id="operational-health-container"' not in detail_template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"' not in detail_template
+        assert "Optical Signal Detail" not in detail_template
+        assert "Status — single ONT state section" in detail_template
+
+    def test_ont_detail_template_removes_duplicate_provisioning_controls(self) -> None:
+        detail_template = Path("templates/admin/network/onts/detail.html").read_text()
+
+        assert '_sidebar_network_config.html' not in detail_template
+        assert '_service_intent_summary.html' not in detail_template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/profile-form"' not in detail_template
+        assert 'hx-get="/admin/network/onts/{{ ont.id }}/firmware-form"' not in detail_template
+        assert "/admin/network/onts/{{ ont.id }}/provision" in detail_template
 
 
 class TestOntLocationDetailsHelpers:

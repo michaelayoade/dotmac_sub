@@ -16,7 +16,10 @@
         </div>
     </div>
 
-    <form method="POST" action="{{ action_url }}" class="space-y-6">
+    {% set selected_olt_id = pool.olt_device_id if pool and pool.olt_device_id else '' %}
+    {% set selected_vlan_id = pool.vlan_id if pool and pool.vlan_id else '' %}
+    <form method="POST" action="{{ action_url }}" class="space-y-6"
+          x-data="{ selectedOlt: {{ selected_olt_id|tojson }}, selectedVlan: {{ selected_vlan_id|tojson }} }">
         {% include "components/forms/csrf_input.html" %}
         {% set fallback_from_notes = pool and pool.notes and ('[fallback]' in (pool.notes|lower)) %}
         {% set fallback_from_field = pool and pool.is_fallback is defined and pool.is_fallback %}
@@ -95,6 +98,36 @@
                             value="{{ pool.dns_secondary if pool else '' }}"
                             placeholder="8.8.4.4"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white font-mono">
+                    </div>
+
+                    <div>
+                        <label for="olt_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Scope</label>
+                        <select name="olt_device_id" id="olt_device_id" x-model="selectedOlt" @change="selectedVlan = ''"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Global / any OLT</option>
+                            {% for olt in olt_devices or [] %}
+                            <option value="{{ olt.id }}" {% if selected_olt_id == olt.id|string %}selected{% endif %}>{{ olt.name }}{% if olt.mgmt_ip %} ({{ olt.mgmt_ip }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Used to limit where this pool can be selected during ONT configuration.</p>
+                    </div>
+
+                    <div>
+                        <label for="vlan_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">VLAN Scope</label>
+                        <select name="vlan_id" id="vlan_id" x-model="selectedVlan"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Any VLAN on selected OLT</option>
+                            {% for vlan in vlans or [] %}
+                            {% set vlan_olt_id = vlan.olt_device_id|string if vlan.olt_device_id else '' %}
+                            <option value="{{ vlan.id }}"
+                                    data-olt-id="{{ vlan_olt_id }}"
+                                    x-show="!selectedOlt || $el.dataset.oltId === selectedOlt || !$el.dataset.oltId"
+                                    {% if selected_vlan_id == vlan.id|string %}selected{% endif %}>
+                                VLAN {{ vlan.tag }} — {{ vlan.name or 'Unnamed' }}{% if vlan.olt_device %} ({{ vlan.olt_device.name }}){% endif %}
+                            </option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">When set, ONT static IP selection only shows this pool after that VLAN is selected.</p>
                     </div>
 
                     <div>

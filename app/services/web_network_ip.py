@@ -349,6 +349,8 @@ def _pool_payload_from_import_row(
         "gateway": row.get("gateway") or None,
         "dns_primary": row.get("dns_primary") or None,
         "dns_secondary": row.get("dns_secondary") or None,
+        "olt_device_id": row.get("olt_device_id") or row.get("olt_id") or None,
+        "vlan_id": row.get("vlan_id") or None,
         "notes": row.get("notes") or None,
         "location": row.get("location") or None,
         "category": row.get("category") or row.get("network category") or None,
@@ -1047,10 +1049,12 @@ def build_ip_management_data(
     }
 
 
-def get_ip_pool_new_form_data() -> dict[str, object]:
+def get_ip_pool_new_form_data(db=None) -> dict[str, object]:
     return {
         "pool": None,
         "action_url": "/admin/network/ip-management/pools",
+        "olt_devices": list_active_olts(db),
+        "vlans": list_active_vlans(db),
     }
 
 
@@ -1071,6 +1075,33 @@ def list_active_ip_pools(db):
         order_by="name",
         order_dir="asc",
         limit=200,
+        offset=0,
+    )
+
+
+def list_active_olts(db):
+    if db is None:
+        return []
+    return network_service.olt_devices.list(
+        db=db,
+        is_active=True,
+        order_by="name",
+        order_dir="asc",
+        limit=500,
+        offset=0,
+    )
+
+
+def list_active_vlans(db):
+    if db is None:
+        return []
+    return network_service.vlans.list(
+        db=db,
+        region_id=None,
+        is_active=True,
+        order_by="tag",
+        order_dir="asc",
+        limit=1000,
         offset=0,
     )
 
@@ -1153,6 +1184,8 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "gateway": form.get("gateway", "").strip() or None,
         "dns_primary": form.get("dns_primary", "").strip() or None,
         "dns_secondary": form.get("dns_secondary", "").strip() or None,
+        "olt_device_id": form.get("olt_device_id", "").strip() or None,
+        "vlan_id": form.get("vlan_id", "").strip() or None,
         "notes": form.get("notes", "").strip() or None,
         "location": form.get("location", "").strip() or None,
         "category": form.get("category", "").strip() or None,
@@ -1176,6 +1209,8 @@ def parse_ipv6_network_form(form) -> dict[str, object]:
         "gateway": str(form.get("gateway") or "").strip() or None,
         "dns_primary": str(form.get("dns_primary") or "").strip() or None,
         "dns_secondary": str(form.get("dns_secondary") or "").strip() or None,
+        "olt_device_id": str(form.get("olt_device_id") or "").strip() or None,
+        "vlan_id": str(form.get("vlan_id") or "").strip() or None,
         "notes": str(form.get("comment") or "").strip() or None,
         "location": str(form.get("location") or "").strip() or None,
         "category": str(form.get("category") or "").strip() or None,
@@ -1198,6 +1233,23 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
     return None
 
 
+def _ip_pool_scope_error(db, values: dict[str, object]) -> str | None:
+    vlan_id = str(values.get("vlan_id") or "").strip()
+    olt_id = str(values.get("olt_device_id") or "").strip()
+    if not vlan_id:
+        return None
+    try:
+        vlan = network_service.vlans.get(db=db, vlan_id=vlan_id)
+    except Exception:
+        return "Selected VLAN was not found."
+    vlan_olt_id = str(getattr(vlan, "olt_device_id", "") or "")
+    if olt_id and vlan_olt_id and vlan_olt_id != olt_id:
+        return "Selected VLAN belongs to a different OLT."
+    if not olt_id and vlan_olt_id:
+        values["olt_device_id"] = vlan_olt_id
+    return None
+
+
 def pool_form_snapshot(
     values: dict[str, object], *, pool_id: str | None = None
 ) -> dict[str, object]:
@@ -1208,6 +1260,8 @@ def pool_form_snapshot(
         "gateway": values.get("gateway"),
         "dns_primary": values.get("dns_primary"),
         "dns_secondary": values.get("dns_secondary"),
+        "olt_device_id": values.get("olt_device_id"),
+        "vlan_id": values.get("vlan_id"),
         "notes": values.get("notes"),
         "location": values.get("location"),
         "category": values.get("category"),
@@ -1234,6 +1288,8 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         "gateway": pool.gateway,
         "dns_primary": pool.dns_primary,
         "dns_secondary": pool.dns_secondary,
+        "olt_device_id": str(pool.olt_device_id) if pool.olt_device_id else None,
+        "vlan_id": str(getattr(pool, "vlan_id", None) or "") or None,
         "notes": cleaned_notes,
         "location": metadata.get("location"),
         "category": metadata.get("category"),
@@ -1273,6 +1329,9 @@ def create_ip_pool(db, values: dict[str, object]):
         normalized.pop("category", None)
         normalized.pop("network_type", None)
         normalized.pop("router", None)
+        scope_error = _ip_pool_scope_error(db, normalized)
+        if scope_error:
+            return None, scope_error
         normalized["ip_version"] = validate_enum(
             str(values.get("ip_version") or ""), IPVersion, "ip_version"
         )
@@ -1322,6 +1381,9 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         normalized.pop("category", None)
         normalized.pop("network_type", None)
         normalized.pop("router", None)
+        scope_error = _ip_pool_scope_error(db, normalized)
+        if scope_error:
+            return None, None, scope_error
         if values.get("ip_version"):
             normalized["ip_version"] = validate_enum(
                 str(values.get("ip_version") or ""), IPVersion, "ip_version"

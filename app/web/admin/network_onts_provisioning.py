@@ -161,6 +161,32 @@ def ont_profile_preview(
 
 
 @router.get(
+    "/onts/{ont_id}/available-static-ips",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_available_static_ips(
+    request: Request,
+    ont_id: str,
+    static_ip_pool_id: str | None = Query(default=None),
+    selected_ip: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: available static IPv4 choices for the selected ONT pool."""
+    state = web_onts_provisioning_service.available_static_ipv4_choices(
+        db,
+        pool_id=static_ip_pool_id,
+        ont_id=ont_id,
+        selected_ip=selected_ip,
+    )
+    context = _base_context(request, db, active_page="onts")
+    context.update(state)
+    return templates.TemplateResponse(
+        "admin/network/onts/_available_static_ips.html", context
+    )
+
+
+@router.get(
     "/onts/{ont_id}/provisioning-preview",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],

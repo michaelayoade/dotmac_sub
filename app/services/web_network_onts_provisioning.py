@@ -3,12 +3,22 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
-from ipaddress import ip_address
+from ipaddress import IPv4Network, ip_address, ip_network
 
 from sqlalchemy.orm import Session
 
-from app.models.network import OntProvisioningProfile, OnuMode, Vlan, WanMode
+from app.models.network import (
+    IPAssignment,
+    IpPool,
+    IPv4Address,
+    IPVersion,
+    OntProvisioningProfile,
+    OnuMode,
+    Vlan,
+    WanMode,
+)
 from app.schemas.network import OntUnitUpdate
 from app.schemas.provisioning import ServiceOrderUpdate
 from app.services import network as network_service
@@ -27,6 +37,353 @@ logger = logging.getLogger(__name__)
 class JsonActionResult:
     content: dict[str, object]
     status_code: int = 200
+
+
+_ONT_RESERVATION_PREFIX = "Reserved for ONT "
+
+
+def _reservation_note_for_ont(ont_id: str) -> str:
+    return f"{_ONT_RESERVATION_PREFIX}{ont_id}"
+
+
+def _reservation_owner(notes: str | None) -> str | None:
+    text = str(notes or "").strip()
+    if not text.startswith(_ONT_RESERVATION_PREFIX):
+        return None
+    return text[len(_ONT_RESERVATION_PREFIX) :].strip() or None
+
+
+def _pool_networks(pool: IpPool) -> list[IPv4Network]:
+    blocks = [
+        block
+        for block in getattr(pool, "blocks", []) or []
+        if getattr(block, "is_active", False)
+    ]
+    cidrs = [str(block.cidr) for block in blocks] or [str(pool.cidr)]
+    networks: list[IPv4Network] = []
+    for cidr in cidrs:
+        try:
+            network = ip_network(cidr, strict=False)
+        except ValueError:
+            continue
+        if network.version == 4:
+            networks.append(network)
+    return networks
+
+
+def _pool_netmask(pool: IpPool) -> str:
+    networks = _pool_networks(pool)
+    return str(networks[0].netmask) if networks else "255.255.255.0"
+
+
+def _existing_ipv4_state(
+    db: Session,
+    addresses: Iterable[str],
+) -> dict[str, tuple[IPv4Address, IPAssignment | None]]:
+    address_values = list(
+        dict.fromkeys(str(address) for address in addresses if address)
+    )
+    if not address_values:
+        return {}
+    rows = (
+        db.query(IPv4Address, IPAssignment)
+        .outerjoin(
+            IPAssignment,
+            IPAssignment.ipv4_address_id == IPv4Address.id,
+        )
+        .filter(IPv4Address.address.in_(address_values))
+        .all()
+    )
+    return {str(address.address): (address, assignment) for address, assignment in rows}
+
+
+def _ipv4_row_is_available(
+    row: tuple[IPv4Address, IPAssignment | None] | None,
+    *,
+    normalized_pool_id: str,
+    owner: str | None,
+) -> bool:
+    if not row:
+        return True
+    address, assignment = row
+    reservation_owner = _reservation_owner(getattr(address, "notes", None))
+    belongs_to_pool = not address.pool_id or str(address.pool_id) == normalized_pool_id
+    reservation_available = not bool(address.is_reserved) or (
+        owner and reservation_owner == owner
+    )
+    return assignment is None and reservation_available and belongs_to_pool
+
+
+def available_static_ipv4_choices(
+    db: Session,
+    *,
+    pool_id: str | None,
+    ont_id: str | None = None,
+    selected_ip: str | None = None,
+    limit: int = 100,
+) -> dict[str, object]:
+    """Return available IPv4 choices for ONT static WAN assignment."""
+    normalized_pool_id = str(pool_id or "").strip()
+    if not normalized_pool_id:
+        return {
+            "pool": None,
+            "choices": [],
+            "recommended_ip": None,
+            "netmask": "255.255.255.0",
+            "gateway": "",
+            "dns": "",
+            "message": "Select an IP pool to see available addresses.",
+        }
+    try:
+        pool_uuid = coerce_uuid(normalized_pool_id)
+    except (TypeError, ValueError):
+        pool_uuid = None
+    pool = db.get(IpPool, pool_uuid) if pool_uuid else None
+    if not pool or not getattr(pool, "is_active", False):
+        return {
+            "pool": None,
+            "choices": [],
+            "recommended_ip": None,
+            "netmask": "255.255.255.0",
+            "gateway": "",
+            "dns": "",
+            "message": "Selected IP pool is not available.",
+        }
+    pool_version = getattr(pool.ip_version, "value", pool.ip_version)
+    if pool_version != IPVersion.ipv4.value:
+        return {
+            "pool": pool,
+            "choices": [],
+            "recommended_ip": None,
+            "netmask": "255.255.255.0",
+            "gateway": pool.gateway or "",
+            "dns": ", ".join(v for v in [pool.dns_primary, pool.dns_secondary] if v),
+            "message": "Only IPv4 pools can be used for static ONT IPv4 selection.",
+        }
+
+    selected = str(selected_ip or "").strip()
+    owner = str(ont_id or "").strip() or None
+    choices: list[dict[str, object]] = []
+    seen: set[str] = set()
+    gateway = str(pool.gateway or "").strip()
+    max_choices = max(1, limit)
+
+    def append_choice(ip_text: str, *, is_selected: bool = False) -> None:
+        seen.add(ip_text)
+        choices.append(
+            {
+                "address": ip_text,
+                "label": ip_text,
+                "recommended": False,
+                "selected": is_selected,
+            }
+        )
+
+    if selected:
+        selected_address = None
+        try:
+            parsed_selected = ip_address(selected)
+        except ValueError:
+            parsed_selected = None
+        if parsed_selected and parsed_selected.version == 4:
+            selected_address = str(parsed_selected)
+        selected_in_pool = bool(
+            selected_address
+            and selected_address != gateway
+            and any(parsed_selected in network for network in _pool_networks(pool))
+        )
+        if selected_in_pool and selected_address:
+            selected_state = _existing_ipv4_state(db, [selected_address])
+            if _ipv4_row_is_available(
+                selected_state.get(selected_address),
+                normalized_pool_id=normalized_pool_id,
+                owner=owner,
+            ):
+                append_choice(selected_address, is_selected=True)
+
+    for network in _pool_networks(pool):
+        iterator = network if network.prefixlen >= 31 else network.hosts()
+        batch: list[str] = []
+        for ip in iterator:
+            ip_text = str(ip)
+            if ip_text in seen or ip_text == gateway:
+                continue
+            batch.append(ip_text)
+            if len(batch) < 512:
+                continue
+            state = _existing_ipv4_state(db, batch)
+            for candidate in batch:
+                if _ipv4_row_is_available(
+                    state.get(candidate),
+                    normalized_pool_id=normalized_pool_id,
+                    owner=owner,
+                ):
+                    append_choice(candidate)
+                    if len(choices) >= max_choices:
+                        break
+            batch = []
+            if len(choices) >= max_choices:
+                break
+        if len(choices) < max_choices and batch:
+            state = _existing_ipv4_state(db, batch)
+            for candidate in batch:
+                if _ipv4_row_is_available(
+                    state.get(candidate),
+                    normalized_pool_id=normalized_pool_id,
+                    owner=owner,
+                ):
+                    append_choice(candidate)
+                    if len(choices) >= max_choices:
+                        break
+        if len(choices) >= max_choices:
+            break
+
+    if choices:
+        recommended = (
+            selected
+            if any(c["address"] == selected for c in choices)
+            else str(choices[0]["address"])
+        )
+        for choice in choices:
+            choice["recommended"] = choice["address"] == recommended
+            choice["selected"] = choice["address"] == recommended
+    else:
+        recommended = None
+
+    return {
+        "pool": pool,
+        "choices": choices,
+        "recommended_ip": recommended,
+        "netmask": _pool_netmask(pool),
+        "gateway": gateway,
+        "dns": ", ".join(v for v in [pool.dns_primary, pool.dns_secondary] if v),
+        "message": None if choices else "No available IPv4 addresses in this pool.",
+    }
+
+
+def _reserve_static_ipv4_for_ont(
+    db: Session,
+    *,
+    ont_id: str,
+    pool_id: str,
+    requested_ip: str | None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    try:
+        pool_uuid = coerce_uuid(pool_id)
+    except (TypeError, ValueError):
+        pool_uuid = None
+    pool = db.get(IpPool, pool_uuid) if pool_uuid else None
+    if not pool:
+        raise ValueError("Selected IP pool is not available.")
+
+    selected = str(requested_ip or "").strip()
+    if selected:
+        try:
+            parsed_selected = ip_address(selected)
+        except ValueError as exc:
+            raise ValueError("Selected static IP is invalid.") from exc
+        selected = str(parsed_selected)
+        gateway = str(pool.gateway or "").strip()
+        if parsed_selected.version != 4 or selected == gateway:
+            raise ValueError("Selected static IP is not available in this pool.")
+        if not any(parsed_selected in network for network in _pool_networks(pool)):
+            raise ValueError("Selected static IP is not available in this pool.")
+        state = _existing_ipv4_state(db, [selected])
+        if not _ipv4_row_is_available(
+            state.get(selected),
+            normalized_pool_id=str(pool.id),
+            owner=ont_id,
+        ):
+            raise ValueError("Selected static IP is not available in this pool.")
+        choices_state = {
+            "netmask": _pool_netmask(pool),
+            "gateway": gateway,
+            "dns": ", ".join(v for v in [pool.dns_primary, pool.dns_secondary] if v),
+        }
+    else:
+        choices_state = available_static_ipv4_choices(
+            db,
+            pool_id=pool_id,
+            ont_id=ont_id,
+            limit=1,
+        )
+        selected = str(choices_state.get("recommended_ip") or "").strip()
+        if not selected:
+            raise ValueError(
+                str(choices_state.get("message") or "No available IPv4 address.")
+            )
+
+    note = _reservation_note_for_ont(ont_id)
+    previous = (
+        db.query(IPv4Address)
+        .filter(IPv4Address.notes == note)
+        .filter(IPv4Address.address != selected)
+        .all()
+    )
+    for address in previous:
+        if not getattr(address, "assignment", None):
+            address.is_reserved = False
+            address.notes = None
+
+    record = db.query(IPv4Address).filter(IPv4Address.address == selected).first()
+    if record is None:
+        record = IPv4Address(
+            address=selected,
+            pool_id=pool.id,
+            is_reserved=True,
+            notes=note,
+        )
+        db.add(record)
+    else:
+        if record.pool_id and str(record.pool_id) != str(pool.id):
+            raise ValueError("Selected static IP belongs to a different pool.")
+        if getattr(record, "assignment", None):
+            raise ValueError("Selected static IP is already assigned.")
+        owner = _reservation_owner(record.notes)
+        if record.is_reserved and owner and owner != ont_id:
+            raise ValueError("Selected static IP is already reserved.")
+        record.pool_id = pool.id
+        record.is_reserved = True
+        record.notes = note
+    db.flush()
+    return (
+        selected,
+        str(choices_state.get("netmask") or "255.255.255.0"),
+        str(choices_state.get("gateway") or ""),
+        str(choices_state.get("dns") or ""),
+    )
+
+
+def _ip_pool_scope_for_ont_error(
+    db: Session,
+    *,
+    ont: object,
+    pool_id: str | None,
+    vlan_id: str | None,
+) -> str | None:
+    normalized_pool_id = str(pool_id or "").strip()
+    if not normalized_pool_id:
+        return None
+    try:
+        pool_uuid = coerce_uuid(normalized_pool_id)
+    except (TypeError, ValueError):
+        return "Selected IP pool is not valid."
+    pool = db.get(IpPool, pool_uuid)
+    if not pool or not getattr(pool, "is_active", False):
+        return "Selected IP pool is not available."
+
+    ont_olt_id = str(getattr(ont, "olt_device_id", "") or "")
+    pool_olt_id = str(getattr(pool, "olt_device_id", "") or "")
+    if pool_olt_id and ont_olt_id and pool_olt_id != ont_olt_id:
+        return "Selected IP pool belongs to a different OLT."
+
+    selected_vlan_id = str(vlan_id or "").strip()
+    pool_vlan_id = str(getattr(pool, "vlan_id", "") or "")
+    if pool_vlan_id and selected_vlan_id and pool_vlan_id != selected_vlan_id:
+        return "Selected IP pool belongs to a different VLAN."
+    if pool_vlan_id and not selected_vlan_id:
+        return "Select the VLAN linked to the selected IP pool."
+    return None
 
 
 def profile_preview_context(
@@ -190,6 +547,44 @@ def save_provision_settings(
     mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
+    if wan_protocol_value == "static" and static_ip_pool_id_value:
+        scope_error = _ip_pool_scope_for_ont_error(
+            db,
+            ont=ont,
+            pool_id=static_ip_pool_id_value,
+            vlan_id=wan_vlan_id_value,
+        )
+        if scope_error:
+            return JsonActionResult(
+                status_code=422,
+                content={"success": False, "message": scope_error},
+            )
+        choices_state = available_static_ipv4_choices(
+            db,
+            pool_id=static_ip_pool_id_value,
+            ont_id=ont_id,
+            selected_ip=static_ip_value,
+            limit=1 if not static_ip_value else 5000,
+        )
+        static_ip_value = (
+            static_ip_value
+            or str(choices_state.get("recommended_ip") or "").strip()
+            or None
+        )
+        static_subnet_value = (
+            static_subnet_value
+            or str(choices_state.get("netmask") or "").strip()
+            or None
+        )
+        static_gateway_value = (
+            static_gateway_value
+            or str(choices_state.get("gateway") or "").strip()
+            or None
+        )
+        static_dns_value = (
+            static_dns_value or str(choices_state.get("dns") or "").strip() or None
+        )
+
     field_issues = validate_provision_form_fields(
         profile_id=profile_id_value,
         onu_mode=onu_mode_value,
@@ -274,6 +669,48 @@ def save_provision_settings(
                 "message": "Static internet deployment requires an IP address or pool",
             },
         )
+    if wan_protocol_value == "static" and static_ip_pool_id_value:
+        scope_error = _ip_pool_scope_for_ont_error(
+            db,
+            ont=ont,
+            pool_id=static_ip_pool_id_value,
+            vlan_id=wan_vlan_id_value,
+        )
+        if scope_error:
+            return JsonActionResult(
+                status_code=422,
+                content={"success": False, "message": scope_error},
+            )
+        try:
+            (
+                static_ip_value,
+                reserved_subnet,
+                reserved_gateway,
+                reserved_dns,
+            ) = _reserve_static_ipv4_for_ont(
+                db,
+                ont_id=ont_id,
+                pool_id=static_ip_pool_id_value,
+                requested_ip=static_ip_value,
+            )
+        except ValueError as exc:
+            return JsonActionResult(
+                status_code=422,
+                content={"success": False, "message": str(exc)},
+            )
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to reserve static IP for ONT %s", ont_id)
+            return JsonActionResult(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": "Unable to reserve static IP. Please try again.",
+                },
+            )
+        static_subnet_value = static_subnet_value or reserved_subnet
+        static_gateway_value = static_gateway_value or reserved_gateway
+        static_dns_value = static_dns_value or reserved_dns
 
     payload = OntUnitUpdate(
         onu_mode=onu_mode_value,
@@ -289,103 +726,121 @@ def save_provision_settings(
         if wan_protocol_value == "pppoe" and pppoe_password_value
         else None,
     )
-    network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
-    profile_uuid = coerce_uuid(profile_id_value)
-    if profile_uuid is not None:
-        ont.provisioning_profile_id = profile_uuid
-        db.commit()
+    try:
+        for key, value in payload.model_dump(exclude_unset=True).items():
+            setattr(ont, key, value)
+        profile_uuid = coerce_uuid(profile_id_value)
+        if profile_uuid is not None:
+            ont.provisioning_profile_id = profile_uuid
 
-    if mgmt_vlan_id_value or mgmt_ip_mode_value:
-        update_service_order_execution_context_for_ont(
-            db,
-            ont_id=ont_id,
-            step_name="configure_management_ip",
-            values={
-                "vlan_id": mgmt_vlan_tag_value,
-                "mgmt_vlan_id": mgmt_vlan_id_value,
-                "vlan_tag": mgmt_vlan_tag_value,
-                "ip_mode": "static"
-                if mgmt_ip_mode_value == "static_ip"
-                else mgmt_ip_mode_value,
-                "ip_address": mgmt_ip_address_value,
-                "subnet": mgmt_subnet_value,
-                "gateway": mgmt_gateway_value,
-            },
-        )
-    if wan_vlan_id_value or wan_protocol_value:
-        wan_values = {
-            "wan_mode": wan_protocol_value,
-            "wan_vlan_id": wan_vlan_id_value,
-            "wan_vlan": wan_vlan_tag_value,
-            "ip_pool_id": ip_pool_id_value,
-            "static_ip_pool_id": static_ip_pool_id_value,
-            "ip_address": static_ip_value,
-            "subnet_mask": static_subnet_value,
-            "gateway": static_gateway_value,
-            "dns_servers": static_dns_value,
-        }
-        update_service_order_execution_context_for_ont(
-            db,
-            ont_id=ont_id,
-            step_name="configure_wan_tr069",
-            values=wan_values,
-        )
-        if tr069_profile_id_value:
+        if mgmt_vlan_id_value or mgmt_ip_mode_value:
             update_service_order_execution_context_for_ont(
                 db,
                 ont_id=ont_id,
-                step_name="bind_tr069",
-                values={"tr069_olt_profile_id": tr069_profile_id_value},
+                step_name="configure_management_ip",
+                values={
+                    "vlan_id": mgmt_vlan_tag_value,
+                    "mgmt_vlan_id": mgmt_vlan_id_value,
+                    "vlan_tag": mgmt_vlan_tag_value,
+                    "ip_mode": "static"
+                    if mgmt_ip_mode_value == "static_ip"
+                    else mgmt_ip_mode_value,
+                    "ip_address": mgmt_ip_address_value,
+                    "subnet": mgmt_subnet_value,
+                    "gateway": mgmt_gateway_value,
+                },
+                commit=False,
             )
-        if wan_protocol_value == "pppoe":
+        if wan_vlan_id_value or wan_protocol_value:
+            wan_values = {
+                "wan_mode": wan_protocol_value,
+                "wan_vlan_id": wan_vlan_id_value,
+                "wan_vlan": wan_vlan_tag_value,
+                "ip_pool_id": ip_pool_id_value,
+                "static_ip_pool_id": static_ip_pool_id_value,
+                "ip_address": static_ip_value,
+                "subnet_mask": static_subnet_value,
+                "gateway": static_gateway_value,
+                "dns_servers": static_dns_value,
+            }
             update_service_order_execution_context_for_ont(
                 db,
                 ont_id=ont_id,
-                step_name="push_pppoe_tr069",
-                values={"username": pppoe_username_value},
+                step_name="configure_wan_tr069",
+                values=wan_values,
+                commit=False,
             )
-    if any(
-        value is not None
-        for value in [
-            lan_ip_value,
-            lan_subnet_value,
-            dhcp_enabled_value,
-            dhcp_start_value,
-            dhcp_end_value,
-        ]
-    ):
-        update_service_order_execution_context_for_ont(
-            db,
-            ont_id=ont_id,
-            step_name="configure_lan_tr069",
-            values={
-                "lan_ip": lan_ip_value,
-                "lan_subnet": lan_subnet_value,
-                "dhcp_enabled": dhcp_enabled_value,
-                "dhcp_start": dhcp_start_value,
-                "dhcp_end": dhcp_end_value,
-            },
-        )
-    if any(
-        value is not None
-        for value in [
-            wifi_enabled_value,
-            wifi_ssid_value,
-            wifi_password_value,
-            wifi_security_mode_value,
-            wifi_channel_value,
-        ]
-    ):
-        update_service_order_execution_context_for_ont(
-            db,
-            ont_id=ont_id,
-            step_name="configure_wifi_tr069",
-            values={
-                "enabled": wifi_enabled_value,
-                "ssid": wifi_ssid_value,
-                "password_set": bool(wifi_password_value),
-                "security_mode": wifi_security_mode_value,
-                "channel": wifi_channel_value,
+            if tr069_profile_id_value:
+                update_service_order_execution_context_for_ont(
+                    db,
+                    ont_id=ont_id,
+                    step_name="bind_tr069",
+                    values={"tr069_olt_profile_id": tr069_profile_id_value},
+                    commit=False,
+                )
+            if wan_protocol_value == "pppoe":
+                update_service_order_execution_context_for_ont(
+                    db,
+                    ont_id=ont_id,
+                    step_name="push_pppoe_tr069",
+                    values={"username": pppoe_username_value},
+                    commit=False,
+                )
+        if any(
+            value is not None
+            for value in [
+                lan_ip_value,
+                lan_subnet_value,
+                dhcp_enabled_value,
+                dhcp_start_value,
+                dhcp_end_value,
+            ]
+        ):
+            update_service_order_execution_context_for_ont(
+                db,
+                ont_id=ont_id,
+                step_name="configure_lan_tr069",
+                values={
+                    "lan_ip": lan_ip_value,
+                    "lan_subnet": lan_subnet_value,
+                    "dhcp_enabled": dhcp_enabled_value,
+                    "dhcp_start": dhcp_start_value,
+                    "dhcp_end": dhcp_end_value,
+                },
+                commit=False,
+            )
+        if any(
+            value is not None
+            for value in [
+                wifi_enabled_value,
+                wifi_ssid_value,
+                wifi_password_value,
+                wifi_security_mode_value,
+                wifi_channel_value,
+            ]
+        ):
+            update_service_order_execution_context_for_ont(
+                db,
+                ont_id=ont_id,
+                step_name="configure_wifi_tr069",
+                values={
+                    "enabled": wifi_enabled_value,
+                    "ssid": wifi_ssid_value,
+                    "password_set": bool(wifi_password_value),
+                    "security_mode": wifi_security_mode_value,
+                    "channel": wifi_channel_value,
+                },
+                commit=False,
+            )
+        db.commit()
+    except Exception:
+        db.rollback()
+        logger.exception("Failed to save provision settings for ONT %s", ont_id)
+        return JsonActionResult(
+            status_code=500,
+            content={
+                "success": False,
+                "message": "Unable to save provision settings. Please try again.",
             },
         )
     return JsonActionResult(
@@ -504,6 +959,7 @@ def update_service_order_execution_context_for_ont(
     ont_id: str,
     step_name: str,
     values: dict[str, object],
+    commit: bool = True,
 ) -> None:
     """Persist operator-selected step inputs onto the linked service order."""
     service_order_id = provisioning_service.resolve_service_order_id_for_ont(db, ont_id)
@@ -516,11 +972,14 @@ def update_service_order_execution_context_for_ont(
         key: value for key, value in values.items() if value not in (None, "", [])
     }
     execution_context["ont_plan"] = ont_plan
-    provisioning_service.service_orders.update(
-        db,
-        service_order_id,
-        ServiceOrderUpdate(execution_context=execution_context),
-    )
+    if commit:
+        provisioning_service.service_orders.update(
+            db,
+            service_order_id,
+            ServiceOrderUpdate(execution_context=execution_context),
+        )
+        return
+    order.execution_context = execution_context
 
 
 def record_ont_step_action(

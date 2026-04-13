@@ -245,6 +245,7 @@ class IpPoolBase(BaseModel):
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool = True
     olt_device_id: UUID | None = None
+    vlan_id: UUID | None = None
     notes: str | None = None
 
 
@@ -261,6 +262,7 @@ class IpPoolUpdate(BaseModel):
     dns_secondary: str | None = Field(default=None, max_length=64)
     is_active: bool | None = None
     olt_device_id: UUID | None = None
+    vlan_id: UUID | None = None
     notes: str | None = None
 
 

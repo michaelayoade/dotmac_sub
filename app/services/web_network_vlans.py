@@ -166,10 +166,28 @@ def handle_vlan_create(db, form):
     return network_service.vlans.create(db, payload)
 
 
+def _sync_ip_pool_olt_scope_for_vlan(db, vlan) -> None:
+    from app.services.network.ipam_scope import sync_ip_pool_olt_scope_for_vlan
+
+    synced_count = sync_ip_pool_olt_scope_for_vlan(db, vlan)
+    if synced_count:
+        db.commit()
+
+
 def handle_vlan_update(db, *, vlan_id: str, form):
     payload = VlanUpdate.model_validate(_payload_from_form(form))
-    return network_service.vlans.update(db, vlan_id, payload)
+    vlan = network_service.vlans.update(db, vlan_id, payload)
+    _sync_ip_pool_olt_scope_for_vlan(db, vlan)
+    return vlan
 
 
 def handle_vlan_delete(db, *, vlan_id: str) -> None:
-    network_service.vlans.delete(db, vlan_id)
+    from app.models.network import IpPool
+
+    vlan = network_service.vlans.get(db=db, vlan_id=vlan_id)
+    db.query(IpPool).filter(IpPool.vlan_id == vlan.id).update(
+        {"vlan_id": None},
+        synchronize_session=False,
+    )
+    network_service.vlans.delete(db, vlan_id, commit=False)
+    db.commit()

@@ -169,15 +169,17 @@
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
                 {% for host in lan_hosts %}
                 <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                    <td class="px-4 py-2 text-sm text-slate-900 dark:text-white">{{ host.HostName or '&mdash;' }}</td>
-                    <td class="px-4 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ host.IPAddress or '&mdash;' }}</td>
-                    <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ host.MACAddress or '&mdash;' }}</td>
-                    <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ host.InterfaceType or '&mdash;' }}</td>
+                    <td class="px-4 py-2 text-sm text-slate-900 dark:text-white">{{ host.host_name_display }}</td>
+                    <td class="px-4 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ host.ip_address_display }}</td>
+                    <td class="px-4 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ host.mac_address_display }}</td>
+                    <td class="px-4 py-2 text-sm text-slate-600 dark:text-slate-300">{{ host.interface_type_display }}</td>
                     <td class="px-4 py-2 text-sm">
-                        {% if host.Active == true or host.Active == '1' or host.Active == 'true' %}
-                        <span class="h-2 w-2 rounded-full bg-emerald-500 inline-block"></span>
+                        {% if host.active %}
+                        <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
+                            <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ host.active_display }}
+                        </span>
                         {% else %}
-                        <span class="h-2 w-2 rounded-full bg-slate-300 dark:bg-slate-600 inline-block"></span>
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ host.active_display }}</span>
                         {% endif %}
                     </td>
                 </tr>

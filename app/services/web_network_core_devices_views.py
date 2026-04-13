@@ -100,8 +100,7 @@ def _dedupe_live_board_inventory(
         else:
             key = (
                 category,
-                str(item.get("card_type") or "").strip().lower()
-                or item.get("index"),
+                str(item.get("card_type") or "").strip().lower() or item.get("index"),
             )
 
         existing_idx = seen.get(key)
@@ -261,7 +260,8 @@ def _connection_request_state_by_ont_id(
         .where(NetworkOperation.target_type == NetworkOperationTargetType.ont)
         .where(NetworkOperation.target_id.in_(ont_ids))
         .where(
-            NetworkOperation.operation_type == NetworkOperationType.ont_send_conn_request
+            NetworkOperation.operation_type
+            == NetworkOperationType.ont_send_conn_request
         )
         .order_by(NetworkOperation.created_at.desc())
     ).all()
@@ -1335,6 +1335,8 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     )
 
     # VLANs and IP pools scoped to this OLT
+    from sqlalchemy import or_
+
     from app.models.network import IpPool, Vlan
 
     olt_vlans = list(
@@ -1360,11 +1362,16 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     available_ip_pools = list(
         db.scalars(
             select(IpPool)
+            .outerjoin(Vlan, IpPool.vlan_id == Vlan.id)
             .where(IpPool.olt_device_id.is_(None))
             .where(IpPool.is_active.is_(True))
+            .where(or_(IpPool.vlan_id.is_(None), Vlan.olt_device_id == olt.id))
             .order_by(IpPool.name.asc())
         ).all()
     )
+    from app.services.network.olt_web_resources import ip_pool_usage_summary
+
+    olt_ip_pool_usage = ip_pool_usage_summary(db, olt_ip_pools)
 
     return {
         "olt": olt,
@@ -1392,6 +1399,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
         "config_backups": config_backups,
         "olt_vlans": olt_vlans,
         "olt_ip_pools": olt_ip_pools,
+        "olt_ip_pool_usage": olt_ip_pool_usage,
         "available_vlans": available_vlans,
         "available_ip_pools": available_ip_pools,
     }
@@ -1558,7 +1566,9 @@ def onts_list_page_data(
     # Signal threshold classification for displayed ONTs
     warn, crit = get_signal_thresholds(db)
     signal_data: dict[str, dict[str, str]] = {}
-    displayed_onts = list(onts) + [item for item in diagnostics_onts if item not in onts]
+    displayed_onts = list(onts) + [
+        item for item in diagnostics_onts if item not in onts
+    ]
     acs_last_inform_by_ont_id = _recent_acs_inform_by_ont_id(
         db, [ont.id for ont in displayed_onts if getattr(ont, "id", None)]
     )
@@ -1861,9 +1871,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     onu_rx = getattr(ont, "onu_rx_signal_dbm", None)
     olt_quality = classify_signal(olt_rx, warn_threshold=warn, crit_threshold=crit)
     onu_quality = classify_signal(onu_rx, warn_threshold=warn, crit_threshold=crit)
-    acs_last_inform_at = _recent_acs_inform_by_ont_id(db, [ont.id]).get(str(ont.id)) or getattr(
-        ont, "acs_last_inform_at", None
-    )
+    acs_last_inform_at = _recent_acs_inform_by_ont_id(db, [ont.id]).get(
+        str(ont.id)
+    ) or getattr(ont, "acs_last_inform_at", None)
     connection_request_info = _connection_request_state_by_ont_id(db, [ont.id]).get(
         str(ont.id), {}
     )
@@ -1894,9 +1904,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "signal_updated_at": getattr(ont, "signal_updated_at", None),
         "online_status": status_display_val,
         "online_status_display": (
-            status_display_val.replace("_", " ").title()
-            if status_display_val
-            else ""
+            status_display_val.replace("_", " ").title() if status_display_val else ""
         ),
         "online_status_class": ONLINE_STATUS_CLASSES.get(
             status_display_val or "unknown", ONLINE_STATUS_CLASSES["unknown"]
@@ -2097,6 +2105,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )
+    last_config_summary = _ont_last_config_summary(ont)
 
     return {
         "ont": ont,
@@ -2110,6 +2119,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "provisioning_runs": provisioning_runs,
         "ont_plan": ont_plan,
         "service_intent": service_intent,
+        "last_config_summary": last_config_summary,
         "profile_state": profile_state,
         "capabilities": capabilities,
         "inventory_ready": (
@@ -2118,6 +2128,189 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             and not bool(profile_state.get("profile_id"))
             and profile_state.get("status") in (None, "unprovisioned")
         ),
+    }
+
+
+def _snapshot_text(section: object, *keys: str) -> str:
+    if not isinstance(section, dict):
+        return ""
+    for key in keys:
+        value = section.get(key)
+        if isinstance(value, dict) and "_value" in value:
+            value = value.get("_value")
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def _snapshot_count(section: object, *keys: str) -> int | None:
+    text = _snapshot_text(section, *keys)
+    if not text:
+        return None
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _snapshot_time(
+    snapshot: dict[str, object], fallback: object = None
+) -> datetime | None:
+    fetched_at = snapshot.get("fetched_at")
+    if isinstance(fetched_at, str) and fetched_at:
+        try:
+            return datetime.fromisoformat(fetched_at)
+        except ValueError:
+            pass
+    return fallback if isinstance(fallback, datetime) else None
+
+
+def _ont_last_config_summary(ont: object) -> dict[str, object]:
+    ont_id = str(getattr(ont, "id", ""))
+    empty_summary = {
+        "has_snapshot": False,
+        "empty_message": "No cached config state yet.",
+        "empty_hint": "Query the ONT to fetch and cache the latest TR-069 state.",
+        "fetched_at": None,
+        "fetched_at_display": "never",
+        "source": "TR-069 cache",
+        "manufacturer": "",
+        "firmware": "",
+        "wan_ip": "",
+        "wan_status": "",
+        "pppoe_user": "",
+        "lan_ip": "",
+        "dhcp_enabled": "",
+        "ssid": "",
+        "wifi_clients": None,
+        "lan_hosts": None,
+        "ethernet_ports": None,
+        "active_ports": None,
+        "metrics": [],
+        "details": [],
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=configuration",
+        "query_url": f"/admin/network/onts/{ont_id}?tab=tr069",
+    }
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
+    if not isinstance(snapshot, dict) or not snapshot:
+        return empty_summary
+
+    system = snapshot.get("system")
+    wan = snapshot.get("wan")
+    lan = snapshot.get("lan")
+    wireless = snapshot.get("wireless")
+    ethernet_ports = snapshot.get("ethernet_ports")
+    lan_hosts = snapshot.get("lan_hosts")
+
+    wifi_clients = _snapshot_count(wireless, "Connected Clients")
+    lan_host_count = len(lan_hosts) if isinstance(lan_hosts, list) else None
+    if lan_host_count is None:
+        lan_host_count = _snapshot_count(lan, "Connected Hosts")
+
+    port_count = len(ethernet_ports) if isinstance(ethernet_ports, list) else None
+    active_ports = None
+    if isinstance(ethernet_ports, list):
+        active_ports = 0
+        for port in ethernet_ports:
+            if not isinstance(port, dict):
+                continue
+            status = _snapshot_text(port, "link_status", "Status").lower()
+            if status == "up":
+                active_ports += 1
+
+    wan_ip = _snapshot_text(wan, "WAN IP", "ExternalIPAddress", "IPAddress")
+    wan_status = _snapshot_text(wan, "Status", "ConnectionStatus")
+    pppoe_user = _snapshot_text(wan, "PPPoE Username", "Username")
+    lan_ip = _snapshot_text(lan, "LAN IP", "IP Address", "IPAddress")
+    dhcp_enabled = _snapshot_text(lan, "DHCP Enabled", "DHCPServerEnable")
+    ssid = _snapshot_text(wireless, "SSID")
+    fetched_at = _snapshot_time(
+        snapshot,
+        getattr(ont, "tr069_last_snapshot_at", None)
+        or getattr(ont, "observed_runtime_updated_at", None),
+    )
+    metrics = [
+        {
+            "label": "WAN IP",
+            "value": wan_ip or "-",
+            "value_class": "font-mono",
+        },
+        {
+            "label": "WAN status",
+            "value": wan_status or "-",
+            "value_class": "",
+        },
+        {
+            "label": "SSID",
+            "value": ssid or "-",
+            "value_class": "font-mono",
+        },
+        {
+            "label": "LAN hosts",
+            "value": str(lan_host_count) if lan_host_count is not None else "-",
+            "value_class": "",
+        },
+    ]
+    details = [
+        {
+            "label": "PPPoE user",
+            "value": pppoe_user or "-",
+            "value_class": "font-mono",
+        },
+        {
+            "label": "LAN gateway",
+            "value": lan_ip or "-",
+            "value_class": "font-mono",
+        },
+        {
+            "label": "DHCP",
+            "value": dhcp_enabled or "-",
+            "value_class": "",
+        },
+        {
+            "label": "WiFi clients",
+            "value": str(wifi_clients) if wifi_clients is not None else "-",
+            "value_class": "",
+        },
+        {
+            "label": "Ethernet ports",
+            "value": (
+                f"{active_ports}/{port_count} up"
+                if active_ports is not None and port_count is not None
+                else str(port_count)
+                if port_count is not None
+                else "-"
+            ),
+            "value_class": "",
+        },
+    ]
+
+    return {
+        "has_snapshot": True,
+        "empty_message": "",
+        "empty_hint": "",
+        "fetched_at": fetched_at,
+        "fetched_at_display": fetched_at.strftime("%Y-%m-%d %H:%M")
+        if fetched_at
+        else "unknown time",
+        "source": str(snapshot.get("source") or "TR-069 cache"),
+        "manufacturer": _snapshot_text(system, "Manufacturer"),
+        "firmware": _snapshot_text(system, "Firmware"),
+        "wan_ip": wan_ip,
+        "wan_status": wan_status,
+        "pppoe_user": pppoe_user,
+        "lan_ip": lan_ip,
+        "dhcp_enabled": dhcp_enabled,
+        "ssid": ssid,
+        "wifi_clients": wifi_clients,
+        "lan_hosts": lan_host_count,
+        "ethernet_ports": port_count,
+        "active_ports": active_ports,
+        "metrics": metrics,
+        "details": details,
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=configuration",
+        "query_url": f"/admin/network/onts/{ont_id}?tab=tr069",
     }
 
 

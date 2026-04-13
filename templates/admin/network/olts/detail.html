@@ -930,7 +930,10 @@
     <div x-show="activeTab === 'config'" x-transition x-cloak>
         <div class="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {# VLANs on this OLT #}
-            {% call card("Service VLANs", color="blue") %}
+            {% set vlan_actions %}
+            <a href="/admin/network/vlans" class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">Manage VLANs</a>
+            {% endset %}
+            {% call card("Service VLANs", color="blue", actions=vlan_actions) %}
             {% if olt_vlans %}
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
@@ -1002,27 +1005,49 @@
             {% endcall %}
 
             {# IP Pools on this OLT #}
-            {% call card("IP Pools", color="blue") %}
-            {% if olt_ip_pools %}
+            {% set ipam_actions %}
+            <a href="/admin/network/ip-management" class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300">Open IPAM</a>
+            {% endset %}
+            {% call card("IP Pools", color="blue", actions=ipam_actions) %}
+            {% if olt_ip_pool_usage %}
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                     <thead>
                         <tr>
                             <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Name</th>
                             <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">CIDR</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">VLAN</th>
                             <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Gateway</th>
-                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Version</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Usage</th>
+                            <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Next IP</th>
                             <th class="px-3 py-2 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400"></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
-                        {% for pool in olt_ip_pools %}
+                        {% for usage in olt_ip_pool_usage %}
+                        {% set pool = usage.pool %}
                         <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
                             <td class="px-3 py-2 text-sm text-slate-900 dark:text-white">{{ pool.name }}</td>
                             <td class="px-3 py-2 text-sm font-mono text-slate-900 dark:text-white">{{ pool.cidr }}</td>
+                            <td class="px-3 py-2 text-sm text-slate-600 dark:text-slate-300">
+                                {% if pool.vlan %}
+                                VLAN {{ pool.vlan.tag }}{% if pool.vlan.name %} — {{ pool.vlan.name }}{% endif %}
+                                {% else %}
+                                Any
+                                {% endif %}
+                            </td>
                             <td class="px-3 py-2 text-sm font-mono text-slate-500 dark:text-slate-400">{{ pool.gateway or '—' }}</td>
                             <td class="px-3 py-2 text-sm">
-                                <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ pool.ip_version.value if pool.ip_version else 'ipv4' }}</span>
+                                <div class="flex flex-wrap gap-1.5">
+                                    <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">{{ usage.available_known }} known free</span>
+                                    <span class="inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-800 dark:bg-blue-900 dark:text-blue-200">{{ usage.assigned }} assigned</span>
+                                    {% if usage.reserved %}
+                                    <span class="inline-flex items-center rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900 dark:text-amber-200">{{ usage.reserved }} reserved</span>
+                                    {% endif %}
+                                </div>
+                            </td>
+                            <td class="px-3 py-2 text-sm font-mono text-slate-900 dark:text-white">
+                                {{ usage.next_available or '—' }}
                             </td>
                             <td class="px-3 py-2 text-right">
                                 <form method="POST" action="/admin/network/olts/{{ olt.id }}/ip-pools/unassign" class="inline">
@@ -1042,15 +1067,25 @@
             <p class="text-sm text-slate-500 dark:text-slate-400 mb-4">No IP pools assigned to this OLT yet.</p>
             {% endif %}
             {% if available_ip_pools %}
-            <form method="POST" action="/admin/network/olts/{{ olt.id }}/ip-pools/assign" class="mt-4 flex items-end gap-3 border-t border-slate-200 pt-4 dark:border-slate-700">
+            <form method="POST" action="/admin/network/olts/{{ olt.id }}/ip-pools/assign" class="mt-4 grid grid-cols-1 gap-3 border-t border-slate-200 pt-4 dark:border-slate-700 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
                 {% include "components/forms/csrf_input.html" %}
-                <div class="flex-1">
+                <div>
                     <label for="assign-pool" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Assign IP Pool</label>
                     <select name="pool_id" id="assign-pool" required
                         class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         <option value="">Select a pool...</option>
                         {% for p in available_ip_pools %}
                         <option value="{{ p.id }}">{{ p.name }} — {{ p.cidr }}{% if p.gateway %} (gw: {{ p.gateway }}){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label for="assign-pool-vlan" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">Limit to VLAN</label>
+                    <select name="vlan_id" id="assign-pool-vlan"
+                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <option value="">Any VLAN</option>
+                        {% for vlan in olt_vlans %}
+                        <option value="{{ vlan.id }}">VLAN {{ vlan.tag }} — {{ vlan.name or 'Unnamed' }}</option>
                         {% endfor %}
                     </select>
                 </div>

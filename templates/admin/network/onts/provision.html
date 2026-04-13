@@ -16,6 +16,7 @@
 {% endif %}
 {% set lan_intent = ont_plan.get('configure_lan_tr069') if ont_plan is defined and ont_plan else {} %}
 {% set wifi_intent = ont_plan.get('configure_wifi_tr069') if ont_plan is defined and ont_plan else {} %}
+{% set wan_intent = ont_plan.get('configure_wan_tr069') if ont_plan is defined and ont_plan else {} %}
 <div class="space-y-6"
      x-data='{
         profileId: {{ (selected_profile_id or "") | tojson }},
@@ -29,11 +30,11 @@
         mgmtGateway: "",
         selectedVlan: {{ (ont.wan_vlan_id|string if ont.wan_vlan_id else "") | tojson }},
         ipPoolId: "",
-        staticIpPoolId: "",
-        staticIp: "",
-        staticSubnet: "255.255.255.0",
-        staticGateway: "",
-        staticDns: "",
+        staticIpPoolId: {{ (wan_intent.get("static_ip_pool_id", "") or wan_intent.get("ip_pool_id", "") or "") | tojson }},
+        staticIp: {{ (wan_intent.get("ip_address", "") or "") | tojson }},
+        staticSubnet: {{ (wan_intent.get("subnet_mask", "") or "255.255.255.0") | tojson }},
+        staticGateway: {{ (wan_intent.get("gateway", "") or "") | tojson }},
+        staticDns: {{ (wan_intent.get("dns_servers", "") or "") | tojson }},
         lanIp: {{ (lan_intent.get("lan_ip", "") or "") | tojson }},
         lanSubnet: {{ (lan_intent.get("lan_subnet", "") or "") | tojson }},
         dhcpEnabled: {{ (lan_intent.get("dhcp_enabled") if lan_intent.get("dhcp_enabled") is not none else "") | tojson }},
@@ -48,7 +49,11 @@
         showPass: false,
         vlanNasMap: {{ vlan_nas_map | tojson }},
         poolNasMap: {{ pool_nas_map | tojson }},
+        poolVlanMap: {{ pool_vlan_map | default({}) | tojson }},
         poolMatchesVlan(poolId) {
+            const poolVlan = this.poolVlanMap[poolId];
+            if (poolVlan && this.selectedVlan) return poolVlan === this.selectedVlan;
+            if (poolVlan && !this.selectedVlan) return false;
             if (!this.selectedVlan || !this.vlanNasMap[this.selectedVlan]) return true;
             const vlanNas = this.vlanNasMap[this.selectedVlan];
             const poolNas = this.poolNasMap[poolId];
@@ -200,7 +205,7 @@
                 {% if not profiles %}
                 <div class="text-center py-6">
                     <svg class="mx-auto h-10 w-10 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
-                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No provisioning profiles available.</p>
+                    <p class="mt-2 text-sm text-slate-500 dark:text-slate-400">No configuration profiles available.</p>
                 </div>
                 {% endif %}
             </div>
@@ -484,18 +489,33 @@
                                 <label for="static_ip_pool" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Assign from Pool</label>
                                 <select id="static_ip_pool" name="static_ip_pool_id"
                                     x-model="staticIpPoolId"
+                                    hx-get="/admin/network/onts/{{ ont.id }}/available-static-ips"
+                                    hx-trigger="load, change"
+                                    hx-target="#static-ip-choice-panel"
+                                    hx-swap="innerHTML"
+                                    hx-include="#static_ip_pool,#selected_static_ip_for_choices"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="">Manual entry below</option>
+                                    <option value="">Select an IP pool</option>
                                     {% for pool in ip_pools %}
-                                    <option value="{{ pool.id }}" x-show="poolMatchesVlan('{{ pool.id }}')">Auto from {{ pool.name }} ({{ pool.cidr }})</option>
+                                    <option value="{{ pool.id }}" x-show="poolMatchesVlan('{{ pool.id }}')" {% if (wan_intent.get("static_ip_pool_id") or wan_intent.get("ip_pool_id")) and (wan_intent.get("static_ip_pool_id") or wan_intent.get("ip_pool_id"))|string == pool.id|string %}selected{% endif %}>{{ pool.name }} ({{ pool.cidr }})</option>
                                     {% endfor %}
                                 </select>
+                                <input type="hidden" id="selected_static_ip_for_choices" name="selected_ip" :value="staticIp">
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Only available IPs from the selected OLT pool will be shown.</p>
+                            </div>
+                            <div id="static-ip-choice-panel">
+                                {% if wan_intent.get("static_ip_pool_id") or wan_intent.get("ip_pool_id") %}
+                                <p class="text-sm text-slate-500 dark:text-slate-400">Change the pool to refresh available IP choices.</p>
+                                {% else %}
+                                <p class="text-sm text-slate-500 dark:text-slate-400">Select a pool to load the next available IP.</p>
+                                {% endif %}
                             </div>
                             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                 <div>
                                     <label for="static_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Address</label>
-                                    <input type="text" id="static_ip" name="static_ip" x-model="staticIp" placeholder="e.g. 172.16.202.50" maxlength="15"
+                                    <input type="text" id="static_ip" name="static_ip" x-model="staticIp" placeholder="Select a pool above" maxlength="15"
                                         pattern="^(\d{1,3}\.){3}\d{1,3}$"
+                                        readonly
                                         class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 </div>
                                 <div>
@@ -649,14 +669,14 @@
                 </div>
             </details>
 
-            {# ── Section 4: Provision Gate ── #}
+            {# ── Section 4: Configure Gate ── #}
             <div class="rounded-lg border p-4"
                  :class="canProceed() ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/30 dark:bg-emerald-900/10' : 'border-amber-200 bg-amber-50/60 dark:border-amber-900/30 dark:bg-amber-900/10'">
                 <div class="flex items-start justify-between gap-4">
                     <div>
                         <h3 class="text-sm font-semibold"
                             :class="canProceed() ? 'text-emerald-900 dark:text-emerald-200' : 'text-amber-900 dark:text-amber-200'">
-                            Provisioning gate
+                            Configuration gate
                         </h3>
                         <p class="mt-1 text-sm"
                            :class="canProceed() ? 'text-emerald-800 dark:text-emerald-300' : 'text-amber-800 dark:text-amber-300'">
@@ -725,7 +745,7 @@
                     Save Configuration and Continue
                 </button>
                 <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
-                    The server repeats these checks before saving, so incomplete provisioning cannot continue from this page.
+                    The server repeats these checks before saving, so incomplete configuration cannot continue from this page.
                 </p>
             </form>
 
@@ -748,7 +768,7 @@
                     {% endif %}
                 </div>
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Provisioning Status</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Configuration Status</span>
                     {% set prov_status = ont.provisioning_status.value if ont.provisioning_status else 'unprovisioned' %}
                     {% set prov_classes = {
                         'provisioned': 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200',
@@ -765,7 +785,7 @@
                 </p>
                 {% if ont.last_provisioned_at %}
                 <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Provisioned</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-slate-400">Last Configured</span>
                     <span class="text-xs text-slate-600 dark:text-slate-400">{{ ont.last_provisioned_at.strftime('%Y-%m-%d %H:%M') }}</span>
                 </div>
                 {% endif %}

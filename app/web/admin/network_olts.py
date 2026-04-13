@@ -27,9 +27,7 @@ from app.services import (
 )
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
-from app.services.network import (
-    olt_authorization_workflow as olt_authorization_workflow_service,
-)
+from app.services.network import olt_api_operations as olt_api_operations_service
 from app.services.network import olt_operations as olt_operations_service
 from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
@@ -55,6 +53,14 @@ def _base_context(
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
     }
+
+
+def _olt_config_redirect(olt_id: str, success: bool, message: str) -> RedirectResponse:
+    status = "success" if success else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?tab=config&sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
 
 
 @router.get(
@@ -284,9 +290,7 @@ def olt_detail(
             "Failed to load operation history for OLT %s", olt_id, exc_info=True
         )
         operations = []
-    available_olt_firmware = olt_operations_service.get_olt_firmware_images(
-        db, olt_id
-    )
+    available_olt_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
 
     # ACS prefill for the TR-069 create modal
     olt_obj = page_data.get("olt")
@@ -327,8 +331,8 @@ def olt_assign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    olt_web_resources_service.assign_vlan_to_olt(db, olt_id, vlan_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    success, message = olt_web_resources_service.assign_vlan_to_olt(db, olt_id, vlan_id)
+    return _olt_config_redirect(olt_id, success, message)
 
 
 @router.post(
@@ -341,8 +345,10 @@ def olt_unassign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    olt_web_resources_service.unassign_vlan_from_olt(db, olt_id, vlan_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    success, message = olt_web_resources_service.unassign_vlan_from_olt(
+        db, olt_id, vlan_id
+    )
+    return _olt_config_redirect(olt_id, success, message)
 
 
 @router.post(
@@ -353,10 +359,13 @@ def olt_assign_ip_pool(
     request: Request,
     olt_id: str,
     pool_id: str = Form(...),
+    vlan_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    olt_web_resources_service.assign_ip_pool_to_olt(db, olt_id, pool_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    success, message = olt_web_resources_service.assign_ip_pool_to_olt(
+        db, olt_id, pool_id, vlan_id
+    )
+    return _olt_config_redirect(olt_id, success, message)
 
 
 @router.post(
@@ -369,8 +378,10 @@ def olt_unassign_ip_pool(
     pool_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    olt_web_resources_service.unassign_ip_pool_from_olt(db, olt_id, pool_id)
-    return RedirectResponse(f"/admin/network/olts/{olt_id}?tab=config", status_code=303)
+    success, message = olt_web_resources_service.unassign_ip_pool_from_olt(
+        db, olt_id, pool_id
+    )
+    return _olt_config_redirect(olt_id, success, message)
 
 
 @router.post(
@@ -467,9 +478,7 @@ def olt_netconf_get_config(
     """Fetch OLT running config via NETCONF and return as formatted HTML."""
     import html as html_mod
 
-    ok, message, config_xml = olt_operations_service.get_olt_netconf_config(
-        db, olt_id
-    )
+    ok, message, config_xml = olt_operations_service.get_olt_netconf_config(db, olt_id)
     escaped_msg = html_mod.escape(message)
     if not ok:
         return HTMLResponse(
@@ -540,7 +549,9 @@ def olt_repair_pon_ports(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
-    message = quote_plus("Repair PON ports uses POST. Please click Repair PON Ports again.")
+    message = quote_plus(
+        "Repair PON ports uses POST. Please click Repair PON Ports again."
+    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
         status_code=303,
@@ -678,10 +689,15 @@ def olt_authorize_ont(
         force,
     )
 
-    auth_result = olt_authorization_workflow_service.authorize_autofind_ont_audited(
-        db, olt_id, fsp, serial_number, force_reauthorize=force, request=request
+    auth_result = olt_api_operations_service.queue_authorize_ont(
+        db,
+        olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
+        force_reauthorize=force,
+        request=request,
     )
-    status = auth_result.status
+    status = "success" if auth_result.success else "error"
     message = auth_result.message
 
     if return_to in (

@@ -395,6 +395,11 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         for pool in ip_pools
         if getattr(pool, "olt_device_id", None)
     }
+    pool_vlan_map = {
+        str(pool.id): str(pool.vlan_id)
+        for pool in ip_pools
+        if getattr(pool, "vlan_id", None)
+    }
     ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
     lan_intent = (
         ont_plan.get("configure_lan_tr069")
@@ -480,6 +485,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "ip_pools": ip_pools,
         "vlan_nas_map": vlan_nas_map,
         "pool_nas_map": pool_nas_map,
+        "pool_vlan_map": pool_vlan_map,
         "tr069_servers": get_tr069_servers(db),
         "speed_profiles_download": get_speed_profiles(db, "download"),
         "speed_profiles_upload": get_speed_profiles(db, "upload"),

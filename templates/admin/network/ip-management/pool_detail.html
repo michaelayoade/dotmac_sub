@@ -73,6 +73,26 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ pool.dns_secondary or '-' }}</dd>
                         </div>
                         <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">OLT Scope</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if pool.olt_device %}
+                                <a href="/admin/network/olts/{{ pool.olt_device.id }}" class="text-primary-600 hover:text-primary-700 dark:text-primary-400">{{ pool.olt_device.name }}</a>
+                                {% else %}
+                                Global / any OLT
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">VLAN Scope</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if pool.vlan %}
+                                VLAN {{ pool.vlan.tag }}{% if pool.vlan.name %} — {{ pool.vlan.name }}{% endif %}
+                                {% else %}
+                                Any VLAN
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Assigned</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ utilization.used }}/{{ utilization.total }} ({{ utilization.percent }}%)</dd>
                         </div>

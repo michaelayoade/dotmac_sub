@@ -91,7 +91,7 @@ def ip_pool_new(request: Request, db: Session = Depends(get_db)):
     context = _base_context(
         request, db, active_page="ip-management", active_menu="ip-address"
     )
-    context.update(web_network_ip_service.get_ip_pool_new_form_data())
+    context.update(web_network_ip_service.get_ip_pool_new_form_data(db))
     return templates.TemplateResponse(
         "admin/network/ip-management/pool_form.html", context
     )
@@ -295,6 +295,8 @@ def ip_pool_edit(request: Request, pool_id: str, db: Session = Depends(get_db)):
         {
             "pool": web_network_ip_service.pool_form_snapshot_from_model(pool),
             "action_url": f"/admin/network/ip-management/pools/{pool_id}",
+            "olt_devices": web_network_ip_service.list_active_olts(db),
+            "vlans": web_network_ip_service.list_active_vlans(db),
         }
     )
     return templates.TemplateResponse(

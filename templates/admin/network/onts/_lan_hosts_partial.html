@@ -17,18 +17,17 @@
         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
             {% for host in lan_hosts %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-900 dark:text-white">{{ host.get('HostName', host.get('hostname', '—')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-900 dark:text-white">{{ host.get('IPAddress', host.get('ip_address', '—')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ host.get('MACAddress', host.get('mac_address', '—')) }}</td>
-                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ host.get('InterfaceType', host.get('interface', '—')) }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-900 dark:text-white">{{ host.host_name_display }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-900 dark:text-white">{{ host.ip_address_display }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm font-mono text-slate-600 dark:text-slate-300">{{ host.mac_address_display }}</td>
+                <td class="whitespace-nowrap px-4 py-2.5 text-sm text-slate-600 dark:text-slate-300">{{ host.interface_type_display }}</td>
                 <td class="whitespace-nowrap px-4 py-2.5">
-                    {% set active = host.get('Active', host.get('active', '')) %}
-                    {% if active == '1' or active == 'true' or active == True %}
+                    {% if host.active %}
                     <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">
-                        <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>Active
+                        <span class="mr-1.5 h-1.5 w-1.5 rounded-full bg-emerald-500"></span>{{ host.active_display }}
                     </span>
                     {% else %}
-                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">Inactive</span>
+                    <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ host.active_display }}</span>
                     {% endif %}
                 </td>
             </tr>

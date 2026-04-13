@@ -201,6 +201,7 @@
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Pool Name</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Version</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">CIDR</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Scope</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Used</th>
                             <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
                             <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
@@ -228,6 +229,12 @@
                             </td>
                             <td class="px-6 py-4 whitespace-nowrap">
                                 <span class="font-mono text-sm text-slate-600 dark:text-slate-300">{{ pool.cidr or '-' }}</span>
+                            </td>
+                            <td class="px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                                <div>{{ pool.olt_device.name if pool.olt_device else 'Any OLT' }}</div>
+                                <div class="text-xs text-slate-400 dark:text-slate-500">
+                                    {% if pool.vlan %}VLAN {{ pool.vlan.tag }}{% if pool.vlan.name %} — {{ pool.vlan.name }}{% endif %}{% else %}Any VLAN{% endif %}
+                                </div>
                             </td>
                             <td class="px-6 py-4">
                                 {% set util = pool_utilization[pool.id|string] if pool_utilization else None %}
@@ -261,7 +268,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="7" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools configured</td>
+                            <td colspan="8" class="px-6 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No IP pools configured</td>
                         </tr>
                         {% endfor %}
                     </tbody>

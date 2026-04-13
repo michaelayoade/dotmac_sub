@@ -151,6 +151,7 @@ def create_ip_block_from_form(request: Request, db, form) -> IpWebActionResult:
 
 
 def ip_pool_form_context(
+    db,
     pool_data: dict[str, object],
     *,
     action_url: str,
@@ -159,6 +160,8 @@ def ip_pool_form_context(
     context: dict[str, object] = {
         "pool": pool_data,
         "action_url": action_url,
+        "olt_devices": ip_service.list_active_olts(db),
+        "vlans": ip_service.list_active_vlans(db),
     }
     if error:
         context["error"] = error
@@ -174,6 +177,7 @@ def create_ip_pool_from_form(request: Request, db, form) -> IpWebActionResult:
         return IpWebActionResult(
             success=False,
             form_context=ip_pool_form_context(
+                db,
                 pool_data,
                 action_url=action_url,
                 error=error,
@@ -198,6 +202,7 @@ def create_ip_pool_from_form(request: Request, db, form) -> IpWebActionResult:
     return IpWebActionResult(
         success=False,
         form_context=ip_pool_form_context(
+            db,
             pool_data,
             action_url=action_url,
             error=error or "Please correct the highlighted fields.",
@@ -219,6 +224,7 @@ def update_ip_pool_from_form(request: Request, db, *, pool_id: str, form) -> IpW
         return IpWebActionResult(
             success=False,
             form_context=ip_pool_form_context(
+                db,
                 pool_data,
                 action_url=action_url,
                 error=error,
@@ -246,6 +252,7 @@ def update_ip_pool_from_form(request: Request, db, *, pool_id: str, form) -> IpW
     return IpWebActionResult(
         success=False,
         form_context=ip_pool_form_context(
+            db,
             pool_data,
             action_url=action_url,
             error=error or "Please correct the highlighted fields.",

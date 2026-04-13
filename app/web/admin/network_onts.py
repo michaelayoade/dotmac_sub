@@ -389,7 +389,7 @@ def ont_firmware_form(
 @router.get(
     "/onts/{ont_id}/provision",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("network:write"))],
+    dependencies=[Depends(require_permission("network:read"))],
 )
 def ont_provision_wizard(
     request: Request,

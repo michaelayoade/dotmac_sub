@@ -402,6 +402,7 @@ class Vlan(Base):
     port_links = relationship("PortVlan", back_populates="vlan")
     region = relationship("RegionZone")
     olt_device = relationship("OLTDevice", back_populates="vlans")
+    ip_pools = relationship("IpPool", back_populates="vlan")
 
 
 class PortVlan(Base):
@@ -506,6 +507,11 @@ class IpPool(Base):
         ForeignKey("olt_devices.id", ondelete="SET NULL"),
         index=True,
     )
+    vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        index=True,
+    )
     nas_device_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True),
         ForeignKey("nas_devices.id", ondelete="SET NULL"),
@@ -526,6 +532,7 @@ class IpPool(Base):
     ipv4_addresses = relationship("IPv4Address", back_populates="pool")
     ipv6_addresses = relationship("IPv6Address", back_populates="pool")
     olt_device = relationship("OLTDevice", back_populates="ip_pools")
+    vlan = relationship("Vlan", back_populates="ip_pools")
 
 
 class IpBlock(Base):

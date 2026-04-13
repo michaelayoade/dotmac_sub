@@ -1,0 +1,25 @@
+{% if pool and choices %}
+<div class="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 dark:border-emerald-900/30 dark:bg-emerald-900/10"
+     x-init="staticIp = {{ recommended_ip|tojson }}; staticSubnet = {{ netmask|tojson }}; staticGateway = {{ gateway|tojson }}; staticDns = {{ dns|tojson }}">
+    <label for="available_static_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Available IP Address</label>
+    <select id="available_static_ip"
+            x-model="staticIp"
+            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+        {% for choice in choices %}
+        <option value="{{ choice.address }}">
+            {{ choice.address }}{% if choice.recommended %} — recommended next available{% endif %}
+        </option>
+        {% endfor %}
+    </select>
+    <div class="mt-2 grid grid-cols-1 gap-2 text-xs text-slate-600 dark:text-slate-400 sm:grid-cols-3">
+        <span>Pool: <strong class="font-medium text-slate-800 dark:text-slate-200">{{ pool.name }}</strong></span>
+        <span>Subnet: <strong class="font-mono font-medium text-slate-800 dark:text-slate-200">{{ netmask }}</strong></span>
+        <span>Gateway: <strong class="font-mono font-medium text-slate-800 dark:text-slate-200">{{ gateway or 'Not set' }}</strong></span>
+    </div>
+</div>
+{% else %}
+<div class="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/30 dark:bg-amber-900/10 dark:text-amber-300"
+     x-init="staticIp = ''; staticSubnet = '255.255.255.0'; staticGateway = ''; staticDns = ''">
+    {{ message or "No available IP addresses for this pool." }}
+</div>
+{% endif %}
