@@ -1531,6 +1531,9 @@ class TestRouteRegistration:
         from app.web.admin.network_olts_onts import router
         from app.web.admin.network_onts_actions import router as actions_router
         from app.web.admin.network_onts_inventory import router as inventory_router
+        from app.web.admin.network_onts_provisioning import (
+            router as provisioning_router,
+        )
 
         # Collect paths from both routers (main routes + action routes)
         route_paths = [
@@ -1542,7 +1545,12 @@ class TestRouteRegistration:
         action_paths = [
             route.path for route in actions_router.routes if isinstance(route, Route)
         ]
-        all_paths = route_paths + inventory_paths + action_paths
+        provisioning_paths = [
+            route.path
+            for route in provisioning_router.routes
+            if isinstance(route, Route)
+        ]
+        all_paths = route_paths + inventory_paths + action_paths + provisioning_paths
 
         # Phase 1: Service-port routes
         assert "/network/onts/{ont_id}/service-ports" in route_paths
@@ -1563,25 +1571,25 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/config-snapshot" in action_paths
         assert "/network/onts/{ont_id}/edit" not in all_paths
 
-        # Phase 3: OLT profile routes remain, provisioning UI routes do not
+        # Phase 3: OLT profile routes remain, provisioning UI routes are registered
         assert "/network/olts/{olt_id}/profiles/line" in route_paths
         assert "/network/olts/{olt_id}/profiles/tr069" in route_paths
 
-        assert "/network/onts/{ont_id}/provisioning-preview" not in all_paths
-        assert "/network/onts/{ont_id}/preflight" not in all_paths
-        assert "/network/onts/{ont_id}/provision" not in all_paths
+        assert "/network/onts/{ont_id}/provisioning-preview" in provisioning_paths
+        assert "/network/onts/{ont_id}/preflight" in provisioning_paths
+        assert "/network/onts/{ont_id}/provision" in route_paths
         assert "/network/onts/{ont_id}/provision-status" not in all_paths
 
 
 class TestProvisioningUiTemplates:
-    def test_provisioning_widget_replaced_with_manual_operations_notice(self) -> None:
+    def test_provisioning_widget_links_to_gated_provisioning_page(self) -> None:
         template = Path(
             "templates/admin/network/onts/_provision_action.html"
         ).read_text()
 
-        assert "Manual ONT Operations" in template
-        assert "Coordinated provisioning is not available" in template
-        assert "clone service-ports" in template
+        assert "Provision ONT" in template
+        assert "/admin/network/onts/{{ ont.id }}/provision" in template
+        assert "management, internet, LAN, WiFi, and profile selections" in template
 
     def test_ont_detail_template_includes_live_location_details_card(self) -> None:
         template = Path("templates/admin/network/onts/detail.html").read_text()
@@ -1667,10 +1675,21 @@ class TestOntLocationDetailsHelpers:
             "templates/admin/network/onts/_provision_action.html"
         ).read_text()
 
-        assert "Preflight Checklist" not in template
-        assert "/preflight" not in template
-        assert "/provisioning-preview" not in template
         assert "/provision-status" not in template
+
+    def test_provisioning_profile_links_use_profile_catalog_routes(self) -> None:
+        provision_template = Path("templates/admin/network/onts/provision.html").read_text()
+        preview_template = Path(
+            "templates/admin/network/onts/_profile_preview.html"
+        ).read_text()
+
+        assert "/admin/network/provisioning-profiles/create" in provision_template
+        assert (
+            "/admin/network/provisioning-profiles/{{ profile.id }}/edit"
+            in preview_template
+        )
+        assert "/admin/network/olts/profiles" not in provision_template
+        assert "/admin/network/olts/profiles" not in preview_template
 
     def test_ont_form_describes_supported_external_id_formats(self) -> None:
         template = Path("templates/admin/network/onts/form.html").read_text()
