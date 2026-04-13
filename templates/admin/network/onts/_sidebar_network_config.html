@@ -38,6 +38,9 @@
     <div x-show="expanded" x-transition.duration.200ms x-cloak>
         <form hx-post="/admin/network/onts/{{ ont.id }}/pppoe-credentials"
               hx-swap="none"
+              hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
+              data-network-action
+              data-loading-label="Pushing..."
               hx-on::before-request="pppoeMessage = 'Pushing PPPoE credentials to device...'; pppoeType = 'info'"
               hx-on::after-request="try { const data = JSON.parse(event.detail.xhr.responseText || '{}'); pppoeMessage = data.message || (event.detail.successful ? 'PPPoE credentials pushed.' : 'PPPoE push failed.'); pppoeType = data.success ? 'success' : 'error'; } catch (e) { pppoeMessage = event.detail.successful ? 'PPPoE credentials pushed.' : 'PPPoE push failed.'; pppoeType = event.detail.successful ? 'success' : 'error'; }"
               class="space-y-2 pt-1">
@@ -61,7 +64,7 @@
                 <input type="password" id="pppoe-pw" name="password" maxlength="64" required placeholder="PPPoE password"
                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-1.5 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
-            <button type="submit" hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
+            <button type="submit"
                 class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-xs font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1">
                 <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4"/></svg>
                 Push to Device
@@ -89,9 +92,12 @@
 <div class="space-y-2.5">
     <p class="text-xs text-slate-500 dark:text-slate-400">Enable DHCPv6 prefix delegation on the ONT WAN interface via TR-069. The subscriber will receive a /64 prefix for their LAN.</p>
     <form hx-post="/admin/network/onts/{{ ont.id }}/enable-ipv6"
-          hx-swap="none">
+          hx-swap="none"
+          hx-confirm="Enable IPv6 dual-stack on this ONT? This will configure DHCPv6-PD via TR-069."
+          data-network-action
+          data-loading-label="Enabling...">
         {% include "components/forms/csrf_input.html" %}
-        <button type="submit" hx-confirm="Enable IPv6 dual-stack on this ONT? This will configure DHCPv6-PD via TR-069."
+        <button type="submit"
                 class="w-full inline-flex items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-500 to-cyan-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:from-teal-600 hover:to-cyan-700 hover:-translate-y-0.5 transition-all focus:outline-none focus:ring-2 focus:ring-teal-500 focus:ring-offset-1">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/></svg>
             Enable IPv6

@@ -94,6 +94,9 @@
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WiFi</h4>
     <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-config"
           hx-swap="none"
+          hx-confirm="Apply WiFi settings to this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Applying WiFi..."
           class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -150,6 +153,9 @@
         <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Change WiFi Name (SSID)</h4>
         <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-ssid"
               hx-swap="none"
+              hx-confirm="Update the WiFi SSID on this ONT via TR-069?"
+              data-network-action
+              data-loading-label="Updating..."
               class="space-y-3">
             {% include "components/forms/csrf_input.html" %}
             <div>
@@ -175,6 +181,9 @@
         <h4 class="text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-3">Change WiFi Password</h4>
         <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-password"
               hx-swap="none"
+              hx-confirm="Update the WiFi password on this ONT via TR-069?"
+              data-network-action
+              data-loading-label="Updating..."
               class="space-y-3">
             {% include "components/forms/csrf_input.html" %}
             <div>

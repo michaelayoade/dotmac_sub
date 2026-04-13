@@ -49,6 +49,9 @@
         </button>
         <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/reboot"
                 hx-swap="none"
+                hx-confirm="Reboot this ONT via TR-069?"
+                data-network-action
+                data-loading-label="Rebooting..."
                 class="rounded-lg border border-rose-300 bg-rose-50 px-3 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 dark:border-rose-700 dark:bg-rose-900/20 dark:text-rose-300">
             Reboot
         </button>
@@ -220,12 +223,18 @@
                             {% if is_enabled %}
                             <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/lan-port?port={{ port.index }}&enabled=false"
                                 hx-swap="none"
+                                hx-confirm="Disable LAN port ETH {{ port.index }} via TR-069?"
+                                data-network-action
+                                data-loading-label="Disabling..."
                                 class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
                                 Disable
                             </button>
                             {% else %}
                             <button hx-post="/admin/network/onts/{{ tr069.ont_id }}/lan-port?port={{ port.index }}&enabled=true"
                                 hx-swap="none"
+                                hx-confirm="Enable LAN port ETH {{ port.index }} via TR-069?"
+                                data-network-action
+                                data-loading-label="Enabling..."
                                 class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
                                 Enable
                             </button>
@@ -438,9 +447,11 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="const fd = new FormData(); fd.append('username', pppoeUser); fd.append('password', pppoePass); submitAction('/admin/network/onts/{{ tr069.ont_id }}/pppoe-credentials', {method:'POST', body: fd}, 'Applying PPPoE credentials...').then(ok => { if (ok) { showPppoeModal = false; pppoePass = ''; } })"
-                        class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
-                    Push Credentials
+                <button @click="if (!confirm('Push PPPoE credentials to this ONT via TR-069?')) return; const fd = new FormData(); fd.append('username', pppoeUser); fd.append('password', pppoePass); submitAction('/admin/network/onts/{{ tr069.ont_id }}/pppoe-credentials', {method:'POST', body: fd}, 'Applying PPPoE credentials...').then(ok => { if (ok) { showPppoeModal = false; pppoePass = ''; } })"
+                        :disabled="actionPending"
+                        :class="actionPending && 'opacity-75 cursor-wait'"
+                        class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:cursor-wait">
+                    <span x-text="actionPending ? 'Pushing...' : 'Push Credentials'"></span>
                 </button>
             </div>
         </div>
@@ -500,9 +511,11 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-ssid?ssid=' + encodeURIComponent(ssid), {method:'POST'}, 'Applying WiFi SSID...').then(ok => { if (ok) { showSsidModal = false; } })"
-                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                    Apply
+                <button @click="if (!confirm('Update the WiFi SSID on this ONT via TR-069?')) return; submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-ssid?ssid=' + encodeURIComponent(ssid), {method:'POST'}, 'Applying WiFi SSID...').then(ok => { if (ok) { showSsidModal = false; } })"
+                        :disabled="actionPending"
+                        :class="actionPending && 'opacity-75 cursor-wait'"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-wait">
+                    <span x-text="actionPending ? 'Applying...' : 'Apply'"></span>
                 </button>
             </div>
         </div>
@@ -528,9 +541,11 @@
                         class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300">
                     Cancel
                 </button>
-                <button @click="const fd = new FormData(); fd.append('password', wifiPassword); submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-password', {method:'POST', body: fd}, 'Applying WiFi password...').then(ok => { if (ok) { showPasswordModal = false; wifiPassword = ''; } })"
-                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700">
-                    Apply
+                <button @click="if (!confirm('Update the WiFi password on this ONT via TR-069?')) return; const fd = new FormData(); fd.append('password', wifiPassword); submitAction('/admin/network/onts/{{ tr069.ont_id }}/wifi-password', {method:'POST', body: fd}, 'Applying WiFi password...').then(ok => { if (ok) { showPasswordModal = false; wifiPassword = ''; } })"
+                        :disabled="actionPending"
+                        :class="actionPending && 'opacity-75 cursor-wait'"
+                        class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-wait">
+                    <span x-text="actionPending ? 'Applying...' : 'Apply'"></span>
                 </button>
             </div>
         </div>

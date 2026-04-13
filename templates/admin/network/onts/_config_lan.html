@@ -37,6 +37,9 @@
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure LAN and DHCP</h4>
     <form hx-post="/admin/network/onts/{{ ont_id }}/lan-config"
           hx-swap="none"
+          hx-confirm="Apply LAN and DHCP settings to this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Applying LAN..."
           class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -121,12 +124,18 @@
                         {% if is_enabled %}
                         <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port.index }}&enabled=false"
                             hx-swap="none"
+                            hx-confirm="Disable LAN port ETH {{ port.index }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Disabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
                             Disable
                         </button>
                         {% else %}
                         <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port.index }}&enabled=true"
                             hx-swap="none"
+                            hx-confirm="Enable LAN port ETH {{ port.index }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Enabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
                             Enable
                         </button>

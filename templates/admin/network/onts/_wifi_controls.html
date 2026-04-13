@@ -14,6 +14,9 @@
     {# Set SSID #}
     <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-ssid"
           hx-swap="none"
+          hx-confirm="Update the WiFi SSID on this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Setting..."
           class="space-y-1.5">
         {% include "components/forms/csrf_input.html" %}
         <label for="wifi-ssid-input" class="block text-xs font-medium text-slate-600 dark:text-slate-400">{{ 'New SSID' if current_ssid else 'SSID' }}</label>
@@ -29,6 +32,9 @@
     {# Set Password #}
     <form hx-post="/admin/network/onts/{{ ont_id }}/wifi-password"
           hx-swap="none"
+          hx-confirm="Update the WiFi password on this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Setting..."
           class="space-y-1.5">
         {% include "components/forms/csrf_input.html" %}
         <label for="wifi-pw-input" class="block text-xs font-medium text-slate-600 dark:text-slate-400">Password</label>

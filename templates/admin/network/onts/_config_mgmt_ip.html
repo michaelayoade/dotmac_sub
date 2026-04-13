@@ -99,6 +99,9 @@
 
     <form hx-post="/admin/network/onts/{{ ont.id if ont else '' }}/actions/configure-mgmt-ip"
           hx-swap="none"
+          hx-confirm="Apply this management IP configuration through the OLT/SSH path?"
+          data-network-action
+          data-loading-label="Applying..."
           class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
         <input type="hidden" name="ip_mode" :value="ipMode">

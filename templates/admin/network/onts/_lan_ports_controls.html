@@ -31,7 +31,9 @@
                     <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
                             hx-target="#lan-ports-controls"
                             hx-swap="innerHTML"
-                            hx-confirm="Disable LAN port {{ port_num }}?"
+                            hx-confirm="Disable LAN port {{ port_num }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Disabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-1"
                             title="Disable port {{ port_num }}">Disable</button>
                 </form>
@@ -41,7 +43,9 @@
                     <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
                             hx-target="#lan-ports-controls"
                             hx-swap="innerHTML"
-                            hx-confirm="Enable LAN port {{ port_num }}?"
+                            hx-confirm="Enable LAN port {{ port_num }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Enabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
                             title="Enable port {{ port_num }}">Enable</button>
                 </form>
@@ -68,7 +72,9 @@
                     <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
                             hx-target="#lan-ports-controls"
                             hx-swap="innerHTML"
-                            hx-confirm="Enable LAN port {{ port_num }}?"
+                            hx-confirm="Enable LAN port {{ port_num }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Enabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium bg-emerald-100 text-emerald-700 hover:bg-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-400 transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-1"
                             title="Enable port {{ port_num }}">On</button>
                 </form>
@@ -77,7 +83,9 @@
                     <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
                             hx-target="#lan-ports-controls"
                             hx-swap="innerHTML"
-                            hx-confirm="Disable LAN port {{ port_num }}?"
+                            hx-confirm="Disable LAN port {{ port_num }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Disabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium bg-rose-100 text-rose-700 hover:bg-rose-200 dark:bg-rose-900/30 dark:text-rose-400 transition-colors focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-1"
                             title="Disable port {{ port_num }}">Off</button>
                 </form>

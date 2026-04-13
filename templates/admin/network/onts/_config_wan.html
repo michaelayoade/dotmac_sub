@@ -95,6 +95,9 @@
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WAN</h4>
     <form hx-post="/admin/network/onts/{{ ont_id }}/wan-config"
           hx-swap="none"
+          hx-confirm="Apply WAN settings to this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Applying WAN..."
           class="space-y-4">
         {% include "components/forms/csrf_input.html" %}
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
@@ -159,6 +162,9 @@
 
     <form hx-post="/admin/network/onts/{{ ont_id }}/pppoe-credentials"
           hx-swap="none"
+          hx-confirm="Push PPPoE credentials to this ONT via TR-069?"
+          data-network-action
+          data-loading-label="Pushing..."
           class="space-y-4">
         <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>

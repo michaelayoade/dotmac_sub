@@ -176,6 +176,71 @@
         document.addEventListener('htmx:responseError', dispatchToastFromTrigger);
         document.addEventListener('htmx:showToast', forwardHtmxToast);
 
+        function networkActionRoot(elt) {
+            if (!elt || !elt.closest) {
+                return null;
+            }
+            return elt.closest('[data-network-action]');
+        }
+
+        function setNetworkActionBusy(evt) {
+            const root = networkActionRoot(evt.detail && evt.detail.elt);
+            if (!root) {
+                return;
+            }
+
+            root.dataset.networkActionBusy = 'true';
+            root.setAttribute('aria-busy', 'true');
+            root.classList.add('opacity-75', 'cursor-wait');
+
+            const controls = root.matches('button, input, select, textarea')
+                ? [root].concat(Array.from(root.querySelectorAll('button, input, select, textarea')))
+                : Array.from(root.querySelectorAll('button, input, select, textarea'));
+            controls.forEach(function(control) {
+                if (!control.disabled) {
+                    control.dataset.networkActionEnabled = 'true';
+                    control.disabled = true;
+                }
+            });
+
+            const labelTarget = root.querySelector('[data-network-action-label]') ||
+                (root.matches('button') ? root : root.querySelector('button[type="submit"]'));
+            if (labelTarget && root.dataset.loadingLabel) {
+                if (!labelTarget.dataset.networkActionOriginalHtml) {
+                    labelTarget.dataset.networkActionOriginalHtml = labelTarget.innerHTML;
+                }
+                labelTarget.textContent = root.dataset.loadingLabel;
+            }
+        }
+
+        function clearNetworkActionBusy(evt) {
+            const root = networkActionRoot(evt.detail && evt.detail.elt);
+            if (!root || root.dataset.networkActionBusy !== 'true') {
+                return;
+            }
+
+            delete root.dataset.networkActionBusy;
+            root.removeAttribute('aria-busy');
+            root.classList.remove('opacity-75', 'cursor-wait');
+
+            root.querySelectorAll('[data-network-action-enabled="true"]').forEach(function(control) {
+                control.disabled = false;
+                delete control.dataset.networkActionEnabled;
+            });
+
+            const labelTarget = root.querySelector('[data-network-action-label]') ||
+                (root.matches('button') ? root : root.querySelector('button[type="submit"]'));
+            if (labelTarget && labelTarget.dataset.networkActionOriginalHtml) {
+                labelTarget.innerHTML = labelTarget.dataset.networkActionOriginalHtml;
+                delete labelTarget.dataset.networkActionOriginalHtml;
+            }
+        }
+
+        document.addEventListener('htmx:beforeSend', setNetworkActionBusy);
+        document.addEventListener('htmx:afterRequest', clearNetworkActionBusy);
+        document.addEventListener('htmx:sendError', clearNetworkActionBusy);
+        document.addEventListener('htmx:responseError', clearNetworkActionBusy);
+
         // Global search component
         function globalSearch() {
             return {

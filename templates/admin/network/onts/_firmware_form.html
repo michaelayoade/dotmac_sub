@@ -2,6 +2,9 @@
 {% if available_firmware %}
 <form hx-post="/admin/network/onts/{{ ont_id }}/firmware-upgrade"
       hx-swap="none"
+      hx-confirm="Upgrade firmware? The ONT will download the image and reboot automatically."
+      data-network-action
+      data-loading-label="Upgrading..."
       class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
     {% include "components/forms/csrf_input.html" %}
     <select name="firmware_image_id" required
@@ -11,7 +14,7 @@
         <option value="{{ fw.id }}">{{ fw.vendor }} {{ fw.model or '' }} v{{ fw.version }}{% if fw.file_size_bytes %} ({{ (fw.file_size_bytes / 1048576) | round(1) }} MB){% endif %}</option>
         {% endfor %}
     </select>
-    <button type="submit" hx-confirm="Upgrade firmware? The ONT will download the image and reboot automatically."
+    <button type="submit"
         class="inline-flex items-center gap-1 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-amber-700">
         <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
         Upgrade

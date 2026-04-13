@@ -48,7 +48,9 @@
                     <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=false"
                             hx-target="#ethernet-ports-panel"
                             hx-swap="innerHTML"
-                            hx-confirm="Disable LAN port {{ port_num }}?"
+                            hx-confirm="Disable LAN port {{ port_num }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Disabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/20">
                         Disable
                     </button>
@@ -56,7 +58,9 @@
                     <button hx-post="/admin/network/onts/{{ ont_id }}/lan-port?port={{ port_num }}&enabled=true"
                             hx-target="#ethernet-ports-panel"
                             hx-swap="innerHTML"
-                            hx-confirm="Enable LAN port {{ port_num }}?"
+                            hx-confirm="Enable LAN port {{ port_num }} via TR-069?"
+                            data-network-action
+                            data-loading-label="Enabling..."
                             class="rounded px-2 py-0.5 text-xs font-medium text-emerald-600 hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-900/20">
                         Enable
                     </button>
