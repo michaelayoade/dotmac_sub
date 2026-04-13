@@ -21,8 +21,8 @@ from app.schemas.network_olt_ops import (
     OltTr069ProfileRead,
 )
 from app.services.auth_dependencies import require_permission
-from app.services.network.olt import OLTDevices
 from app.services.network import olt_api_operations
+from app.services.network.olt import OLTDevices
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def authorize_ont(
     payload: OltAuthorizeOntRequest,
     db: Session = Depends(get_db),
 ) -> OltOperationResponse:
-    result = olt_api_operations.authorize_ont(
+    result = olt_api_operations.queue_authorize_ont(
         db,
         olt_id,
         fsp=payload.fsp,
@@ -83,12 +83,12 @@ def authorize_ont(
         force_reauthorize=payload.force_reauthorize,
         request=request,
     )
-    if not result.success and result.status != "warning":
+    if not result.success:
         raise HTTPException(status_code=422, detail=result.message)
     return OltOperationResponse(
         success=result.success,
         message=result.message,
-        data=result.to_dict(),
+        data=result.data,
     )
 
 

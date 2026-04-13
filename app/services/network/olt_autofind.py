@@ -11,7 +11,6 @@ from starlette.requests import Request
 from app.models.network import (
     GponChannel,
     OLTDevice,
-    OntAssignment,
     OntUnit,
     OnuOnlineStatus,
     PonType,
@@ -21,7 +20,9 @@ from app.services import tr069 as tr069_service
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
-from app.services.network.olt_web_topology import ensure_canonical_pon_port
+from app.services.network.ont_assignment_alignment import (
+    align_ont_assignment_to_authoritative_fsp,
+)
 from app.services.web_network_ont_autofind import _find_ont_by_serial
 
 
@@ -92,51 +93,13 @@ def persist_authorized_ont_inventory(
         if candidate.mac:
             ont.mac_address = candidate.mac
 
-    pon_port = ensure_canonical_pon_port(
+    align_ont_assignment_to_authoritative_fsp(
         db,
+        ont=ont,
         olt_id=olt.id,
         fsp=fsp,
-        board=board,
-        port=port,
+        assigned_at=now,
     )
-
-    active_assignment = db.scalars(
-        select(OntAssignment)
-        .where(
-            OntAssignment.ont_unit_id == ont.id,
-            OntAssignment.active.is_(True),
-        )
-        .order_by(
-            OntAssignment.assigned_at.desc(),
-            OntAssignment.created_at.desc(),
-        )
-    ).first()
-    if active_assignment is None:
-        db.add(
-            OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=pon_port.id,
-                active=True,
-                assigned_at=now,
-            )
-        )
-    elif active_assignment.pon_port_id != pon_port.id:
-        active_assignment.active = False
-        db.add(
-            OntAssignment(
-                ont_unit_id=ont.id,
-                pon_port_id=pon_port.id,
-                subscriber_id=active_assignment.subscriber_id,
-                service_address_id=active_assignment.service_address_id,
-                notes=active_assignment.notes,
-                active=True,
-                assigned_at=now,
-            )
-        )
-    else:
-        active_assignment.active = True
-        if active_assignment.assigned_at is None:
-            active_assignment.assigned_at = now
 
     if candidate is not None:
         candidate.ont_unit = ont

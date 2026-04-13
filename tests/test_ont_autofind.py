@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.models.network import OLTDevice
+from app.models.network import OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services import web_network_ont_autofind as autofind_service
 
@@ -52,6 +52,56 @@ def test_sync_olt_autofind_candidates_creates_and_expires(db_session, monkeypatc
     assert item.resolved_at is not None
 
 
+def test_sync_olt_autofind_candidates_reactivates_disappeared_entry(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="OLT-Reappeared", mgmt_ip="198.51.100.203", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/1",
+        serial_number="HWTC-7D4806C3",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    entries = [
+        SimpleNamespace(
+            fsp="0/2/1",
+            serial_number="HWTC7D4806C3",
+            serial_hex="485754437D4806C3",
+            vendor_id="HWTC",
+            model="EG8145V5",
+            software_version="V1",
+            mac="E0:37:68:80:50:11",
+            equipment_sn="EQ-1",
+            autofind_time="2026-03-23 12:05",
+        )
+    ]
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.get_autofind_onts",
+        lambda _olt: (True, "Found 1 unregistered ONT", entries),
+    )
+
+    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
+        db_session, str(olt.id)
+    )
+
+    assert ok is True
+    assert stats["created"] == 0
+    assert stats["updated"] == 1
+    assert db_session.query(OltAutofindCandidate).count() == 1
+    db_session.refresh(item)
+    assert item.is_active is True
+    assert item.resolution_reason is None
+    assert item.resolved_at is None
+    assert item.serial_number == "HWTC7D4806C3"
+
+
 def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
     olt = OLTDevice(name="OLT-Resolve", mgmt_ip="198.51.100.201", is_active=True)
     db_session.add(olt)
@@ -77,6 +127,46 @@ def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
     assert item.is_active is False
     assert item.resolution_reason == "authorized"
     assert item.resolved_at is not None
+
+
+def test_restore_candidate_clears_disappeared_state_for_authorization(db_session):
+    from app.services.network.olt_authorization_workflow import (
+        get_autofind_candidate_by_serial,
+    )
+
+    olt = OLTDevice(name="OLT-Restore", mgmt_ip="198.51.100.204", is_active=True)
+    ont = OntUnit(serial_number="HWTC22222222", is_active=True)
+    db_session.add_all([olt, ont])
+    db_session.commit()
+
+    item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/6",
+        serial_number="HWTC22222222",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    ok, message = autofind_service.restore_candidate(db_session, candidate_id=str(item.id))
+
+    assert ok is True
+    assert "Restored autofind candidate" in message
+    db_session.refresh(item)
+    assert item.is_active is True
+    assert item.resolution_reason is None
+    assert item.resolved_at is None
+    assert item.ont_unit_id == ont.id
+    assert (
+        get_autofind_candidate_by_serial(
+            db_session,
+            str(olt.id),
+            "HWTC22222222",
+            fsp="0/2/6",
+        )
+        is not None
+    )
 
 
 def test_build_unconfigured_onts_page_data_supports_history_filters(db_session):

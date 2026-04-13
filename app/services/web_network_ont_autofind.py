@@ -109,17 +109,19 @@ def sync_olt_autofind_entries(
 
     entry_list = list(entries)
     now = datetime.now(UTC)
-    active_entries = list(
+    existing_candidates = list(
         db.scalars(
             select(OltAutofindCandidate).where(
                 OltAutofindCandidate.olt_id == olt.id,
-                OltAutofindCandidate.is_active.is_(True),
             )
         ).all()
     )
+    active_entries = [
+        candidate for candidate in existing_candidates if candidate.is_active
+    ]
     by_key = {
         (item.fsp, _normalize_serial(item.serial_number)): item
-        for item in active_entries
+        for item in existing_candidates
     }
     seen_keys: set[tuple[str, str]] = set()
     created = 0
@@ -134,15 +136,6 @@ def sync_olt_autofind_entries(
         key = (fsp, _normalize_serial(serial_number))
         seen_keys.add(key)
         candidate = by_key.get(key)
-        if candidate is None:
-            candidate = db.scalars(
-                select(OltAutofindCandidate).where(
-                    OltAutofindCandidate.olt_id == olt.id,
-                    OltAutofindCandidate.fsp == fsp,
-                    OltAutofindCandidate.serial_number == serial_number,
-                )
-            ).first()
-
         matched_ont = _find_ont_by_serial(db, serial_number)
         if candidate is None:
             candidate = OltAutofindCandidate(
@@ -167,6 +160,8 @@ def sync_olt_autofind_entries(
             candidate.ont_unit_id = (
                 matched_ont.id if matched_ont else candidate.ont_unit_id
             )
+            candidate.fsp = fsp
+            candidate.serial_number = serial_number
             candidate.serial_hex = getattr(entry, "serial_hex", None)
             candidate.vendor_id = getattr(entry, "vendor_id", None)
             candidate.model = getattr(entry, "model", None)
@@ -247,6 +242,9 @@ def restore_candidate(db: Session, *, candidate_id: str) -> tuple[bool, str]:
     candidate.is_active = True
     candidate.resolution_reason = None
     candidate.resolved_at = None
+    matched_ont = _find_ont_by_serial(db, candidate.serial_number)
+    if matched_ont:
+        candidate.ont_unit_id = matched_ont.id
     candidate.last_seen_at = datetime.now(UTC)
     db.commit()
     logger.info(

@@ -32,7 +32,7 @@ from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_resources as olt_web_resources_service
 from app.services.network import olt_web_topology as olt_web_topology_service
-from app.services.network.action_logging import log_network_action_result
+from app.services.network.action_logging import actor_label, log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.web.request_parsing import parse_form_data_sync
 
@@ -1006,59 +1006,39 @@ def olt_authorize_ont(
         return RedirectResponse(target, status_code=303)
 
     from app.services.network.olt_authorization_workflow import (
-        authorize_autofind_ont_audited as _authorize_workflow,
+        queue_authorize_autofind_ont,
     )
 
     force = force_reauthorize.lower() in ("true", "1", "on", "yes")
-    logger.info(
-        "authorize_ont route: serial=%s force_reauthorize_raw=%r force=%s",
-        serial_number,
-        force_reauthorize,
-        force,
-    )
-
-    result = _authorize_workflow(
+    initiated_by = actor_label(request)
+    queue_ok, queue_msg, operation_id = queue_authorize_autofind_ont(
         db,
-        olt_id,
-        fsp,
-        serial_number,
+        olt_id=olt_id,
+        fsp=fsp,
+        serial_number=serial_number,
         force_reauthorize=force,
-        request=request,
+        initiated_by=initiated_by,
     )
-    status = getattr(result, "status", "success" if result.success else "error")
-    log_network_action_result(
+    status = "success" if queue_ok else "error"
+    from app.services.network.olt_web_audit import log_olt_audit_event
+
+    log_olt_audit_event(
+        db,
         request=request,
-        resource_type="olt",
-        resource_id=olt_id,
-        action="Authorize ONT",
-        success=result.success,
-        message=result.message,
+        action="force_authorize_ont_queued" if force else "authorize_ont_queued",
+        entity_id=olt_id,
         metadata={
+            "result": status,
+            "message": queue_msg,
             "fsp": fsp,
             "serial_number": serial_number,
             "force_reauthorize": force,
+            "operation_id": operation_id,
+            "initiated_by": initiated_by,
         },
+        status_code=202 if queue_ok else 500,
+        is_success=queue_ok,
     )
-    completed_authorization = bool(
-        getattr(result, "completed_authorization", False)
-    )
-    result_query = _authorization_result_query(result)
-
-    if completed_authorization and result.ont_unit_id:
-        target = (
-            f"/admin/network/onts/{result.ont_unit_id}"
-            + (f"?authorize_result={result_query}" if result_query else "")
-        )
-        if is_htmx:
-            return Response(
-                status_code=200,
-                headers={
-                    **_toast_headers(result.message, status),
-                    "HX-Redirect": target,
-                },
-            )
-        return RedirectResponse(target, status_code=303)
-
     if return_to in (
         "/admin/network/unconfigured-onts",
         "/admin/network/onts",
@@ -1071,28 +1051,27 @@ def olt_authorize_ont(
         )
         separator = "&" if "?" in target_base else "?"
         target = (
-            f"{target_base}{separator}status={status}&message={quote_plus(result.message)}"
-            + (f"&authorize_result={result_query}" if result_query else "")
+            f"{target_base}{separator}status={status}&message={quote_plus(queue_msg)}"
         )
         if is_htmx:
             return Response(
                 status_code=200,
                 headers={
-                    **_toast_headers(result.message, status),
+                    **_toast_headers(queue_msg, status),
                     "HX-Redirect": target,
                 },
             )
         return RedirectResponse(target, status_code=303)
 
     target = (
-        f"/admin/network/olts/{olt_id}?tab=autofind&sync_status={status}&sync_message={quote_plus(result.message)}"
-        + (f"&authorize_result={result_query}" if result_query else "")
+        f"/admin/network/olts/{olt_id}?tab=autofind&sync_status={status}"
+        f"&sync_message={quote_plus(queue_msg)}"
     )
     if is_htmx:
         return Response(
             status_code=200,
             headers={
-                **_toast_headers(result.message, status),
+                **_toast_headers(queue_msg, status),
                 "HX-Redirect": target,
             },
         )

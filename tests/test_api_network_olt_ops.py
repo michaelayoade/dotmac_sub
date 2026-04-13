@@ -88,3 +88,64 @@ class TestRouterRegistration:
         assert any("/olt-devices/{olt_id}/cli-command" in p for p in paths)
         assert any("/olt-devices/{olt_id}/profiles/line" in p for p in paths)
         assert any("/olt-devices/{olt_id}/service-ports" in p for p in paths)
+
+
+class TestAuthorizeEndpoint:
+    """Authorization endpoints should enqueue OLT work instead of blocking HTTP."""
+
+    def test_authorize_ont_queues_background_operation(self, monkeypatch):
+        from app.api import network_olt_ops
+
+        captured = {}
+
+        def fake_queue_authorize_ont(
+            db,
+            olt_id,
+            *,
+            fsp,
+            serial_number,
+            force_reauthorize=False,
+            request=None,
+        ):
+            captured.update(
+                {
+                    "db": db,
+                    "olt_id": olt_id,
+                    "fsp": fsp,
+                    "serial_number": serial_number,
+                    "force_reauthorize": force_reauthorize,
+                    "request": request,
+                }
+            )
+            return network_olt_ops.olt_api_operations.OltApiWriteResult(
+                True,
+                "Authorization queued. Track progress in operation history.",
+                {"status": "queued", "operation_id": "op-123"},
+            )
+
+        monkeypatch.setattr(
+            network_olt_ops.olt_api_operations,
+            "queue_authorize_ont",
+            fake_queue_authorize_ont,
+        )
+
+        payload = OltAuthorizeOntRequest(
+            fsp="0/1/0",
+            serial_number="HWTCABCD1234",
+            force_reauthorize=True,
+        )
+        request = object()
+        db = object()
+
+        response = network_olt_ops.authorize_ont(request, "olt-123", payload, db=db)
+
+        assert response.success is True
+        assert response.data == {"status": "queued", "operation_id": "op-123"}
+        assert captured == {
+            "db": db,
+            "olt_id": "olt-123",
+            "fsp": "0/1/0",
+            "serial_number": "HWTCABCD1234",
+            "force_reauthorize": True,
+            "request": request,
+        }
