@@ -109,7 +109,7 @@ def poll_single_olt(olt_id: str) -> dict[str, int | str]:
 def poll_all_olt_signals() -> dict[str, int]:
     """Periodic task to poll all active OLTs for ONT signal levels.
 
-    First marks stale ONTs as offline (those not seen in 2x poll interval),
+    First marks stale ONTs as unknown (those not seen in 2x poll interval),
     then fans out to parallel poll_single_olt tasks for each active OLT.
     Each subtask runs independently with its own per-OLT advisory lock,
     preventing concurrent polling of the same device even if this
@@ -117,20 +117,21 @@ def poll_all_olt_signals() -> dict[str, int]:
 
     Returns:
         Statistics dict with olts_dispatched and stale_marked_offline counts.
+        stale_marked_offline is a legacy key; those ONTs are now set unknown.
     """
     logger.info("Starting parallel OLT signal polling orchestrator")
     db = SessionLocal()
     stale_marked = 0
     try:
-        # Mark stale ONTs as offline BEFORE dispatching new polls
+        # Mark stale ONTs as unknown BEFORE dispatching new polls
         # This eliminates race conditions with finalize_olt_polling
         # ONTs not updated in 10 minutes (2x poll interval) are considered stale
         try:
             stale_marked = _mark_stale_onts_offline(db, stale_threshold_minutes=10)
             if stale_marked > 0:
-                logger.info("Marked %d stale ONTs as offline", stale_marked)
+                logger.info("Marked %d stale ONTs as unknown", stale_marked)
         except Exception as exc:
-            logger.warning("Failed to mark stale ONTs offline: %s", exc)
+            logger.warning("Failed to mark stale ONTs unknown: %s", exc)
 
         # Get all active OLTs
         stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True))
@@ -172,23 +173,18 @@ def poll_all_olt_signals() -> dict[str, int]:
 
 
 def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
-    """Mark ONTs as offline if they haven't been polled recently.
+    """Mark stale ONTs as unknown if they haven't been polled recently.
 
-    P2 FIX: Only marks ONTs offline if their parent OLT was successfully
-    polled recently. This prevents false-positives during OLT downtime
-    or network issues where the OLT itself was unreachable.
-
-    ONTs that are currently 'online' but haven't had their signal_updated_at
-    refreshed within the threshold are marked offline with reason 'los',
-    but only if the OLT's last_poll_at is recent (indicating the OLT
-    was reachable but the ONT wasn't seen).
+    Missing/stale poll data is not proof that the ONT is offline.  This task
+    only downgrades stale OLT-side status to unknown.  Explicit fresh OLT
+    readings are responsible for setting offline.
 
     Args:
         db: Database session.
-        stale_threshold_minutes: Minutes without update before marking offline.
+        stale_threshold_minutes: Minutes without update before marking unknown.
 
     Returns:
-        Number of ONTs marked offline.
+        Number of ONTs marked unknown because the OLT poll did not refresh them.
     """
     from datetime import UTC, datetime, timedelta
 
@@ -198,7 +194,6 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     from app.models.network import (
         OLTDevice,
         OntUnit,
-        OnuOfflineReason,
         OnuOnlineStatus,
         PollStatus,
     )
@@ -292,8 +287,8 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     )
     marked = 0
     for ont in stale_candidates:
-        ont.online_status = OnuOnlineStatus.offline
-        ont.offline_reason = OnuOfflineReason.los
+        ont.online_status = OnuOnlineStatus.unknown
+        ont.offline_reason = None
         snapshot = resolve_ont_status_for_model(ont, now=now)
         ont.acs_status = snapshot.acs_status
         ont.acs_last_inform_at = snapshot.acs_last_inform_at
@@ -311,7 +306,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         )
     if marked > 0:
         logger.info(
-            "Marked %d stale ONTs offline (OLTs polled but ONTs not seen in %d min)",
+            "Marked %d stale ONTs unknown (OLTs polled but ONTs not seen in %d min)",
             marked,
             stale_threshold_minutes,
         )

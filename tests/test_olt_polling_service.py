@@ -324,7 +324,7 @@ def test_huawei_external_id_repair_targets_packed_snmp_index() -> None:
     )
 
 
-def test_mark_stale_onts_offline_updates_effective_status_snapshot(db_session) -> None:
+def test_mark_stale_onts_unknown_updates_effective_status_snapshot(db_session) -> None:
     from app.models.network import (
         OLTDevice,
         OntStatusSource,
@@ -358,13 +358,14 @@ def test_mark_stale_onts_offline_updates_effective_status_snapshot(db_session) -
 
     db_session.refresh(ont)
     assert marked == 1
-    assert ont.online_status == OnuOnlineStatus.offline
-    assert ont.effective_status == OnuOnlineStatus.offline
-    assert ont.effective_status_source == OntStatusSource.olt
+    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.effective_status == OnuOnlineStatus.unknown
+    assert ont.effective_status_source == OntStatusSource.derived
+    assert ont.offline_reason is None
     assert ont.status_resolved_at is not None
 
 
-def test_mark_stale_onts_offline_keeps_recent_acs_inform_effective_online(
+def test_mark_stale_onts_unknown_keeps_recent_acs_inform_effective_online(
     db_session,
 ) -> None:
     from app.models.network import (
@@ -402,10 +403,11 @@ def test_mark_stale_onts_offline_keeps_recent_acs_inform_effective_online(
 
     db_session.refresh(ont)
     assert marked == 1
-    assert ont.online_status == OnuOnlineStatus.offline
+    assert ont.online_status == OnuOnlineStatus.unknown
     assert ont.acs_status == OntAcsStatus.online
     assert ont.effective_status == OnuOnlineStatus.online
     assert ont.effective_status_source == OntStatusSource.acs
+    assert ont.offline_reason is None
 
 
 def test_mark_stale_huawei_numeric_external_id_unknown_not_los(db_session) -> None:
