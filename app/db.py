@@ -1,5 +1,5 @@
+from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Generator
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -22,7 +22,15 @@ def get_engine():
     )
 
 
-SessionLocal = sessionmaker(bind=get_engine(), autoflush=False, autocommit=False)
+_engine = get_engine()
+
+
+SessionLocal = sessionmaker(bind=_engine, autoflush=False, autocommit=False)
+
+
+def dispose_engine() -> None:
+    """Dispose pooled DB connections, especially after Celery prefork."""
+    _engine.dispose()
 
 
 def get_db():

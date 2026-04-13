@@ -1,7 +1,13 @@
 import logging
 
 from celery import Celery, current_task
-from celery.signals import task_failure, task_postrun, task_prerun, task_retry
+from celery.signals import (
+    task_failure,
+    task_postrun,
+    task_prerun,
+    task_retry,
+    worker_process_init,
+)
 from kombu import Queue
 
 from app.services.scheduler_config import build_beat_schedule, get_celery_config
@@ -33,6 +39,14 @@ celery_app.conf.task_queues = (
 
 # Ensure all tasks are registered by importing the tasks package
 import app.tasks  # noqa: E402, F401
+
+
+@worker_process_init.connect
+def _dispose_inherited_db_connections(**_kwargs):
+    """Celery prefork workers must not reuse parent-created DB connections."""
+    from app.db import dispose_engine
+
+    dispose_engine()
 
 
 def _task_extra(task, task_id: str | None, **extra):
