@@ -693,8 +693,11 @@ class Vlans(CRUDManager[Vlan]):
         return entity
 
     @classmethod
-    def delete(cls, db: Session, vlan_id: str):
-        return super().delete(db, vlan_id)
+    def delete(cls, db: Session, vlan_id: str, *, commit: bool = True):
+        entity = cls._get_or_404(db, vlan_id)
+        db.delete(entity)
+        if commit:
+            db.commit()
 
 
 class PortVlans(CRUDManager[PortVlan]):

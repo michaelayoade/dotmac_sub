@@ -398,6 +398,7 @@ def _extract_object_instances(
 
 
 def _value_to_bool(value: Any) -> bool | None:
+    value = _unwrap_tr069_value(value)
     if value is None:
         return None
     text = str(value).strip().lower()
@@ -405,6 +406,20 @@ def _value_to_bool(value: Any) -> bool | None:
         return True
     if text in {"0", "false", "no", "off", "disabled", "down"}:
         return False
+    return None
+
+
+def _unwrap_tr069_value(value: Any) -> Any:
+    """Return the scalar value from GenieACS parameter nodes."""
+    if isinstance(value, dict) and "_value" in value:
+        return value.get("_value")
+    return value
+
+
+def _first_present(item: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        if key in item and item[key] is not None:
+            return item[key]
     return None
 
 
@@ -443,11 +458,29 @@ def _normalize_lan_hosts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for row in rows or []:
         item = dict(row or {})
-        item.setdefault("host_name", item.get("HostName") or "")
-        item.setdefault("ip_address", item.get("IPAddress") or "")
-        item.setdefault("mac_address", normalize_mac_address(item.get("MACAddress")))
-        item.setdefault("interface_type", item.get("InterfaceType") or "")
-        item.setdefault("active", _value_to_bool(item.get("Active")))
+        host_name = _unwrap_tr069_value(
+            _first_present(item, "host_name", "hostname", "HostName")
+        )
+        ip_address = _unwrap_tr069_value(
+            _first_present(item, "ip_address", "IPAddress")
+        )
+        mac_address = _unwrap_tr069_value(
+            _first_present(item, "mac_address", "MACAddress")
+        )
+        interface_type = _unwrap_tr069_value(
+            _first_present(item, "interface_type", "interface", "InterfaceType")
+        )
+        active = _unwrap_tr069_value(_first_present(item, "active", "Active"))
+        item["host_name"] = str(host_name or "").strip()
+        item["ip_address"] = str(ip_address or "").strip()
+        item["mac_address"] = normalize_mac_address(mac_address) or ""
+        item["interface_type"] = str(interface_type or "").strip()
+        item["active"] = _value_to_bool(active)
+        item["host_name_display"] = item["host_name"] or "-"
+        item["ip_address_display"] = item["ip_address"] or "-"
+        item["mac_address_display"] = item["mac_address"] or "-"
+        item["interface_type_display"] = item["interface_type"] or "-"
+        item["active_display"] = "Active" if item["active"] is True else "Inactive"
         normalized.append(item)
     return normalized
 

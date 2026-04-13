@@ -58,12 +58,12 @@ def build_service_intent(
     service_port_plan = _plan_section(ont_plan, "create_service_port")
     pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069")
 
-    onu_mode = _enum_value(getattr(ont, "onu_mode", None)) or "routing"
+    onu_mode = _enum_value(getattr(ont, "onu_mode", None))
     wan_mode = _enum_value(getattr(ont, "wan_mode", None)) or wan_plan.get("wan_mode")
     mgmt_ip_mode = (
         _enum_value(getattr(ont, "mgmt_ip_mode", None))
         or mgmt_plan.get("ip_mode")
-        or "dhcp"
+        or ""
     )
     mgmt_ip_mode = "static" if mgmt_ip_mode == "static_ip" else str(mgmt_ip_mode)
 

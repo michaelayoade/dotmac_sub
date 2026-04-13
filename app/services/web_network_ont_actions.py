@@ -31,6 +31,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult, OntActions
+from app.services.network.ont_tr069 import OntTR069
 from app.services.network_operations import run_tracked_action
 
 logger = logging.getLogger(__name__)
@@ -277,6 +278,37 @@ def execute_refresh(
         metadata={"success": result.success},
     )
     return result
+
+
+def execute_config_snapshot_refresh(
+    db: Session, ont_id: str, *, request: Request | None = None
+) -> ActionResult:
+    """Fetch live TR-069 config and persist the last-known snapshot."""
+    summary = OntTR069.get_device_summary(
+        db,
+        ont_id,
+        persist_observed_runtime=True,
+    )
+    success = bool(summary.available and summary.source == "live" and not summary.error)
+    message = (
+        "Last known config refreshed."
+        if success
+        else summary.error or "Unable to refresh last known config."
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="refresh_config_snapshot",
+        ont_id=ont_id,
+        metadata={
+            "success": success,
+            "source": summary.source,
+            "message": message,
+        },
+        status_code=200 if success else 502,
+        is_success=success,
+    )
+    return ActionResult(success=success, message=message)
 
 
 def fetch_running_config(db: Session, ont_id: str) -> ActionResult:

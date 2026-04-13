@@ -106,13 +106,8 @@ def initial_iphost_form(ont: Any, config: dict[str, str]) -> dict[str, str]:
         ip_mode = "static"
     elif "dhcp" in live_mode:
         ip_mode = "dhcp"
-    elif (
-        getattr(ont, "mgmt_ip_mode", None)
-        and getattr(ont.mgmt_ip_mode, "value", None) == "static_ip"
-    ):
-        ip_mode = "static"
     else:
-        ip_mode = "dhcp"
+        ip_mode = ""
 
     live_vlan = _iphost_value(config, "vlan", "vlan id") or ""
     vlan_digits = re.search(r"\d+", live_vlan)
@@ -120,17 +115,10 @@ def initial_iphost_form(ont: Any, config: dict[str, str]) -> dict[str, str]:
     subnet = _iphost_value(config, "subnet mask", "mask", "subnet") or ""
     gateway = _iphost_value(config, "gateway") or ""
 
-    fallback_vlan = ""
-    if (
-        getattr(ont, "mgmt_vlan", None)
-        and getattr(ont.mgmt_vlan, "tag", None) is not None
-    ):
-        fallback_vlan = str(ont.mgmt_vlan.tag)
-
     return {
         "ip_mode": ip_mode,
-        "vlan_id": vlan_digits.group(0) if vlan_digits else fallback_vlan,
-        "ip_address": live_ip or str(getattr(ont, "mgmt_ip_address", "") or ""),
+        "vlan_id": vlan_digits.group(0) if vlan_digits else "",
+        "ip_address": live_ip,
         "subnet": subnet,
         "gateway": gateway,
     }
