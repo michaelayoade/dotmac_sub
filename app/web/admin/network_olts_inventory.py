@@ -62,6 +62,16 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
     }
 
 
+def _acs_prefill_from_olt(olt: OLTDevice | None) -> dict[str, str]:
+    acs = getattr(olt, "tr069_acs_server", None) if olt else None
+    if acs is None:
+        return {}
+    return {
+        "cwmp_url": getattr(acs, "cwmp_url", "") or "",
+        "cwmp_username": getattr(acs, "cwmp_username", "") or "",
+    }
+
+
 def _authorization_result_query(result: object | None) -> str | None:
     if result is None or not hasattr(result, "to_dict"):
         return None
@@ -360,6 +370,7 @@ def olt_detail(
             "activities": activities,
             "operations": operations,
             "available_olt_firmware": available_olt_firmware,
+            "acs_prefill": _acs_prefill_from_olt(olt_obj),
             "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                 db, olt=olt_obj
             ),
@@ -424,6 +435,7 @@ def olt_detail_preview(
             "activities": activities,
             "operations": operations,
             "available_olt_firmware": available_olt_firmware,
+            "acs_prefill": _acs_prefill_from_olt(olt_obj),
             "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                 db, olt=olt_obj
             ),

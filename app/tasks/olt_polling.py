@@ -186,7 +186,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     """
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import update
+    from sqlalchemy import func, update
 
     from app.models.network import (
         OLTDevice,
@@ -220,17 +220,54 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         logger.info("No recently-polled OLTs found; skipping stale ONT marking")
         return 0
 
+    stale_filter = (
+        (OntUnit.signal_updated_at < threshold)
+        | (OntUnit.signal_updated_at.is_(None))
+    )
+
+    huawei_olt_ids = [
+        olt_id
+        for olt_id in db.scalars(
+            select(OLTDevice.id).where(
+                OLTDevice.id.in_(reachable_olt_ids),
+                func.lower(func.coalesce(OLTDevice.vendor, "")).like("%huawei%"),
+            )
+        ).all()
+    ]
+    huawei_packed_external_id = func.lower(
+        func.coalesce(OntUnit.external_id, "")
+    ).like("huawei:%.%")
+    huawei_non_deterministic_identity = (
+        OntUnit.olt_device_id.in_(huawei_olt_ids)
+        & ~huawei_packed_external_id
+    )
+
+    unknown_result = db.execute(
+        update(OntUnit)
+        .where(OntUnit.online_status == OnuOnlineStatus.online)
+        .where(OntUnit.is_active.is_(True))
+        .where(huawei_non_deterministic_identity)
+        .where(stale_filter)
+        .values(
+            online_status=OnuOnlineStatus.unknown,
+            offline_reason=None,
+            effective_status=OnuOnlineStatus.unknown,
+            effective_status_source=OntStatusSource.derived,
+            status_resolved_at=now,
+        )
+    )
+
     # Find stale ONTs: online status but not seen recently
-    # AND their OLT was recently polled (so the ONT should have been seen)
+    # AND their OLT was recently polled (so the ONT should have been seen).
+    # Huawei rows without packed SNMP identity are deliberately excluded above:
+    # when polling cannot map the packed index, the safe state is unknown, not LOS.
     result = db.execute(
         update(OntUnit)
         .where(OntUnit.online_status == OnuOnlineStatus.online)
         .where(OntUnit.is_active.is_(True))
         .where(OntUnit.olt_device_id.in_(reachable_olt_ids))
-        .where(
-            (OntUnit.signal_updated_at < threshold)
-            | (OntUnit.signal_updated_at.is_(None))
-        )
+        .where(~huawei_non_deterministic_identity)
+        .where(stale_filter)
         .values(
             online_status=OnuOnlineStatus.offline,
             offline_reason=OnuOfflineReason.los,
@@ -242,6 +279,12 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     db.commit()
 
     marked = result.rowcount
+    unknown_marked = unknown_result.rowcount
+    if unknown_marked > 0:
+        logger.info(
+            "Marked %d stale Huawei ONTs with non-packed SNMP identity as unknown",
+            unknown_marked,
+        )
     if marked > 0:
         logger.info(
             "Marked %d stale ONTs offline (OLTs polled but ONTs not seen in %d min)",

@@ -233,6 +233,8 @@ def _build_reading_targets(
 
     by_external_id: dict[str, OntUnit] = {}
     by_fsp_hint: dict[str, list[OntUnit]] = {}
+    by_fsp_onu_id: dict[tuple[str, str], OntUnit] = {}
+    duplicate_fsp_onu_ids: set[tuple[str, str]] = set()
     # P1 FIX: Add serial number index for more reliable matching
     by_serial: dict[str, OntUnit] = {}
 
@@ -240,6 +242,20 @@ def _build_reading_targets(
         """Normalize serial number for matching (strip non-alphanumeric, uppercase)."""
         import re
         return re.sub(r"[^A-Za-z0-9]", "", str(val or "").strip()).upper()
+
+    def _external_onu_id(val: str | None) -> str | None:
+        raw = str(val or "").strip()
+        if not raw:
+            return None
+        if ":" in raw:
+            raw = raw.rsplit(":", 1)[-1]
+        if "." in raw:
+            raw = raw.rsplit(".", 1)[-1]
+        return raw if raw.isdigit() else None
+
+    def _onu_id_from_reading_index(val: str) -> str | None:
+        parts = [part for part in str(val).split(".") if part.isdigit()]
+        return parts[-1] if parts else None
 
     for ont in ordered_onts:
         # Skip inactive ONTs to prevent stale records from blocking active ones
@@ -256,6 +272,14 @@ def _build_reading_targets(
         fsp_hint = _fsp_hint_from_ont(ont)
         if fsp_hint:
             by_fsp_hint.setdefault(fsp_hint, []).append(ont)
+            onu_id = _external_onu_id(getattr(ont, "external_id", None))
+            if onu_id:
+                fsp_onu_key = (fsp_hint, onu_id)
+                if fsp_onu_key in by_fsp_onu_id:
+                    duplicate_fsp_onu_ids.add(fsp_onu_key)
+                    by_fsp_onu_id.pop(fsp_onu_key, None)
+                elif fsp_onu_key not in duplicate_fsp_onu_ids:
+                    by_fsp_onu_id[fsp_onu_key] = ont
 
     used_ont_ids: set = set()
     targets: list[tuple[OntUnit, OntSignalReading]] = []
@@ -291,7 +315,17 @@ def _build_reading_targets(
                     matched = ont
                     serial_matches += 1
 
-        # 3) FSP hint match (frame/slot/port) - least reliable, only for single matches
+        # 3) FSP + ONT-ID match. This upgrades legacy Huawei rows that only
+        # stored external_id="8" into deterministic packed SNMP identities.
+        if matched is None:
+            fsp_hint = _fsp_hint_from_index(reading.onu_index)
+            onu_id = _onu_id_from_reading_index(reading.onu_index)
+            if fsp_hint and onu_id:
+                ont = by_fsp_onu_id.get((fsp_hint, onu_id))
+                if ont and ont.id not in used_ont_ids:
+                    matched = ont
+
+        # 4) FSP hint match (frame/slot/port) - least reliable, only for single matches
         if matched is None:
             fsp_hint = _fsp_hint_from_index(reading.onu_index)
             if fsp_hint:
@@ -324,6 +358,35 @@ def _build_reading_targets(
         )
 
     return targets
+
+
+def _expected_external_id_for_reading(vendor: str | None, onu_index: str) -> str | None:
+    """Return the canonical external_id for a vendor SNMP reading."""
+    vendor_lower = str(vendor or "").lower()
+    if "huawei" in vendor_lower:
+        return f"huawei:{onu_index}"
+    if "zte" in vendor_lower:
+        return f"zte:{onu_index}"
+    if "nokia" in vendor_lower:
+        return f"nokia:{onu_index}"
+    return None
+
+
+def _should_repair_external_id(current: str | None, expected: str | None) -> bool:
+    if not expected:
+        return False
+    current_clean = str(current or "").strip()
+    if not current_clean:
+        return True
+    if current_clean.lower() == expected.lower():
+        return False
+    # Legacy Huawei imports often stored only the per-port ONT-ID, e.g. "8".
+    # Replace those with the packed SNMP index once a normal poll matches.
+    if current_clean.isdigit():
+        return True
+    if current_clean.lower().startswith("generic:"):
+        return True
+    return False
 
 
 def _get_olt_snmp_config(db: Session, olt: OLTDevice) -> dict[str, str | int | None]:
@@ -705,6 +768,31 @@ def poll_olt_ont_signals(
 
             # Mark telemetry freshness only when at least one field was observed.
             if update_values:
+                expected_external_id = _expected_external_id_for_reading(
+                    getattr(olt, "vendor", None),
+                    reading.onu_index,
+                )
+                if _should_repair_external_id(
+                    getattr(ont, "external_id", None),
+                    expected_external_id,
+                ):
+                    conflict_id = db.scalar(
+                        select(OntUnit.id)
+                        .where(OntUnit.olt_device_id == olt.id)
+                        .where(OntUnit.external_id == expected_external_id)
+                        .where(OntUnit.id != ont.id)
+                        .limit(1)
+                    )
+                    if conflict_id is None:
+                        update_values["external_id"] = expected_external_id
+                    else:
+                        logger.warning(
+                            "Skipping external_id repair for ONT %s on OLT %s: %s belongs to %s",
+                            ont.id,
+                            olt.id,
+                            expected_external_id,
+                            conflict_id,
+                        )
                 resolved_status = resolve_ont_status_snapshot(
                     olt_status=update_values.get("online_status", prev_status),
                     acs_last_inform_at=getattr(ont, "acs_last_inform_at", None),

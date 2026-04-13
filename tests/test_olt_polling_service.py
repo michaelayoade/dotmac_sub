@@ -2,8 +2,10 @@ from datetime import UTC, datetime, timedelta
 
 from app.services.network.olt_polling import (
     _build_reading_targets,
+    _expected_external_id_for_reading,
     _parse_signal_value,
     _parse_snmp_table,
+    _should_repair_external_id,
 )
 from app.services.network.olt_polling_parsers import _fsp_hint_from_index
 
@@ -258,6 +260,70 @@ def test_build_reading_targets_skips_ambiguous_fsp_only_matches(db_session) -> N
     assert targets == []
 
 
+def test_build_reading_targets_matches_huawei_fsp_and_numeric_onu_id(
+    db_session,
+) -> None:
+    from app.models.network import OLTDevice, OntUnit
+    from app.services.network.olt_polling_parsers import OntSignalReading
+
+    olt = OLTDevice(name="Poll OLT", vendor="Huawei")
+    db_session.add(olt)
+    db_session.flush()
+    ont_a = OntUnit(
+        serial_number="48575443348F8A84",
+        olt_device_id=olt.id,
+        is_active=True,
+        board="0/4",
+        port="0",
+        external_id="8",
+    )
+    ont_b = OntUnit(
+        serial_number="48575443348F8A85",
+        olt_device_id=olt.id,
+        is_active=True,
+        board="0/4",
+        port="0",
+        external_id="9",
+    )
+    db_session.add_all([ont_a, ont_b])
+    db_session.commit()
+
+    readings = [
+        OntSignalReading(
+            onu_index="4194320384.8",
+            olt_rx_dbm=-19.5,
+            onu_rx_dbm=-21.0,
+            onu_tx_dbm=None,
+            distance_m=1000,
+            is_online=True,
+        )
+    ]
+
+    targets = _build_reading_targets(
+        db_session,
+        olt=olt,
+        readings=readings,
+        assignments=[],
+    )
+
+    assert targets == [(ont_a, readings[0])]
+
+
+def test_huawei_external_id_repair_targets_packed_snmp_index() -> None:
+    assert (
+        _expected_external_id_for_reading("Huawei", "4194315520.8")
+        == "huawei:4194315520.8"
+    )
+    assert _should_repair_external_id("8", "huawei:4194315520.8") is True
+    assert (
+        _should_repair_external_id(
+            "huawei:4194315520.8",
+            "huawei:4194315520.8",
+        )
+        is False
+    )
+
+
 def test_mark_stale_onts_offline_updates_effective_status_snapshot(db_session) -> None:
     from app.models.network import (
         OLTDevice,
@@ -296,6 +362,48 @@ def test_mark_stale_onts_offline_updates_effective_status_snapshot(db_session) -
     assert ont.effective_status == OnuOnlineStatus.offline
     assert ont.effective_status_source == OntStatusSource.olt
     assert ont.status_resolved_at is not None
+
+
+def test_mark_stale_huawei_numeric_external_id_unknown_not_los(db_session) -> None:
+    from app.models.network import (
+        OLTDevice,
+        OntStatusSource,
+        OntUnit,
+        OnuOnlineStatus,
+        PollStatus,
+    )
+    from app.tasks.olt_polling import _mark_stale_onts_offline
+
+    now = datetime.now(UTC)
+    olt = OLTDevice(
+        name="Huawei Reachable OLT",
+        vendor="Huawei",
+        is_active=True,
+        last_poll_at=now,
+        last_poll_status=PollStatus.success,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="48575443348F8A84",
+        olt_device_id=olt.id,
+        is_active=True,
+        online_status=OnuOnlineStatus.online,
+        effective_status=OnuOnlineStatus.online,
+        external_id="8",
+        signal_updated_at=now - timedelta(minutes=30),
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    marked = _mark_stale_onts_offline(db_session, stale_threshold_minutes=10)
+
+    db_session.refresh(ont)
+    assert marked == 0
+    assert ont.online_status == OnuOnlineStatus.unknown
+    assert ont.effective_status == OnuOnlineStatus.unknown
+    assert ont.effective_status_source == OntStatusSource.derived
+    assert ont.offline_reason is None
 
 
 def test_fsp_hint_from_huawei_packed_index_decodes_frame_slot_port() -> None:
