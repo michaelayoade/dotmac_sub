@@ -10,7 +10,16 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OLTDevice, OntAssignment, OntProvisioningStatus, OntUnit
+from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.network import (
+    OLTDevice,
+    OntAssignment,
+    OntProvisioningStatus,
+    OntUnit,
+    OnuMode,
+    Vlan,
+    WanMode,
+)
 from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
@@ -71,6 +80,97 @@ def _log_action_audit(
         status_code=status_code or 200,
         is_success=is_success,
     )
+
+
+def _persist_ont_plan_step(
+    db: Session,
+    ont_id: str,
+    step_name: str,
+    values: dict[str, object],
+) -> None:
+    """Persist desired ONT intent even when the immediate apply path is unavailable."""
+    if not any(value not in (None, "", []) for value in values.values()):
+        return
+    try:
+        from app.services import (
+            web_network_onts_provisioning as provisioning_web_service,
+        )
+
+        provisioning_web_service.update_service_order_execution_context_for_ont(
+            db,
+            ont_id=ont_id,
+            step_name=step_name,
+            values=values,
+        )
+    except Exception:
+        logger.exception("Failed to persist %s intent for ONT %s", step_name, ont_id)
+
+
+def _is_input_error(message: str | None) -> bool:
+    text = (message or "").lower()
+    return any(
+        phrase in text
+        for phrase in [
+            "required",
+            "invalid",
+            "must be",
+            "out of range",
+            "at least one",
+            "no wan parameters",
+        ]
+    )
+
+
+def _intent_saved_result(result: ActionResult) -> ActionResult:
+    if result.success or _is_input_error(result.message):
+        return result
+    return ActionResult(
+        success=True,
+        message=f"Intent saved. Immediate apply did not complete: {result.message}",
+        data=getattr(result, "data", None),
+        waiting=getattr(result, "waiting", False),
+    )
+
+
+def _persist_wan_intent(
+    db: Session,
+    ont_id: str,
+    *,
+    wan_mode: str,
+    wan_vlan: int | None,
+    ip_address: str | None,
+    subnet_mask: str | None,
+    gateway: str | None,
+    dns_servers: str | None,
+    instance_index: int,
+) -> None:
+    mode = (wan_mode or "").strip().lower()
+    step_values: dict[str, object] = {
+        "wan_mode": mode,
+        "wan_vlan": wan_vlan,
+        "ip_address": ip_address,
+        "subnet_mask": subnet_mask,
+        "gateway": gateway,
+        "dns_servers": dns_servers,
+        "instance_index": instance_index,
+    }
+    try:
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+        if mode == "bridge":
+            ont.onu_mode = OnuMode.bridging
+            ont.wan_mode = WanMode.setup_via_onu
+        elif mode in {"dhcp", "pppoe", "static"}:
+            ont.onu_mode = OnuMode.routing
+            ont.wan_mode = WanMode.static_ip if mode == "static" else WanMode(mode)
+        if wan_vlan is not None:
+            vlan = db.scalars(select(Vlan).where(Vlan.tag == wan_vlan).limit(1)).first()
+            if vlan:
+                ont.wan_vlan_id = vlan.id
+        db.add(ont)
+        db.flush()
+    except Exception:
+        logger.exception("Failed to persist WAN model intent for ONT %s", ont_id)
+    _persist_ont_plan_step(db, ont_id, "configure_wan_tr069", step_values)
 
 
 def _normalize_fsp(value: str | None) -> str | None:
@@ -313,6 +413,20 @@ def set_wifi_config(
         channel=channel,
         security_mode=security_mode,
     )
+    if result.success or not _is_input_error(result.message):
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "configure_wifi_tr069",
+            {
+                "enabled": enabled,
+                "ssid": ssid,
+                "password_set": bool(password),
+                "channel": channel,
+                "security_mode": security_mode,
+            },
+        )
+        result = _intent_saved_result(result)
     _log_action_audit(
         db,
         request=request,
@@ -374,6 +488,20 @@ def set_lan_config(
         dhcp_start=dhcp_start,
         dhcp_end=dhcp_end,
     )
+    if result.success or not _is_input_error(result.message):
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "configure_lan_tr069",
+            {
+                "lan_ip": lan_ip,
+                "lan_subnet": lan_subnet,
+                "dhcp_enabled": dhcp_enabled,
+                "dhcp_start": dhcp_start,
+                "dhcp_end": dhcp_end,
+            },
+        )
+        result = _intent_saved_result(result)
     _log_action_audit(
         db,
         request=request,
@@ -416,6 +544,19 @@ def configure_wan_config(
         dns_servers=dns_servers,
         instance_index=instance_index,
     )
+    if result.success or not _is_input_error(result.message):
+        _persist_wan_intent(
+            db,
+            ont_id,
+            wan_mode=wan_mode,
+            wan_vlan=wan_vlan,
+            ip_address=ip_address,
+            subnet_mask=subnet_mask,
+            gateway=gateway,
+            dns_servers=dns_servers,
+            instance_index=instance_index,
+        )
+        result = _intent_saved_result(result)
     _log_action_audit(
         db,
         request=request,
@@ -451,6 +592,23 @@ def set_pppoe_credentials(
         correlation_key=f"ont_set_pppoe:{ont_id}",
         initiated_by=initiated_by,
     )
+    if result.success or not _is_input_error(result.message):
+        try:
+            ont = network_service.ont_units.get_including_inactive(
+                db=db, entity_id=ont_id
+            )
+            ont.pppoe_username = username.strip() or ont.pppoe_username
+            db.add(ont)
+            db.flush()
+        except Exception:
+            logger.exception("Failed to persist PPPoE username for ONT %s", ont_id)
+        _persist_ont_plan_step(
+            db,
+            ont_id,
+            "push_pppoe_tr069",
+            {"username": username, "password_set": bool(password)},
+        )
+        result = _intent_saved_result(result)
     waiting = getattr(result, "waiting", False)
     _log_action_audit(
         db,
@@ -664,6 +822,10 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_onts as web_network_onts_service
     from app.services import web_network_service_ports as web_service_ports_service
     from app.services.network import ont_web_forms as ont_web_forms_service
+    from app.services.network.ont_service_intent import (
+        build_service_intent,
+        load_latest_ont_plan,
+    )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     linked_tr069 = (
@@ -690,6 +852,37 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     except Exception:
         logger.exception("Failed to load service-port count for ONT %s", ont_id)
 
+    assignment = db.scalars(
+        select(OntAssignment)
+        .where(OntAssignment.ont_unit_id == ont.id)
+        .where(OntAssignment.active.is_(True))
+        .limit(1)
+    ).first()
+    subscription = None
+    subscriber_info: dict[str, object] = {}
+    if assignment and assignment.subscriber_id:
+        subscription = db.scalars(
+            select(Subscription)
+            .where(Subscription.subscriber_id == assignment.subscriber_id)
+            .where(Subscription.status == SubscriptionStatus.active)
+            .order_by(Subscription.created_at.desc())
+            .limit(1)
+        ).first()
+        if assignment.subscriber:
+            subscriber_info["name"] = str(
+                getattr(assignment.subscriber, "display_name", "")
+                or getattr(assignment.subscriber, "full_name", "")
+                or ""
+            ).strip()
+    ont_plan = load_latest_ont_plan(
+        db, subscription_id=getattr(subscription, "id", None)
+    )
+    service_intent = build_service_intent(
+        ont,
+        subscriber_info=subscriber_info,
+        ont_plan=ont_plan,
+    )
+
     snapshot = getattr(ont, "tr069_last_snapshot", None) or {}
     wireless_snapshot = snapshot.get("wireless") if isinstance(snapshot, dict) else {}
     current_ssid = None
@@ -698,6 +891,8 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
     return {
         "ont": ont,
+        "service_intent": service_intent,
+        "ont_plan": ont_plan,
         "iphost_config": iphost_config,
         "iphost_ok": ok,
         "iphost_msg": msg,
@@ -728,14 +923,18 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
 def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_ont_tr069 as web_tr069_service
     from app.services import web_network_onts as web_network_onts_service
+    from app.services.network.ont_service_intent import load_ont_plan_for_ont
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
     tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
     tr069 = tr069_data.get("tr069")
     wan = getattr(tr069, "wan", None) if tr069 else None
     return {
         "ont_id": ont_id,
         "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "ont": ont,
+        "ont_plan": ont_plan,
         "wan_info": wan,
         "current_pppoe_user": (wan or {}).get("Username"),
         "vlans": web_network_onts_service.get_vlans_for_ont(db, ont),
@@ -744,13 +943,16 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 def wifi_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_ont_tr069 as web_tr069_service
+    from app.services.network.ont_service_intent import load_ont_plan_for_ont
 
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
     tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
     tr069 = tr069_data.get("tr069")
     wireless = getattr(tr069, "wireless", None) if tr069 else None
     return {
         "ont_id": ont_id,
         "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "ont_plan": ont_plan,
         "wireless_info": wireless,
         "current_ssid": (wireless or {}).get("SSID"),
     }
@@ -774,12 +976,15 @@ def tr069_profile_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 def lan_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_ont_tr069 as web_tr069_service
+    from app.services.network.ont_service_intent import load_ont_plan_for_ont
 
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
     tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
     tr069 = tr069_data.get("tr069")
     return {
         "ont_id": ont_id,
         "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
+        "ont_plan": ont_plan,
         "lan_info": getattr(tr069, "lan", None) if tr069 else None,
         "ethernet_ports": getattr(tr069, "ethernet_ports", None) if tr069 else None,
         "lan_hosts": getattr(tr069, "lan_hosts", None) if tr069 else None,

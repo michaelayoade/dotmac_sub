@@ -14,6 +14,8 @@
 {% elif ont.wan_mode and ont.wan_mode.value == "pppoe" %}
     {% set initial_wan_protocol = "pppoe" %}
 {% endif %}
+{% set lan_intent = ont_plan.get('configure_lan_tr069') if ont_plan is defined and ont_plan else {} %}
+{% set wifi_intent = ont_plan.get('configure_wifi_tr069') if ont_plan is defined and ont_plan else {} %}
 <div class="space-y-6"
      x-data='{
         profileId: {{ (selected_profile_id or "") | tojson }},
@@ -32,6 +34,16 @@
         staticSubnet: "255.255.255.0",
         staticGateway: "",
         staticDns: "",
+        lanIp: {{ (lan_intent.get("lan_ip", "") or "") | tojson }},
+        lanSubnet: {{ (lan_intent.get("lan_subnet", "") or "") | tojson }},
+        dhcpEnabled: {{ (lan_intent.get("dhcp_enabled") if lan_intent.get("dhcp_enabled") is not none else "") | tojson }},
+        dhcpStart: {{ (lan_intent.get("dhcp_start", "") or "") | tojson }},
+        dhcpEnd: {{ (lan_intent.get("dhcp_end", "") or "") | tojson }},
+        wifiEnabled: {{ (wifi_intent.get("enabled") if wifi_intent.get("enabled") is not none else "") | tojson }},
+        wifiSsid: {{ (wifi_intent.get("ssid", "") or "") | tojson }},
+        wifiSecurityMode: {{ (wifi_intent.get("security_mode", "") or "") | tojson }},
+        wifiChannel: {{ (wifi_intent.get("channel", "") or "") | tojson }},
+        wifiPassword: "",
         pppoeUser: {{ (pppoe_username or "") | tojson }},
         showPass: false,
         vlanNasMap: {{ vlan_nas_map | tojson }},
@@ -463,6 +475,98 @@
                     {# ── Divider ── #}
                     <hr class="border-slate-200 dark:border-slate-700">
 
+                    {# ── Subscriber LAN / DHCP ── #}
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                            <svg class="h-4 w-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/></svg>
+                            Subscriber LAN and DHCP
+                        </h4>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                                <label for="lan_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">LAN Gateway IP</label>
+                                <input type="text" id="lan_ip" x-model="lanIp" placeholder="192.168.100.1" maxlength="15"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="lan_subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300">LAN Subnet</label>
+                                <input type="text" id="lan_subnet" x-model="lanSubnet" placeholder="255.255.255.0" maxlength="15"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="dhcp_enabled" class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP Server</label>
+                                <select id="dhcp_enabled" x-model="dhcpEnabled"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">From profile / unchanged</option>
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3">
+                                <div>
+                                    <label for="dhcp_start" class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP Start</label>
+                                    <input type="text" id="dhcp_start" x-model="dhcpStart" placeholder="192.168.100.2" maxlength="15"
+                                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                                <div>
+                                    <label for="dhcp_end" class="block text-sm font-medium text-slate-700 dark:text-slate-300">DHCP End</label>
+                                    <input type="text" id="dhcp_end" x-model="dhcpEnd" placeholder="192.168.100.254" maxlength="15"
+                                        class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {# ── Divider ── #}
+                    <hr class="border-slate-200 dark:border-slate-700">
+
+                    {# ── WiFi Intent ── #}
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                            <svg class="h-4 w-4 text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/></svg>
+                            WiFi
+                        </h4>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                            <div>
+                                <label for="wifi_enabled" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Radio</label>
+                                <select id="wifi_enabled" x-model="wifiEnabled"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">From profile / unchanged</option>
+                                    <option value="true">Enabled</option>
+                                    <option value="false">Disabled</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="wifi_ssid" class="block text-sm font-medium text-slate-700 dark:text-slate-300">SSID</label>
+                                <input type="text" id="wifi_ssid" x-model="wifiSsid" placeholder="Customer WiFi" maxlength="32"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="wifi_security_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Security Mode</label>
+                                <select id="wifi_security_mode" x-model="wifiSecurityMode"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">From profile / unchanged</option>
+                                    <option value="WPA2-Personal">WPA2-Personal</option>
+                                    <option value="WPA-WPA2-Personal">WPA-WPA2-Personal</option>
+                                    <option value="WPA3-Personal">WPA3-Personal</option>
+                                    <option value="None">None</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label for="wifi_channel" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Channel</label>
+                                <input type="number" id="wifi_channel" x-model="wifiChannel" min="0" max="196" placeholder="Auto"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div class="sm:col-span-2">
+                                <label for="wifi_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">WiFi Password</label>
+                                <input type="password" id="wifi_password" x-model="wifiPassword" minlength="8" maxlength="63" placeholder="Leave empty to keep generated/current password"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                    </div>
+
+                    {# ── Divider ── #}
+                    <hr class="border-slate-200 dark:border-slate-700">
+
                     {# ── Speed Profiles ── #}
                     <div class="space-y-4">
                         <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
@@ -525,6 +629,16 @@
                 <input type="hidden" name="static_subnet" :value="staticSubnet">
                 <input type="hidden" name="static_gateway" :value="staticGateway">
                 <input type="hidden" name="static_dns" :value="staticDns">
+                <input type="hidden" name="lan_ip" :value="lanIp">
+                <input type="hidden" name="lan_subnet" :value="lanSubnet">
+                <input type="hidden" name="dhcp_enabled" :value="dhcpEnabled">
+                <input type="hidden" name="dhcp_start" :value="dhcpStart">
+                <input type="hidden" name="dhcp_end" :value="dhcpEnd">
+                <input type="hidden" name="wifi_enabled" :value="wifiEnabled">
+                <input type="hidden" name="wifi_ssid" :value="wifiSsid">
+                <input type="hidden" name="wifi_security_mode" :value="wifiSecurityMode">
+                <input type="hidden" name="wifi_channel" :value="wifiChannel">
+                <input type="hidden" name="wifi_password" :value="wifiPassword">
                 <input type="hidden" name="pppoe_username" :value="pppoeUser">
                 <input type="hidden" id="pppoe_password_hidden" name="pppoe_password">
                 <button type="submit"

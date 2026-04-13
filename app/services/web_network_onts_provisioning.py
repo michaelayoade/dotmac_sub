@@ -134,6 +134,16 @@ def save_provision_settings(
     static_subnet: str | None,
     static_gateway: str | None,
     static_dns: str | None,
+    lan_ip: str | None,
+    lan_subnet: str | None,
+    dhcp_enabled: str | None,
+    dhcp_start: str | None,
+    dhcp_end: str | None,
+    wifi_enabled: str | None,
+    wifi_ssid: str | None,
+    wifi_password: str | None,
+    wifi_security_mode: str | None,
+    wifi_channel: str | None,
     pppoe_username: str | None,
     pppoe_password: str | None,
 ) -> JsonActionResult:
@@ -162,6 +172,16 @@ def save_provision_settings(
     static_subnet_value = (static_subnet or "").strip() or None
     static_gateway_value = (static_gateway or "").strip() or None
     static_dns_value = (static_dns or "").strip() or None
+    lan_ip_value = (lan_ip or "").strip() or None
+    lan_subnet_value = (lan_subnet or "").strip() or None
+    dhcp_enabled_value = _bool_from_form(dhcp_enabled)
+    dhcp_start_value = (dhcp_start or "").strip() or None
+    dhcp_end_value = (dhcp_end or "").strip() or None
+    wifi_enabled_value = _bool_from_form(wifi_enabled)
+    wifi_ssid_value = (wifi_ssid or "").strip() or None
+    wifi_password_value = (wifi_password or "").strip() or None
+    wifi_security_mode_value = (wifi_security_mode or "").strip() or None
+    wifi_channel_value = (wifi_channel or "").strip() or None
     mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
@@ -272,9 +292,60 @@ def save_provision_settings(
                 step_name="push_pppoe_tr069",
                 values={"username": pppoe_username_value},
             )
+    if any(
+        value is not None
+        for value in [
+            lan_ip_value,
+            lan_subnet_value,
+            dhcp_enabled_value,
+            dhcp_start_value,
+            dhcp_end_value,
+        ]
+    ):
+        update_service_order_execution_context_for_ont(
+            db,
+            ont_id=ont_id,
+            step_name="configure_lan_tr069",
+            values={
+                "lan_ip": lan_ip_value,
+                "lan_subnet": lan_subnet_value,
+                "dhcp_enabled": dhcp_enabled_value,
+                "dhcp_start": dhcp_start_value,
+                "dhcp_end": dhcp_end_value,
+            },
+        )
+    if any(
+        value is not None
+        for value in [
+            wifi_enabled_value,
+            wifi_ssid_value,
+            wifi_password_value,
+            wifi_security_mode_value,
+            wifi_channel_value,
+        ]
+    ):
+        update_service_order_execution_context_for_ont(
+            db,
+            ont_id=ont_id,
+            step_name="configure_wifi_tr069",
+            values={
+                "enabled": wifi_enabled_value,
+                "ssid": wifi_ssid_value,
+                "password_set": bool(wifi_password_value),
+                "security_mode": wifi_security_mode_value,
+                "channel": wifi_channel_value,
+            },
+        )
     return JsonActionResult(
         content={"success": True, "message": "Provision settings saved"}
     )
+
+
+def _bool_from_form(value: str | None) -> bool | None:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    return raw in {"true", "1", "yes", "on", "enabled"}
 
 
 def _vlan_tag_for_id(db: Session, vlan_id: str | None) -> int | None:

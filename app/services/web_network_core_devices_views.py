@@ -2006,9 +2006,10 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         )
 
     provisioning_runs: list[dict[str, object]] = []
+    ont_plan: dict[str, object] = {}
     subscription_entity_id = subscription.id if subscription else None
     if subscription_entity_id is not None:
-        from app.models.provisioning import ProvisioningRun
+        from app.models.provisioning import ProvisioningRun, ServiceOrder
 
         run_stmt = (
             select(ProvisioningRun)
@@ -2042,6 +2043,18 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
                     "error_message": run.error_message,
                 }
             )
+        order_stmt = (
+            select(ServiceOrder)
+            .where(ServiceOrder.subscription_id == subscription_entity_id)
+            .order_by(ServiceOrder.created_at.desc())
+            .limit(1)
+        )
+        service_order = db.scalars(order_stmt).first()
+        execution_context = getattr(service_order, "execution_context", None) or {}
+        if isinstance(execution_context, dict):
+            maybe_ont_plan = execution_context.get("ont_plan")
+            if isinstance(maybe_ont_plan, dict):
+                ont_plan = maybe_ont_plan
 
     # Manual profile state shown on the ONT detail screen
     profile_state: dict[str, object] = {}
@@ -2077,6 +2090,14 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     capabilities = OntReadFacade.get_capabilities(db, ont_id)
 
+    from app.services.network.ont_service_intent import build_service_intent
+
+    service_intent = build_service_intent(
+        ont,
+        subscriber_info=subscriber_info,
+        ont_plan=ont_plan,
+    )
+
     return {
         "ont": ont,
         "display_serial_number": display_serial_number,
@@ -2087,6 +2108,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "network_path": network_path,
         "subscriber_info": subscriber_info,
         "provisioning_runs": provisioning_runs,
+        "ont_plan": ont_plan,
+        "service_intent": service_intent,
         "profile_state": profile_state,
         "capabilities": capabilities,
         "inventory_ready": (

@@ -4,13 +4,14 @@
 <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-700 dark:border-amber-900/30 dark:bg-amber-900/10 dark:text-amber-300">
     {{ error }}
 </div>
-{% elif not tr069_available %}
+{% endif %}
+{% if not tr069_available %}
 <div class="rounded-lg border border-slate-200 bg-slate-50 px-4 py-6 text-center dark:border-slate-700 dark:bg-slate-800/50">
     <svg class="mx-auto h-8 w-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
     <p class="mt-2 text-sm text-slate-600 dark:text-slate-400">TR-069 data not available for this device.</p>
-    <p class="mt-1 text-xs text-slate-500 dark:text-slate-500">The device may not be registered with the ACS server or may be offline.</p>
+    <p class="mt-1 text-xs text-slate-500 dark:text-slate-500">You can still save WAN service intent. Applying it requires ACS connectivity.</p>
 </div>
-{% else %}
+{% endif %}
 
 {# Current WAN Status - Formatted Display #}
 {% if wan_info %}
@@ -78,8 +79,10 @@
 {% endif %}
 
 {# WAN Mode Form #}
-{% set current_wan_mode = 'pppoe' %}
+{% set wan_intent = ont_plan.get('configure_wan_tr069') if ont_plan is defined and ont_plan else {} %}
+{% set current_wan_mode = wan_intent.get('wan_mode') or 'pppoe' %}
 {% set conn_type_value = (wan_info.get('Connection Type') or '') if wan_info else '' %}
+{% if not wan_intent.get('wan_mode') %}
 {% if 'dhcp' in conn_type_value|lower %}
 {% set current_wan_mode = 'dhcp' %}
 {% elif 'static' in conn_type_value|lower %}
@@ -87,9 +90,11 @@
 {% elif 'bridge' in conn_type_value|lower %}
 {% set current_wan_mode = 'bridge' %}
 {% endif %}
-{% set current_wan_ip = wan_info.get('WAN IP') or wan_info.get('External IP') or wan_info.get('ExternalIPAddress') if wan_info else '' %}
-{% set current_gateway = wan_info.get('Gateway') or wan_info.get('Default Gateway') or wan_info.get('DefaultGateway') if wan_info else '' %}
-{% set current_dns = wan_info.get('DNS Servers') or wan_info.get('DNSServers') if wan_info else '' %}
+{% endif %}
+{% set current_wan_ip = wan_intent.get('ip_address') or (wan_info.get('WAN IP') or wan_info.get('External IP') or wan_info.get('ExternalIPAddress') if wan_info else '') %}
+{% set current_subnet = wan_intent.get('subnet_mask') or '' %}
+{% set current_gateway = wan_intent.get('gateway') or (wan_info.get('Gateway') or wan_info.get('Default Gateway') or wan_info.get('DefaultGateway') if wan_info else '') %}
+{% set current_dns = wan_intent.get('dns_servers') or (wan_info.get('DNS Servers') or wan_info.get('DNSServers') if wan_info else '') %}
 <div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
      x-data="{ wanMode: '{{ current_wan_mode }}' }">
     <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WAN</h4>
@@ -115,7 +120,7 @@
                 <select name="wan_vlan" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">Leave unchanged</option>
                     {% for vlan in vlans or [] %}
-                    <option value="{{ vlan.tag }}">VLAN {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}</option>
+                    <option value="{{ vlan.tag }}" {% if wan_intent.get('wan_vlan') == vlan.tag %}selected{% endif %}>VLAN {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}</option>
                     {% endfor %}
                 </select>
             </div>
@@ -133,7 +138,7 @@
             </div>
             <div>
                 <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subnet Mask</label>
-                <input type="text" name="subnet_mask" placeholder="255.255.255.0"
+                <input type="text" name="subnet_mask" value="{{ current_subnet or '' }}" placeholder="255.255.255.0"
                        class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             </div>
             <div>
@@ -200,5 +205,3 @@
         </div>
     </form>
 </div>
-
-{% endif %}
