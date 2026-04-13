@@ -1,34 +1,70 @@
 {% set intent = service_intent if service_intent is defined else none %}
 {% if intent %}
-<div class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div>
-            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service Intent</p>
-            <h2 class="mt-1 text-base font-semibold text-slate-900 dark:text-white">Desired subscriber service</h2>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Management, internet, LAN, WiFi, and OLT service path are tracked separately so day-2 changes do not depend on raw TR-069 data.</p>
+<div class="group relative overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+    {# Subtle gradient accent at top #}
+    <div class="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
+
+    {# Header #}
+    <div class="flex items-center justify-between gap-4 border-b border-slate-100 px-4 py-3 dark:border-slate-700/50">
+        <div class="flex items-center gap-3">
+            <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-500/10 dark:bg-blue-500/20">
+                <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+            </div>
+            <div>
+                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Service Intent</h2>
+                <p class="text-[11px] text-slate-500 dark:text-slate-400">Desired configuration state</p>
+            </div>
         </div>
-        <div class="flex flex-wrap gap-2">
+        <div class="flex items-center gap-2">
             {% if intent.is_complete %}
-            <span class="inline-flex items-center rounded-lg bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/30">Complete</span>
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[11px] font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20 dark:bg-emerald-500/10 dark:text-emerald-400 dark:ring-emerald-500/30">
+                <svg class="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                Complete
+            </span>
             {% else %}
-            <span class="inline-flex items-center rounded-lg bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 ring-1 ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-300 dark:ring-amber-500/30">{{ intent.missing_count }} unset</span>
+            <span class="inline-flex items-center gap-1.5 rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20 dark:bg-amber-500/10 dark:text-amber-400 dark:ring-amber-500/30">
+                <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                {{ intent.missing_count }} unset
+            </span>
             {% endif %}
             <a href="/admin/network/onts/{{ ont.id }}?tab=configuration"
-               class="inline-flex items-center rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-blue-700">Edit Intent</a>
+               class="inline-flex items-center gap-1.5 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                Edit
+            </a>
         </div>
     </div>
-    <div class="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
+
+    {# Section Grid - Compact cards with clear visual hierarchy #}
+    <div class="grid gap-px bg-slate-100 dark:bg-slate-700/50 md:grid-cols-2 xl:grid-cols-5">
         {% for section in intent.sections %}
-        <div class="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/40">
-            <div class="mb-2">
-                <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ section.title }}</h3>
-                <p class="text-xs text-slate-500 dark:text-slate-400">{{ section.description }}</p>
+        <div class="relative bg-white p-3 dark:bg-slate-800/95 {% if loop.first %}xl:rounded-bl-xl{% endif %}{% if loop.last %}xl:rounded-br-xl{% endif %}">
+            {# Section Header with Icon #}
+            <div class="mb-2.5 flex items-center gap-2">
+                {% set section_icons = {
+                    'Management': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9"/>',
+                    'Internet': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>',
+                    'WiFi': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.858 15.355-5.858 21.213 0"/>',
+                    'LAN': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2"/>',
+                    'OLT Path': '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/>'
+                } %}
+                {% set section_colors = {
+                    'Management': 'text-blue-500 dark:text-blue-400',
+                    'Internet': 'text-emerald-500 dark:text-emerald-400',
+                    'WiFi': 'text-amber-500 dark:text-amber-400',
+                    'LAN': 'text-cyan-500 dark:text-cyan-400',
+                    'OLT Path': 'text-violet-500 dark:text-violet-400'
+                } %}
+                <svg class="h-4 w-4 {{ section_colors.get(section.title, 'text-slate-400') }}" fill="none" stroke="currentColor" viewBox="0 0 24 24">{{ section_icons.get(section.title, '<circle cx="12" cy="12" r="10"/>') | safe }}</svg>
+                <h3 class="text-xs font-semibold text-slate-700 dark:text-slate-200">{{ section.title }}</h3>
             </div>
-            <dl class="space-y-1.5">
+
+            {# Data Rows - Tighter spacing, cleaner layout #}
+            <dl class="space-y-1">
                 {% for row in section.rows %}
-                <div class="flex items-start justify-between gap-2">
-                    <dt class="text-xs text-slate-500 dark:text-slate-400">{{ row.label }}</dt>
-                    <dd class="max-w-[9rem] break-words text-right text-xs font-medium {% if row.value == 'Not set' %}text-amber-700 dark:text-amber-300{% else %}text-slate-900 dark:text-white{% endif %}">{{ row.value }}</dd>
+                <div class="flex items-baseline justify-between gap-2 text-[11px]">
+                    <dt class="text-slate-500 dark:text-slate-400">{{ row.label }}</dt>
+                    <dd class="max-w-[8rem] truncate text-right font-medium {% if row.value == 'Not set' %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}" title="{{ row.value }}">{{ row.value }}</dd>
                 </div>
                 {% endfor %}
             </dl>

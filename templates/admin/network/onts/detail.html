@@ -167,226 +167,280 @@
     </div>
     {% endif %}
 
-    {# Quick Status Row — Compact indicators for at-a-glance scanning #}
-    <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-        {# Runtime Status #}
-        <div class="group relative rounded-xl border {{ 'border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-teal-50/50 dark:border-emerald-800/40 dark:from-emerald-900/20 dark:to-teal-900/10' if signal_info and signal_info.online_status == 'online' else 'border-rose-200/80 bg-gradient-to-br from-rose-50 to-red-50/50 dark:border-rose-800/40 dark:from-rose-900/20 dark:to-red-900/10' if signal_info and signal_info.online_status == 'offline' else 'border-slate-200/80 bg-white dark:border-slate-700/80 dark:bg-slate-800' }} p-4 transition-all hover:shadow-md">
-            <div class="flex items-center gap-3">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {{ 'bg-emerald-500/10 dark:bg-emerald-500/20' if signal_info and signal_info.online_status == 'online' else 'bg-rose-500/10 dark:bg-rose-500/20' if signal_info and signal_info.online_status == 'offline' else 'bg-slate-500/10 dark:bg-slate-500/20' }}">
+    {# Quick Status Strip — Ultra-compact NOC indicators #}
+    <div class="overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+        <div class="grid grid-cols-2 gap-px bg-slate-100 dark:bg-slate-700/50 sm:grid-cols-3 lg:grid-cols-5">
+            {# Runtime Status #}
+            <div class="relative bg-white px-3 py-2.5 dark:bg-slate-800/95 {{ 'lg:rounded-tl-xl lg:rounded-bl-xl' }}">
+                {# Status indicator bar #}
+                <div class="absolute inset-y-0 left-0 w-0.5 {{ 'bg-emerald-500' if signal_info and signal_info.online_status == 'online' else 'bg-rose-500' if signal_info and signal_info.online_status == 'offline' else 'bg-slate-300 dark:bg-slate-600' }}"></div>
+                <div class="flex items-center gap-2">
                     {% if signal_info and signal_info.online_status == 'online' %}
-                    <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                    <span class="relative flex h-2.5 w-2.5 shrink-0">
+                        <span class="absolute inline-flex h-full w-full animate-ping motion-reduce:animate-none rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex h-2.5 w-2.5 rounded-full bg-emerald-500"></span>
+                    </span>
                     {% elif signal_info and signal_info.online_status == 'offline' %}
-                    <svg class="h-5 w-5 text-rose-600 dark:text-rose-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-rose-500"></span>
                     {% else %}
-                    <svg class="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-slate-400"></span>
                     {% endif %}
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[9px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Runtime</p>
+                        <p class="truncate text-xs font-semibold {{ 'text-emerald-700 dark:text-emerald-400' if signal_info and signal_info.online_status == 'online' else 'text-rose-700 dark:text-rose-400' if signal_info and signal_info.online_status == 'offline' else 'text-slate-600 dark:text-slate-300' }}">
+                            {{ signal_info.online_status_display if signal_info else "Unknown" }}
+                        </p>
+                    </div>
                 </div>
-                <div class="min-w-0 flex-1">
-                    <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Runtime</p>
-                    <p class="truncate text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if signal_info and signal_info.online_status == 'online' else 'text-rose-700 dark:text-rose-300' if signal_info and signal_info.online_status == 'offline' else 'text-slate-700 dark:text-slate-300' }}">{{ signal_info.online_status_display if signal_info else "" }}</p>
+                {% if signal_info and signal_info.offline_reason_display %}
+                <p class="mt-1 truncate text-[10px] text-rose-600 dark:text-rose-400" title="{{ signal_info.offline_reason_display }}">{{ signal_info.offline_reason_display }}</p>
+                {% elif signal_info and signal_info.last_seen_at %}
+                <p class="mt-1 truncate text-[10px] tabular-nums text-slate-400 dark:text-slate-500">{{ signal_info.last_seen_at.strftime('%m/%d %H:%M') }}</p>
+                {% endif %}
+            </div>
+
+            {# Assignment #}
+            <div class="relative bg-white px-3 py-2.5 dark:bg-slate-800/95">
+                <div class="absolute inset-y-0 left-0 w-0.5 {{ 'bg-emerald-500' if assignment else 'bg-amber-500' }}"></div>
+                <div class="flex items-center gap-2">
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full {{ 'bg-emerald-500' if assignment else 'bg-amber-500' }}"></span>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[9px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Assignment</p>
+                        <p class="truncate text-xs font-semibold {{ 'text-emerald-700 dark:text-emerald-400' if assignment else 'text-amber-700 dark:text-amber-400' }}">
+                            {{ 'Assigned' if assignment else 'Unassigned' }}
+                        </p>
+                    </div>
                 </div>
             </div>
-            {% if signal_info and signal_info.offline_reason_display %}
-            <p class="mt-2 truncate text-xs text-rose-600 dark:text-rose-400">{{ signal_info.offline_reason_display }}</p>
-            {% elif signal_info and signal_info.last_seen_at %}
-            <p class="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">Last seen {{ signal_info.last_seen_at.strftime('%m/%d %H:%M') }}</p>
-            {% endif %}
-            {% if signal_info %}
-            {% endif %}
-        </div>
 
-        {# Assignment #}
-        <div class="group relative rounded-xl border {{ 'border-emerald-200/80 bg-gradient-to-br from-emerald-50 to-teal-50/50 dark:border-emerald-800/40 dark:from-emerald-900/20 dark:to-teal-900/10' if assignment else 'border-amber-200/80 bg-gradient-to-br from-amber-50 to-orange-50/50 dark:border-amber-800/40 dark:from-amber-900/20 dark:to-orange-900/10' }} p-4 transition-all hover:shadow-md">
-            <div class="flex items-center gap-3">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {{ 'bg-emerald-500/10 dark:bg-emerald-500/20' if assignment else 'bg-amber-500/10 dark:bg-amber-500/20' }}">
-                    {% if assignment %}
-                    <svg class="h-5 w-5 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+            {# Subscriber #}
+            <div class="relative bg-white px-3 py-2.5 dark:bg-slate-800/95">
+                <div class="absolute inset-y-0 left-0 w-0.5 {{ 'bg-violet-500' if subscriber_info.get('name') else 'bg-slate-300 dark:bg-slate-600' }}"></div>
+                <div class="flex items-center gap-2">
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full {{ 'bg-violet-500' if subscriber_info.get('name') else 'bg-slate-400' }}"></span>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[9px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Subscriber</p>
+                        {% if subscriber_info.get('name') %}
+                        <p class="truncate text-xs font-semibold text-slate-900 dark:text-white" title="{{ subscriber_info.name }}">{{ subscriber_info.name }}</p>
+                        {% else %}
+                        <p class="text-xs font-semibold text-slate-400 dark:text-slate-500">Not linked</p>
+                        {% endif %}
+                    </div>
+                </div>
+                {% if subscriber_info.get('status') %}
+                <p class="mt-1 truncate text-[10px] text-slate-400 dark:text-slate-500">{{ subscriber_info.status | replace("_", " ") | title }}</p>
+                {% endif %}
+            </div>
+
+            {# Topology #}
+            <div class="relative bg-white px-3 py-2.5 dark:bg-slate-800/95">
+                <div class="absolute inset-y-0 left-0 w-0.5 bg-blue-500"></div>
+                <div class="flex items-center gap-2">
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-500"></span>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[9px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Topology</p>
+                        <p class="truncate text-xs font-semibold text-slate-900 dark:text-white" title="{{ network_path.get('olt_name') or 'Unknown' }}">{{ network_path.get('olt_name') or 'Unknown' }}</p>
+                    </div>
+                </div>
+                {% if network_path.get('pon_port') %}
+                <p class="mt-1 truncate text-[10px] font-mono text-slate-400 dark:text-slate-500" title="{{ network_path.pon_port }}{% if network_path.get('splitter_name') %} · {{ network_path.splitter_name }}{% endif %}">{{ network_path.pon_port }}{% if network_path.get('splitter_name') %} · {{ network_path.splitter_name }}{% endif %}</p>
+                {% endif %}
+            </div>
+
+            {# Profile #}
+            <div class="relative bg-white px-3 py-2.5 dark:bg-slate-800/95 {{ 'lg:rounded-tr-xl lg:rounded-br-xl' }}">
+                <div class="absolute inset-y-0 left-0 w-0.5 {{ 'bg-teal-500' if profile_state.get('profile_name') else 'bg-slate-300 dark:bg-slate-600' }}"></div>
+                <div class="flex items-center gap-2">
+                    {% if profile_state.get('has_drift') %}
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-amber-500"></span>
+                    {% elif profile_state.get('profile_name') %}
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-teal-500"></span>
                     {% else %}
-                    <svg class="h-5 w-5 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                    <span class="h-2.5 w-2.5 shrink-0 rounded-full bg-slate-400"></span>
                     {% endif %}
+                    <div class="min-w-0 flex-1">
+                        <p class="text-[9px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">Profile</p>
+                        <p class="truncate text-xs font-semibold {{ 'text-teal-700 dark:text-teal-400' if profile_state.get('profile_name') else 'text-slate-400 dark:text-slate-500' }}">{{ profile_state.profile_name if profile_state.get('profile_name') else 'None' }}</p>
+                    </div>
                 </div>
-                <div class="min-w-0 flex-1">
-                    <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Assignment</p>
-                    <p class="truncate text-sm font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if assignment else 'text-amber-700 dark:text-amber-300' }}">{{ 'Assigned' if assignment else 'Unassigned' }}</p>
-                </div>
+                {% if profile_state.get('has_drift') %}
+                <p class="mt-1 flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
+                    <svg class="h-2.5 w-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                    Drift detected
+                </p>
+                {% elif profile_state.get('status') %}
+                <p class="mt-1 truncate text-[10px] text-slate-400 dark:text-slate-500">{{ profile_state.status | replace("_", " ") | title }}</p>
+                {% endif %}
             </div>
-        </div>
-
-        {# Subscriber #}
-        <div class="group relative rounded-xl border border-slate-200/80 bg-white p-4 transition-all hover:shadow-md dark:border-slate-700/80 dark:bg-slate-800">
-            <div class="flex items-center gap-3">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {{ 'bg-violet-500/10 dark:bg-violet-500/20' if subscriber_info.get('name') else 'bg-slate-500/10 dark:bg-slate-500/20' }}">
-                    <svg class="h-5 w-5 {{ 'text-violet-600 dark:text-violet-400' if subscriber_info.get('name') else 'text-slate-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"/></svg>
-                </div>
-                <div class="min-w-0 flex-1">
-                    <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Subscriber</p>
-                    {% if subscriber_info.get('name') %}
-                    <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ subscriber_info.name }}</p>
-                    {% else %}
-                    <p class="text-sm font-semibold text-slate-400 dark:text-slate-500">Not linked</p>
-                    {% endif %}
-                </div>
-            </div>
-            {% if subscriber_info.get('status') %}
-            <p class="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">{{ subscriber_info.status | replace("_", " ") | title }}</p>
-            {% endif %}
-        </div>
-
-        {# Topology #}
-        <div class="group relative rounded-xl border border-slate-200/80 bg-white p-4 transition-all hover:shadow-md dark:border-slate-700/80 dark:bg-slate-800">
-            <div class="flex items-center gap-3">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-blue-500/10 dark:bg-blue-500/20">
-                    <svg class="h-5 w-5 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10"/></svg>
-                </div>
-                <div class="min-w-0 flex-1">
-                    <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Topology</p>
-                    <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ network_path.get('olt_name') or 'Unknown' }}</p>
-                </div>
-            </div>
-            {% if network_path.get('pon_port') %}
-            <p class="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">{{ network_path.pon_port }}{% if network_path.get('splitter_name') %} · {{ network_path.splitter_name }}{% endif %}</p>
-            {% endif %}
-        </div>
-
-        {# Profile #}
-        <div class="group relative rounded-xl border {{ 'border-teal-200/80 bg-gradient-to-br from-teal-50 to-emerald-50/50 dark:border-teal-800/40 dark:from-teal-900/20 dark:to-emerald-900/10' if profile_state.get('profile_name') else 'border-slate-200/80 bg-white dark:border-slate-700/80 dark:bg-slate-800' }} p-4 transition-all hover:shadow-md">
-            <div class="flex items-center gap-3">
-                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg {{ 'bg-teal-500/10 dark:bg-teal-500/20' if profile_state.get('profile_name') else 'bg-slate-500/10 dark:bg-slate-500/20' }}">
-                    <svg class="h-5 w-5 {{ 'text-teal-600 dark:text-teal-400' if profile_state.get('profile_name') else 'text-slate-400' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
-                </div>
-                <div class="min-w-0 flex-1">
-                    <p class="text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Profile</p>
-                    <p class="truncate text-sm font-semibold {{ 'text-teal-700 dark:text-teal-300' if profile_state.get('profile_name') else 'text-slate-400 dark:text-slate-500' }}">{{ profile_state.profile_name if profile_state.get('profile_name') else 'None' }}</p>
-                </div>
-            </div>
-            {% if profile_state.get('has_drift') %}
-            <p class="mt-2 truncate text-xs text-amber-600 dark:text-amber-400">Drift detected</p>
-            {% elif profile_state.get('status') %}
-            <p class="mt-2 truncate text-xs text-slate-500 dark:text-slate-400">{{ profile_state.status | replace("_", " ") | title }}</p>
-            {% endif %}
         </div>
     </div>
 
-    {# Optical Link Visualization — Fiber Path Diagram #}
+    {# Optical Link Visualization — Technical Fiber Diagram for NOC #}
     {% if signal_info %}
-    <div class="rounded-2xl border border-slate-200/80 bg-white p-5 shadow-sm dark:border-slate-700/80 dark:bg-slate-800/95 lg:p-6">
-        {# Section Header #}
-        <div class="mb-5 flex items-center justify-between">
-            <div class="flex items-center gap-2">
-                <div class="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                </div>
-                <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Optical Link</h2>
-            </div>
-            {% if signal_info.signal_updated_at %}
-            <span class="text-xs text-slate-500 dark:text-slate-400">
-                Updated {{ signal_info.signal_updated_at.strftime('%H:%M') }}
-            </span>
-            {% endif %}
-        </div>
+    <div class="relative overflow-hidden rounded-xl border border-slate-200/80 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800/95">
+        {# Top accent line indicating link status #}
+        <div class="absolute inset-x-0 top-0 h-0.5 {{ 'bg-gradient-to-r from-emerald-500 via-teal-500 to-emerald-500' if signal_info.online_status == 'online' else 'bg-gradient-to-r from-rose-500 via-red-500 to-rose-500' if signal_info.online_status == 'offline' else 'bg-slate-300 dark:bg-slate-600' }}"></div>
 
-        {# Fiber Path Diagram #}
-        <div class="relative">
-            {# Connection Line (Background) #}
-            <div class="absolute left-[4.5rem] right-[4.5rem] top-1/2 h-1 -translate-y-1/2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700 lg:left-32 lg:right-32">
+        {# Header Row #}
+        <div class="flex items-center justify-between border-b border-slate-100 px-4 py-2.5 dark:border-slate-700/50">
+            <div class="flex items-center gap-2.5">
+                <div class="flex h-7 w-7 items-center justify-center rounded-md {{ 'bg-emerald-500/10 dark:bg-emerald-500/20' if signal_info.online_status == 'online' else 'bg-rose-500/10 dark:bg-rose-500/20' if signal_info.online_status == 'offline' else 'bg-slate-500/10 dark:bg-slate-500/20' }}">
+                    <svg class="h-4 w-4 {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.online_status == 'online' else 'text-rose-600 dark:text-rose-400' if signal_info.online_status == 'offline' else 'text-slate-500' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+                </div>
+                <div>
+                    <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Optical Link</h2>
+                </div>
+            </div>
+            <div class="flex items-center gap-3">
                 {% if signal_info.online_status == 'online' %}
-                <div class="absolute inset-0 bg-gradient-to-r from-emerald-400 via-teal-400 to-emerald-400 animate-pulse" style="animation-duration: 3s;"></div>
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                    <span class="relative flex h-2 w-2">
+                        <span class="absolute inline-flex h-full w-full animate-ping motion-reduce:animate-none rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex h-2 w-2 rounded-full bg-emerald-500"></span>
+                    </span>
+                    Active
+                </span>
+                {% elif signal_info.online_status == 'offline' %}
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-rose-700 dark:text-rose-400">
+                    <span class="h-2 w-2 rounded-full bg-rose-500"></span>
+                    Offline
+                </span>
+                {% else %}
+                <span class="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 dark:text-slate-400">
+                    <span class="h-2 w-2 rounded-full bg-slate-400"></span>
+                    Unknown
+                </span>
+                {% endif %}
+                {% if signal_info.signal_updated_at %}
+                <span class="text-[11px] tabular-nums text-slate-400 dark:text-slate-500">{{ signal_info.signal_updated_at.strftime('%H:%M') }}</span>
                 {% endif %}
             </div>
+        </div>
 
-            <div class="relative flex items-stretch justify-between gap-4">
-                {# OLT Side #}
-                <div class="flex w-28 flex-col items-center lg:w-40">
-                    <div class="relative z-10 flex h-16 w-16 items-center justify-center rounded-xl border-2 {{ 'border-emerald-500 bg-emerald-50 dark:border-emerald-400 dark:bg-emerald-900/30' if signal_info.online_status == 'online' else 'border-slate-300 bg-slate-100 dark:border-slate-600 dark:bg-slate-700' }} lg:h-20 lg:w-20">
-                        <svg class="h-8 w-8 {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.online_status == 'online' else 'text-slate-400 dark:text-slate-500' }} lg:h-10 lg:w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M5 12h14M12 5l7 7-7 7"/></svg>
+        {# Main Signal Display - Horizontal Layout #}
+        <div class="px-4 py-5 lg:px-6">
+            <div class="grid grid-cols-3 items-center gap-4 lg:gap-8">
+                {# OLT Transmit / ONT Receive (Downstream) #}
+                <div class="text-center">
+                    <div class="mb-1.5 flex items-center justify-center gap-1">
+                        <span class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">ONU Rx</span>
+                        <svg class="h-3 w-3 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>
                     </div>
-                    <span class="mt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 lg:text-xs">OLT</span>
+                    {% if signal_info.onu_rx_dbm is not none %}
+                    {% set onu_color = 'text-emerald-600 dark:text-emerald-400' if signal_info.onu_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.onu_quality == 'warning' else 'text-rose-600 dark:text-rose-400' if signal_info.onu_quality == 'critical' else 'text-slate-900 dark:text-white' %}
+                    <p class="text-2xl font-bold tabular-nums tracking-tighter {{ onu_color }} lg:text-3xl">{{ "%.2f"|format(signal_info.onu_rx_dbm) }}</p>
+                    <p class="text-[10px] font-medium text-slate-500 dark:text-slate-400">dBm</p>
+                    {# Quality indicator dot #}
+                    <div class="mt-2 flex items-center justify-center gap-1.5">
+                        <span class="h-1.5 w-1.5 rounded-full {{ 'bg-emerald-500' if signal_info.onu_quality == 'good' else 'bg-amber-500' if signal_info.onu_quality == 'warning' else 'bg-rose-500' if signal_info.onu_quality == 'critical' else 'bg-slate-400' }}"></span>
+                        <span class="text-[10px] font-medium {{ onu_color }}">{{ signal_info.onu_quality | title }}</span>
+                    </div>
+                    {% else %}
+                    <p class="text-2xl font-bold tabular-nums text-slate-300 dark:text-slate-600 lg:text-3xl">&mdash;</p>
+                    <p class="text-[10px] font-medium text-slate-400">No data</p>
+                    {% endif %}
                 </div>
 
-                {# Signal Metrics - Centered #}
-                <div class="flex flex-1 flex-col items-center justify-center gap-4 py-8 sm:flex-row sm:gap-6 lg:gap-10">
-                    {# OLT Rx (from ONT) #}
-                    <div class="text-center">
-                        <div class="flex items-center justify-center gap-1.5">
-                            <svg class="h-3.5 w-3.5 text-slate-400 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
-                            <span class="text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">OLT Rx</span>
+                {# Center: Fiber Link Visualization #}
+                <div class="relative flex flex-col items-center justify-center py-2">
+                    {# Fiber line with data flow animation #}
+                    <div class="relative h-3 w-full overflow-hidden rounded-full bg-slate-100 dark:bg-slate-700/60">
+                        {% if signal_info.online_status == 'online' %}
+                        {# Animated fiber core showing bidirectional data #}
+                        <div class="absolute inset-y-0.5 inset-x-0.5 overflow-hidden rounded-full">
+                            <div class="absolute inset-0 bg-gradient-to-r from-teal-400 via-emerald-300 to-teal-400 opacity-60" style="animation: fiber-pulse 2s ease-in-out infinite;"></div>
+                            <div class="absolute inset-0 bg-gradient-to-r from-transparent via-white/40 to-transparent" style="animation: fiber-shimmer 1.5s linear infinite;"></div>
                         </div>
-                        {% if signal_info.olt_rx_dbm is not none %}
-                        <p class="mt-1 text-2xl font-bold tabular-nums tracking-tight {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.olt_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.olt_quality == 'warning' else 'text-rose-600 dark:text-rose-400' if signal_info.olt_quality == 'critical' else 'text-slate-900 dark:text-white' }} lg:text-3xl">{{ "%.2f"|format(signal_info.olt_rx_dbm) }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">dBm</p>
-                        {% else %}
-                        <p class="mt-1 text-2xl font-bold text-slate-300 dark:text-slate-600">&mdash;</p>
+                        {% elif signal_info.online_status == 'offline' %}
+                        <div class="absolute inset-y-0.5 inset-x-0.5 rounded-full bg-rose-200 dark:bg-rose-900/40"></div>
                         {% endif %}
                     </div>
 
-                    {# Distance (if available) #}
+                    {# Distance badge #}
                     {% if signal_info.distance_meters is not none %}
-                    <div class="hidden text-center sm:block">
-                        <span class="text-[10px] font-medium uppercase tracking-wider text-slate-400 dark:text-slate-500">Distance</span>
-                        <p class="mt-1 text-lg font-semibold tabular-nums text-slate-700 dark:text-slate-300">{{ "{:,}".format(signal_info.distance_meters) }}<span class="ml-0.5 text-xs font-normal text-slate-400">m</span></p>
+                    <div class="mt-2 inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 dark:bg-slate-700">
+                        <svg class="h-3 w-3 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>
+                        <span class="text-[11px] font-semibold tabular-nums text-slate-600 dark:text-slate-300">{{ "{:,}".format(signal_info.distance_meters) }}m</span>
                     </div>
                     {% endif %}
 
-                    {# ONU Rx (from OLT) #}
-                    <div class="text-center">
-                        <div class="flex items-center justify-center gap-1.5">
-                            <span class="text-[10px] font-medium uppercase tracking-wider text-slate-500 dark:text-slate-400">ONU Rx</span>
-                            <svg class="h-3.5 w-3.5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
-                        </div>
-                        {% if signal_info.onu_rx_dbm is not none %}
-                        <p class="mt-1 text-2xl font-bold tabular-nums tracking-tight {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.onu_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.onu_quality == 'warning' else 'text-rose-600 dark:text-rose-400' if signal_info.onu_quality == 'critical' else 'text-slate-900 dark:text-white' }} lg:text-3xl">{{ "%.2f"|format(signal_info.onu_rx_dbm) }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">dBm</p>
-                        {% else %}
-                        <p class="mt-1 text-2xl font-bold text-slate-300 dark:text-slate-600">&mdash;</p>
-                        {% endif %}
+                    {# Device labels below fiber #}
+                    <div class="mt-3 flex w-full items-center justify-between px-2 text-[9px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">
+                        <span>OLT</span>
+                        <span>ONT</span>
                     </div>
                 </div>
 
-                {# ONT Side #}
-                <div class="flex w-28 flex-col items-center lg:w-40">
-                    <div class="relative z-10 flex h-16 w-16 items-center justify-center rounded-xl border-2 {{ 'border-emerald-500 bg-emerald-50 dark:border-emerald-400 dark:bg-emerald-900/30' if signal_info.online_status == 'online' else 'border-rose-400 bg-rose-50 dark:border-rose-500 dark:bg-rose-900/30' if signal_info.online_status == 'offline' else 'border-slate-300 bg-slate-100 dark:border-slate-600 dark:bg-slate-700' }} lg:h-20 lg:w-20">
-                        <svg class="h-8 w-8 {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.online_status == 'online' else 'text-rose-500 dark:text-rose-400' if signal_info.online_status == 'offline' else 'text-slate-400 dark:text-slate-500' }} lg:h-10 lg:w-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                {# OLT Receive / ONT Transmit (Upstream) #}
+                <div class="text-center">
+                    <div class="mb-1.5 flex items-center justify-center gap-1">
+                        <svg class="h-3 w-3 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 17l-5-5m0 0l5-5m-5 5h12"/></svg>
+                        <span class="text-[10px] font-semibold uppercase tracking-widest text-slate-400 dark:text-slate-500">OLT Rx</span>
                     </div>
-                    <span class="mt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 lg:text-xs">ONT</span>
+                    {% if signal_info.olt_rx_dbm is not none %}
+                    {% set olt_color = 'text-emerald-600 dark:text-emerald-400' if signal_info.olt_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.olt_quality == 'warning' else 'text-rose-600 dark:text-rose-400' if signal_info.olt_quality == 'critical' else 'text-slate-900 dark:text-white' %}
+                    <p class="text-2xl font-bold tabular-nums tracking-tighter {{ olt_color }} lg:text-3xl">{{ "%.2f"|format(signal_info.olt_rx_dbm) }}</p>
+                    <p class="text-[10px] font-medium text-slate-500 dark:text-slate-400">dBm</p>
+                    {# Quality indicator dot #}
+                    <div class="mt-2 flex items-center justify-center gap-1.5">
+                        <span class="h-1.5 w-1.5 rounded-full {{ 'bg-emerald-500' if signal_info.olt_quality == 'good' else 'bg-amber-500' if signal_info.olt_quality == 'warning' else 'bg-rose-500' if signal_info.olt_quality == 'critical' else 'bg-slate-400' }}"></span>
+                        <span class="text-[10px] font-medium {{ olt_color }}">{{ signal_info.olt_quality | title }}</span>
+                    </div>
+                    {% else %}
+                    <p class="text-2xl font-bold tabular-nums text-slate-300 dark:text-slate-600 lg:text-3xl">&mdash;</p>
+                    <p class="text-[10px] font-medium text-slate-400">No data</p>
+                    {% endif %}
                 </div>
             </div>
         </div>
 
-        {# Quality Indicator Bars #}
-        <div class="mt-6 grid gap-3 sm:grid-cols-2">
-            {# OLT Rx Quality Bar #}
-            <div class="rounded-lg bg-slate-50 px-4 py-3 dark:bg-slate-900/50">
-                <div class="flex items-center justify-between text-xs">
-                    <span class="font-medium text-slate-600 dark:text-slate-400">OLT Receive Quality</span>
-                    {% if signal_info.olt_quality != 'unknown' %}
-                    <span class="font-semibold {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.olt_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.olt_quality == 'warning' else 'text-rose-600 dark:text-rose-400' }}">{{ signal_info.olt_quality | title }}</span>
-                    {% endif %}
-                </div>
-                {% if signal_info.olt_rx_dbm is not none %}
-                {% set olt_pct = [0, [100, ((signal_info.olt_rx_dbm + 30) / 20 * 100)] | min] | max %}
-                <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-                    <div class="h-full rounded-full transition-all duration-500 {{ 'bg-gradient-to-r from-emerald-500 to-teal-500' if signal_info.olt_quality == 'good' else 'bg-gradient-to-r from-amber-500 to-orange-500' if signal_info.olt_quality == 'warning' else 'bg-gradient-to-r from-rose-500 to-red-500' if signal_info.olt_quality == 'critical' else 'bg-slate-400' }}" style="width: {{ olt_pct }}%"></div>
-                </div>
-                {% endif %}
-            </div>
-
-            {# ONU Rx Quality Bar #}
-            <div class="rounded-lg bg-slate-50 px-4 py-3 dark:bg-slate-900/50">
-                <div class="flex items-center justify-between text-xs">
-                    <span class="font-medium text-slate-600 dark:text-slate-400">ONU Receive Quality</span>
-                    {% if signal_info.onu_quality != 'unknown' %}
-                    <span class="font-semibold {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.onu_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.onu_quality == 'warning' else 'text-rose-600 dark:text-rose-400' }}">{{ signal_info.onu_quality | title }}</span>
+        {# Bottom: Compact quality meters #}
+        <div class="grid grid-cols-2 gap-px border-t border-slate-100 bg-slate-100 dark:border-slate-700/50 dark:bg-slate-700/50">
+            {# ONU Rx Quality #}
+            <div class="bg-white px-4 py-2.5 dark:bg-slate-800/95">
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-medium text-slate-500 dark:text-slate-400">Downstream</span>
+                    {% if signal_info.onu_rx_dbm is not none %}
+                    {% set onu_pct = [0, [100, ((signal_info.onu_rx_dbm + 30) / 20 * 100)] | min] | max %}
+                    <span class="text-[10px] font-semibold tabular-nums {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.onu_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.onu_quality == 'warning' else 'text-rose-600 dark:text-rose-400' }}">{{ "%.0f"|format(onu_pct) }}%</span>
                     {% endif %}
                 </div>
                 {% if signal_info.onu_rx_dbm is not none %}
-                {% set onu_pct = [0, [100, ((signal_info.onu_rx_dbm + 30) / 20 * 100)] | min] | max %}
-                <div class="mt-2 h-2 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
-                    <div class="h-full rounded-full transition-all duration-500 {{ 'bg-gradient-to-r from-emerald-500 to-teal-500' if signal_info.onu_quality == 'good' else 'bg-gradient-to-r from-amber-500 to-orange-500' if signal_info.onu_quality == 'warning' else 'bg-gradient-to-r from-rose-500 to-red-500' if signal_info.onu_quality == 'critical' else 'bg-slate-400' }}" style="width: {{ onu_pct }}%"></div>
+                <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                    <div class="h-full rounded-full transition-all duration-500 {{ 'bg-emerald-500' if signal_info.onu_quality == 'good' else 'bg-amber-500' if signal_info.onu_quality == 'warning' else 'bg-rose-500' if signal_info.onu_quality == 'critical' else 'bg-slate-400' }}" style="width: {{ onu_pct }}%"></div>
+                </div>
+                {% endif %}
+            </div>
+
+            {# OLT Rx Quality #}
+            <div class="bg-white px-4 py-2.5 dark:bg-slate-800/95">
+                <div class="flex items-center justify-between">
+                    <span class="text-[10px] font-medium text-slate-500 dark:text-slate-400">Upstream</span>
+                    {% if signal_info.olt_rx_dbm is not none %}
+                    {% set olt_pct = [0, [100, ((signal_info.olt_rx_dbm + 30) / 20 * 100)] | min] | max %}
+                    <span class="text-[10px] font-semibold tabular-nums {{ 'text-emerald-600 dark:text-emerald-400' if signal_info.olt_quality == 'good' else 'text-amber-600 dark:text-amber-400' if signal_info.olt_quality == 'warning' else 'text-rose-600 dark:text-rose-400' }}">{{ "%.0f"|format(olt_pct) }}%</span>
+                    {% endif %}
+                </div>
+                {% if signal_info.olt_rx_dbm is not none %}
+                <div class="mt-1.5 h-1 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700">
+                    <div class="h-full rounded-full transition-all duration-500 {{ 'bg-emerald-500' if signal_info.olt_quality == 'good' else 'bg-amber-500' if signal_info.olt_quality == 'warning' else 'bg-rose-500' if signal_info.olt_quality == 'critical' else 'bg-slate-400' }}" style="width: {{ olt_pct }}%"></div>
                 </div>
                 {% endif %}
             </div>
         </div>
     </div>
+
+    {# CSS for fiber animation #}
+    <style>
+        @keyframes fiber-pulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 0.8; }
+        }
+        @keyframes fiber-shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+    </style>
     {% endif %}
 
     {% include "admin/network/onts/_service_intent_summary.html" %}
