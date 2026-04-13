@@ -28,17 +28,45 @@ def test_promql_label_selector_does_not_overescape_hyphen() -> None:
 def test_huawei_command_defaults_accept_user_and_exec_prompts(monkeypatch) -> None:
     channel = _DummyChannel()
 
-    def _fake_read_until_prompt(_channel, prompt_regex: str, timeout_sec: float = 8.0) -> str:
+    def _fake_read_until_prompt(
+        _channel, prompt_regex: str, timeout_sec: float = 8.0
+    ) -> str:
         assert prompt_regex.startswith(r"#\s*$")
         assert timeout_sec == 12
         return "OLT>"
 
-    monkeypatch.setattr("app.services.network.olt_ssh._read_until_prompt", _fake_read_until_prompt)
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._read_until_prompt", _fake_read_until_prompt
+    )
 
     output = _run_huawei_cmd(channel, "display version")
 
     assert output == "OLT>"
     assert channel.sent == ["display version\n"]
+
+
+def test_huawei_command_accepts_brace_optional_prompt(monkeypatch) -> None:
+    channel = _DummyChannel()
+    responses = iter(["{ |priority<K> }:", "OLT(config-if-gpon-0/1)#"])
+
+    def _fake_read_until_prompt(
+        _channel, prompt_regex: str, timeout_sec: float = 8.0
+    ) -> str:
+        assert prompt_regex.startswith(r"#\s*$")
+        assert timeout_sec == 12
+        return next(responses)
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._read_until_prompt", _fake_read_until_prompt
+    )
+
+    output = _run_huawei_cmd(channel, "ont ipconfig 13 8 ip-index 0 dhcp vlan 201")
+
+    assert output == "OLT(config-if-gpon-0/1)#"
+    assert channel.sent == [
+        "ont ipconfig 13 8 ip-index 0 dhcp vlan 201\n",
+        "\n",
+    ]
 
 
 def test_olt_autofind_get_route_exists_for_auth_redirect_recovery() -> None:

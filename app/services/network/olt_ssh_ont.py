@@ -21,7 +21,13 @@ from app.services.network.olt_validators import (
 logger = logging.getLogger(__name__)
 
 # Specific SSH-related exceptions that can occur during OLT operations
-_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
+_SSH_CONNECTION_ERRORS = (
+    SSHException,
+    OSError,
+    socket.timeout,
+    TimeoutError,
+    ConnectionError,
+)
 
 
 @dataclass
@@ -89,7 +95,9 @@ def get_ont_status(
         )
         return True, "ONT status retrieved", entry
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error getting ONT status from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error getting ONT status from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", None
     finally:
         transport.close()
@@ -137,7 +145,10 @@ def get_registered_ont_serials(
         return True, f"Found {len(entries)} registered ONTs", entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
-            "Error getting registered ONT serials from OLT %s: %s", olt.name, exc, exc_info=True
+            "Error getting registered ONT serials from OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
         )
         return False, f"Error: {exc}", []
     finally:
@@ -197,7 +208,9 @@ def find_ont_by_serial(
         if fsp_match and ont_id_match:
             fsp = fsp_match.group(1)
             ont_id = int(ont_id_match.group(1))
-            run_state = run_state_match.group(1).lower() if run_state_match else "unknown"
+            run_state = (
+                run_state_match.group(1).lower() if run_state_match else "unknown"
+            )
 
             logger.info(
                 "Found existing ONT registration: serial=%s on %s port %s ont_id=%d state=%s",
@@ -284,7 +297,12 @@ def _run_ont_config_command(
             return False, f"OLT rejected: {output.strip()[-150:]}"
         return True, success_message
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error running ONT config command on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error running ONT config command on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -372,7 +390,10 @@ def configure_ont_iphost(
                 ip_mode,
                 vlan_id,
             )
-            return True, f"Management IP already configured ({ip_mode} on VLAN {vlan_id})"
+            return (
+                True,
+                f"Management IP already configured ({ip_mode} on VLAN {vlan_id})",
+            )
 
         if core.is_error_output(output):
             logger.warning(
@@ -383,6 +404,44 @@ def configure_ont_iphost(
             )
             return False, f"OLT rejected: {output.strip()[-150:]}"
 
+        verify_output = core._run_huawei_cmd(
+            channel, f"display ont ipconfig {port_num} {ont_id}", prompt=config_prompt
+        )
+        if core.is_error_output(verify_output):
+            logger.warning(
+                "IPHOST verification failed for ONT %d on OLT %s: %s",
+                ont_id,
+                olt.name,
+                verify_output.strip()[-150:],
+            )
+            return False, f"OLT verification failed: {verify_output.strip()[-150:]}"
+
+        verified = parse_iphost_config_output(verify_output)
+        verified_mode = (verified.get("mode") or "").lower()
+        verified_vlan = verified.get("vlan")
+        verified_priority = verified.get("priority")
+        if ip_mode == "dhcp":
+            mode_ok = "dhcp" in verified_mode
+            ip_ok = True
+        else:
+            mode_ok = "static" in verified_mode
+            ip_ok = verified.get("ip_address") == ip_address
+        vlan_ok = verified_vlan == str(vlan_id)
+        priority_ok = priority is None or verified_priority == str(priority)
+        if not (mode_ok and ip_ok and vlan_ok and priority_ok):
+            logger.warning(
+                "IPHOST verification mismatch for ONT %d on OLT %s: expected mode=%s "
+                "ip=%s vlan=%s priority=%s, got %s",
+                ont_id,
+                olt.name,
+                ip_mode,
+                ip_address,
+                vlan_id,
+                priority,
+                verified,
+            )
+            return False, "OLT did not apply the requested management IP configuration"
+
         logger.info(
             "Configured IPHOST for ONT %d on OLT %s (%s VLAN %d)",
             ont_id,
@@ -392,7 +451,9 @@ def configure_ont_iphost(
         )
         return True, f"Management IP configured ({ip_mode} on VLAN {vlan_id})"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error configuring IPHOST on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error configuring IPHOST on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -481,7 +542,9 @@ def get_ont_iphost_config(
         config = parse_iphost_config_output(output)
         return True, "IPHOST config retrieved", config
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error getting IPHOST config from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error getting IPHOST config from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", {}
     finally:
         transport.close()
@@ -604,7 +667,12 @@ def configure_ont_internet_config(
         )
         return True, f"Internet config activated (ip-index {ip_index})"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error configuring internet-config on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error configuring internet-config on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -688,7 +756,9 @@ def configure_ont_wan_config(
             f"WAN route+NAT mode set (ip-index {ip_index}, profile-id {profile_id})",
         )
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error configuring wan-config on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error configuring wan-config on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -776,7 +846,9 @@ def configure_ont_pppoe_omci(
         )
         return True, f"PPPoE configured via OMCI (VLAN {vlan_id}, user {username})"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error configuring PPPoE OMCI on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error configuring PPPoE OMCI on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -844,7 +916,9 @@ def configure_ont_port_native_vlan(
         )
         return True, f"Native VLAN {vlan_id} set on eth port {eth_port}"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error setting port native-vlan on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error setting port native-vlan on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -906,7 +980,9 @@ def factory_reset_ont_omci(olt: OLTDevice, fsp: str, ont_id: int) -> tuple[bool,
         logger.info("Factory reset ONT %d via OMCI on OLT %s", ont_id, olt.name)
         return True, f"ONT {ont_id} factory reset command sent via OMCI"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error factory-resetting ONT on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error factory-resetting ONT on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -968,7 +1044,9 @@ def remote_ping_ont(
         )
         return True, f"Remote ping to {ip_address}: {output.strip()[-200:]}"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error running remote ping on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error running remote ping on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -1148,7 +1226,9 @@ def bind_tr069_server_profile(
             f"TR-069 profile {profile_id} bound to ONT {ont_id} (reset triggered)",
         )
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error binding TR-069 profile on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error binding TR-069 profile on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()

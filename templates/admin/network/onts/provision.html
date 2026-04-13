@@ -20,7 +20,18 @@
         tr069ProfileId: {{ (selected_tr069_profile_id or "") | tojson }},
         wanProtocol: {{ initial_wan_protocol | tojson }},
         onuMode: {{ (ont.onu_mode.value if ont.onu_mode else "routing") | tojson }},
+        selectedMgmtVlan: {{ (ont.mgmt_vlan_id|string if ont.mgmt_vlan_id else "") | tojson }},
+        mgmtIpMode: {{ ("static" if ont.mgmt_ip_mode and ont.mgmt_ip_mode.value == "static_ip" else (ont.mgmt_ip_mode.value if ont.mgmt_ip_mode else "dhcp")) | tojson }},
+        mgmtIp: {{ (ont.mgmt_ip_address or "") | tojson }},
+        mgmtSubnet: "",
+        mgmtGateway: "",
         selectedVlan: {{ (ont.wan_vlan_id|string if ont.wan_vlan_id else "") | tojson }},
+        ipPoolId: "",
+        staticIpPoolId: "",
+        staticIp: "",
+        staticSubnet: "255.255.255.0",
+        staticGateway: "",
+        staticDns: "",
         pppoeUser: {{ (pppoe_username or "") | tojson }},
         showPass: false,
         vlanNasMap: {{ vlan_nas_map | tojson }},
@@ -191,6 +202,63 @@
                 </summary>
                 <div class="p-5 space-y-5 bg-white dark:bg-slate-800">
 
+                    {# ── Management IPHOST ── #}
+                    <div class="space-y-4">
+                        <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
+                            <svg class="h-4 w-4 text-cyan-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
+                            Management IPHOST
+                        </h4>
+                        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div>
+                                <label for="mgmt_vlan" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management VLAN</label>
+                                <select id="mgmt_vlan" name="mgmt_vlan_id" x-model="selectedMgmtVlan"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                    <option value="">Select management VLAN</option>
+                                    {% for v in vlans %}
+                                    <option value="{{ v.id }}" {% if ont.mgmt_vlan_id and ont.mgmt_vlan_id|string == v.id|string %}selected{% endif %}>
+                                        VLAN {{ v.tag }} &mdash; {{ v.name }}{% if v.purpose %} [{{ v.purpose.value | title }}]{% endif %}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP Mode</label>
+                                <div class="mt-2 flex flex-wrap gap-3">
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="radio" name="mgmt_ip_mode" value="dhcp" x-model="mgmtIpMode"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        DHCP
+                                    </label>
+                                    <label class="inline-flex items-center gap-2 text-sm cursor-pointer">
+                                        <input type="radio" name="mgmt_ip_mode" value="static" x-model="mgmtIpMode"
+                                            class="text-blue-600 focus:ring-blue-500 dark:bg-slate-700 dark:border-slate-500">
+                                        Static
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                        <div x-show="mgmtIpMode === 'static'" x-transition x-cloak class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                            <div>
+                                <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP</label>
+                                <input type="text" id="mgmt_ip_address" name="mgmt_ip_address" x-model="mgmtIp" placeholder="172.16.202.20" maxlength="64"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="mgmt_subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management Subnet</label>
+                                <input type="text" id="mgmt_subnet" name="mgmt_subnet" x-model="mgmtSubnet" placeholder="255.255.255.0" maxlength="15"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                            <div>
+                                <label for="mgmt_gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management Gateway</label>
+                                <input type="text" id="mgmt_gateway" name="mgmt_gateway" x-model="mgmtGateway" placeholder="172.16.202.1" maxlength="15"
+                                    class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            </div>
+                        </div>
+                    </div>
+
+                    {# ── Divider ── #}
+                    <hr class="border-slate-200 dark:border-slate-700">
+
                     {# ── WAN Configuration ── #}
                     <div class="space-y-4">
                         <h4 class="text-sm font-semibold text-slate-900 dark:text-white flex items-center gap-2">
@@ -202,7 +270,7 @@
                                 <label for="wan_vlan" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
                                 <select id="wan_vlan" name="wan_vlan_id" x-model="selectedVlan"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                    <option value="">From profile</option>
+                                    <option value="">Select internet VLAN</option>
                                     {% for v in vlans %}
                                     <option value="{{ v.id }}" {% if ont.wan_vlan_id and ont.wan_vlan_id|string == v.id|string %}selected{% endif %}>
                                         VLAN {{ v.tag }} &mdash; {{ v.name }}{% if v.nas_device %} [{{ v.nas_device.name }}]{% endif %}
@@ -335,6 +403,7 @@
                             <div>
                                 <label for="ip_pool" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Pool</label>
                                 <select id="ip_pool" name="ip_pool_id"
+                                    x-model="ipPoolId"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <option value="">Auto-assign from default pool</option>
                                     {% for pool in ip_pools %}
@@ -357,6 +426,7 @@
                             <div>
                                 <label for="static_ip_pool" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Assign from Pool</label>
                                 <select id="static_ip_pool" name="static_ip_pool_id"
+                                    x-model="staticIpPoolId"
                                     class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                     <option value="">Manual entry below</option>
                                     {% for pool in ip_pools %}
@@ -367,23 +437,23 @@
                             <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                 <div>
                                     <label for="static_ip" class="block text-sm font-medium text-slate-700 dark:text-slate-300">IP Address</label>
-                                    <input type="text" id="static_ip" name="static_ip" placeholder="e.g. 172.16.202.50" maxlength="15"
+                                    <input type="text" id="static_ip" name="static_ip" x-model="staticIp" placeholder="e.g. 172.16.202.50" maxlength="15"
                                         pattern="^(\d{1,3}\.){3}\d{1,3}$"
                                         class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 </div>
                                 <div>
                                     <label for="static_subnet" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subnet Mask</label>
-                                    <input type="text" id="static_subnet" name="static_subnet" placeholder="255.255.255.0" value="255.255.255.0" maxlength="15"
+                                    <input type="text" id="static_subnet" name="static_subnet" x-model="staticSubnet" placeholder="255.255.255.0" maxlength="15"
                                         class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 </div>
                                 <div>
                                     <label for="static_gateway" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway</label>
-                                    <input type="text" id="static_gateway" name="static_gateway" placeholder="e.g. 172.16.202.1" maxlength="15"
+                                    <input type="text" id="static_gateway" name="static_gateway" x-model="staticGateway" placeholder="e.g. 172.16.202.1" maxlength="15"
                                         class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 </div>
                                 <div>
                                     <label for="static_dns" class="block text-sm font-medium text-slate-700 dark:text-slate-300">DNS Servers</label>
-                                    <input type="text" id="static_dns" name="static_dns" placeholder="8.8.8.8, 8.8.4.4" maxlength="64"
+                                    <input type="text" id="static_dns" name="static_dns" x-model="staticDns" placeholder="8.8.8.8, 8.8.4.4" maxlength="64"
                                         class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm font-mono shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 </div>
                             </div>
@@ -442,8 +512,19 @@
                 {% include "components/forms/csrf_input.html" %}
                 <input type="hidden" name="profile_id" :value="profileId">
                 <input type="hidden" name="onu_mode" :value="onuMode">
+                <input type="hidden" name="mgmt_vlan_id" :value="selectedMgmtVlan">
+                <input type="hidden" name="mgmt_ip_mode" :value="mgmtIpMode">
+                <input type="hidden" name="mgmt_ip_address" :value="mgmtIp">
+                <input type="hidden" name="mgmt_subnet" :value="mgmtSubnet">
+                <input type="hidden" name="mgmt_gateway" :value="mgmtGateway">
                 <input type="hidden" name="wan_protocol" :value="wanProtocol">
                 <input type="hidden" name="wan_vlan_id" :value="selectedVlan">
+                <input type="hidden" name="ip_pool_id" :value="ipPoolId">
+                <input type="hidden" name="static_ip_pool_id" :value="staticIpPoolId">
+                <input type="hidden" name="static_ip" :value="staticIp">
+                <input type="hidden" name="static_subnet" :value="staticSubnet">
+                <input type="hidden" name="static_gateway" :value="staticGateway">
+                <input type="hidden" name="static_dns" :value="staticDns">
                 <input type="hidden" name="pppoe_username" :value="pppoeUser">
                 <input type="hidden" id="pppoe_password_hidden" name="pppoe_password">
                 <button type="submit"

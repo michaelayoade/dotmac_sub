@@ -149,7 +149,9 @@ def test_authorize_autofind_logs_disappeared_candidate_after_refresh(
     )
 
     assert result.status == "error"
-    assert result.message == "Authorization failed at step 2: Validate discovered ONT row"
+    assert (
+        result.message == "Authorization failed at step 2: Validate discovered ONT row"
+    )
     assert any(
         "validation failed after autofind refresh" in record.getMessage()
         and "UBNT-F9AA7344" in record.getMessage()
@@ -244,9 +246,7 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     assert result.completed_authorization is True
     assert result.ont_id_on_olt == 9
     assert result.follow_up_operation_id == "op-123"
-    assert any(
-        "already registered on the OLT" in step.message for step in result.steps
-    )
+    assert any("already registered on the OLT" in step.message for step in result.steps)
     db_session.refresh(candidate)
     assert candidate.is_active is False
     assert candidate.resolution_reason == "authorized"
@@ -374,7 +374,9 @@ class TestServicePortParsing:
         assert entries == []
 
     def test_parse_no_gpon_token(self) -> None:
-        output = "  27  201 common   ethernet 0/2 /1  0    2     vlan  201  86   86   up\n"
+        output = (
+            "  27  201 common   ethernet 0/2 /1  0    2     vlan  201  86   86   up\n"
+        )
         entries = _parse_service_port_table(output)
         assert len(entries) == 0
 
@@ -385,9 +387,33 @@ class TestServicePortFiltering:
     def test_filter_by_ont_id(self) -> None:
         """Verify that get_service_ports_for_ont filters correctly."""
         all_ports = [
-            ServicePortEntry(index=1, vlan_id=100, ont_id=0, gem_index=1, flow_type="vlan", flow_para="100", state="up"),
-            ServicePortEntry(index=2, vlan_id=200, ont_id=1, gem_index=1, flow_type="vlan", flow_para="200", state="up"),
-            ServicePortEntry(index=3, vlan_id=300, ont_id=0, gem_index=2, flow_type="vlan", flow_para="300", state="up"),
+            ServicePortEntry(
+                index=1,
+                vlan_id=100,
+                ont_id=0,
+                gem_index=1,
+                flow_type="vlan",
+                flow_para="100",
+                state="up",
+            ),
+            ServicePortEntry(
+                index=2,
+                vlan_id=200,
+                ont_id=1,
+                gem_index=1,
+                flow_type="vlan",
+                flow_para="200",
+                state="up",
+            ),
+            ServicePortEntry(
+                index=3,
+                vlan_id=300,
+                ont_id=0,
+                gem_index=2,
+                flow_type="vlan",
+                flow_para="300",
+                state="up",
+            ),
         ]
         # Simulate filtering (the actual function does SSH + filter, we test the filter logic)
         filtered = [p for p in all_ports if p.ont_id == 0]
@@ -436,33 +462,37 @@ class TestServicePortFiltering:
             cast(
                 list[ServicePortEntry],
                 [
-                SimpleNamespace(
-                    index=1,
-                    vlan_id=201,
-                    ont_id=3,
-                    gem_index=2,
-                    flow_type="vlan",
-                    flow_para="101",
-                    state="up",
-                    tag_transform="translate",
-                ),
-                SimpleNamespace(
-                    index=2,
-                    vlan_id=301,
-                    ont_id=3,
-                    gem_index=4,
-                    flow_type="vlan",
-                    flow_para="untagged",
-                    state="up",
-                    tag_transform="default",
-                ),
+                    SimpleNamespace(
+                        index=1,
+                        vlan_id=201,
+                        ont_id=3,
+                        gem_index=2,
+                        flow_type="vlan",
+                        flow_para="101",
+                        state="up",
+                        tag_transform="translate",
+                    ),
+                    SimpleNamespace(
+                        index=2,
+                        vlan_id=301,
+                        ont_id=3,
+                        gem_index=4,
+                        flow_type="vlan",
+                        flow_para="untagged",
+                        state="up",
+                        tag_transform="default",
+                    ),
                 ],
             ),
         )
 
         assert ok is True
         assert "Created 2 service-port(s)" in msg
-        service_port_commands = [command for command in sent_commands if command.startswith("service-port vlan")]
+        service_port_commands = [
+            command
+            for command in sent_commands
+            if command.startswith("service-port vlan")
+        ]
         assert service_port_commands == [
             "service-port vlan 201 gpon 0/2/1 ont 7 gemport 2 multi-service user-vlan 101 tag-transform translate",
             "service-port vlan 301 gpon 0/2/1 ont 7 gemport 4 multi-service user-vlan untagged tag-transform default",
@@ -660,7 +690,10 @@ class TestTemplateRendering:
         from app.services.network.olt_command_gen import _render_template
 
         ctx = OntProvisioningContext(
-            frame=0, slot=2, port=1, ont_id=5,
+            frame=0,
+            slot=2,
+            port=1,
+            ont_id=5,
             subscriber_code="100014919",
         )
         result = _render_template("{subscriber_code}", ctx)
@@ -670,7 +703,10 @@ class TestTemplateRendering:
         from app.services.network.olt_command_gen import _render_template
 
         ctx = OntProvisioningContext(
-            frame=0, slot=2, port=1, ont_id=5,
+            frame=0,
+            slot=2,
+            port=1,
+            ont_id=5,
             subscriber_name="John Doe",
         )
         result = _render_template("{subscriber_name}", ctx)
@@ -719,7 +755,10 @@ class TestBuildSpecFromProfile:
             mgmt_ip_mode=SimpleNamespace(value="dhcp"),
         )
         ctx = OntProvisioningContext(
-            frame=0, slot=2, port=1, ont_id=5,
+            frame=0,
+            slot=2,
+            port=1,
+            ont_id=5,
             subscriber_code="100014919",
         )
         spec = build_spec_from_profile(profile, ctx, tr069_profile_id=3)
@@ -727,7 +766,9 @@ class TestBuildSpecFromProfile:
         assert len(spec.wan_services) == 1
         assert spec.wan_services[0].vlan_id == 201
         assert spec.wan_services[0].gem_index == 2
-        assert spec.wan_services[0].pppoe_username_template == "{subscriber_code}@isp.ng"
+        assert (
+            spec.wan_services[0].pppoe_username_template == "{subscriber_code}@isp.ng"
+        )
         assert spec.mgmt_vlan_tag == 100
         assert spec.mgmt_ip_mode == "dhcp"
         assert spec.tr069_profile_id == 3
@@ -1019,7 +1060,9 @@ class TestWebNetworkServicePortsWrappers:
         assert ctx["error"] is not None
         assert "assignment" in ctx["error"].lower() or "mapping" in ctx["error"].lower()
 
-    def test_list_context_includes_reference_onts_on_same_olt(self, db_session, monkeypatch) -> None:
+    def test_list_context_includes_reference_onts_on_same_olt(
+        self, db_session, monkeypatch
+    ) -> None:
         from app.services.web_network_service_ports import list_context
 
         olt = OLTDevice(name="Reference OLT", vendor="Huawei", model="MA5608T")
@@ -1034,7 +1077,9 @@ class TestWebNetworkServicePortsWrappers:
         db_session.refresh(pon_a)
         db_session.refresh(pon_b)
 
-        target = OntUnit(serial_number="TARGET-ONT", board="0/2", port="1", external_id="7")
+        target = OntUnit(
+            serial_number="TARGET-ONT", board="0/2", port="1", external_id="7"
+        )
         ref = OntUnit(serial_number="REF-ONT", board="0/2", port="2", external_id="9")
         db_session.add_all([target, ref])
         db_session.commit()
@@ -1064,7 +1109,9 @@ class TestWebNetworkServicePortsWrappers:
             }
         ]
 
-    def test_list_context_accepts_prefixed_pon_name(self, db_session, monkeypatch) -> None:
+    def test_list_context_accepts_prefixed_pon_name(
+        self, db_session, monkeypatch
+    ) -> None:
         from app.services.web_network_service_ports import list_context
 
         olt = OLTDevice(name="Prefixed OLT", vendor="Huawei", model="MA5608T")
@@ -1082,7 +1129,9 @@ class TestWebNetworkServicePortsWrappers:
         db_session.commit()
         db_session.refresh(ont)
 
-        db_session.add(OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True))
+        db_session.add(
+            OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
+        )
         db_session.commit()
 
         captured: dict[str, object] = {}
@@ -1109,7 +1158,9 @@ class TestWebNetworkServicePortsWrappers:
         assert not ok
         assert "OLT" in msg or "resolve" in msg.lower()
 
-    def test_handle_create_forwards_user_vlan_and_transform(self, db_session, monkeypatch) -> None:
+    def test_handle_create_forwards_user_vlan_and_transform(
+        self, db_session, monkeypatch
+    ) -> None:
         from app.services.web_network_service_ports import handle_create
 
         olt = OLTDevice(name="SP Create OLT", vendor="Huawei", model="MA5608T")
@@ -1122,17 +1173,30 @@ class TestWebNetworkServicePortsWrappers:
         db_session.commit()
         db_session.refresh(pon)
 
-        ont = OntUnit(serial_number="TEST-SP-CREATE-001", board="0/2", port="1", external_id="7")
+        ont = OntUnit(
+            serial_number="TEST-SP-CREATE-001", board="0/2", port="1", external_id="7"
+        )
         db_session.add(ont)
         db_session.commit()
         db_session.refresh(ont)
 
-        db_session.add(OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True))
+        db_session.add(
+            OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
+        )
         db_session.commit()
 
         captured: dict[str, object] = {}
 
-        def _fake_create_single_service_port(olt_obj, fsp, olt_ont_id, gem_index, vlan_id, *, user_vlan=None, tag_transform="translate"):
+        def _fake_create_single_service_port(
+            olt_obj,
+            fsp,
+            olt_ont_id,
+            gem_index,
+            vlan_id,
+            *,
+            user_vlan=None,
+            tag_transform="translate",
+        ):
             captured.update(
                 {
                     "olt_id": str(olt_obj.id),
@@ -1210,7 +1274,9 @@ class TestWebNetworkOltProfiles:
 
 
 class TestWebNetworkOltsMigration:
-    def test_provision_ont_service_ports_targets_explicit_ont_id(self, db_session, monkeypatch) -> None:
+    def test_provision_ont_service_ports_targets_explicit_ont_id(
+        self, db_session, monkeypatch
+    ) -> None:
         from app.services.web_network_olts import provision_ont_service_ports
 
         olt = OLTDevice(name="Neighbor Learning OLT", vendor="Huawei", model="MA5608T")
@@ -1259,7 +1325,9 @@ class TestWebNetworkOltsMigration:
             "reference_vlans": [201, 202],
         }
 
-    def test_authorize_autofind_skips_clone_when_ont_id_unknown(self, db_session, monkeypatch) -> None:
+    def test_authorize_autofind_skips_clone_when_ont_id_unknown(
+        self, db_session, monkeypatch
+    ) -> None:
         from app.services.web_network_olts import authorize_autofind_ont
 
         monkeypatch.setattr(
@@ -1282,7 +1350,9 @@ class TestWebNetworkOltsMigration:
         assert status == "warning"
         assert msg == "Authorization completed on OLT, but follow-up is pending."
 
-    def test_authorize_autofind_delegates_to_authorization_workflow(self, db_session, monkeypatch) -> None:
+    def test_authorize_autofind_delegates_to_authorization_workflow(
+        self, db_session, monkeypatch
+    ) -> None:
         from app.services.web_network_olts import authorize_autofind_ont
 
         captured: dict[str, object] = {}
@@ -1327,7 +1397,9 @@ class TestWebNetworkOltsMigration:
     def test_command_preview_profile_not_found(self, db_session) -> None:
         from app.services.web_network_olt_profiles import command_preview_context
 
-        ont = OntUnit(serial_number="TEST-CP-001", board="0/2", port="1", external_id="5")
+        ont = OntUnit(
+            serial_number="TEST-CP-001", board="0/2", port="1", external_id="5"
+        )
         db_session.add(ont)
         db_session.commit()
         db_session.refresh(ont)
@@ -1420,7 +1492,9 @@ class TestGetProfileTemplates:
         from app.services.network.ont_profile_apply import apply_profile_to_ont
 
         ont_olt = OLTDevice(name="ONT Scope OLT", vendor="Huawei", model="MA5608T")
-        profile_olt = OLTDevice(name="Profile Scope OLT", vendor="Huawei", model="MA5608T")
+        profile_olt = OLTDevice(
+            name="Profile Scope OLT", vendor="Huawei", model="MA5608T"
+        )
         db_session.add_all([ont_olt, profile_olt])
         db_session.commit()
         db_session.refresh(ont_olt)
@@ -1456,11 +1530,15 @@ class TestRouteRegistration:
         from app.web.admin.network_onts_inventory import router as inventory_router
 
         # Collect paths from both routers (main routes + action routes)
-        route_paths = [route.path for route in router.routes if isinstance(route, Route)]
+        route_paths = [
+            route.path for route in router.routes if isinstance(route, Route)
+        ]
         inventory_paths = [
             route.path for route in inventory_router.routes if isinstance(route, Route)
         ]
-        action_paths = [route.path for route in actions_router.routes if isinstance(route, Route)]
+        action_paths = [
+            route.path for route in actions_router.routes if isinstance(route, Route)
+        ]
         all_paths = route_paths + inventory_paths + action_paths
 
         # Phase 1: Service-port routes
@@ -1494,7 +1572,9 @@ class TestRouteRegistration:
 
 class TestProvisioningUiTemplates:
     def test_provisioning_widget_replaced_with_manual_operations_notice(self) -> None:
-        template = Path("templates/admin/network/onts/_provision_action.html").read_text()
+        template = Path(
+            "templates/admin/network/onts/_provision_action.html"
+        ).read_text()
 
         assert "Manual ONT Operations" in template
         assert "Coordinated provisioning is not available" in template
@@ -1525,7 +1605,10 @@ class TestProvisioningUiTemplates:
         ).read_text()
 
         assert 'id="operational-health-container"' in detail_template
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"' in detail_template
+        assert (
+            'hx-get="/admin/network/onts/{{ ont.id }}/operational-health"'
+            in detail_template
+        )
         assert 'hx-trigger="load"' in detail_template
         assert "Rediscover / Reconcile" in health_template
         assert "/admin/network/onts/{{ ont_id }}/reconcile" in health_template
@@ -1558,7 +1641,9 @@ class TestOntLocationDetailsHelpers:
 
         assert resolved is not None
 
-    def test_resolve_splitter_port_id_rejects_port_without_splitter(self, db_session) -> None:
+    def test_resolve_splitter_port_id_rejects_port_without_splitter(
+        self, db_session
+    ) -> None:
         from app.services.network.ont_web_forms import resolve_splitter_port_id
 
         try:
@@ -1570,10 +1655,14 @@ class TestOntLocationDetailsHelpers:
         except ValueError as exc:
             assert "Select an ODB" in str(exc)
         else:
-            raise AssertionError("Expected ValueError when ODB Port is set without splitter")
+            raise AssertionError(
+                "Expected ValueError when ODB Port is set without splitter"
+            )
 
     def test_provisioning_widget_has_no_orchestration_controls(self) -> None:
-        template = Path("templates/admin/network/onts/_provision_action.html").read_text()
+        template = Path(
+            "templates/admin/network/onts/_provision_action.html"
+        ).read_text()
 
         assert "Preflight Checklist" not in template
         assert "/preflight" not in template
@@ -1648,6 +1737,65 @@ class TestOltSshFunctionExistence:
         from app.services.network.olt_ssh import get_ont_iphost_config
 
         assert callable(get_ont_iphost_config)
+
+    def test_configure_ont_iphost_verifies_applied_state(self, monkeypatch) -> None:
+        from app.services.network.olt_ssh_ont import configure_ont_iphost
+
+        olt = OLTDevice(name="Verify OLT", vendor="Huawei", model="MA5608T")
+        sent_commands: list[str] = []
+
+        class _FakeChannel:
+            def send(self, _chars: str) -> None:
+                return None
+
+        class _FakeTransport:
+            def close(self) -> None:
+                return None
+
+        def _fake_run_huawei_cmd(_channel, command, prompt=None):  # noqa: ARG001
+            sent_commands.append(command)
+            if command.startswith("display ont ipconfig"):
+                return """
+ONT IP host index      : 0
+ONT config type        : Static config
+ONT IP                 : 172.16.202.20
+ONT subnet mask        : 255.255.255.0
+ONT gateway            : 172.16.202.1
+ONT manage VLAN        : 201
+ONT manage priority    : 2
+"""
+            return "success"
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh._open_shell",
+            lambda *_args, **_kwargs: (_FakeTransport(), _FakeChannel(), None),
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh._read_until_prompt",
+            lambda *_args, **_kwargs: "#",
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh._run_huawei_cmd",
+            _fake_run_huawei_cmd,
+        )
+
+        ok, msg = configure_ont_iphost(
+            olt,
+            "0/1/13",
+            8,
+            vlan_id=201,
+            ip_mode="static_ip",
+            priority=2,
+            ip_address="172.16.202.20",
+            subnet="255.255.255.0",
+            gateway="172.16.202.1",
+        )
+
+        assert ok is True
+        assert "configured" in msg.lower()
+        assert any(
+            command.startswith("display ont ipconfig") for command in sent_commands
+        )
 
     def test_reboot_ont_omci_importable(self) -> None:
         from app.services.network.olt_ssh import reboot_ont_omci
@@ -1820,8 +1968,12 @@ class TestProfileWanServiceVlanScope:
 
         db_session.add_all(
             [
-                Vlan(region_id=region.id, olt_device_id=olt_a.id, tag=203, is_active=True),
-                Vlan(region_id=region.id, olt_device_id=olt_b.id, tag=203, is_active=True),
+                Vlan(
+                    region_id=region.id, olt_device_id=olt_a.id, tag=203, is_active=True
+                ),
+                Vlan(
+                    region_id=region.id, olt_device_id=olt_b.id, tag=203, is_active=True
+                ),
             ]
         )
         db_session.commit()

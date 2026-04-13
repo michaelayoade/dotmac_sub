@@ -7,7 +7,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.orm import Session
 
-from app.models.network import OntProvisioningProfile, OnuMode, WanMode
+from app.models.network import OntProvisioningProfile, OnuMode, Vlan, WanMode
 from app.schemas.network import OntUnitUpdate
 from app.schemas.provisioning import ServiceOrderUpdate
 from app.services import network as network_service
@@ -121,8 +121,19 @@ def save_provision_settings(
     *,
     ont_id: str,
     onu_mode: str | None,
+    mgmt_vlan_id: str | None,
+    mgmt_ip_mode: str | None,
+    mgmt_ip_address: str | None,
+    mgmt_subnet: str | None,
+    mgmt_gateway: str | None,
     wan_protocol: str | None,
     wan_vlan_id: str | None,
+    ip_pool_id: str | None,
+    static_ip_pool_id: str | None,
+    static_ip: str | None,
+    static_subnet: str | None,
+    static_gateway: str | None,
+    static_dns: str | None,
     pppoe_username: str | None,
     pppoe_password: str | None,
 ) -> JsonActionResult:
@@ -136,15 +147,46 @@ def save_provision_settings(
         )
 
     onu_mode_value = (onu_mode or "").strip().lower() or None
+    mgmt_vlan_id_value = (mgmt_vlan_id or "").strip() or None
+    mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower() or None
+    mgmt_ip_address_value = (mgmt_ip_address or "").strip() or None
+    mgmt_subnet_value = (mgmt_subnet or "").strip() or None
+    mgmt_gateway_value = (mgmt_gateway or "").strip() or None
     wan_protocol_value = (wan_protocol or "").strip().lower() or None
     pppoe_username_value = (pppoe_username or "").strip() or None
     pppoe_password_value = (pppoe_password or "").strip() or None
     wan_vlan_id_value = (wan_vlan_id or "").strip() or None
+    ip_pool_id_value = (ip_pool_id or "").strip() or None
+    static_ip_pool_id_value = (static_ip_pool_id or "").strip() or None
+    static_ip_value = (static_ip or "").strip() or None
+    static_subnet_value = (static_subnet or "").strip() or None
+    static_gateway_value = (static_gateway or "").strip() or None
+    static_dns_value = (static_dns or "").strip() or None
+    mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
+    wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
     if onu_mode_value not in {None, OnuMode.routing.value, OnuMode.bridging.value}:
         return JsonActionResult(
             status_code=422,
             content={"success": False, "message": "Invalid ONU mode"},
+        )
+
+    if mgmt_ip_mode_value == "static":
+        mgmt_ip_mode_value = "static_ip"
+    if mgmt_ip_mode_value not in {None, "inactive", "dhcp", "static_ip"}:
+        return JsonActionResult(
+            status_code=422,
+            content={"success": False, "message": "Invalid management IP mode"},
+        )
+    if mgmt_ip_mode_value == "static_ip" and not (
+        mgmt_ip_address_value and mgmt_subnet_value and mgmt_gateway_value
+    ):
+        return JsonActionResult(
+            status_code=422,
+            content={
+                "success": False,
+                "message": "Static management IP requires address, subnet, and gateway",
+            },
         )
 
     wan_mode_value: str | None = None
@@ -161,9 +203,24 @@ def save_provision_settings(
             status_code=422,
             content={"success": False, "message": "Invalid WAN protocol"},
         )
+    if wan_protocol_value == "static" and not (
+        static_ip_value or static_ip_pool_id_value
+    ):
+        return JsonActionResult(
+            status_code=422,
+            content={
+                "success": False,
+                "message": "Static internet deployment requires an IP address or pool",
+            },
+        )
 
     payload = OntUnitUpdate(
         onu_mode=onu_mode_value,
+        mgmt_vlan_id=coerce_uuid(mgmt_vlan_id_value),
+        mgmt_ip_mode=mgmt_ip_mode_value,
+        mgmt_ip_address=mgmt_ip_address_value
+        if mgmt_ip_mode_value == "static_ip"
+        else None,
         wan_mode=wan_mode_value,
         wan_vlan_id=coerce_uuid(wan_vlan_id_value),
         pppoe_username=pppoe_username_value if wan_protocol_value == "pppoe" else None,
@@ -172,9 +229,60 @@ def save_provision_settings(
         else None,
     )
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+
+    if mgmt_vlan_id_value or mgmt_ip_mode_value:
+        update_service_order_execution_context_for_ont(
+            db,
+            ont_id=ont_id,
+            step_name="configure_management_ip",
+            values={
+                "vlan_id": mgmt_vlan_tag_value,
+                "mgmt_vlan_id": mgmt_vlan_id_value,
+                "vlan_tag": mgmt_vlan_tag_value,
+                "ip_mode": "static"
+                if mgmt_ip_mode_value == "static_ip"
+                else mgmt_ip_mode_value,
+                "ip_address": mgmt_ip_address_value,
+                "subnet": mgmt_subnet_value,
+                "gateway": mgmt_gateway_value,
+            },
+        )
+    if wan_vlan_id_value or wan_protocol_value:
+        wan_values = {
+            "wan_mode": wan_protocol_value,
+            "wan_vlan_id": wan_vlan_id_value,
+            "wan_vlan": wan_vlan_tag_value,
+            "ip_pool_id": ip_pool_id_value,
+            "static_ip_pool_id": static_ip_pool_id_value,
+            "ip_address": static_ip_value,
+            "subnet_mask": static_subnet_value,
+            "gateway": static_gateway_value,
+            "dns_servers": static_dns_value,
+        }
+        update_service_order_execution_context_for_ont(
+            db,
+            ont_id=ont_id,
+            step_name="configure_wan_tr069",
+            values=wan_values,
+        )
+        if wan_protocol_value == "pppoe":
+            update_service_order_execution_context_for_ont(
+                db,
+                ont_id=ont_id,
+                step_name="push_pppoe_tr069",
+                values={"username": pppoe_username_value},
+            )
     return JsonActionResult(
         content={"success": True, "message": "Provision settings saved"}
     )
+
+
+def _vlan_tag_for_id(db: Session, vlan_id: str | None) -> int | None:
+    vlan_uuid = coerce_uuid(vlan_id)
+    if vlan_uuid is None:
+        return None
+    vlan = db.get(Vlan, vlan_uuid)
+    return int(vlan.tag) if vlan and vlan.tag is not None else None
 
 
 def update_service_order_execution_context_for_ont(

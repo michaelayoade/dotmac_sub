@@ -19,7 +19,13 @@ from paramiko.transport import Transport
 logger = logging.getLogger(__name__)
 
 # Specific SSH-related exceptions that can occur during OLT operations
-_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
+_SSH_CONNECTION_ERRORS = (
+    SSHException,
+    OSError,
+    socket.timeout,
+    TimeoutError,
+    ConnectionError,
+)
 
 from app.models.network import OLTDevice
 from app.services.credential_crypto import decrypt_credential
@@ -319,7 +325,9 @@ def get_autofind_onts(olt: OLTDevice) -> tuple[bool, str, list[AutofindEntry]]:
         msg = f"Found {count} unregistered ONT{'s' if count != 1 else ''}"
         return True, msg, entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error reading autofind from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error reading autofind: {exc}", []
     finally:
         transport.close()
@@ -463,12 +471,25 @@ def is_error_output(output: str) -> bool:
     return any(pattern in lower for pattern in _HUAWEI_ERROR_PATTERNS)
 
 
+_HUAWEI_OPTIONAL_ARG_PROMPT = r"\{[^\r\n{}]*\}\s*:?\s*$"
+
+
+def _needs_huawei_command_confirm(output: str) -> bool:
+    """Return true when Huawei CLI is waiting for Enter to accept defaults."""
+    return (
+        "<cr>" in output.lower()
+        or re.search(_HUAWEI_OPTIONAL_ARG_PROMPT, output) is not None
+    )
+
+
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
-    """Send a command to a Huawei shell, handling interactive {<cr>} prompts."""
+    """Send a command to a Huawei shell, accepting optional-argument prompts."""
     logger.debug("OLT command: %r", command)
     channel.send(f"{command}\n")
-    out = _read_until_prompt(channel, rf"{prompt}|<cr>", timeout_sec=12)
-    if "<cr>" in out:
+    out = _read_until_prompt(
+        channel, rf"{prompt}|<cr>|{_HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
+    )
+    if _needs_huawei_command_confirm(out):
         channel.send("\n")
         out = _read_until_prompt(channel, prompt, timeout_sec=12)
     return out
@@ -529,7 +550,9 @@ def get_service_ports(
         entries = _parse_service_port_table(output)
         return True, f"Found {len(entries)} service-ports on {fsp}", entries
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error reading service-ports from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error reading service-ports from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", []
     finally:
         transport.close()
@@ -614,7 +637,9 @@ def create_service_ports(
         logger.info(msg)
         return errors == 0, msg
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error creating service-ports on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error creating service-ports on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -676,7 +701,9 @@ def upgrade_firmware(
         )
         return True, "Firmware upgrade command sent"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error during firmware upgrade on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error during firmware upgrade on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -715,7 +742,9 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
             )
         return True, "Configuration retrieved", config_text
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", ""
     finally:
         transport.close()
@@ -753,7 +782,9 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
         clean_output = "\n".join(lines).strip()
         return True, "Command executed", clean_output
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", ""
     finally:
         transport.close()
@@ -821,7 +852,9 @@ def delete_service_port(olt: OLTDevice, index: int) -> tuple[bool, str]:
         logger.info("Deleted service-port %d on OLT %s", index, olt.name)
         return True, f"Service-port {index} deleted"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error deleting service-port on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error deleting service-port on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -895,7 +928,9 @@ def create_single_service_port(
         )
         return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error creating service-port on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error creating service-port on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
