@@ -86,7 +86,13 @@ def poll_single_olt(olt_id: str) -> dict[str, int | str]:
     except Exception as e:
         logger.error("Single OLT poll failed for %s: %s", olt_id, e, exc_info=True)
         db.rollback()
-        return {"olt_id": olt_id, "polled": 0, "updated": 0, "errors": 1, "error": str(e)}
+        return {
+            "olt_id": olt_id,
+            "polled": 0,
+            "updated": 0,
+            "errors": 1,
+            "error": str(e),
+        }
     finally:
         if lock_acquired:
             try:
@@ -186,16 +192,17 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
     """
     from datetime import UTC, datetime, timedelta
 
-    from sqlalchemy import func, update
+    from sqlalchemy import func
+    from sqlalchemy.orm import joinedload
 
     from app.models.network import (
         OLTDevice,
         OntUnit,
         OnuOfflineReason,
         OnuOnlineStatus,
-        OntStatusSource,
         PollStatus,
     )
+    from app.services.network.ont_status import resolve_ont_status_for_model
 
     now = datetime.now(UTC)
     threshold = now - timedelta(minutes=stale_threshold_minutes)
@@ -220,9 +227,8 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
         logger.info("No recently-polled OLTs found; skipping stale ONT marking")
         return 0
 
-    stale_filter = (
-        (OntUnit.signal_updated_at < threshold)
-        | (OntUnit.signal_updated_at.is_(None))
+    stale_filter = (OntUnit.signal_updated_at < threshold) | (
+        OntUnit.signal_updated_at.is_(None)
     )
 
     huawei_olt_ids = [
@@ -234,52 +240,70 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
             )
         ).all()
     ]
-    huawei_packed_external_id = func.lower(
-        func.coalesce(OntUnit.external_id, "")
-    ).like("huawei:%.%")
+    huawei_packed_external_id = func.lower(func.coalesce(OntUnit.external_id, "")).like(
+        "huawei:%.%"
+    )
     huawei_non_deterministic_identity = (
-        OntUnit.olt_device_id.in_(huawei_olt_ids)
-        & ~huawei_packed_external_id
+        OntUnit.olt_device_id.in_(huawei_olt_ids) & ~huawei_packed_external_id
     )
 
-    unknown_result = db.execute(
-        update(OntUnit)
-        .where(OntUnit.online_status == OnuOnlineStatus.online)
-        .where(OntUnit.is_active.is_(True))
-        .where(huawei_non_deterministic_identity)
-        .where(stale_filter)
-        .values(
-            online_status=OnuOnlineStatus.unknown,
-            offline_reason=None,
-            effective_status=OnuOnlineStatus.unknown,
-            effective_status_source=OntStatusSource.derived,
-            status_resolved_at=now,
-        )
+    unknown_candidates = list(
+        db.scalars(
+            select(OntUnit)
+            .options(
+                joinedload(OntUnit.tr069_acs_server),
+                joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
+            )
+            .where(OntUnit.online_status == OnuOnlineStatus.online)
+            .where(OntUnit.is_active.is_(True))
+            .where(huawei_non_deterministic_identity)
+            .where(stale_filter)
+        ).all()
     )
+    unknown_marked = 0
+    for ont in unknown_candidates:
+        ont.online_status = OnuOnlineStatus.unknown
+        ont.offline_reason = None
+        snapshot = resolve_ont_status_for_model(ont, now=now)
+        ont.acs_status = snapshot.acs_status
+        ont.acs_last_inform_at = snapshot.acs_last_inform_at
+        ont.effective_status = snapshot.effective_status
+        ont.effective_status_source = snapshot.effective_status_source
+        ont.status_resolved_at = snapshot.status_resolved_at
+        unknown_marked += 1
 
     # Find stale ONTs: online status but not seen recently
     # AND their OLT was recently polled (so the ONT should have been seen).
     # Huawei rows without packed SNMP identity are deliberately excluded above:
     # when polling cannot map the packed index, the safe state is unknown, not LOS.
-    result = db.execute(
-        update(OntUnit)
-        .where(OntUnit.online_status == OnuOnlineStatus.online)
-        .where(OntUnit.is_active.is_(True))
-        .where(OntUnit.olt_device_id.in_(reachable_olt_ids))
-        .where(~huawei_non_deterministic_identity)
-        .where(stale_filter)
-        .values(
-            online_status=OnuOnlineStatus.offline,
-            offline_reason=OnuOfflineReason.los,
-            effective_status=OnuOnlineStatus.offline,
-            effective_status_source=OntStatusSource.olt,
-            status_resolved_at=now,
-        )
+    stale_candidates = list(
+        db.scalars(
+            select(OntUnit)
+            .options(
+                joinedload(OntUnit.tr069_acs_server),
+                joinedload(OntUnit.olt_device).joinedload(OLTDevice.tr069_acs_server),
+            )
+            .where(OntUnit.online_status == OnuOnlineStatus.online)
+            .where(OntUnit.is_active.is_(True))
+            .where(OntUnit.olt_device_id.in_(reachable_olt_ids))
+            .where(~huawei_non_deterministic_identity)
+            .where(stale_filter)
+        ).all()
     )
+    marked = 0
+    for ont in stale_candidates:
+        ont.online_status = OnuOnlineStatus.offline
+        ont.offline_reason = OnuOfflineReason.los
+        snapshot = resolve_ont_status_for_model(ont, now=now)
+        ont.acs_status = snapshot.acs_status
+        ont.acs_last_inform_at = snapshot.acs_last_inform_at
+        ont.effective_status = snapshot.effective_status
+        ont.effective_status_source = snapshot.effective_status_source
+        ont.status_resolved_at = snapshot.status_resolved_at
+        marked += 1
+
     db.commit()
 
-    marked = result.rowcount
-    unknown_marked = unknown_result.rowcount
     if unknown_marked > 0:
         logger.info(
             "Marked %d stale Huawei ONTs with non-packed SNMP identity as unknown",

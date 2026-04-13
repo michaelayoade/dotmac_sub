@@ -364,6 +364,50 @@ def test_mark_stale_onts_offline_updates_effective_status_snapshot(db_session) -
     assert ont.status_resolved_at is not None
 
 
+def test_mark_stale_onts_offline_keeps_recent_acs_inform_effective_online(
+    db_session,
+) -> None:
+    from app.models.network import (
+        OLTDevice,
+        OntAcsStatus,
+        OntStatusSource,
+        OntUnit,
+        OnuOnlineStatus,
+        PollStatus,
+    )
+    from app.tasks.olt_polling import _mark_stale_onts_offline
+
+    now = datetime.now(UTC)
+    olt = OLTDevice(
+        name="Reachable ACS OLT",
+        is_active=True,
+        last_poll_at=now,
+        last_poll_status=PollStatus.success,
+    )
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-STALE-ACS-ONLINE",
+        olt_device_id=olt.id,
+        is_active=True,
+        online_status=OnuOnlineStatus.online,
+        effective_status=OnuOnlineStatus.online,
+        acs_last_inform_at=now - timedelta(minutes=2),
+        signal_updated_at=now - timedelta(minutes=30),
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    marked = _mark_stale_onts_offline(db_session, stale_threshold_minutes=10)
+
+    db_session.refresh(ont)
+    assert marked == 1
+    assert ont.online_status == OnuOnlineStatus.offline
+    assert ont.acs_status == OntAcsStatus.online
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.acs
+
+
 def test_mark_stale_huawei_numeric_external_id_unknown_not_los(db_session) -> None:
     from app.models.network import (
         OLTDevice,
@@ -454,7 +498,9 @@ def test_poll_sfp_modules_scopes_to_olt_and_uses_port_number_keys(
             return [f"{oid}.3 = INTEGER: -1950"]
         return [f"{oid}.3 = INTEGER: -2050"]
 
-    monkeypatch.setattr("app.services.network.olt_polling._run_olt_snmpwalk", _fake_walk)
+    monkeypatch.setattr(
+        "app.services.network.olt_polling._run_olt_snmpwalk", _fake_walk
+    )
 
     stats = poll_sfp_modules(db_session, olt, community="public")
 
