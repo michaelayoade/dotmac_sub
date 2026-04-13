@@ -115,7 +115,11 @@ def _run_snmpwalk(device: NetworkDevice, oid: str, timeout: int = 20) -> list[st
 
 
 def _run_snmpbulkwalk(device: NetworkDevice, oid: str, timeout: int = 20) -> list[str]:
-    args = _snmpwalk_args(device, command="snmpbulkwalk", bulk=True) + [oid]
+    version = (device.snmp_version or "v2c").lower()
+    if version in {"1", "v1"}:
+        args = _snmpwalk_args(device, command="snmpwalk", bulk=False) + [oid]
+    else:
+        args = _snmpwalk_args(device, command="snmpbulkwalk", bulk=True) + [oid]
     return _run_snmp_command(args, timeout)
 
 

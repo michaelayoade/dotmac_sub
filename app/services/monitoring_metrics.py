@@ -36,6 +36,14 @@ _IF_HC_IN_OCTETS = ".1.3.6.1.2.1.31.1.1.1.6"
 _IF_HC_OUT_OCTETS = ".1.3.6.1.2.1.31.1.1.1.10"
 
 
+def _device_metric_unit(value: str | None) -> str | None:
+    """Normalize DeviceMetric.unit values to the database column limit."""
+    if not value:
+        return None
+    normalized = str(value).strip()
+    return normalized[:40] or None
+
+
 # ── Custom SNMP OID Polling ──────────────────────────────────────────────
 
 
@@ -78,7 +86,7 @@ def poll_custom_snmp_oids(db: Session, device: NetworkDevice) -> dict[str, int]:
                     device_id=device.id,
                     metric_type=MetricType.custom,
                     value=float(value),
-                    unit=oid_config.title or oid_config.oid,
+                    unit=_device_metric_unit(oid_config.title or oid_config.oid),
                     recorded_at=now,
                 )
                 db.add(metric)
