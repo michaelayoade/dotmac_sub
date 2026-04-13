@@ -7,6 +7,7 @@ online status, and distance estimates. Updates OntUnit records in bulk.
 from __future__ import annotations
 
 import logging
+import re
 import shutil
 from datetime import UTC, datetime
 
@@ -711,12 +712,18 @@ def poll_olt_ont_signals(
             update_values: dict = {}
             if reading.olt_rx_dbm is not None:
                 update_values["olt_rx_signal_dbm"] = reading.olt_rx_dbm
+            elif reading.onu_index in olt_rx_raw:
+                update_values["olt_rx_signal_dbm"] = None
             if reading.onu_rx_dbm is not None:
                 update_values["onu_rx_signal_dbm"] = reading.onu_rx_dbm
+            elif reading.onu_index in onu_rx_raw:
+                update_values["onu_rx_signal_dbm"] = None
             if reading.distance_m is not None:
                 update_values["distance_meters"] = reading.distance_m
             if reading.onu_tx_dbm is not None:
                 update_values["onu_tx_signal_dbm"] = reading.onu_tx_dbm
+            elif reading.onu_index in onu_tx_raw:
+                update_values["onu_tx_signal_dbm"] = None
             if reading.temperature_c is not None:
                 update_values["ont_temperature_c"] = reading.temperature_c
             if reading.voltage_v is not None:
@@ -726,7 +733,35 @@ def poll_olt_ont_signals(
 
             prev_status = ont.online_status
 
-            if reading.is_online is not None:
+            raw_status = status_raw.get(reading.onu_index)
+            reconciled_status, reconciled_reason, _was_reconciled = (
+                reconcile_snmp_status_with_signal(
+                    vendor=vendor,
+                    raw_status=raw_status,
+                    olt_rx_dbm=reading.olt_rx_dbm,
+                )
+            )
+            if reconciled_status != OnuOnlineStatus.unknown:
+                if reconciled_status == OnuOnlineStatus.online:
+                    update_values["online_status"] = OnuOnlineStatus.online
+                    update_values["last_seen_at"] = now
+                    update_values["offline_reason"] = None
+                    # Reset flap counter when online
+                    update_values["consecutive_offline_polls"] = 0
+                else:
+                    # Flap protection: increment offline counter and only mark offline
+                    # after consecutive polls reach threshold
+                    new_offline_count = (ont.consecutive_offline_polls or 0) + 1
+                    update_values["consecutive_offline_polls"] = new_offline_count
+
+                    if new_offline_count >= offline_poll_threshold:
+                        # Threshold reached - mark as offline
+                        update_values["online_status"] = OnuOnlineStatus.offline
+                        update_values["offline_reason"] = (
+                            reconciled_reason or OnuOfflineReason.unknown
+                        )
+                    # If threshold not reached, keep current status but track the poll
+            elif reading.is_online is not None:
                 if reading.is_online:
                     update_values["online_status"] = OnuOnlineStatus.online
                     update_values["last_seen_at"] = now
@@ -742,7 +777,7 @@ def poll_olt_ont_signals(
                     if new_offline_count >= offline_poll_threshold:
                         # Threshold reached - mark as offline
                         update_values["online_status"] = OnuOnlineStatus.offline
-                        status_val = status_raw.get(reading.onu_index, "")
+                        status_val = raw_status or ""
                         reason = _derive_offline_reason(status_val)
                         if reason is None:
                             update_values["offline_reason"] = None
@@ -1361,13 +1396,40 @@ def reconcile_snmp_status_with_signal(
 
     state_lower = raw_status.lower().strip()
 
+    def _has_valid_signal() -> bool:
+        return olt_rx_dbm is not None and -30.0 < olt_rx_dbm < 0.0
+
+    numeric = re.search(r"(-?\d+)", state_lower)
+    if numeric:
+        code = int(numeric.group(1))
+        if code == 1:
+            return OnuOnlineStatus.online, None, False
+        if code in {2, 3, 4, 5}:
+            if _has_valid_signal():
+                logger.warning(
+                    "SNMP reports offline code %s but has valid signal %.1f dBm (vendor=%s)",
+                    code,
+                    olt_rx_dbm,
+                    vendor,
+                )
+                return OnuOnlineStatus.online, None, True
+            reason = _derive_offline_reason(state_lower)
+            try:
+                return (
+                    OnuOnlineStatus.offline,
+                    OnuOfflineReason(reason) if reason else OnuOfflineReason.unknown,
+                    False,
+                )
+            except ValueError:
+                return OnuOnlineStatus.offline, OnuOfflineReason.unknown, False
+
     # Map SNMP states to status
     if state_lower in ("online", "up", "1", "active"):
         return OnuOnlineStatus.online, None, False
 
     if state_lower in ("offline", "down", "0", "inactive", "2"):
         # If SNMP says offline but we have a valid signal, something is off
-        if olt_rx_dbm is not None and -30.0 < olt_rx_dbm < 0.0:
+        if _has_valid_signal():
             logger.warning(
                 "SNMP reports offline but has valid signal %.1f dBm (vendor=%s)",
                 olt_rx_dbm,

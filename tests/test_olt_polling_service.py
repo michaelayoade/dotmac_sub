@@ -6,6 +6,7 @@ from app.services.network.olt_polling import (
     _parse_signal_value,
     _parse_snmp_table,
     _should_repair_external_id,
+    reconcile_snmp_status_with_signal,
 )
 from app.services.network.olt_polling_parsers import _fsp_hint_from_index
 
@@ -178,6 +179,136 @@ def test_event_type_ont_ddm_alert_exists() -> None:
 
     assert hasattr(EventType, "ont_ddm_alert")
     assert EventType.ont_ddm_alert.value == "ont.ddm_alert"
+
+
+def test_reconcile_snmp_numeric_offline_code_trusts_valid_signal() -> None:
+    from app.models.network import OnuOnlineStatus
+
+    status, reason, reconciled = reconcile_snmp_status_with_signal(
+        vendor="Huawei",
+        raw_status="2",
+        olt_rx_dbm=-22.59,
+    )
+
+    assert status == OnuOnlineStatus.online
+    assert reason is None
+    assert reconciled is True
+
+
+def test_poll_olt_ont_signals_trusts_valid_signal_over_offline_status(
+    db_session,
+    monkeypatch,
+) -> None:
+    from app.models.network import OLTDevice, OntStatusSource, OntUnit, OnuOnlineStatus
+    from app.services.network.olt_polling import poll_olt_ont_signals
+    from app.services.network.olt_polling_oids import _resolve_oid_set
+
+    olt = OLTDevice(
+        name="Huawei OLT",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.1",
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="HWTCF2D9E853",
+        olt_device_id=olt.id,
+        is_active=True,
+        external_id="huawei:4194323968.2",
+        online_status=OnuOnlineStatus.offline,
+        effective_status=OnuOnlineStatus.offline,
+        consecutive_offline_polls=184,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    oids = _resolve_oid_set("huawei")
+    idx = "4194323968.2"
+
+    def _fake_walk(_host, oid, _community, timeout=20):
+        if oid == oids["olt_rx"]:
+            return [f"{oid}.{idx} = INTEGER: -2259"]
+        if oid == oids["onu_rx"]:
+            return [f"{oid}.{idx} = INTEGER: 7681"]
+        if oid == oids["status"]:
+            return [f"{oid}.{idx} = INTEGER: 2"]
+        return []
+
+    monkeypatch.setattr(
+        "app.services.network.olt_polling._run_olt_snmpwalk", _fake_walk
+    )
+
+    stats = poll_olt_ont_signals(db_session, olt, community="public")
+
+    db_session.refresh(ont)
+    assert stats["updated"] == 1
+    assert ont.online_status == OnuOnlineStatus.online
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.olt
+    assert ont.offline_reason is None
+    assert ont.consecutive_offline_polls == 0
+    assert ont.last_seen_at is not None
+
+
+def test_poll_olt_ont_signals_clears_stale_signal_on_observed_sentinel(
+    db_session,
+    monkeypatch,
+) -> None:
+    from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
+    from app.services.network.olt_polling import poll_olt_ont_signals
+    from app.services.network.olt_polling_oids import _resolve_oid_set
+
+    olt = OLTDevice(
+        name="Huawei Sentinel OLT",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.1",
+    )
+    db_session.add(olt)
+    db_session.flush()
+
+    ont = OntUnit(
+        serial_number="HWTCF2D9E853",
+        olt_device_id=olt.id,
+        is_active=True,
+        external_id="huawei:4194323968.2",
+        online_status=OnuOnlineStatus.offline,
+        effective_status=OnuOnlineStatus.offline,
+        consecutive_offline_polls=184,
+        olt_rx_signal_dbm=-22.59,
+        onu_rx_signal_dbm=-23.19,
+        onu_tx_signal_dbm=2.31,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    oids = _resolve_oid_set("huawei")
+    idx = "4194323968.2"
+
+    def _fake_walk(_host, oid, _community, timeout=20):
+        if oid == oids["olt_rx"]:
+            return [f"{oid}.{idx} = INTEGER: 2147483647"]
+        if oid == oids["onu_rx"]:
+            return [f"{oid}.{idx} = INTEGER: 2147483647"]
+        if oid == oids["onu_tx"]:
+            return [f"{oid}.{idx} = INTEGER: 2147483647"]
+        if oid == oids["status"]:
+            return [f"{oid}.{idx} = INTEGER: 2"]
+        return []
+
+    monkeypatch.setattr(
+        "app.services.network.olt_polling._run_olt_snmpwalk", _fake_walk
+    )
+
+    stats = poll_olt_ont_signals(db_session, olt, community="public")
+
+    db_session.refresh(ont)
+    assert stats["updated"] == 1
+    assert ont.online_status == OnuOnlineStatus.offline
+    assert ont.olt_rx_signal_dbm is None
+    assert ont.onu_rx_signal_dbm is None
+    assert ont.onu_tx_signal_dbm is None
+    assert ont.signal_updated_at is not None
 
 
 def test_build_reading_targets_does_not_fallback_to_unmatched_ont(db_session) -> None:

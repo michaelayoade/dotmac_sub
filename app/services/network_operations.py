@@ -23,6 +23,7 @@ from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
+from app.services.network.action_logging import looks_like_prerequisite_failure
 from app.services.response import ListResponseMixin
 
 if TYPE_CHECKING:
@@ -254,6 +255,21 @@ class NetworkOperations(ListResponseMixin):
             error_preview,
             extra=extra,
         )
+        if looks_like_prerequisite_failure(str(error)):
+            prereq_extra = dict(extra)
+            prereq_extra["event"] = "network_action_prerequisite_blocked"
+            prereq_extra["network_resource_type"] = op.target_type.value
+            prereq_extra["network_resource_id"] = str(op.target_id)
+            prereq_extra["network_action"] = op.operation_type.value
+            prereq_extra["reason"] = error
+            logger.error(
+                "Network action blocked by missing prerequisite: resource=%s resource_id=%s action=%s reason=%s",
+                op.target_type.value,
+                op.target_id,
+                op.operation_type.value,
+                error_preview,
+                extra=prereq_extra,
+            )
         return op
 
     @staticmethod

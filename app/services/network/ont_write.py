@@ -13,7 +13,10 @@ from app.services.network.ont_action_common import (
     ActionResult,
     get_ont_or_error,
 )
-from app.services.web_network_service_ports import _normalize_fsp, _parse_ont_id_on_olt
+from app.services.network.ont_olt_context import (
+    OntOltWriteContext,
+    resolve_ont_olt_write_context,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +53,17 @@ def _resolve_olt_context(
     return olt, assignment, None
 
 
-def _fsp_from_assignment(assignment: OntAssignment) -> str | None:
-    """Derive FSP string from assignment → pon_port relationship."""
-    pp = assignment.pon_port
-    if not pp:
-        return None
-    # PonPort typically has frame/slot/port or a name like "0/1/0"
-    return _normalize_fsp(pp.name)
+def _strict_olt_write_context(
+    db: Session, ont_id: str
+) -> tuple[OntOltWriteContext | None, ActionResult | None]:
+    """Resolve strict OLT write context or return an action error."""
+    ctx, message = resolve_ont_olt_write_context(db, ont_id)
+    if ctx is None:
+        return None, ActionResult(
+            success=False,
+            message=message or "ONT OLT context is incomplete.",
+        )
+    return ctx, None
 
 
 def _set_sync_meta(ont: OntUnit, source: str) -> None:
@@ -190,25 +197,11 @@ class OntWriteService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        olt, assignment, olt_err = _resolve_olt_context(db, ont)
-        if olt_err:
-            return olt_err
-        if olt is None or assignment is None:
+        ctx, context_err = _strict_olt_write_context(db, ont_id)
+        if context_err:
+            return context_err
+        if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
-
-        fsp = _fsp_from_assignment(assignment)
-        if not fsp:
-            return ActionResult(
-                success=False, message="Cannot determine FSP for this ONT."
-            )
-
-        # We need the ONT number within the PON port; parse from external_id or assignment
-        ont_number = _parse_ont_id_on_olt(ont.external_id)
-        if ont_number is None:
-            return ActionResult(
-                success=False,
-                message="ONT external_id does not contain a usable ONT number.",
-            )
 
         # Resolve VLAN tag for the OLT command. Web/API callers commonly pass
         # a DB VLAN UUID, while provisioning profiles carry the actual VLAN tag.
@@ -230,7 +223,7 @@ class OntWriteService:
                 select(Vlan).where(
                     Vlan.tag == vlan_int,
                     Vlan.is_active.is_(True),
-                    (Vlan.olt_device_id == olt.id) | (Vlan.olt_device_id.is_(None)),
+                    (Vlan.olt_device_id == ctx.olt.id) | (Vlan.olt_device_id.is_(None)),
                 )
             ).first()
             resolved_mgmt_vlan_id = getattr(vlan_obj, "id", None) if vlan_obj else None
@@ -244,9 +237,9 @@ class OntWriteService:
             from app.services.network.olt_ssh_ont import configure_ont_iphost
 
             success, message = configure_ont_iphost(
-                olt,
-                fsp,
-                ont_number,
+                ctx.olt,
+                ctx.fsp,
+                ctx.ont_id_on_olt,
                 vlan_id=vlan_int,
                 ip_mode=mgmt_ip_mode,
                 priority=mgmt_priority,
@@ -297,22 +290,11 @@ class OntWriteService:
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        olt, assignment, olt_err = _resolve_olt_context(db, ont)
-        if olt_err:
-            return olt_err
-        if olt is None or assignment is None:
+        ctx, context_err = _strict_olt_write_context(db, ont_id)
+        if context_err:
+            return context_err
+        if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
-
-        fsp = _fsp_from_assignment(assignment)
-        if not fsp:
-            return ActionResult(success=False, message="Cannot determine FSP.")
-
-        ont_number = _parse_ont_id_on_olt(ont.external_id)
-        if ont_number is None:
-            return ActionResult(
-                success=False,
-                message="ONT external_id does not contain a usable ONT number.",
-            )
 
         try:
             from app.services.network.olt_ssh_service_ports import (
@@ -320,9 +302,9 @@ class OntWriteService:
             )
 
             success, message = create_single_service_port(
-                olt,
-                fsp,
-                ont_number,
+                ctx.olt,
+                ctx.fsp,
+                ctx.ont_id_on_olt,
                 gem_index,
                 vlan_id,
                 user_vlan=user_vlan,

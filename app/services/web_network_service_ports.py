@@ -16,6 +16,7 @@ from app.services.network.olt_ssh_service_ports import (
     delete_service_port,
     get_service_ports_for_ont,
 )
+from app.services.network.ont_olt_context import resolve_ont_olt_write_context
 from app.services.network.vlan_chain import validate_chain
 
 logger = logging.getLogger(__name__)
@@ -58,43 +59,12 @@ def _resolve_ont_olt_context(
     Returns:
         (ont, olt, fsp, ont_id_on_olt) or (None, None, None, None) on failure.
     """
+    ctx, _message = resolve_ont_olt_write_context(db, ont_id)
+    if ctx is not None:
+        return ctx.ont, ctx.olt, ctx.fsp, ctx.ont_id_on_olt
+
     ont = db.get(OntUnit, ont_id)
-    if not ont:
-        return None, None, None, None
-
-    # Find active assignment
-    assignment: OntAssignment | None = None
-    for a in getattr(ont, "assignments", []):
-        if a.active:
-            assignment = a
-            break
-    if not assignment:
-        return ont, None, None, None
-
-    # Resolve OLT via pon_port
-    pon_port: PonPort | None = db.get(PonPort, str(assignment.pon_port_id))
-    if not pon_port:
-        return ont, None, None, None
-
-    olt: OLTDevice | None = db.get(OLTDevice, str(pon_port.olt_id))
-    if not olt:
-        return ont, None, None, None
-
-    # Build FSP from OntUnit fields (board = "0/2", port = "1" → "0/2/1")
-    board = ont.board or ""
-    port = ont.port or ""
-    if board and port:
-        fsp = _normalize_fsp(f"{board}/{port}")
-    elif pon_port.name:
-        fsp = _normalize_fsp(pon_port.name)
-    else:
-        return ont, olt, None, None
-
-    # ONT-ID extraction from external_id
-    # Formats: "5" (plain), "huawei:4194320640.5" (SNMP), "external:SERIAL" (no ID)
-    ont_id_on_olt = _parse_ont_id_on_olt(ont.external_id)
-
-    return ont, olt, fsp, ont_id_on_olt
+    return ont, None, None, None
 
 
 def _reference_ont_options(
