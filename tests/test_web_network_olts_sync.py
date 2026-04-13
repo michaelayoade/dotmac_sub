@@ -525,6 +525,81 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
     assert card_port.port_number == 0
 
 
+def test_sync_impl_realigns_stale_active_assignment_to_scanned_fsp(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network import OLTDevice
+
+    olt = OLTDevice(
+        id=uuid4(),
+        name="OLT realign",
+        mgmt_ip="10.0.0.31",
+        hostname="olt-realign.local",
+        vendor="Huawei",
+        model="MA5600",
+    )
+    db_session.add(olt)
+    db_session.flush()
+    stale_pon = PonPort(olt_id=olt.id, name="0/1/1", is_active=True)
+    db_session.add(stale_pon)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="HWTCREALIGN1",
+        olt_device_id=olt.id,
+        external_id="huawei:4194320384.3",
+        board="0/1",
+        port="1",
+        is_active=True,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(
+        ont_unit_id=ont.id,
+        pon_port_id=stale_pon.id,
+        active=True,
+    )
+    db_session.add(assignment)
+    db_session.commit()
+
+    fake_linked = SimpleNamespace(
+        mgmt_ip="10.0.0.31",
+        hostname="olt-realign.local",
+        snmp_enabled=True,
+        snmp_community="enc",
+        snmp_version="v2c",
+        snmp_port=None,
+        vendor="Huawei",
+    )
+
+    monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: olt)
+    monkeypatch.setattr(
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"],
+    )
+    monkeypatch.setattr(
+        service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"}
+    )
+    monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
+
+    ok, _msg, stats = service._sync_onts_from_olt_snmp_impl(db_session, str(olt.id))
+
+    db_session.refresh(ont)
+    db_session.refresh(assignment)
+    scanned_pon = db_session.get(PonPort, assignment.pon_port_id)
+
+    assert ok is True
+    assert stats["assignments_created"] == 0
+    assert stats["assignments_updated"] == 1
+    assert ont.board == "0/2"
+    assert ont.port == "0"
+    assert scanned_pon is not None
+    assert scanned_pon.name == "0/2/0"
+
+
 def test_sync_impl_repairs_existing_pon_port_metadata(db_session, monkeypatch) -> None:
     fake_olt = SimpleNamespace(
         id=uuid4(),

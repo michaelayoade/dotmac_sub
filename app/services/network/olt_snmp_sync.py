@@ -23,7 +23,6 @@ from app.models.network import (
     OntUnit,
     OnuOfflineReason,
     OnuOnlineStatus,
-    PonPort,
     PonType,
 )
 from app.models.network_monitoring import DeviceInterface
@@ -44,6 +43,9 @@ from app.services.network.olt_web_audit import (
     log_olt_audit_event,
 )
 from app.services.network.olt_web_topology import ensure_canonical_pon_port
+from app.services.network.ont_assignment_alignment import (
+    align_ont_assignment_to_authoritative_fsp,
+)
 from app.services.network.ont_serials import (
     is_plausible_vendor_serial,
     looks_synthetic_ont_serial,
@@ -638,78 +640,56 @@ def _sync_onts_from_olt_snmp_impl(
         )
 
     assignment_created = 0
+    assignment_updated = 0
+    assignment_reactivated = 0
     assignment_errors = 0
     try:
-        olt_pon_ports = {
-            pp.name: pp
-            for pp in db.scalars(
-                select(PonPort).where(
-                    PonPort.olt_id == olt.id,
-                    PonPort.is_active.is_(True),
-                )
-            ).all()
-        }
-        onts_needing_assignment = list(
+        active_onts = list(
             db.scalars(
                 select(OntUnit)
-                .outerjoin(
-                    OntAssignment,
-                    (OntAssignment.ont_unit_id == OntUnit.id)
-                    & (OntAssignment.active.is_(True)),
-                )
                 .where(
                     OntUnit.olt_device_id == olt.id,
                     OntUnit.is_active.is_(True),
-                    OntAssignment.id.is_(None),
                 )
             ).all()
         )
-        for ont_item in onts_needing_assignment:
+        for ont_item in active_onts:
             ont_board = getattr(ont_item, "board", "") or ""
             ont_port = getattr(ont_item, "port", "") or ""
             pon_name = f"{ont_board}/{ont_port}" if ont_board and ont_port else None
             if not pon_name:
                 continue
-            pon_port = olt_pon_ports.get(pon_name)
-            if not pon_port:
-                pon_port = ensure_canonical_pon_port(
-                    db,
-                    olt_id=olt.id,
-                    fsp=pon_name,
-                    board=ont_board,
-                    port=ont_port,
-                )
-            else:
-                pon_port = ensure_canonical_pon_port(
-                    db,
-                    olt_id=olt.id,
-                    fsp=pon_name,
-                    board=ont_board,
-                    port=ont_port,
-                )
-            olt_pon_ports[pon_name] = pon_port
-            assignment = OntAssignment(
-                ont_unit_id=ont_item.id,
-                pon_port_id=pon_port.id,
-                active=True,
+            alignment = align_ont_assignment_to_authoritative_fsp(
+                db,
+                ont=ont_item,
+                olt_id=olt.id,
+                fsp=pon_name,
                 assigned_at=now,
             )
-            db.add(assignment)
-            assignment_created += 1
-        if assignment_created:
+            if alignment is None:
+                continue
+            if alignment.created:
+                assignment_created += 1
+            elif alignment.reactivated:
+                assignment_reactivated += 1
+            elif alignment.updated:
+                assignment_updated += 1
+        if assignment_created or assignment_reactivated or assignment_updated:
             db.flush()
     except Exception as exc:
-        logger.warning("Failed to auto-create ONT assignments: %s", exc)
+        logger.warning("Failed to align ONT assignments to OLT scan: %s", exc)
         db.rollback()
         assignment_errors += 1
         return (
             False,
-            f"Failed to auto-create ONT assignments: {exc!s}",
+            f"Failed to align ONT assignments to OLT scan: {exc!s}",
             {
                 "discovered": len(all_indexes),
                 "created": created,
                 "updated": updated,
                 "assignments_created": 0,
+                "assignments_updated": 0,
+                "assignments_reactivated": 0,
                 "assignment_errors": assignment_errors,
                 "tr069_runtime_synced": 0,
                 "tr069_runtime_errors": 0,
@@ -786,6 +766,8 @@ def _sync_onts_from_olt_snmp_impl(
         "skipped": skipped,
         "unresolved_topology": unresolved_topology,
         "assignments_created": assignment_created,
+        "assignments_updated": assignment_updated,
+        "assignments_reactivated": assignment_reactivated,
         "assignment_errors": assignment_errors,
         "tr069_runtime_synced": tr069_runtime_synced,
         "tr069_runtime_errors": tr069_runtime_errors,

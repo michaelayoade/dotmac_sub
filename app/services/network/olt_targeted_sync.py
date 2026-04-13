@@ -16,6 +16,9 @@ from app.services.network.huawei_snmp import (
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_monitoring_devices import resolve_snmp_target_for_olt
 from app.services.network.olt_polling import reconcile_snmp_status_with_signal
+from app.services.network.ont_assignment_alignment import (
+    align_ont_assignment_to_authoritative_fsp,
+)
 from app.services.network.ont_status import apply_resolved_status_for_model
 from app.services.network.snmp_walk import run_simple_v2c_walk
 
@@ -153,9 +156,9 @@ def sync_authorized_ont_from_olt_snmp(
                         decoded,
                         hinted,
                     )
-                idx_fsp = hinted or decoded or f"0/0/{packed}"
+                idx_fsp = hinted or decoded
             else:
-                idx_fsp = f"0/0/{packed}"
+                idx_fsp = ""
 
         if idx_fsp == fsp and onu == str(ont_id_on_olt):
             matched_index = idx
@@ -238,6 +241,13 @@ def sync_authorized_ont_from_olt_snmp(
         if ont.tr069_acs_server_id is None:
             ont.tr069_acs_server_id = olt.tr069_acs_server_id
         apply_resolved_status_for_model(ont, now=now)
+        assignment_alignment = align_ont_assignment_to_authoritative_fsp(
+            db,
+            ont=ont,
+            olt_id=olt.id,
+            fsp=fsp,
+            assigned_at=now,
+        )
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -246,5 +256,10 @@ def sync_authorized_ont_from_olt_snmp(
     return (
         True,
         f"Synced ONT {ont.serial_number} from OLT SNMP using index {matched_index}.",
-        {"matched_index": matched_index},
+        {
+            "matched_index": matched_index,
+            "assignment_aligned": bool(
+                assignment_alignment and assignment_alignment.changed
+            ),
+        },
     )
