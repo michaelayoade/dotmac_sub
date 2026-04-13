@@ -8,7 +8,6 @@ service functions in ``app.services.network.ont_provision_steps``.
 from __future__ import annotations
 
 import json
-import logging
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
@@ -22,11 +21,11 @@ from app.services import (
 )
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_provision_steps as steps
+from app.services.network.action_logging import log_network_action_result
 from app.services.network.ont_provisioning.result import StepResult
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-provisioning"])
-logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -53,75 +52,6 @@ def _toast_headers(message: str, toast_type: str = "success") -> dict[str, str]:
     }
 
 
-def _actor_label(request: Request | None) -> str:
-    if request is None:
-        return "unknown"
-    try:
-        current_user = web_admin_service.get_current_user(request)
-    except Exception:
-        return "unknown"
-    if not isinstance(current_user, dict):
-        return "unknown"
-    return str(
-        current_user.get("name")
-        or current_user.get("email")
-        or current_user.get("actor_id")
-        or current_user.get("subscriber_id")
-        or "unknown"
-    )
-
-
-def _looks_like_prerequisite_failure(message: str) -> bool:
-    text = str(message or "").lower()
-    markers = [
-        "not found",
-        "no profile selected",
-        "no firmware image selected",
-        "no tr-069 device",
-        "no matching genieacs device",
-        "waiting for",
-        "not bootstrapped",
-        "no connectionrequesturl",
-        "connection request url",
-        "resolution failed",
-        "missing",
-        "required",
-        "no associated olt",
-        "no active assignment",
-        "olt context is incomplete",
-        "cannot determine",
-        "not linked",
-        "not managed via tr-069",
-        "no live acs",
-    ]
-    return any(marker in text for marker in markers)
-
-
-def _log_blocked_step(
-    *,
-    request: Request | None,
-    ont_id: str | None,
-    result: StepResult,
-) -> None:
-    if result.waiting or not _looks_like_prerequisite_failure(result.message):
-        return
-    actor = _actor_label(request)
-    logger.error(
-        "ONT provisioning step blocked by missing prerequisite: step=%s ont_id=%s actor=%s reason=%s",
-        result.step_name,
-        ont_id or "unknown",
-        actor,
-        result.message,
-        extra={
-            "event": "ont_provisioning_prerequisite_blocked",
-            "step": result.step_name,
-            "ont_id": ont_id,
-            "actor": actor,
-            "reason": result.message,
-        },
-    )
-
-
 def _step_response(
     result: StepResult,
     *,
@@ -137,8 +67,16 @@ def _step_response(
         toast_type = "success" if result.success else "error"
         phase = "succeeded" if result.success else "failed"
         status_code = 200 if result.success else 400
-    if not result.success:
-        _log_blocked_step(request=request, ont_id=ont_id, result=result)
+    log_network_action_result(
+        request=request,
+        resource_type="ont",
+        resource_id=ont_id,
+        action=result.step_name,
+        success=result.success,
+        message=result.message,
+        waiting=result.waiting,
+        metadata={"critical": result.critical, "skipped": result.skipped},
+    )
     return JSONResponse(
         content={
             "success": result.success or result.waiting,

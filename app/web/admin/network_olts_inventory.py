@@ -32,6 +32,7 @@ from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
 from app.services.network import olt_web_resources as olt_web_resources_service
 from app.services.network import olt_web_topology as olt_web_topology_service
+from app.services.network.action_logging import log_network_action_result
 from app.services.network.olt_inventory import get_olt_or_none
 from app.web.request_parsing import parse_form_data_sync
 
@@ -100,6 +101,26 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
             ensure_ascii=True,
         )
     }
+
+
+def _log_olt_action_result(
+    *,
+    request: Request | None,
+    olt_id: str | None,
+    action: str,
+    ok: bool,
+    message: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    log_network_action_result(
+        request=request,
+        resource_type="olt",
+        resource_id=olt_id,
+        action=action,
+        success=ok,
+        message=message,
+        metadata=metadata,
+    )
 
 
 @router.get(
@@ -548,6 +569,14 @@ def olt_run_cli_command(
 
     ok, message, output = olt_operations_service.execute_cli_command(db, olt_id, cmd)
     if not ok:
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="Run CLI Command",
+            ok=ok,
+            message=message,
+            metadata={"command": cmd},
+        )
         return HTMLResponse(
             f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 '
             f'dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{html_mod.escape(message)}</div>'
@@ -570,6 +599,13 @@ def olt_test_ssh_connection(
     ok, message, _policy_key = olt_operations_service.test_olt_ssh_connection(
         db, olt_id, request=request
     )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Test SSH Connection",
+        ok=ok,
+        message=message,
+    )
     status = "success" if ok else "error"
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
@@ -587,6 +623,13 @@ def olt_test_snmp_connection(
     ok, message = olt_operations_service.test_olt_snmp_connection(
         db, olt_id, request=request
     )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Test SNMP Connection",
+        ok=ok,
+        message=message,
+    )
     status = "success" if ok else "error"
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?snmp_test_status={status}&snmp_test_message={quote_plus(message)}",
@@ -603,6 +646,13 @@ def olt_test_netconf_connection(
 ) -> RedirectResponse:
     ok, message, _capabilities = olt_operations_service.test_olt_netconf_connection(
         db, olt_id, request=request
+    )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Test NETCONF Connection",
+        ok=ok,
+        message=message,
     )
     status = "success" if ok else "error"
     return RedirectResponse(
@@ -626,6 +676,13 @@ def olt_netconf_get_config(
     )
     escaped_msg = html_mod.escape(message)
     if not ok:
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="Get NETCONF Config",
+            ok=ok,
+            message=message,
+        )
         return HTMLResponse(
             f'<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
             f'dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">{escaped_msg}</div>'
@@ -649,6 +706,13 @@ def olt_sync_onts(
 ) -> RedirectResponse:
     ok, message, _stats = olt_snmp_sync_service.sync_onts_from_olt_snmp_tracked(
         db, olt_id, request=request
+    )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Sync ONU Telemetry",
+        ok=ok,
+        message=message,
     )
     status = "success" if ok else "error"
     return RedirectResponse(
@@ -681,6 +745,13 @@ def olt_repair_pon_ports(
 ) -> RedirectResponse:
     ok, message, _stats = olt_web_topology_service.repair_pon_ports_for_olt_tracked(
         db, olt_id, request=request
+    )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Repair PON Ports",
+        ok=ok,
+        message=message,
     )
     status = "success" if ok else "error"
     return RedirectResponse(
@@ -717,12 +788,26 @@ def olt_discover_hardware(
     try:
         olt = OLTDevices.get(db, olt_id)
     except HTTPException:
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="Discover Hardware",
+            ok=False,
+            message="OLT not found",
+        )
         return RedirectResponse(
             f"/admin/network/olts/{olt_id}?tab=hardware&sync_status=error&sync_message={quote_plus('OLT not found')}",
             status_code=303,
         )
 
     ok, message, _stats = discover_olt_hardware_audited(db, olt, request=request)
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Discover Hardware",
+        ok=ok,
+        message=message,
+    )
     status = "success" if ok else "error"
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?tab=hardware&sync_status={status}&sync_message={quote_plus(message)}",
@@ -740,6 +825,13 @@ def olt_autofind_scan(
     """Scan OLT for unregistered ONTs via SSH autofind."""
     ok, message, entries = olt_autofind_service.get_autofind_onts_audited(
         db, olt_id, request=request
+    )
+    _log_olt_action_result(
+        request=request,
+        olt_id=olt_id,
+        action="Scan Autofind ONTs",
+        ok=ok,
+        message=message,
     )
     if ok:
         web_network_ont_autofind_service.sync_olt_autofind_entries(
@@ -842,6 +934,14 @@ def restore_autofind_candidate(
     ok, message = web_network_ont_autofind_service.restore_candidate_audited(
         db, candidate_id=candidate_id, request=request
     )
+    log_network_action_result(
+        request=request,
+        resource_type="ont_autofind_candidate",
+        resource_id=candidate_id,
+        action="Restore Autofind Candidate",
+        success=ok,
+        message=message,
+    )
     status = "success" if ok else "error"
     target = web_network_ont_autofind_service.build_unconfigured_onts_feedback_url(
         status=status,
@@ -870,6 +970,14 @@ def olt_authorize_ont(
     is_htmx = request.headers.get("HX-Request") == "true"
 
     if not fsp or not serial_number:
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="Authorize ONT",
+            ok=False,
+            message="Missing port or serial number",
+            metadata={"fsp": fsp, "serial_number": serial_number},
+        )
         msg = quote_plus("Missing port or serial number")
         if return_to in (
             "/admin/network/unconfigured-onts",
@@ -918,6 +1026,19 @@ def olt_authorize_ont(
         request=request,
     )
     status = getattr(result, "status", "success" if result.success else "error")
+    log_network_action_result(
+        request=request,
+        resource_type="olt",
+        resource_id=olt_id,
+        action="Authorize ONT",
+        success=result.success,
+        message=result.message,
+        metadata={
+            "fsp": fsp,
+            "serial_number": serial_number,
+            "force_reauthorize": force,
+        },
+    )
     completed_authorization = bool(
         getattr(result, "completed_authorization", False)
     )

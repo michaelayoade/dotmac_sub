@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -17,11 +16,11 @@ from app.services import web_network_ont_actions as web_network_ont_actions_serv
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
+from app.services.network.action_logging import log_network_action_result
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-actions"])
-logger = logging.getLogger(__name__)
 
 
 def _form_str(form: FormData, key: str, default: str = "") -> str:
@@ -59,77 +58,6 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
     }
 
 
-def _actor_label(request: Request | None) -> str:
-    if request is None:
-        return "unknown"
-    try:
-        current_user = web_admin_service.get_current_user(request)
-    except Exception:
-        return "unknown"
-    if not isinstance(current_user, dict):
-        return "unknown"
-    return str(
-        current_user.get("name")
-        or current_user.get("email")
-        or current_user.get("actor_id")
-        or current_user.get("subscriber_id")
-        or "unknown"
-    )
-
-
-def _looks_like_prerequisite_failure(message: str) -> bool:
-    text = str(message or "").lower()
-    markers = [
-        "not found",
-        "no profile selected",
-        "no firmware image selected",
-        "no tr-069 device",
-        "no matching genieacs device",
-        "waiting for",
-        "not bootstrapped",
-        "no connectionrequesturl",
-        "connection request url",
-        "resolution failed",
-        "missing",
-        "required",
-        "no associated olt",
-        "no active assignment",
-        "olt context is incomplete",
-        "cannot determine",
-        "not linked",
-        "not managed via tr-069",
-        "no live acs",
-    ]
-    return any(marker in text for marker in markers)
-
-
-def _log_blocked_action(
-    *,
-    request: Request | None,
-    ont_id: str | None,
-    action: str,
-    message: str,
-    waiting: bool,
-) -> None:
-    if waiting or not _looks_like_prerequisite_failure(message):
-        return
-    actor = _actor_label(request)
-    logger.error(
-        "ONT action blocked by missing prerequisite: action=%s ont_id=%s actor=%s reason=%s",
-        action,
-        ont_id or "unknown",
-        actor,
-        message,
-        extra={
-            "event": "ont_action_prerequisite_blocked",
-            "action": action,
-            "ont_id": ont_id,
-            "actor": actor,
-            "reason": message,
-        },
-    )
-
-
 def _action_json_response(
     *,
     success: bool,
@@ -144,14 +72,15 @@ def _action_json_response(
     """Return a consistent JSON contract for ONT action requests."""
     toast_type = "success" if success else ("info" if waiting else "error")
     phase = "succeeded" if success else ("waiting" if waiting else "failed")
-    if not success:
-        _log_blocked_action(
-            request=request,
-            ont_id=ont_id,
-            action=action,
-            message=message,
-            waiting=waiting,
-        )
+    log_network_action_result(
+        request=request,
+        resource_type="ont",
+        resource_id=ont_id,
+        action=action,
+        success=success,
+        message=message,
+        waiting=waiting,
+    )
     return JSONResponse(
         {
             "success": success or waiting,
@@ -182,14 +111,15 @@ def _action_result_response(
     success = bool(getattr(result, "success", False))
     message = str(getattr(result, "message", "Action failed"))
     waiting = bool(getattr(result, "waiting", False))
-    if not success:
-        _log_blocked_action(
-            request=request,
-            ont_id=ont_id,
-            action=action,
-            message=message,
-            waiting=waiting,
-        )
+    log_network_action_result(
+        request=request,
+        resource_type="ont",
+        resource_id=ont_id,
+        action=action,
+        success=success,
+        message=message,
+        waiting=waiting,
+    )
     return JSONResponse(
         {"success": success, "message": message},
         status_code=200 if success else 400,
@@ -567,10 +497,12 @@ def ont_toggle_lan_port(
     )
     if request.headers.get("HX-Request"):
         if not result.success:
-            _log_blocked_action(
+            log_network_action_result(
                 request=request,
-                ont_id=ont_id,
+                resource_type="ont",
+                resource_id=ont_id,
                 action="Toggle LAN Port",
+                success=result.success,
                 message=result.message,
                 waiting=getattr(result, "waiting", False),
             )

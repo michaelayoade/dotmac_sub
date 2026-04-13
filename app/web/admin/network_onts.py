@@ -24,6 +24,7 @@ from app.services import web_network_service_ports as web_network_service_ports_
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
 from app.services.network import ont_web_forms as ont_web_forms_service
+from app.services.network.action_logging import log_network_action_result
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -82,6 +83,26 @@ def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
             ensure_ascii=True,
         )
     }
+
+
+def _log_ont_action_result(
+    *,
+    request: Request | None,
+    ont_id: str | None,
+    action: str,
+    ok: bool,
+    message: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    log_network_action_result(
+        request=request,
+        resource_type="ont",
+        resource_id=ont_id,
+        action=action,
+        success=ok,
+        message=message,
+        metadata=metadata,
+    )
 
 
 def _ont_form_dependencies(db: Session, ont: Any | None = None) -> dict:
@@ -405,6 +426,14 @@ def ont_service_port_create(
         user_vlan
     )
     if error:
+        _log_ont_action_result(
+            request=request,
+            ont_id=ont_id,
+            action="Create Service Port",
+            ok=False,
+            message=error,
+            metadata={"vlan_id": vlan_id, "user_vlan": user_vlan},
+        )
         return _service_ports_partial_response(
             request,
             db,
@@ -420,6 +449,14 @@ def ont_service_port_create(
         gem_index,
         user_vlan=resolved_user_vlan,
         tag_transform=tag_transform,
+    )
+    _log_ont_action_result(
+        request=request,
+        ont_id=ont_id,
+        action="Create Service Port",
+        ok=ok,
+        message=msg,
+        metadata={"vlan_id": vlan_id, "gem_index": gem_index},
     )
     return _service_ports_partial_response(
         request,
@@ -443,6 +480,14 @@ def ont_service_port_delete(
 ) -> HTMLResponse:
     """Delete a service-port from the OLT by index."""
     ok, msg = web_network_service_ports_service.handle_delete(db, ont_id, index)
+    _log_ont_action_result(
+        request=request,
+        ont_id=ont_id,
+        action="Delete Service Port",
+        ok=ok,
+        message=msg,
+        metadata={"service_port_index": index},
+    )
     return _service_ports_partial_response(
         request,
         db,
@@ -465,6 +510,14 @@ def ont_service_port_clone(
 ) -> HTMLResponse:
     """Clone service-ports from a reference ONT."""
     ok, msg = web_network_service_ports_service.handle_clone(db, ont_id, ref_ont_id)
+    _log_ont_action_result(
+        request=request,
+        ont_id=ont_id,
+        action="Clone Service Ports",
+        ok=ok,
+        message=msg,
+        metadata={"reference_ont_id": ref_ont_id},
+    )
     return _service_ports_partial_response(
         request,
         db,
