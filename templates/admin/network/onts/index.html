@@ -277,26 +277,42 @@
                             </td>
                             <td class="px-3 py-2 text-right">
                                 {% if entry.is_active %}
-                                <form method="POST" action="/admin/network/olts/{{ entry.olt_id }}/authorize-ont" class="inline-flex items-center gap-2" x-data="{ force: false }">
+                                <form method="POST" action="/admin/network/olts/{{ entry.olt_id }}/authorize-ont" class="inline-flex items-center gap-2" x-data="{ force: false, submitting: false }" @submit="submitting = true">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="fsp" value="{{ entry.fsp }}">
                                     <input type="hidden" name="serial_number" value="{{ entry.serial_number }}">
                                     <input type="hidden" name="return_to" value="/admin/network/onts?view=unconfigured">
                                     <input type="hidden" name="force_reauthorize" :value="force ? 'true' : ''">
-                                    <label class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400 cursor-pointer whitespace-nowrap" title="Delete existing registration first">
-                                        <input type="checkbox" x-model="force" class="h-3.5 w-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800">
+                                    <label class="flex items-center gap-1 text-xs text-slate-500 dark:text-slate-400 cursor-pointer whitespace-nowrap" :class="submitting && 'opacity-50 pointer-events-none'" title="Delete existing registration first">
+                                        <input type="checkbox" x-model="force" :disabled="submitting" class="h-3.5 w-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500 dark:border-slate-600 dark:bg-slate-800">
                                         Force
                                     </label>
-                                    <button type="submit" :onclick="force ? 'return confirm(\'Force re-authorize {{ entry.serial_number }}? This will DELETE any existing registration.\')' : 'return confirm(\'Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}?\')'" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all hover:shadow-md focus-visible:ring-2 focus-visible:ring-offset-2" :class="force ? 'bg-amber-600 hover:bg-amber-700 focus-visible:ring-amber-500' : 'bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-emerald-500'">
-                                        <span x-show="!force">Authorize</span>
-                                        <span x-show="force" x-cloak>Force</span>
+                                    <button type="submit" :disabled="submitting" :onclick="force ? 'return confirm(\'Force re-authorize {{ entry.serial_number }}? This will DELETE any existing registration.\')' : 'return confirm(\'Authorize ONT {{ entry.serial_number }} on {{ entry.olt_name }} {{ entry.fsp }}?\')'" class="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition-all focus-visible:ring-2 focus-visible:ring-offset-2" :class="[
+                                        force ? 'bg-amber-600 focus-visible:ring-amber-500' : 'bg-emerald-600 focus-visible:ring-emerald-500',
+                                        submitting ? 'opacity-75 cursor-wait' : (force ? 'hover:bg-amber-700 hover:shadow-md' : 'hover:bg-emerald-700 hover:shadow-md')
+                                    ]">
+                                        {# Spinner - shown when submitting #}
+                                        <svg x-show="submitting" x-cloak class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        {# Normal state #}
+                                        <span x-show="!submitting && !force">Authorize</span>
+                                        <span x-show="!submitting && force" x-cloak>Force</span>
+                                        {# Loading text #}
+                                        <span x-show="submitting" x-cloak>Authorizing...</span>
                                     </button>
                                 </form>
                                 {% elif entry.resolution_reason == 'disappeared' %}
-                                <form method="POST" action="/admin/network/unconfigured-onts/{{ entry.id }}/restore" class="inline">
+                                <form method="POST" action="/admin/network/unconfigured-onts/{{ entry.id }}/restore" class="inline" x-data="{ submitting: false }" @submit="submitting = true">
                                     {% include "components/forms/csrf_input.html" %}
-                                    <button type="submit" onclick="return confirm('Restore ONT {{ entry.serial_number }} to active state?')" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
-                                        Restore
+                                    <button type="submit" :disabled="submitting" onclick="return confirm('Restore ONT {{ entry.serial_number }} to active state?')" class="inline-flex items-center gap-1.5 rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-700 transition-colors dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300" :class="submitting ? 'opacity-75 cursor-wait' : 'hover:bg-amber-100'">
+                                        <svg x-show="submitting" x-cloak class="h-3.5 w-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                        </svg>
+                                        <span x-show="!submitting">Restore</span>
+                                        <span x-show="submitting" x-cloak>Restoring...</span>
                                     </button>
                                 </form>
                                 {% else %}
