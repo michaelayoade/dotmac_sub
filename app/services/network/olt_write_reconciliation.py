@@ -40,9 +40,45 @@ def verify_ont_authorized(
 
     normalized_serial = _normalize_serial(serial_number)
 
+    def _verify_by_serial(reason: str) -> OltWriteVerification | None:
+        find_ok, find_msg, found = olt_ssh_ont.find_ont_by_serial(olt, serial_number)
+        if not find_ok:
+            return OltWriteVerification(
+                False,
+                f"OLT accepted the authorization write, but serial readback failed after {reason}: {find_msg}",
+                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+            )
+        if found is None:
+            return None
+        if found.fsp != fsp:
+            return OltWriteVerification(
+                False,
+                "ONT serial was found on the OLT, but on a different port than expected.",
+                {
+                    "expected_fsp": fsp,
+                    "observed_fsp": found.fsp,
+                    "ont_id": found.onu_id,
+                    "serial_number": found.real_serial,
+                    "run_state": found.run_state,
+                },
+            )
+        return OltWriteVerification(
+            True,
+            f"Verified ONT {serial_number} on {fsp} with ONT-ID {found.onu_id} by serial readback.",
+            {
+                "fsp": found.fsp,
+                "ont_id": found.onu_id,
+                "serial_number": found.real_serial,
+                "run_state": found.run_state,
+            },
+        )
+
     if ont_id is not None:
         ok, msg, status_entry = olt_ssh_ont.get_ont_status(olt, fsp, ont_id)
         if not ok:
+            serial_verification = _verify_by_serial("ONT-ID readback failure")
+            if serial_verification is not None:
+                return serial_verification
             return OltWriteVerification(
                 False,
                 f"OLT accepted the authorization write, but readback failed: {msg}",
@@ -52,6 +88,9 @@ def verify_ont_authorized(
             status_entry is None
             or _normalize_serial(status_entry.serial_number) != normalized_serial
         ):
+            serial_verification = _verify_by_serial("ONT-ID readback mismatch")
+            if serial_verification is not None:
+                return serial_verification
             return OltWriteVerification(
                 False,
                 "OLT accepted the authorization write, but the ONT was not present on readback.",
@@ -305,7 +344,11 @@ def verify_iphost_config(
         return OltWriteVerification(
             False,
             "IPHOST readback returned a different VLAN than the requested write.",
-            {"expected_vlan_id": vlan_id, "observed_vlan_id": observed_vlan, "config": config},
+            {
+                "expected_vlan_id": vlan_id,
+                "observed_vlan_id": observed_vlan,
+                "config": config,
+            },
         )
 
     observed_mode = normalized.get(
@@ -316,7 +359,11 @@ def verify_iphost_config(
         return OltWriteVerification(
             False,
             "IPHOST readback returned a different mode than the requested write.",
-            {"expected_mode": ip_mode, "observed_mode": observed_mode, "config": config},
+            {
+                "expected_mode": ip_mode,
+                "observed_mode": observed_mode,
+                "config": config,
+            },
         )
 
     observed_ip = normalized.get(
@@ -327,7 +374,11 @@ def verify_iphost_config(
         return OltWriteVerification(
             False,
             "IPHOST readback returned a different IP address than the requested write.",
-            {"expected_ip_address": ip_address, "observed_ip_address": observed_ip, "config": config},
+            {
+                "expected_ip_address": ip_address,
+                "observed_ip_address": observed_ip,
+                "config": config,
+            },
         )
 
     return OltWriteVerification(

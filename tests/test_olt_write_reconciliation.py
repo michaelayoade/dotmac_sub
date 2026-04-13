@@ -39,6 +39,44 @@ class TestVerifyOntAuthorized:
         assert result.success is True
         assert "Verified ONT" in result.message
 
+    def test_falls_back_to_serial_lookup_when_direct_status_query_fails(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network.olt_write_reconciliation import verify_ont_authorized
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_ont_status",
+            lambda *_args, **_kwargs: (
+                False,
+                "OLT error: display ont info 0/165 % Parameter error",
+                None,
+            ),
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.find_ont_by_serial",
+            lambda *_args, **_kwargs: (
+                True,
+                "found",
+                SimpleNamespace(
+                    fsp="0/1/6",
+                    onu_id=5,
+                    real_serial="4857544328201B9A",
+                    run_state="online",
+                ),
+            ),
+        )
+
+        result = verify_ont_authorized(
+            _olt(),
+            fsp="0/1/6",
+            ont_id=5,
+            serial_number="4857544328201B9A",
+        )
+
+        assert result.success is True
+        assert result.details["ont_id"] == 5
+        assert "serial readback" in result.message
+
     def test_falls_back_to_registered_serial_scan(self, monkeypatch) -> None:
         from app.services.network.olt_write_reconciliation import verify_ont_authorized
 
@@ -111,7 +149,11 @@ class TestVerifyServicePortPresent:
             lambda *_args, **_kwargs: (
                 True,
                 "ok",
-                [SimpleNamespace(index=11, vlan_id=201, ont_id=7, gem_index=1, state="up")],
+                [
+                    SimpleNamespace(
+                        index=11, vlan_id=201, ont_id=7, gem_index=1, state="up"
+                    )
+                ],
             ),
         )
 
