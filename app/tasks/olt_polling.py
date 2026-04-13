@@ -310,7 +310,7 @@ def _mark_stale_onts_offline(db, stale_threshold_minutes: int = 10) -> int:
             marked,
             stale_threshold_minutes,
         )
-    return marked
+    return marked + unknown_marked
 
 
 @celery_app.task(name="app.tasks.olt_polling.finalize_olt_polling")

@@ -88,7 +88,7 @@ class ProvisioningEnforcement:
             OntUnit.pppoe_username.isnot(None),
             OntUnit.tr069_acs_server_id.isnot(None),
             OntUnit.observed_wan_ip.is_(None),
-            OntUnit.online_status == OnuOnlineStatus.online,
+            OntUnit.effective_status == OnuOnlineStatus.online,
         )
         for ont in db.scalars(stmt).all():
             gaps["pppoe_not_pushed"].append(str(ont.id))
@@ -97,9 +97,11 @@ class ProvisioningEnforcement:
         stale_cutoff = datetime.now(UTC) - timedelta(hours=STALE_RUNTIME_HOURS)
         stmt = base.where(
             OntUnit.observed_wan_ip.isnot(None),
-            OntUnit.online_status.in_([
-                OnuOnlineStatus.offline,
-            ]),
+            OntUnit.effective_status.in_(
+                [
+                    OnuOnlineStatus.offline,
+                ]
+            ),
             and_(
                 OntUnit.observed_runtime_updated_at.isnot(None),
                 OntUnit.observed_runtime_updated_at < stale_cutoff,
@@ -126,57 +128,69 @@ class ProvisioningEnforcement:
         counts: dict[str, int] = {}
 
         # No ACS binding
-        counts["no_acs_binding"] = db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-            .where(
-                *base_where,
-                OntUnit.pppoe_username.isnot(None),
-                OntUnit.tr069_acs_server_id.is_(None),
-                OLTDevice.tr069_acs_server_id.isnot(None),
+        counts["no_acs_binding"] = (
+            db.scalar(
+                select(func.count())
+                .select_from(OntUnit)
+                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+                .where(
+                    *base_where,
+                    OntUnit.pppoe_username.isnot(None),
+                    OntUnit.tr069_acs_server_id.is_(None),
+                    OLTDevice.tr069_acs_server_id.isnot(None),
+                )
             )
-        ) or 0
+            or 0
+        )
 
         # No ACS on OLT
-        counts["no_acs_on_olt"] = db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-            .where(
-                *base_where,
-                OntUnit.pppoe_username.isnot(None),
-                OLTDevice.tr069_acs_server_id.is_(None),
+        counts["no_acs_on_olt"] = (
+            db.scalar(
+                select(func.count())
+                .select_from(OntUnit)
+                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+                .where(
+                    *base_where,
+                    OntUnit.pppoe_username.isnot(None),
+                    OLTDevice.tr069_acs_server_id.is_(None),
+                )
             )
-        ) or 0
+            or 0
+        )
 
         # PPPoE not pushed
-        counts["pppoe_not_pushed"] = db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
-            .where(
-                *base_where,
-                OntUnit.pppoe_username.isnot(None),
-                OntUnit.tr069_acs_server_id.isnot(None),
-                OntUnit.observed_wan_ip.is_(None),
-                OntUnit.online_status == OnuOnlineStatus.online,
+        counts["pppoe_not_pushed"] = (
+            db.scalar(
+                select(func.count())
+                .select_from(OntUnit)
+                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+                .where(
+                    *base_where,
+                    OntUnit.pppoe_username.isnot(None),
+                    OntUnit.tr069_acs_server_id.isnot(None),
+                    OntUnit.observed_wan_ip.is_(None),
+                    OntUnit.effective_status == OnuOnlineStatus.online,
+                )
             )
-        ) or 0
+            or 0
+        )
 
         # Stale WAN IP
         stale_cutoff = datetime.now(UTC) - timedelta(hours=STALE_RUNTIME_HOURS)
-        counts["stale_wan_ip"] = db.scalar(
-            select(func.count())
-            .select_from(OntUnit)
-            .where(
-                *base_where,
-                OntUnit.observed_wan_ip.isnot(None),
-                OntUnit.online_status == OnuOnlineStatus.offline,
-                OntUnit.observed_runtime_updated_at.isnot(None),
-                OntUnit.observed_runtime_updated_at < stale_cutoff,
+        counts["stale_wan_ip"] = (
+            db.scalar(
+                select(func.count())
+                .select_from(OntUnit)
+                .where(
+                    *base_where,
+                    OntUnit.observed_wan_ip.isnot(None),
+                    OntUnit.effective_status == OnuOnlineStatus.offline,
+                    OntUnit.observed_runtime_updated_at.isnot(None),
+                    OntUnit.observed_runtime_updated_at < stale_cutoff,
+                )
             )
-        ) or 0
+            or 0
+        )
 
         return counts
 
@@ -227,11 +241,15 @@ class ProvisioningEnforcement:
                     failed += 1
             except Exception as exc:
                 logger.warning(
-                    "Connection request failed for ONT %s: %s", ont_id, exc,
+                    "Connection request failed for ONT %s: %s",
+                    ont_id,
+                    exc,
                 )
                 failed += 1
         logger.info(
-            "Connection request enforcement: sent %d, failed %d", sent, failed,
+            "Connection request enforcement: sent %d, failed %d",
+            sent,
+            failed,
         )
         return {"sent": sent, "failed": failed}
 
@@ -280,7 +298,10 @@ class ProvisioningEnforcement:
 
             try:
                 result = set_pppoe_credentials(
-                    db, ont_id, ont.pppoe_username, password,
+                    db,
+                    ont_id,
+                    ont.pppoe_username,
+                    password,
                 )
                 if result.success:
                     pushed += 1
@@ -293,13 +314,17 @@ class ProvisioningEnforcement:
                     failed += 1
             except Exception as exc:
                 logger.warning(
-                    "PPPoE push error for ONT %s: %s", ont.serial_number, exc,
+                    "PPPoE push error for ONT %s: %s",
+                    ont.serial_number,
+                    exc,
                 )
                 failed += 1
 
         logger.info(
             "PPPoE enforcement: pushed %d, failed %d, skipped %d",
-            pushed, failed, skipped,
+            pushed,
+            failed,
+            skipped,
         )
         return {"pushed": pushed, "failed": failed, "skipped": skipped}
 

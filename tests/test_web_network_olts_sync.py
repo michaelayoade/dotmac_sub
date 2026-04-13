@@ -9,10 +9,12 @@ from app.models.network import (
     OltCardPort,
     OltShelf,
     OntAssignment,
+    OntStatusSource,
     OntUnit,
     OnuOfflineReason,
     OnuOnlineStatus,
     PonPort,
+    WanMode,
 )
 from app.services.network import olt_snmp_sync as service
 from app.services.network import olt_web_topology as topology_service
@@ -55,9 +57,7 @@ def test_olt_sync_lock_key_is_deterministic_and_positive() -> None:
     assert key_one != other_key
 
 
-def test_sync_onts_from_olt_snmp_skips_lock_on_sqlite(
-    db_session, monkeypatch
-) -> None:
+def test_sync_onts_from_olt_snmp_skips_lock_on_sqlite(db_session, monkeypatch) -> None:
     called = {}
 
     def fake_impl(session, olt_id):
@@ -118,6 +118,57 @@ def test_sync_onts_from_olt_snmp_returns_busy_when_lock_not_acquired(
         {"discovered": 0, "created": 0, "updated": 0},
     )
     assert called["impl"] is False
+
+
+def test_targeted_snmp_sync_updates_effective_status(db_session, monkeypatch) -> None:
+    from app.models.network import OLTDevice
+    from app.services.network.olt_targeted_sync import (
+        sync_authorized_ont_from_olt_snmp,
+    )
+
+    olt = OLTDevice(name="Targeted OLT", vendor="Generic")
+    db_session.add(olt)
+    db_session.flush()
+    ont = OntUnit(
+        serial_number="ONT-TARGETED-STATUS",
+        olt_device_id=olt.id,
+        external_id="3",
+        online_status=OnuOnlineStatus.unknown,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.olt_targeted_sync.resolve_snmp_target_for_olt",
+        lambda _db, _olt: SimpleNamespace(snmp_enabled=True, vendor="Generic"),
+    )
+
+    def fake_walk(_linked, oid, **_kwargs):
+        if oid.endswith(".1.1.8"):
+            return ["iso.1.2.3.4.0.1.2.3 = INTEGER: 1"]
+        if oid.endswith(".10.1.2"):
+            return ["iso.1.2.3.4.0.1.2.3 = INTEGER: -1950"]
+        if oid.endswith(".10.1.3"):
+            return ["iso.1.2.3.4.0.1.2.3 = INTEGER: -2050"]
+        if oid.endswith(".1.1.9"):
+            return ["iso.1.2.3.4.0.1.2.3 = INTEGER: 1000"]
+        return ["iso.1.3.6.1.2.1.1.5.0 = STRING: targeted"]
+
+    ok, message, _stats = sync_authorized_ont_from_olt_snmp(
+        db_session,
+        olt_id=str(olt.id),
+        ont_unit_id=str(ont.id),
+        fsp="0/1/2",
+        ont_id_on_olt=3,
+        serial_number=ont.serial_number,
+        walk_fn=fake_walk,
+    )
+
+    assert ok, message
+    db_session.refresh(ont)
+    assert ont.online_status == OnuOnlineStatus.online
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.olt
 
 
 def test_sync_onts_from_olt_snmp_impl_flushes_before_final_commit(
@@ -221,9 +272,17 @@ def test_sync_impl_skips_unknown_snmp_onu_without_creating_inventory(
     )
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: fake_olt)
-    monkeypatch.setattr(service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked)
-    monkeypatch.setattr(service, "_run_simple_v2c_walk", lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"])
-    monkeypatch.setattr(service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"})
+    monkeypatch.setattr(
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.4194320384.3 = INTEGER: 1"],
+    )
+    monkeypatch.setattr(
+        service, "_parse_walk_composite", lambda _lines: {"4194320384.3": "1"}
+    )
 
     result = service._sync_onts_from_olt_snmp_impl(fake_db, "olt-1")
 
@@ -298,15 +357,25 @@ def test_sync_impl_leaves_unresolved_topology_unassigned(
     )
 
     monkeypatch.setattr(service, "get_olt_or_none", lambda _db, _id: fake_olt)
-    monkeypatch.setattr(service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked)
-    monkeypatch.setattr(service, "_run_simple_v2c_walk", lambda *_a, **_k: ["1.3.6.1.x.99.7 = INTEGER: 1"])
+    monkeypatch.setattr(
+        service, "resolve_snmp_target_for_olt", lambda *_a, **_k: fake_linked
+    )
+    monkeypatch.setattr(
+        service,
+        "_run_simple_v2c_walk",
+        lambda *_a, **_k: ["1.3.6.1.x.99.7 = INTEGER: 1"],
+    )
     monkeypatch.setattr(service, "_parse_walk_composite", lambda _lines: {"99.7": "1"})
     monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
 
     ok, _msg, stats = service._sync_onts_from_olt_snmp_impl(fake_db, "olt-2")
 
-    discovered_onts = [obj for obj in fake_db.added if obj.__class__.__name__ == "OntUnit"]
-    assignments = [obj for obj in fake_db.added if obj.__class__.__name__ == "OntAssignment"]
+    discovered_onts = [
+        obj for obj in fake_db.added if obj.__class__.__name__ == "OntUnit"
+    ]
+    assignments = [
+        obj for obj in fake_db.added if obj.__class__.__name__ == "OntAssignment"
+    ]
     pon_ports = [obj for obj in fake_db.added if obj.__class__.__name__ == "PonPort"]
 
     assert ok is True
@@ -361,7 +430,9 @@ def test_sync_impl_clears_stale_offline_reason_when_status_becomes_unknown(
         "_run_simple_v2c_walk",
         lambda *_a, **_k: ["1.3.6.1.x.99.7 = STRING: unknown"],
     )
-    monkeypatch.setattr(service, "_parse_walk_composite", lambda _lines: {"99.7": "unknown"})
+    monkeypatch.setattr(
+        service, "_parse_walk_composite", lambda _lines: {"99.7": "unknown"}
+    )
     monkeypatch.setattr(service, "emit_event", lambda *_a, **_k: None)
 
     ok, _msg, _stats = service._sync_onts_from_olt_snmp_impl(db_session, "olt-2")
@@ -439,9 +510,7 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
 
     ok, _msg, stats = service._sync_onts_from_olt_snmp_impl(db_session, str(olt.id))
 
-    pon = db_session.scalars(
-        select(PonPort).where(PonPort.olt_id == olt.id)
-    ).first()
+    pon = db_session.scalars(select(PonPort).where(PonPort.olt_id == olt.id)).first()
 
     assert ok is True
     assert stats["created"] == 0
@@ -456,9 +525,7 @@ def test_sync_impl_auto_created_pon_port_keeps_canonical_port_metadata(
     assert card_port.port_number == 0
 
 
-def test_sync_impl_repairs_existing_pon_port_metadata(
-    db_session, monkeypatch
-) -> None:
+def test_sync_impl_repairs_existing_pon_port_metadata(db_session, monkeypatch) -> None:
     fake_olt = SimpleNamespace(
         id=uuid4(),
         mgmt_ip="10.0.0.4",
@@ -572,7 +639,9 @@ def test_sync_impl_merges_duplicate_rows_for_same_card_port(
     card = OltCard(shelf_id=shelf.id, slot_number=2)
     db_session.add(card)
     db_session.flush()
-    card_port = OltCardPort(card_id=card.id, port_number=0, name="0/2/0", is_active=True)
+    card_port = OltCardPort(
+        card_id=card.id, port_number=0, name="0/2/0", is_active=True
+    )
     db_session.add(card_port)
     db_session.flush()
     linked_port = PonPort(
@@ -718,6 +787,42 @@ def test_get_device_summary_runtime_persistence_does_not_commit_when_requested(
     )
 
     assert committed["count"] == 0
+
+
+def test_persist_observed_runtime_does_not_overwrite_desired_wan_config(
+    db_session,
+) -> None:
+    ont_tr069_module = importlib.import_module("app.services.network.ont_tr069")
+    ont = OntUnit(
+        serial_number="ONT-DESIRED-WAN",
+        pppoe_username="desired-user",
+        wan_mode=WanMode.pppoe,
+        is_active=False,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    summary = ont_tr069_module.TR069Summary(
+        available=True,
+        system={"Serial": "ONT-DESIRED-WAN"},
+        wan={
+            "Username": "observed-user",
+            "Connection Type": "DHCP",
+            "Status": "Connected",
+            "WAN IP": "192.0.2.10",
+        },
+    )
+
+    ont_tr069_module.OntTR069._persist_observed_runtime(
+        db_session,
+        ont,
+        summary,
+        commit=False,
+    )
+
+    assert ont.pppoe_username == "desired-user"
+    assert ont.wan_mode == WanMode.pppoe
+    assert ont.observed_pppoe_status == "Connected"
+    assert ont.observed_wan_ip == "192.0.2.10"
 
 
 def test_repair_pon_ports_for_olt_repairs_assignment_derived_legacy_port(

@@ -75,12 +75,15 @@ def ont_has_acs_management(
     *,
     acs_last_inform_at: datetime | None = None,
 ) -> bool:
-    if getattr(ont, "tr069_acs_server_id", None) or getattr(ont, "tr069_acs_server", None):
+    if getattr(ont, "tr069_acs_server_id", None) or getattr(
+        ont, "tr069_acs_server", None
+    ):
         return True
 
     olt = getattr(ont, "olt_device", None)
     if olt is not None and (
-        getattr(olt, "tr069_acs_server_id", None) or getattr(olt, "tr069_acs_server", None)
+        getattr(olt, "tr069_acs_server_id", None)
+        or getattr(olt, "tr069_acs_server", None)
     ):
         return True
 
@@ -182,3 +185,21 @@ def apply_status_snapshot(ont: OntUnit, snapshot: OntStatusSnapshot) -> OntUnit:
     ont.effective_status_source = snapshot.effective_status_source
     ont.status_resolved_at = snapshot.status_resolved_at
     return ont
+
+
+def apply_resolved_status_for_model(
+    ont: OntUnit,
+    *,
+    now: datetime | None = None,
+    acs_last_inform_at: datetime | None = None,
+    online_window_minutes: int | None = None,
+) -> OntStatusSnapshot:
+    """Resolve and persist the ONT's derived status fields."""
+    snapshot = resolve_ont_status_for_model(
+        ont,
+        now=now,
+        acs_last_inform_at=acs_last_inform_at,
+        online_window_minutes=online_window_minutes,
+    )
+    apply_status_snapshot(ont, snapshot)
+    return snapshot

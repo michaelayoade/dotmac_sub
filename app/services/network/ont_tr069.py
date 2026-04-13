@@ -13,7 +13,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.models.network import OntUnit, WanMode
+from app.models.network import OntUnit
 from app.services.genieacs import GenieACSClient, GenieACSError
 from app.services.network._common import normalize_mac_address
 from app.services.network._resolve import resolve_genieacs
@@ -383,6 +383,53 @@ def _extract_object_instances(
     return results
 
 
+def _value_to_bool(value: Any) -> bool | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on", "enabled", "up"}:
+        return True
+    if text in {"0", "false", "no", "off", "disabled", "down"}:
+        return False
+    return None
+
+
+def _normalize_ethernet_ports(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add stable display keys while preserving raw TR-069 fields."""
+    normalized: list[dict[str, Any]] = []
+    for row in rows or []:
+        item = dict(row or {})
+        enable = item.get("Enable")
+        status = item.get("Status")
+        speed = item.get("MaxBitRate")
+        try:
+            speed_mbps = int(str(speed).strip()) if speed not in (None, "") else None
+        except (TypeError, ValueError):
+            speed_mbps = None
+        item.setdefault("port", item.get("index"))
+        item.setdefault("admin_enabled", _value_to_bool(enable))
+        item.setdefault("link_status", str(status or "unknown").strip() or "unknown")
+        item.setdefault("speed_mbps", speed_mbps)
+        item.setdefault("duplex", item.get("DuplexMode"))
+        item.setdefault("mac_address", normalize_mac_address(item.get("MACAddress")))
+        normalized.append(item)
+    return normalized
+
+
+def _normalize_lan_hosts(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Add stable display keys while preserving raw TR-069 fields."""
+    normalized: list[dict[str, Any]] = []
+    for row in rows or []:
+        item = dict(row or {})
+        item.setdefault("host_name", item.get("HostName") or "")
+        item.setdefault("ip_address", item.get("IPAddress") or "")
+        item.setdefault("mac_address", normalize_mac_address(item.get("MACAddress")))
+        item.setdefault("interface_type", item.get("InterfaceType") or "")
+        item.setdefault("active", _value_to_bool(item.get("Active")))
+        normalized.append(item)
+    return normalized
+
+
 class OntTR069:
     """Fetch and structure TR-069 parameters for ONT display."""
 
@@ -432,7 +479,9 @@ class OntTR069:
             logger.error("TR-069 fetch failed for ONT %s: %s", ont.serial_number, e)
             cached_summary = OntTR069._summary_from_snapshot(ont)
             if cached_summary:
-                cached_summary.error = f"Showing cached TR-069 snapshot. Live fetch failed: {e}"
+                cached_summary.error = (
+                    f"Showing cached TR-069 snapshot. Live fetch failed: {e}"
+                )
                 OntTR069._attach_recent_informs(db, ont, cached_summary)
                 OntTR069._attach_cached_parameters(db, ont, cached_summary)
                 return cached_summary
@@ -473,14 +522,14 @@ class OntTR069:
             ports_base = base_path.split(".{i}")[0] + "."
             ports = _extract_object_instances(device, ports_base, _ETH_FIELDS)
             if ports:
-                summary.ethernet_ports = ports
+                summary.ethernet_ports = _normalize_ethernet_ports(ports)
                 break
 
         # LAN hosts
         for hosts_path in [_HOSTS_PATH_IGD, _HOSTS_PATH_DEV]:
             hosts = _extract_object_instances(device, hosts_path, _HOST_FIELDS)
             if hosts:
-                summary.lan_hosts = hosts
+                summary.lan_hosts = _normalize_lan_hosts(hosts)
                 break
 
         # Format uptime if present
@@ -626,9 +675,8 @@ class OntTR069:
                     ".wlanconfiguration." in lowered or ".wifi.ssid." in lowered
                 ):
                     OntTR069._set_missing(summary.wireless, "SSID", value)
-                elif (
-                    lowered.endswith(".totalassociations")
-                    or lowered.endswith(".associateddevicenumberofentries")
+                elif lowered.endswith(".totalassociations") or lowered.endswith(
+                    ".associateddevicenumberofentries"
                 ):
                     OntTR069._set_missing(
                         summary.wireless,
@@ -673,8 +721,10 @@ class OntTR069:
             wan=dict(snapshot.get("wan") or {}),
             lan=dict(snapshot.get("lan") or {}),
             wireless=dict(snapshot.get("wireless") or {}),
-            ethernet_ports=list(snapshot.get("ethernet_ports") or []),
-            lan_hosts=list(snapshot.get("lan_hosts") or []),
+            ethernet_ports=_normalize_ethernet_ports(
+                list(snapshot.get("ethernet_ports") or [])
+            ),
+            lan_hosts=_normalize_lan_hosts(list(snapshot.get("lan_hosts") or [])),
             available=True,
             source="cache",
             fetched_at=fetched_at
@@ -769,43 +819,9 @@ class OntTR069:
         mac_address = OntTR069._choose_mac_address(summary)
 
         wan_ip = str(summary.wan.get("WAN IP") or "").strip() if summary.wan else ""
-        pppoe_user = (
-            str(summary.wan.get("Username") or "").strip() if summary.wan else ""
-        )
         pppoe_status = (
             str(summary.wan.get("Status") or "").strip() if summary.wan else ""
         )
-        raw_wan_mode = (
-            str(summary.wan.get("Connection Type") or "").strip() if summary.wan else ""
-        )
-        wan_mode = ""
-        if raw_wan_mode:
-            normalized = (
-                raw_wan_mode.lower().replace(" ", "").replace("-", "").replace("_", "")
-            )
-            pppoe_mode = WanMode.pppoe.value if hasattr(WanMode, "pppoe") else ""
-            dhcp_mode = WanMode.dhcp.value if hasattr(WanMode, "dhcp") else ""
-            static_mode = (
-                WanMode.static.value
-                if hasattr(WanMode, "static")
-                else (WanMode.static_ip.value if hasattr(WanMode, "static_ip") else "")
-            )
-            wan_mode_map = {
-                "pppoe": pppoe_mode,
-                "dhcp": dhcp_mode,
-                "static": static_mode,
-                "bridge": (
-                    WanMode.bridge.value
-                    if hasattr(WanMode, "bridge")
-                    else (WanMode.bridged.value if hasattr(WanMode, "bridged") else "")
-                ),
-                "bridged": (
-                    WanMode.bridged.value
-                    if hasattr(WanMode, "bridged")
-                    else (WanMode.bridge.value if hasattr(WanMode, "bridge") else "")
-                ),
-            }
-            wan_mode = wan_mode_map.get(normalized, "")
 
         wifi_clients = OntTR069._to_int(
             summary.wireless.get("Connected Clients") if summary.wireless else None
@@ -833,12 +849,8 @@ class OntTR069:
             ont.mac_address = mac_address
         if wan_ip:
             ont.observed_wan_ip = wan_ip
-        if pppoe_user:
-            ont.pppoe_username = pppoe_user
         if pppoe_status:
             ont.observed_pppoe_status = pppoe_status
-        if wan_mode:
-            ont.wan_mode = wan_mode
         if lan_mode:
             ont.observed_lan_mode = lan_mode
         if wifi_clients is not None:
@@ -889,7 +901,7 @@ class OntTR069:
         for hosts_path in [_HOSTS_PATH_IGD, _HOSTS_PATH_DEV]:
             hosts = _extract_object_instances(device, hosts_path, _HOST_FIELDS)
             if hosts:
-                return hosts
+                return _normalize_lan_hosts(hosts)
         return []
 
     @staticmethod
@@ -921,7 +933,7 @@ class OntTR069:
             ports_base = base_path.split(".{i}")[0] + "."
             ports = _extract_object_instances(device, ports_base, _ETH_FIELDS)
             if ports:
-                return ports
+                return _normalize_ethernet_ports(ports)
         return []
 
 

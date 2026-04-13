@@ -2550,7 +2550,7 @@ def test_ont_tr069_persists_observed_runtime_fields(db_session, monkeypatch):
     assert refreshed is not None
     assert refreshed.mac_address == "AA:AA:AA:AA:AA:AA"
     assert refreshed.observed_wan_ip == "100.64.10.5"
-    assert refreshed.pppoe_username == "subscriber001"
+    assert refreshed.pppoe_username is None
     assert refreshed.observed_pppoe_status == "Up"
     assert refreshed.observed_wifi_clients == 5
     assert refreshed.observed_lan_hosts == 12
@@ -2648,6 +2648,10 @@ def test_ont_tr069_uses_cached_snapshot_when_live_fetch_fails(db_session, monkey
     assert summary.source == "cache"
     assert summary.wan["WAN IP"] == "172.16.1.10"
     assert summary.wireless["SSID"] == "DotMac"
+    assert summary.ethernet_ports[0]["link_status"] == "Up"
+    assert summary.ethernet_ports[0]["port"] == 1
+    assert summary.lan_hosts[0]["host_name"] == "phone"
+    assert summary.lan_hosts[0]["ip_address"] == "192.168.1.10"
     assert summary.raw_device == {
         "Device": {"DeviceInfo": {"ModelName": {"_value": "EG8145V5"}}}
     }

@@ -16,6 +16,7 @@ from app.services.network.huawei_snmp import (
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_monitoring_devices import resolve_snmp_target_for_olt
 from app.services.network.olt_polling import reconcile_snmp_status_with_signal
+from app.services.network.ont_status import apply_resolved_status_for_model
 from app.services.network.snmp_walk import run_simple_v2c_walk
 
 
@@ -213,7 +214,10 @@ def sync_authorized_ont_from_olt_snmp(
                 return (
                     False,
                     f"SNMP sync found {external_id}, but it belongs to another ONT record.",
-                    {"matched_index": matched_index, "conflict_ont_id": str(conflict.id)},
+                    {
+                        "matched_index": matched_index,
+                        "conflict_ont_id": str(conflict.id),
+                    },
                 )
 
         ont.olt_device_id = olt.id
@@ -226,11 +230,14 @@ def sync_authorized_ont_from_olt_snmp(
         ont.distance_meters = distance
         ont.signal_updated_at = now
         ont.last_seen_at = now if status == OnuOnlineStatus.online else ont.last_seen_at
-        ont.offline_reason = None if status == OnuOnlineStatus.online else offline_reason
+        ont.offline_reason = (
+            None if status == OnuOnlineStatus.online else offline_reason
+        )
         ont.last_sync_source = "olt_snmp_targeted"
         ont.last_sync_at = now
         if ont.tr069_acs_server_id is None:
             ont.tr069_acs_server_id = olt.tr069_acs_server_id
+        apply_resolved_status_for_model(ont, now=now)
         db.commit()
     except Exception as exc:
         db.rollback()

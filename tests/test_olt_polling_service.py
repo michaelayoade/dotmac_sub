@@ -445,7 +445,7 @@ def test_mark_stale_huawei_numeric_external_id_unknown_not_los(db_session) -> No
     marked = _mark_stale_onts_offline(db_session, stale_threshold_minutes=10)
 
     db_session.refresh(ont)
-    assert marked == 0
+    assert marked == 1
     assert ont.online_status == OnuOnlineStatus.unknown
     assert ont.effective_status == OnuOnlineStatus.unknown
     assert ont.effective_status_source == OntStatusSource.derived

@@ -929,6 +929,7 @@ def create_or_find_ont_for_authorized_serial(
 ) -> tuple[str | None, str]:
     """Create or find an OntUnit for a just-authorized ONT serial."""
     from app.models.ont_autofind import OltAutofindCandidate
+    from app.services.network.ont_status import apply_resolved_status_for_model
 
     clean_serial = re.sub(r"[^A-Za-z0-9]", "", serial_number).upper()
     olt = get_olt_or_none(db, olt_id)
@@ -962,6 +963,7 @@ def create_or_find_ont_for_authorized_serial(
             if existing.tr069_acs_server_id is None:
                 if olt is not None:
                     existing.tr069_acs_server_id = olt.tr069_acs_server_id
+            apply_resolved_status_for_model(existing)
             db.commit()
             return str(
                 existing.id
@@ -1015,6 +1017,7 @@ def create_or_find_ont_for_authorized_serial(
     )
     try:
         db.add(new_ont)
+        apply_resolved_status_for_model(new_ont)
         db.commit()
     except SQLAlchemyError as exc:
         db.rollback()

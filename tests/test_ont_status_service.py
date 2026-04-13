@@ -5,6 +5,7 @@ from app.models.network import OntStatusSource, OntUnit, OnuOnlineStatus
 from app.services import network as network_service
 from app.services.network.ont_status import (
     OntAcsStatus,
+    apply_resolved_status_for_model,
     apply_status_snapshot,
     ont_has_acs_management,
     resolve_acs_online_window_minutes_for_model,
@@ -66,6 +67,21 @@ def test_apply_status_snapshot_updates_ont_fields() -> None:
     assert ont.acs_last_inform_at == now
     assert ont.effective_status == OnuOnlineStatus.online
     assert ont.effective_status_source == OntStatusSource.acs
+    assert ont.status_resolved_at == now
+
+
+def test_apply_resolved_status_for_model_persists_effective_snapshot() -> None:
+    ont = OntUnit(
+        serial_number="ONT-STATUS-RESOLVED",
+        online_status=OnuOnlineStatus.online,
+    )
+    now = datetime.now(UTC)
+
+    snapshot = apply_resolved_status_for_model(ont, now=now)
+
+    assert snapshot.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.olt
     assert ont.status_resolved_at == now
 
 

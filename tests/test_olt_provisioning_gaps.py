@@ -22,6 +22,7 @@ from app.models.network import (
     OLTDevice,
     OntAssignment,
     OntProvisioningProfile,
+    OntStatusSource,
     OntUnit,
     OnuOnlineStatus,
     PonPort,
@@ -255,6 +256,8 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     ont = db_session.get(OntUnit, candidate.ont_unit_id)
     assert ont is not None
     assert ont.online_status == OnuOnlineStatus.online
+    assert ont.effective_status == OnuOnlineStatus.online
+    assert ont.effective_status_source == OntStatusSource.olt
     assert ont.offline_reason is None
     assert ont.last_seen_at is not None
     assert ont.last_sync_source == "olt_ssh_readback"
