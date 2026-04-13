@@ -1002,6 +1002,268 @@ def diagnostics_config_context(db: Session, ont_id: str) -> dict[str, object]:
     }
 
 
+def _intent_step_present(ont_plan: dict[str, Any], step_name: str) -> bool:
+    section = ont_plan.get(step_name)
+    return isinstance(section, dict) and any(
+        value not in (None, "", []) for value in section.values()
+    )
+
+
+def _runbook_step(
+    *,
+    order: int,
+    title: str,
+    source: str,
+    status: str,
+    message: str,
+    action_label: str | None = None,
+    action_url: str | None = None,
+    method: str = "GET",
+    confirm: str | None = None,
+    loading_label: str | None = None,
+    target: str | None = None,
+    swap: str = "innerHTML",
+    group: str = "Provisioning",
+) -> dict[str, object]:
+    return {
+        "order": order,
+        "title": title,
+        "source": source,
+        "status": status,
+        "message": message,
+        "action_label": action_label,
+        "action_url": action_url,
+        "method": method,
+        "confirm": confirm,
+        "loading_label": loading_label,
+        "target": target,
+        "swap": swap,
+        "group": group,
+    }
+
+
+def _build_ont_operations_runbook(
+    *,
+    ont: OntUnit | None,
+    olt: OLTDevice | None,
+    fsp: str | None,
+    ont_id_on_olt: int | None,
+    linked_tr069: Tr069CpeDevice | None,
+    service_intent: dict[str, object],
+    ont_plan: dict[str, Any],
+    snapshots: list[object],
+) -> list[dict[str, object]]:
+    if not ont:
+        return []
+
+    ont_id = str(ont.id)
+    has_olt_context = bool(olt and fsp and ont_id_on_olt is not None)
+    has_acs_device = bool(linked_tr069 and linked_tr069.genieacs_device_id)
+    has_cr_url = bool(linked_tr069 and linked_tr069.connection_request_url)
+    intent_complete = bool(service_intent.get("is_complete"))
+    missing_count = int(service_intent.get("missing_count") or 0)
+    has_service_path_intent = _intent_step_present(ont_plan, "create_service_port")
+    has_mgmt_intent = bool(
+        getattr(ont, "mgmt_vlan_id", None)
+        or getattr(ont, "mgmt_ip_mode", None)
+        or _intent_step_present(ont_plan, "configure_management_ip")
+    )
+    has_wan_intent = bool(
+        getattr(ont, "wan_vlan_id", None)
+        or getattr(ont, "wan_mode", None)
+        or _intent_step_present(ont_plan, "configure_wan_tr069")
+    )
+    has_pppoe_intent = bool(
+        getattr(ont, "pppoe_username", None)
+        or _intent_step_present(ont_plan, "push_pppoe_tr069")
+        or _intent_step_present(ont_plan, "push_pppoe_omci")
+    )
+    has_lan_intent = _intent_step_present(ont_plan, "configure_lan_tr069")
+    has_wifi_intent = _intent_step_present(ont_plan, "configure_wifi_tr069")
+    has_running_snapshot = bool(snapshots)
+
+    return [
+        _runbook_step(
+            order=1,
+            title="OLT placement",
+            source="OLT",
+            status="complete" if has_olt_context else "blocked",
+            message=(
+                f"{getattr(olt, 'name', 'OLT')} / {fsp} / ONT {ont_id_on_olt}"
+                if has_olt_context
+                else "Set OLT, F/S/P, and OLT ONT-ID before access actions."
+            ),
+            action_label="Rediscover",
+            action_url=f"/admin/network/onts/{ont_id}/reconcile",
+            method="POST",
+            confirm="Run OLT/ACS reconciliation for this ONT?",
+            loading_label="Reconciling...",
+            target="#operational-health-container",
+        ),
+        _runbook_step(
+            order=2,
+            title="Service intent",
+            source="Local intent",
+            status="complete" if intent_complete else "blocked",
+            message=(
+                "Management, internet, LAN, WiFi, and service path intent are set."
+                if intent_complete
+                else f"{missing_count} intent fields are unset."
+            ),
+            action_label="Edit intent",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+        _runbook_step(
+            order=3,
+            title="OLT service path",
+            source="OLT SSH",
+            status="ready" if has_olt_context and has_service_path_intent else "blocked",
+            message=(
+                "Ready to create or verify service-port/VLAN path."
+                if has_olt_context and has_service_path_intent
+                else "Set internet VLAN/service-port intent and confirm OLT placement."
+            ),
+            action_label="Service ports",
+            action_url=f"/admin/network/onts/{ont_id}?tab=service-ports",
+        ),
+        _runbook_step(
+            order=4,
+            title="Management access",
+            source="OLT SSH",
+            status="ready" if has_olt_context and has_mgmt_intent else "blocked",
+            message=(
+                "Management VLAN/IP intent is ready to apply or verify."
+                if has_olt_context and has_mgmt_intent
+                else "Set management VLAN and IP method first."
+            ),
+            action_label="Management intent",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+        _runbook_step(
+            order=5,
+            title="ACS inform",
+            source="ACS",
+            status="complete"
+            if has_acs_device
+            else "waiting"
+            if getattr(ont, "tr069_acs_server_id", None)
+            or getattr(olt, "tr069_acs_server_id", None)
+            else "blocked",
+            message=(
+                f"ACS device {linked_tr069.genieacs_device_id}"
+                if has_acs_device and linked_tr069
+                else "Waiting for ONT to inform ACS."
+                if getattr(ont, "tr069_acs_server_id", None)
+                or getattr(olt, "tr069_acs_server_id", None)
+                else "Bind an ACS profile before waiting for inform."
+            ),
+            action_label="Wait for inform",
+            action_url=f"/admin/network/onts/{ont_id}/step/wait-tr069-bootstrap",
+            method="POST",
+            confirm="Queue an ACS bootstrap wait for this ONT?",
+            loading_label="Waiting...",
+            target=None,
+            swap="none",
+        ),
+        _runbook_step(
+            order=6,
+            title="ACS connection request",
+            source="ACS",
+            status="ready" if has_cr_url else "blocked",
+            message="Connection request URL captured." if has_cr_url else "No connection request URL captured yet.",
+            action_label="Force inform",
+            action_url=f"/admin/network/onts/{ont_id}/connection-request",
+            method="POST",
+            confirm="Send a TR-069 connection request to this ONT?",
+            loading_label="Sending...",
+            target=None,
+            swap="none",
+        ),
+        _runbook_step(
+            order=7,
+            title="WAN service",
+            source="ACS",
+            status="ready" if has_acs_device and has_wan_intent else "blocked",
+            message=(
+                "WAN method/VLAN intent is ready to apply from the config tab."
+                if has_acs_device and has_wan_intent
+                else "Set WAN method/VLAN intent and wait for ACS reachability."
+            ),
+            action_label="WAN intent",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+        _runbook_step(
+            order=8,
+            title="PPPoE/static credentials",
+            source="ACS",
+            status="ready" if has_acs_device and has_pppoe_intent else "blocked",
+            message=(
+                "Credentials or static addressing intent is ready to apply."
+                if has_acs_device and has_pppoe_intent
+                else "Set PPPoE/static addressing intent first."
+            ),
+            action_label="Internet credentials",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+        _runbook_step(
+            order=9,
+            title="LAN and DHCP",
+            source="ACS",
+            status="ready" if has_acs_device and has_lan_intent else "blocked",
+            message=(
+                "LAN gateway and DHCP intent is ready to apply."
+                if has_acs_device and has_lan_intent
+                else "Set LAN gateway/DHCP intent and wait for ACS reachability."
+            ),
+            action_label="LAN intent",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+        _runbook_step(
+            order=10,
+            title="WiFi",
+            source="ACS",
+            status="ready" if has_acs_device and has_wifi_intent else "blocked",
+            message=(
+                "WiFi intent is ready to apply."
+                if has_acs_device and has_wifi_intent
+                else "Set WiFi intent and wait for ACS reachability."
+            ),
+            action_label="WiFi intent",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+        _runbook_step(
+            order=11,
+            title="Running config snapshot",
+            source="ACS read",
+            status="complete" if has_running_snapshot else "ready" if has_acs_device else "blocked",
+            message=(
+                f"{len(snapshots)} snapshot(s) captured."
+                if has_running_snapshot
+                else "Capture running config after ACS is reachable."
+            ),
+            action_label="Capture snapshot",
+            action_url=f"/admin/network/onts/{ont_id}/config-snapshot",
+            method="POST",
+            confirm="Capture current running config from this ONT?",
+            loading_label="Capturing...",
+            target="#snapshot-list",
+        ),
+        _runbook_step(
+            order=12,
+            title="Intent verification",
+            source="Intent vs running",
+            status="ready" if has_running_snapshot and intent_complete else "blocked",
+            message=(
+                "Ready to compare desired intent with captured running state."
+                if has_running_snapshot and intent_complete
+                else "Complete service intent and capture running config first."
+            ),
+            action_label="Review config",
+            action_url=f"/admin/network/onts/{ont_id}?tab=configuration",
+        ),
+    ]
+
+
 def operational_health_context(
     db: Session,
     ont_id: str,
@@ -1030,6 +1292,28 @@ def operational_health_context(
         snapshots = _config_snapshot_service().list_for_ont(db, ont_id, limit=limit)
     except HTTPException:
         snapshots = []
+    try:
+        from app.services.network.ont_service_intent import (
+            build_service_intent,
+            load_ont_plan_for_ont,
+        )
+
+        ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
+        service_intent = build_service_intent(ont, ont_plan=ont_plan) if ont else {}
+    except Exception:
+        logger.exception("Failed to build operations runbook intent for ONT %s", ont_id)
+        ont_plan = {}
+        service_intent = {}
+    operations_runbook = _build_ont_operations_runbook(
+        ont=ont,
+        olt=olt,
+        fsp=fsp,
+        ont_id_on_olt=ont_id_on_olt,
+        linked_tr069=linked_tr069,
+        service_intent=service_intent,
+        ont_plan=ont_plan,
+        snapshots=snapshots,
+    )
 
     checks = [
         {
@@ -1081,6 +1365,7 @@ def operational_health_context(
         "operational_checks": checks,
         "operation_message": message,
         "operation_message_type": message_type,
+        "operations_runbook": operations_runbook,
         "config_snapshots": snapshots,
         "return_impact": {
             "service_ports": "OLT service ports will be removed when reachable.",
