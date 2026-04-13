@@ -401,6 +401,42 @@ def ont_set_wifi_password(
 
 
 @router.post(
+    "/onts/{ont_id}/wifi-config",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_wifi_config(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Set WiFi radio, SSID, security, channel, and password via TR-069."""
+    form = parse_form_data_sync(request)
+    enabled_raw = _form_str(form, "enabled").strip().lower()
+    enabled = None
+    if enabled_raw:
+        enabled = enabled_raw in {"true", "1", "yes", "on", "enabled"}
+    channel_raw = _form_str(form, "channel").strip()
+    channel = int(channel_raw) if channel_raw.isdigit() else None
+    result = web_network_ont_actions_service.set_wifi_config(
+        db,
+        ont_id,
+        enabled=enabled,
+        ssid=_form_str(form, "ssid").strip() or None,
+        password=_form_str(form, "password").strip() or None,
+        channel=channel,
+        security_mode=_form_str(form, "security_mode").strip() or None,
+        request=request,
+    )
+    status_code = 200 if result.success else 400
+    headers = _toast_headers(result.message, "success" if result.success else "error")
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post(
     "/onts/{ont_id}/lan-port",
     dependencies=[Depends(require_permission("network:write"))],
 )
@@ -469,6 +505,38 @@ def ont_set_lan_config(
         dhcp_enabled=dhcp_enabled,
         dhcp_start=dhcp_start,
         dhcp_end=dhcp_end,
+        request=request,
+    )
+    status_code = 200 if result.success else 400
+    headers = _toast_headers(result.message, "success" if result.success else "error")
+    return JSONResponse(
+        {"success": result.success, "message": result.message},
+        status_code=status_code,
+        headers=headers,
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/wan-config",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_set_wan_config(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Set WAN mode, VLAN, and static IP settings via GenieACS TR-069."""
+    form = parse_form_data_sync(request)
+    vlan_raw = _form_str(form, "wan_vlan").strip()
+    instance_raw = _form_str(form, "instance_index", "1").strip()
+    result = web_network_ont_actions_service.configure_wan_config(
+        db,
+        ont_id,
+        wan_mode=_form_str(form, "wan_mode", "pppoe").strip() or "pppoe",
+        wan_vlan=int(vlan_raw) if vlan_raw.isdigit() else None,
+        ip_address=_form_str(form, "ip_address").strip() or None,
+        subnet_mask=_form_str(form, "subnet_mask").strip() or None,
+        gateway=_form_str(form, "gateway").strip() or None,
+        dns_servers=_form_str(form, "dns_servers").strip() or None,
+        instance_index=int(instance_raw) if instance_raw.isdigit() else 1,
         request=request,
     )
     status_code = 200 if result.success else 400

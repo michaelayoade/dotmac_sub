@@ -77,6 +77,80 @@
 </div>
 {% endif %}
 
+{# WAN Mode Form #}
+{% set current_wan_mode = 'pppoe' %}
+{% set conn_type_value = (wan_info.get('Connection Type') or '') if wan_info else '' %}
+{% if 'dhcp' in conn_type_value|lower %}
+{% set current_wan_mode = 'dhcp' %}
+{% elif 'static' in conn_type_value|lower %}
+{% set current_wan_mode = 'static' %}
+{% elif 'bridge' in conn_type_value|lower %}
+{% set current_wan_mode = 'bridge' %}
+{% endif %}
+{% set current_wan_ip = wan_info.get('WAN IP') or wan_info.get('External IP') or wan_info.get('ExternalIPAddress') if wan_info else '' %}
+{% set current_gateway = wan_info.get('Gateway') or wan_info.get('Default Gateway') or wan_info.get('DefaultGateway') if wan_info else '' %}
+{% set current_dns = wan_info.get('DNS Servers') or wan_info.get('DNSServers') if wan_info else '' %}
+<div class="mb-4 rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
+     x-data="{ wanMode: '{{ current_wan_mode }}' }">
+    <h4 class="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Configure WAN</h4>
+    <form hx-post="/admin/network/onts/{{ ont_id }}/wan-config"
+          hx-swap="none"
+          class="space-y-4">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">WAN Mode</label>
+                <select name="wan_mode" x-model="wanMode" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="pppoe">PPPoE</option>
+                    <option value="dhcp">DHCP</option>
+                    <option value="static">Static</option>
+                    <option value="bridge">Bridge</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Internet VLAN</label>
+                <select name="wan_vlan" class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <option value="">Leave unchanged</option>
+                    {% for vlan in vlans or [] %}
+                    <option value="{{ vlan.tag }}">VLAN {{ vlan.tag }} &mdash; {{ vlan.name or 'Unnamed' }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">WAN Instance</label>
+                <input type="number" name="instance_index" value="1" min="1" max="16"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        <div x-show="wanMode === 'static'" x-transition x-cloak class="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Static IP</label>
+                <input type="text" name="ip_address" value="{{ current_wan_ip or '' }}" placeholder="172.16.203.50"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subnet Mask</label>
+                <input type="text" name="subnet_mask" placeholder="255.255.255.0"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Gateway</label>
+                <input type="text" name="gateway" value="{{ current_gateway or '' }}" placeholder="172.16.203.1"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+            <div>
+                <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">DNS Servers</label>
+                <input type="text" name="dns_servers" value="{{ current_dns or '' }}" placeholder="8.8.8.8, 1.1.1.1"
+                       class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            </div>
+        </div>
+        <button type="submit"
+                class="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
+            Apply WAN Settings
+        </button>
+    </form>
+</div>
+
 {# PPPoE Credentials Form #}
 <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800"
      x-data="{ showPassword: false }">

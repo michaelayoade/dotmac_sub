@@ -10,7 +10,9 @@ def test_ont_actions_facade_exposes_split_methods() -> None:
     assert callable(OntActions.reboot)
     assert callable(OntActions.get_running_config)
     assert callable(OntActions.set_wifi_ssid)
+    assert callable(OntActions.set_wifi_config)
     assert callable(OntActions.set_pppoe_credentials)
+    assert callable(OntActions.configure_wan_config)
     assert callable(OntActions.set_lan_config)
     assert callable(OntActions.run_ping_diagnostic)
 
@@ -111,6 +113,61 @@ def test_set_lan_config_pushes_dhcp_server_range(monkeypatch) -> None:
                 "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.DHCPServerEnable": "true",
                 "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MinAddress": "192.168.10.10",
                 "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.MaxAddress": "192.168.10.200",
+            },
+        )
+    ]
+
+
+def test_configure_wan_config_pushes_static_igd_paths(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class FakeClient:
+        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+            calls.append((device_id, params))
+            return {"queued": True}
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_network,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_network,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_network, "persist_data_model_root", lambda *_: None)
+
+    result = ont_action_network.configure_wan_config(
+        None,
+        "ont-1",
+        wan_mode="static",
+        wan_vlan=203,
+        ip_address="172.16.203.50",
+        subnet_mask="255.255.255.0",
+        gateway="172.16.203.1",
+        dns_servers="8.8.8.8,1.1.1.1",
+    )
+
+    assert result.success is True
+    assert calls == [
+        (
+            "device-1",
+            {
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.Enable": "1",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ConnectionType": "IP_Routed",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.AddressingType": "Static",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.ExternalIPAddress": "172.16.203.50",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.SubnetMask": "255.255.255.0",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DefaultGateway": "172.16.203.1",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.DNSServers": "8.8.8.8,1.1.1.1",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1.WANIPConnection.1.X_HW_VLAN": "203",
             },
         )
     ]

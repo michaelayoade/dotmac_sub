@@ -292,6 +292,43 @@ def set_wifi_password(
     return result
 
 
+def set_wifi_config(
+    db: Session,
+    ont_id: str,
+    *,
+    enabled: bool | None = None,
+    ssid: str | None = None,
+    password: str | None = None,
+    channel: int | None = None,
+    security_mode: str | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Set WiFi radio, SSID, security, and password fields."""
+    result = OntActions.set_wifi_config(
+        db,
+        ont_id,
+        enabled=enabled,
+        ssid=ssid,
+        password=password,
+        channel=channel,
+        security_mode=security_mode,
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="set_wifi_config",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "enabled": enabled,
+            "ssid": ssid,
+            "channel": channel,
+            "security_mode": security_mode,
+        },
+    )
+    return result
+
+
 def toggle_lan_port(
     db: Session,
     ont_id: str,
@@ -349,6 +386,46 @@ def set_lan_config(
             "dhcp_enabled": dhcp_enabled,
             "dhcp_start": dhcp_start,
             "dhcp_end": dhcp_end,
+        },
+    )
+    return result
+
+
+def configure_wan_config(
+    db: Session,
+    ont_id: str,
+    *,
+    wan_mode: str,
+    wan_vlan: int | None = None,
+    ip_address: str | None = None,
+    subnet_mask: str | None = None,
+    gateway: str | None = None,
+    dns_servers: str | None = None,
+    instance_index: int = 1,
+    request: Request | None = None,
+) -> ActionResult:
+    """Set WAN mode, VLAN, and static IP fields via GenieACS TR-069."""
+    result = OntActions.configure_wan_config(
+        db,
+        ont_id,
+        wan_mode=wan_mode,
+        wan_vlan=wan_vlan,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
+    )
+    _log_action_audit(
+        db,
+        request=request,
+        action="configure_wan_config",
+        ont_id=ont_id,
+        metadata={
+            "success": result.success,
+            "wan_mode": wan_mode,
+            "wan_vlan": wan_vlan,
+            "instance_index": instance_index,
         },
     )
     return result
@@ -650,7 +727,9 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
 
 def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services import web_network_ont_tr069 as web_tr069_service
+    from app.services import web_network_onts as web_network_onts_service
 
+    ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     tr069_data = web_tr069_service.tr069_tab_data(db, ont_id)
     tr069 = tr069_data.get("tr069")
     wan = getattr(tr069, "wan", None) if tr069 else None
@@ -659,6 +738,7 @@ def wan_config_context(db: Session, ont_id: str) -> dict[str, object]:
         "tr069_available": bool(getattr(tr069, "available", False)) if tr069 else False,
         "wan_info": wan,
         "current_pppoe_user": (wan or {}).get("Username"),
+        "vlans": web_network_onts_service.get_vlans_for_ont(db, ont),
     }
 
 

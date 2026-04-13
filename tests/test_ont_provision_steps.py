@@ -87,9 +87,7 @@ class TestCreateServicePort:
         db_session.commit()
         db_session.refresh(ont)
 
-        assignment = OntAssignment(
-            ont_unit_id=ont.id, pon_port_id=pon.id, active=True
-        )
+        assignment = OntAssignment(ont_unit_id=ont.id, pon_port_id=pon.id, active=True)
         db_session.add(assignment)
         db_session.commit()
 
@@ -206,9 +204,7 @@ class TestValidatePrerequisites:
         )
         assert tr069_check["status"] == "ok"
         assert "dynamically" in tr069_check["message"]
-        assert "PPPoE credential" not in {
-            check["name"] for check in result["checks"]
-        }
+        assert "PPPoE credential" not in {check["name"] for check in result["checks"]}
         assert result["ready"] is True
 
 
@@ -289,6 +285,7 @@ class TestWaitTr069Bootstrap:
         assert "Failed to queue TR-069 bootstrap polling" in result.message
         mark_failed.assert_called_once()
 
+
 class TestPushPppoeOmci:
     """Test push_pppoe_omci step."""
 
@@ -363,6 +360,53 @@ class TestPushPppoeTr069:
 
         assert result.waiting is True
         assert result.data == {"task_id": "task-123", "delivery": "queued"}
+
+
+class TestConfigureWanTr069:
+    """Test configure_wan_tr069 step."""
+
+    def test_delegates_to_ont_action(self, db_session) -> None:
+        from app.services.network.ont_provision_steps import configure_wan_tr069
+
+        mock_result = SimpleNamespace(
+            success=True,
+            waiting=False,
+            message="WAN config updated",
+            data={"queued": True},
+        )
+        ont_id = str(uuid.uuid4())
+
+        with patch(
+            "app.services.network.ont_action_network.configure_wan_config",
+            return_value=mock_result,
+        ) as configure_wan_config:
+            result = configure_wan_tr069(
+                db_session,
+                ont_id,
+                wan_mode="static",
+                wan_vlan="203",
+                ip_address="172.16.203.50",
+                subnet_mask="255.255.255.0",
+                gateway="172.16.203.1",
+                dns_servers="8.8.8.8,1.1.1.1",
+                instance_index=2,
+            )
+
+        assert result.success is True
+        assert result.step_name == "configure_wan_tr069"
+        assert result.critical is False
+        assert result.data == {"queued": True}
+        configure_wan_config.assert_called_once_with(
+            db_session,
+            ont_id,
+            wan_mode="static",
+            wan_vlan=203,
+            ip_address="172.16.203.50",
+            subnet_mask="255.255.255.0",
+            gateway="172.16.203.1",
+            dns_servers="8.8.8.8,1.1.1.1",
+            instance_index=2,
+        )
 
 
 class TestRollbackServicePorts:

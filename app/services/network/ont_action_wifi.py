@@ -23,6 +23,21 @@ _WIFI_SSID_PATHS = {
     "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.SSID",
 }
 
+_WIFI_ENABLE_PATHS = {
+    "Device": "WiFi.SSID.1.Enable",
+    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.Enable",
+}
+
+_WIFI_CHANNEL_PATHS = {
+    "Device": "WiFi.Radio.1.Channel",
+    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.Channel",
+}
+
+_WIFI_SECURITY_PATHS = {
+    "Device": "WiFi.AccessPoint.1.Security.ModeEnabled",
+    "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.BeaconType",
+}
+
 _WIFI_PSK_PATHS = {
     "Device": [
         "WiFi.AccessPoint.1.Security.KeyPassphrase",
@@ -144,6 +159,81 @@ def set_wifi_password(db: Session, ont_id: str, password: str) -> ActionResult:
         return ActionResult(
             success=False, message=f"Failed to set WiFi password: {exc}"
         )
+
+
+def set_wifi_config(
+    db: Session,
+    ont_id: str,
+    *,
+    enabled: bool | None = None,
+    ssid: str | None = None,
+    password: str | None = None,
+    channel: int | None = None,
+    security_mode: str | None = None,
+) -> ActionResult:
+    """Set common WiFi radio/SSID/security fields via TR-069."""
+    if ssid is not None and (not ssid or len(ssid) > 32):
+        return ActionResult(success=False, message="SSID must be 1-32 characters.")
+    if password is not None and len(password) < 8:
+        return ActionResult(
+            success=False, message="WiFi password must be at least 8 characters."
+        )
+    if channel is not None and not 0 <= channel <= 196:
+        return ActionResult(success=False, message="WiFi channel is out of range.")
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+
+    params: dict[str, str] = {}
+    changed: list[str] = []
+    if enabled is not None:
+        params[_WIFI_ENABLE_PATHS[root]] = "true" if enabled else "false"
+        changed.append("enabled" if enabled else "disabled")
+    if ssid is not None:
+        params[_WIFI_SSID_PATHS[root]] = ssid
+        changed.append(f"SSID {ssid}")
+    if channel is not None:
+        params[_WIFI_CHANNEL_PATHS[root]] = str(channel)
+        changed.append(f"channel {channel}")
+    if security_mode:
+        params[_WIFI_SECURITY_PATHS[root]] = security_mode
+        changed.append(f"security {security_mode}")
+
+    if not params and password is None:
+        return ActionResult(
+            success=False, message="At least one WiFi setting is required."
+        )
+
+    try:
+        result: dict[str, object] = {}
+        if params:
+            result = client.set_parameter_values(
+                device_id, build_tr069_params(root, params)
+            )
+            _request_runtime_refresh(client, device_id, root)
+        if password is not None:
+            result = _set_first_supported_path(
+                client,
+                device_id,
+                root,
+                _WIFI_PSK_PATHS[root],
+                password,
+            )
+            changed.append("password")
+        logger.info("WiFi config set on ONT %s: %s", ont.serial_number, changed)
+        return ActionResult(
+            success=True,
+            message=f"WiFi config updated on {ont.serial_number}: {', '.join(changed)}.",
+            data=result,
+        )
+    except GenieACSError as exc:
+        logger.error("Set WiFi config failed for ONT %s: %s", ont.serial_number, exc)
+        return ActionResult(success=False, message=f"Failed to set WiFi config: {exc}")
 
 
 def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> ActionResult:

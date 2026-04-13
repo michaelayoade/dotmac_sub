@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 
+from app.services import web_network_core_devices_views as core_devices_views
 from app.services.genieacs import GenieACSError
 from app.services.network import ont_action_wifi
-from app.services import web_network_core_devices_views as core_devices_views
 
 
 def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
@@ -49,6 +49,54 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
         "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
     ]
     assert refresh_calls == [("device-1", "InternetGatewayDevice.", True)]
+
+
+def test_set_wifi_config_pushes_radio_ssid_channel_and_security(monkeypatch) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+
+    class FakeClient:
+        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+            calls.append((device_id, params))
+            return {"queued": True}
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "Device",
+    )
+
+    result = ont_action_wifi.set_wifi_config(
+        None,
+        "ont-1",
+        enabled=True,
+        ssid="Customer WiFi",
+        channel=6,
+        security_mode="WPA2-Personal",
+    )
+
+    assert result.success is True
+    assert calls == [
+        (
+            "device-1",
+            {
+                "Device.WiFi.SSID.1.Enable": "true",
+                "Device.WiFi.SSID.1.SSID": "Customer WiFi",
+                "Device.WiFi.Radio.1.Channel": "6",
+                "Device.WiFi.AccessPoint.1.Security.ModeEnabled": "WPA2-Personal",
+            },
+        )
+    ]
 
 
 def test_normalize_port_name_uses_canonical_pon_hint() -> None:

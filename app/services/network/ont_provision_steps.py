@@ -730,27 +730,37 @@ def configure_wan_tr069(
         dns_servers: Comma-separated DNS servers when wan_mode is "static".
         instance_index: WAN instance index (default 1).
     """
-    t0 = time.monotonic()
+    from app.services.network.ont_action_network import configure_wan_config
 
-    # TR-069 WAN mode configuration is not yet implemented as an
-    # ont_action_network action.  Log the intent and return a waiting result
-    # so callers know the step was attempted but deferred.
-    logger.info(
-        "configure_wan_tr069 requested for ONT %s: wan_mode=%s wan_vlan=%s "
-        "ip_address=%s instance_index=%s (not yet implemented)",
+    t0 = time.monotonic()
+    resolved_wan_vlan = (
+        int(wan_vlan)
+        if isinstance(wan_vlan, str) and wan_vlan.strip().isdigit()
+        else wan_vlan
+    )
+    if isinstance(resolved_wan_vlan, str):
+        resolved_wan_vlan = None
+
+    action_result = configure_wan_config(
+        db,
         ont_id,
-        wan_mode,
-        wan_vlan,
-        ip_address,
-        instance_index,
+        wan_mode=wan_mode,
+        wan_vlan=resolved_wan_vlan,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
     )
     ms = int((time.monotonic() - t0) * 1000)
     result = StepResult(
         "configure_wan_tr069",
-        False,
-        "TR-069 WAN mode configuration is not yet implemented.",
+        action_result.success,
+        action_result.message,
         ms,
-        waiting=True,
+        critical=False,
+        waiting=getattr(action_result, "waiting", False),
+        data=getattr(action_result, "data", None),
     )
     ont = db.get(OntUnit, ont_id)
     if ont:

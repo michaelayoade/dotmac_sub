@@ -321,6 +321,127 @@ def set_connection_request_credentials(
         )
 
 
+def configure_wan_config(
+    db: Session,
+    ont_id: str,
+    *,
+    wan_mode: str,
+    wan_vlan: int | None = None,
+    ip_address: str | None = None,
+    subnet_mask: str | None = None,
+    gateway: str | None = None,
+    dns_servers: str | None = None,
+    instance_index: int = 1,
+) -> ActionResult:
+    """Set common WAN mode, VLAN, and static IP fields via TR-069."""
+    mode = (wan_mode or "").strip().lower()
+    if mode not in {"pppoe", "dhcp", "static", "bridge"}:
+        return ActionResult(success=False, message="Invalid WAN mode.")
+    if instance_index < 1:
+        return ActionResult(success=False, message="WAN instance must be positive.")
+
+    if mode == "static":
+        if not ip_address or not subnet_mask or not gateway:
+            return ActionResult(
+                success=False,
+                message="Static WAN mode requires IP address, subnet mask, and gateway.",
+            )
+        normalized_ip = _validate_ipv4(ip_address.strip(), "WAN IP address")
+        if isinstance(normalized_ip, ActionResult):
+            return normalized_ip
+        normalized_mask = _validate_subnet_mask(subnet_mask.strip())
+        if isinstance(normalized_mask, ActionResult):
+            return normalized_mask
+        normalized_gateway = _validate_ipv4(gateway.strip(), "WAN gateway")
+        if isinstance(normalized_gateway, ActionResult):
+            return normalized_gateway
+        ip_address = normalized_ip
+        subnet_mask = normalized_mask
+        gateway = normalized_gateway
+
+    resolved, error = get_ont_client_or_error(db, ont_id)
+    if error:
+        return error
+    if resolved is None:
+        return ActionResult(success=False, message="ONT resolution failed.")
+    ont, client, device_id = resolved
+    root = detect_data_model_root(db, ont, client, device_id)
+    persist_data_model_root(ont, root)
+
+    params: dict[str, str] = {}
+    if root == "Device":
+        if mode == "pppoe":
+            params[f"PPP.Interface.{instance_index}.Enable"] = "true"
+        elif mode == "dhcp":
+            params[f"DHCPv4.Client.{instance_index}.Enable"] = "true"
+        elif mode == "static":
+            params[f"IP.Interface.{instance_index}.IPv4Address.1.IPAddress"] = str(
+                ip_address
+            )
+            params[f"IP.Interface.{instance_index}.IPv4Address.1.SubnetMask"] = str(
+                subnet_mask
+            )
+            params[
+                f"Routing.Router.1.IPv4Forwarding.{instance_index}.GatewayIPAddress"
+            ] = str(gateway)
+            if dns_servers:
+                params[f"DNS.Client.Server.{instance_index}.DNSServer"] = (
+                    dns_servers.strip()
+                )
+        if wan_vlan is not None:
+            params[f"Ethernet.VLANTermination.{instance_index}.VLANID"] = str(wan_vlan)
+    else:
+        if mode == "pppoe":
+            base = (
+                f"WANDevice.1.WANConnectionDevice.{instance_index}.WANPPPConnection.1"
+            )
+            params[f"{base}.Enable"] = "1"
+            params[f"{base}.ConnectionType"] = "IP_Routed"
+        else:
+            base = f"WANDevice.1.WANConnectionDevice.{instance_index}.WANIPConnection.1"
+            params[f"{base}.Enable"] = "1"
+            params[f"{base}.ConnectionType"] = (
+                "IP_Bridged" if mode == "bridge" else "IP_Routed"
+            )
+            if mode == "dhcp":
+                params[f"{base}.AddressingType"] = "DHCP"
+            elif mode == "static":
+                params[f"{base}.AddressingType"] = "Static"
+                params[f"{base}.ExternalIPAddress"] = str(ip_address)
+                params[f"{base}.SubnetMask"] = str(subnet_mask)
+                params[f"{base}.DefaultGateway"] = str(gateway)
+                if dns_servers:
+                    params[f"{base}.DNSServers"] = dns_servers.strip()
+        if wan_vlan is not None:
+            params[f"{base}.X_HW_VLAN"] = str(wan_vlan)
+
+    if not params:
+        return ActionResult(success=False, message="No WAN parameters were generated.")
+
+    try:
+        result = client.set_parameter_values(
+            device_id, build_tr069_params(root, params)
+        )
+        refresh = getattr(client, "refresh_object", None)
+        if callable(refresh):
+            refresh(device_id, f"{root}.", connection_request=True)
+        logger.info(
+            "WAN config set on ONT %s mode=%s vlan=%s root=%s",
+            ont.serial_number,
+            mode,
+            wan_vlan,
+            root,
+        )
+        return ActionResult(
+            success=True,
+            message=f"WAN config updated on {ont.serial_number} ({mode}).",
+            data=result,
+        )
+    except GenieACSError as exc:
+        logger.error("Set WAN config failed for ONT %s: %s", ont.serial_number, exc)
+        return ActionResult(success=False, message=f"Failed to set WAN config: {exc}")
+
+
 def send_connection_request(db: Session, ont_id: str) -> ActionResult:
     """Send an HTTP connection request to the ONT for on-demand management.
 
