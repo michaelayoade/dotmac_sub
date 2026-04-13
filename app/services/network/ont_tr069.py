@@ -188,7 +188,17 @@ _ETH_PORT_PATHS_IGD = (
     "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.{i}."
 )
 _ETH_PORT_PATHS_DEV = "Device.Ethernet.Interface.{i}."
-_ETH_FIELDS = ["Enable", "Status", "MaxBitRate", "DuplexMode", "MACAddress"]
+_ETH_FIELDS = [
+    "Enable",
+    "Status",
+    "MaxBitRate",
+    "DuplexMode",
+    "MACAddress",
+    "Stats.BytesSent",
+    "Stats.BytesReceived",
+    "BytesSent",
+    "BytesReceived",
+]
 
 # LAN host paths
 _HOSTS_PATH_IGD = "InternetGatewayDevice.LANDevice.1.Hosts.Host."
@@ -374,7 +384,11 @@ def _extract_object_instances(
             continue
         row: dict[str, Any] = {"index": i}
         for f in fields:
-            node = instance.get(f)
+            node = instance
+            for part in f.split("."):
+                node = node.get(part) if isinstance(node, dict) else None
+                if node is None:
+                    break
             if isinstance(node, dict) and "_value" in node:
                 row[f] = node["_value"]
             else:
@@ -412,6 +426,14 @@ def _normalize_ethernet_ports(rows: list[dict[str, Any]]) -> list[dict[str, Any]
         item.setdefault("speed_mbps", speed_mbps)
         item.setdefault("duplex", item.get("DuplexMode"))
         item.setdefault("mac_address", normalize_mac_address(item.get("MACAddress")))
+        item.setdefault(
+            "bytes_sent",
+            item.get("Stats.BytesSent") or item.get("BytesSent"),
+        )
+        item.setdefault(
+            "bytes_received",
+            item.get("Stats.BytesReceived") or item.get("BytesReceived"),
+        )
         normalized.append(item)
     return normalized
 

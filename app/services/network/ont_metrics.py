@@ -135,6 +135,25 @@ def _build_label_selector(*, ont_serial: str, ont_id: str | None = None) -> str:
     return ",".join(selectors)
 
 
+def _build_label_selectors(*, ont_serial: str, ont_id: str | None = None) -> list[str]:
+    selectors: list[str] = []
+    if ont_id:
+        selectors.append(f'ont_id="{ont_id}"')
+    serial_candidates = _serial_candidates(ont_serial)
+    if serial_candidates:
+        if len(serial_candidates) == 1:
+            selectors.append(f'ont_serial="{serial_candidates[0]}"')
+        else:
+            escaped = "|".join(
+                re.escape(candidate) for candidate in sorted(serial_candidates)
+            )
+            selectors.append(f'ont_serial=~"{escaped}"')
+    combined = _build_label_selector(ont_serial=ont_serial, ont_id=ont_id)
+    if combined:
+        selectors.insert(0, combined)
+    return list(dict.fromkeys(selector for selector in selectors if selector))
+
+
 def get_signal_history(
     ont_serial: str, time_range: str = "24h", *, ont_id: str | None = None
 ) -> ChartData:
@@ -184,7 +203,7 @@ def get_traffic_history(
 ) -> ChartData:
     """Query traffic history for an ONT.
 
-    Uses RADIUS accounting or SNMP-derived traffic counters if available.
+    Uses OLT/ONT traffic counters exported into VictoriaMetrics.
 
     Args:
         ont_serial: ONT serial number.
@@ -195,31 +214,50 @@ def get_traffic_history(
     """
     start, end, step = _parse_range(time_range)
 
-    label_selector = _build_label_selector(ont_serial=ont_serial, ont_id=ont_id)
-    if not label_selector:
+    label_selectors = _build_label_selectors(ont_serial=ont_serial, ont_id=ont_id)
+    if not label_selectors:
         return ChartData(
             time_range=time_range,
             available=False,
             error="No traffic history data available for this ONT.",
         )
 
-    rx_query = f"rate(ont_rx_bytes_total{{{label_selector}}}[5m]) * 8"
-    tx_query = f"rate(ont_tx_bytes_total{{{label_selector}}}[5m]) * 8"
-
-    rx_results = _query_range_sync(rx_query, start, end, step)
-    tx_results = _query_range_sync(tx_query, start, end, step)
+    counter_pairs = [
+        ("ont_rx_bytes_total", "ont_tx_bytes_total"),
+        ("onu_rx_bytes_total", "onu_tx_bytes_total"),
+        ("ont_downstream_bytes_total", "ont_upstream_bytes_total"),
+    ]
 
     series: list[ChartSeries] = []
-    if rx_results:
-        series.append(_result_to_series(rx_results[0], "Download (bps)"))
-    if tx_results:
-        series.append(_result_to_series(tx_results[0], "Upload (bps)"))
+    for label_selector in label_selectors:
+        for rx_metric, tx_metric in counter_pairs:
+            rx_query = f"rate({rx_metric}{{{label_selector}}}[5m]) * 8"
+            tx_query = f"rate({tx_metric}{{{label_selector}}}[5m]) * 8"
+
+            rx_results = _query_range_sync(rx_query, start, end, step)
+            tx_results = _query_range_sync(tx_query, start, end, step)
+
+            series = []
+            if rx_results:
+                series.append(_result_to_series(rx_results[0], "Download (bps)"))
+            if tx_results:
+                series.append(_result_to_series(tx_results[0], "Upload (bps)"))
+            if series:
+                return ChartData(
+                    series=series,
+                    time_range=time_range,
+                    available=True,
+                    error=f"Showing OLT/ONT counter series from {rx_metric}/{tx_metric}.",
+                )
 
     if not series:
         return ChartData(
             time_range=time_range,
             available=False,
-            error="No traffic history data available for this ONT.",
+            error=(
+                "No OLT/ONT traffic counter series found for this ONT "
+                "(expected ont_rx_bytes_total/ont_tx_bytes_total or compatible counters)."
+            ),
         )
 
     return ChartData(series=series, time_range=time_range, available=True)

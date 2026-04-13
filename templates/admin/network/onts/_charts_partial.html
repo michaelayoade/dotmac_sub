@@ -1,5 +1,9 @@
 {# HTMX partial: ONT signal and traffic charts #}
 
+<div hx-get="/admin/network/onts/{{ ont_id }}/charts?time_range={{ time_range }}"
+     hx-trigger="every 15s"
+     hx-target="#charts-content"
+     hx-swap="innerHTML">
 {# Time range selector #}
 <div class="flex items-center justify-between mb-6">
     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Signal & Traffic History</h3>
@@ -224,3 +228,4 @@
 })();
 </script>
 {% endif %}
+</div>
