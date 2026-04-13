@@ -40,6 +40,7 @@ def looks_like_prerequisite_failure(message: str) -> bool:
         "missing",
         "required",
         "not configured",
+        "incomplete",
         "not linked",
         "not managed",
         "not bootstrapped",

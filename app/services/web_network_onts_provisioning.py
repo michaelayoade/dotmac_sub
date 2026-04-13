@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from ipaddress import ip_address
 
 from sqlalchemy.orm import Session
 
@@ -120,6 +121,8 @@ def save_provision_settings(
     db: Session,
     *,
     ont_id: str,
+    profile_id: str | None,
+    tr069_profile_id: str | None,
     onu_mode: str | None,
     mgmt_vlan_id: str | None,
     mgmt_ip_mode: str | None,
@@ -149,7 +152,7 @@ def save_provision_settings(
 ) -> JsonActionResult:
     """Persist provision-page WAN settings without starting provisioning."""
     try:
-        network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except Exception:
         return JsonActionResult(
             status_code=404,
@@ -157,6 +160,8 @@ def save_provision_settings(
         )
 
     onu_mode_value = (onu_mode or "").strip().lower() or None
+    profile_id_value = (profile_id or "").strip() or None
+    tr069_profile_id_value = (tr069_profile_id or "").strip() or None
     mgmt_vlan_id_value = (mgmt_vlan_id or "").strip() or None
     mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower() or None
     mgmt_ip_address_value = (mgmt_ip_address or "").strip() or None
@@ -184,6 +189,42 @@ def save_provision_settings(
     wifi_channel_value = (wifi_channel or "").strip() or None
     mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
+
+    field_issues = validate_provision_form_fields(
+        profile_id=profile_id_value,
+        onu_mode=onu_mode_value,
+        mgmt_vlan_id=mgmt_vlan_id_value,
+        mgmt_ip_mode=mgmt_ip_mode_value,
+        mgmt_ip_address=mgmt_ip_address_value,
+        mgmt_subnet=mgmt_subnet_value,
+        mgmt_gateway=mgmt_gateway_value,
+        wan_protocol=wan_protocol_value,
+        wan_vlan_id=wan_vlan_id_value,
+        pppoe_username=pppoe_username_value,
+        static_ip_pool_id=static_ip_pool_id_value,
+        static_ip=static_ip_value,
+        static_subnet=static_subnet_value,
+        static_gateway=static_gateway_value,
+        static_dns=static_dns_value,
+        lan_ip=lan_ip_value,
+        lan_subnet=lan_subnet_value,
+        dhcp_enabled=dhcp_enabled_value,
+        dhcp_start=dhcp_start_value,
+        dhcp_end=dhcp_end_value,
+        wifi_enabled=wifi_enabled_value,
+        wifi_ssid=wifi_ssid_value,
+        wifi_password=wifi_password_value,
+    )
+    if field_issues:
+        return JsonActionResult(
+            status_code=422,
+            content={
+                "success": False,
+                "message": "Provisioning configuration is incomplete: "
+                + "; ".join(field_issues),
+                "issues": field_issues,
+            },
+        )
 
     if onu_mode_value not in {None, OnuMode.routing.value, OnuMode.bridging.value}:
         return JsonActionResult(
@@ -249,6 +290,10 @@ def save_provision_settings(
         else None,
     )
     network_service.ont_units.update(db=db, unit_id=ont_id, payload=payload)
+    profile_uuid = coerce_uuid(profile_id_value)
+    if profile_uuid is not None:
+        ont.provisioning_profile_id = profile_uuid
+        db.commit()
 
     if mgmt_vlan_id_value or mgmt_ip_mode_value:
         update_service_order_execution_context_for_ont(
@@ -285,6 +330,13 @@ def save_provision_settings(
             step_name="configure_wan_tr069",
             values=wan_values,
         )
+        if tr069_profile_id_value:
+            update_service_order_execution_context_for_ont(
+                db,
+                ont_id=ont_id,
+                step_name="bind_tr069",
+                values={"tr069_olt_profile_id": tr069_profile_id_value},
+            )
         if wan_protocol_value == "pppoe":
             update_service_order_execution_context_for_ont(
                 db,
@@ -339,6 +391,96 @@ def save_provision_settings(
     return JsonActionResult(
         content={"success": True, "message": "Provision settings saved"}
     )
+
+
+def validate_provision_form_fields(
+    *,
+    profile_id: str | None,
+    onu_mode: str | None,
+    mgmt_vlan_id: str | None,
+    mgmt_ip_mode: str | None,
+    mgmt_ip_address: str | None,
+    mgmt_subnet: str | None,
+    mgmt_gateway: str | None,
+    wan_protocol: str | None,
+    wan_vlan_id: str | None,
+    pppoe_username: str | None,
+    static_ip_pool_id: str | None,
+    static_ip: str | None,
+    static_subnet: str | None,
+    static_gateway: str | None,
+    static_dns: str | None,
+    lan_ip: str | None,
+    lan_subnet: str | None,
+    dhcp_enabled: bool | None,
+    dhcp_start: str | None,
+    dhcp_end: str | None,
+    wifi_enabled: bool | None,
+    wifi_ssid: str | None,
+    wifi_password: str | None,
+) -> list[str]:
+    """Validate operator-selected provisioning inputs before allowing proceed."""
+    issues: list[str] = []
+    onu_mode_value = (onu_mode or "").strip().lower()
+    mgmt_ip_mode_value = (mgmt_ip_mode or "").strip().lower()
+    wan_protocol_value = (wan_protocol or "").strip().lower()
+
+    if not profile_id:
+        issues.append("Select service profile")
+    if onu_mode_value not in {OnuMode.routing.value, OnuMode.bridging.value}:
+        issues.append("Select ONU mode")
+    if not mgmt_vlan_id:
+        issues.append("Select management VLAN")
+    if mgmt_ip_mode_value not in {"dhcp", "static", "static_ip"}:
+        issues.append("Select management IP method")
+    if mgmt_ip_mode_value in {"static", "static_ip"}:
+        _require_ip(issues, "Management IP", mgmt_ip_address)
+        _require_ip(issues, "Management subnet", mgmt_subnet)
+        _require_ip(issues, "Management gateway", mgmt_gateway)
+
+    if not wan_vlan_id:
+        issues.append("Select internet VLAN")
+    if onu_mode_value == OnuMode.bridging.value:
+        if wan_protocol_value not in {"bridged", "bridge"}:
+            issues.append("Bridge ONU mode requires bridged WAN protocol")
+    elif wan_protocol_value not in {"pppoe", "dhcp", "static"}:
+        issues.append("Select internet deployment method")
+
+    if wan_protocol_value == "pppoe" and not pppoe_username:
+        issues.append("Enter PPPoE username")
+    if wan_protocol_value == "static":
+        if not static_ip_pool_id:
+            _require_ip(issues, "Static IP address", static_ip)
+        _require_ip(issues, "Static subnet", static_subnet)
+        _require_ip(issues, "Static gateway", static_gateway)
+        if static_dns:
+            for dns in [item.strip() for item in static_dns.split(",") if item.strip()]:
+                _require_ip(issues, f"DNS server {dns}", dns)
+
+    if onu_mode_value == OnuMode.routing.value:
+        _require_ip(issues, "LAN gateway IP", lan_ip)
+        _require_ip(issues, "LAN subnet", lan_subnet)
+        if dhcp_enabled is True:
+            _require_ip(issues, "DHCP start", dhcp_start)
+            _require_ip(issues, "DHCP end", dhcp_end)
+
+    if wifi_enabled is True:
+        if not wifi_ssid:
+            issues.append("Enter WiFi SSID")
+        if wifi_password and len(wifi_password) < 8:
+            issues.append("WiFi password must be at least 8 characters")
+
+    return issues
+
+
+def _require_ip(issues: list[str], label: str, value: str | None) -> None:
+    if not value:
+        issues.append(f"{label} is required")
+        return
+    try:
+        ip_address(value)
+    except ValueError:
+        issues.append(f"{label} is invalid")
 
 
 def _bool_from_form(value: str | None) -> bool | None:

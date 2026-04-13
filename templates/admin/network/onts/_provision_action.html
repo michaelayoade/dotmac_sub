@@ -1,9 +1,10 @@
-{# Manual operations notice: orchestration removed from operational UI #}
-
-<div class="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm dark:border-amber-900/30 dark:bg-amber-900/10">
-    <h3 class="text-sm font-semibold text-amber-900 dark:text-amber-200">Manual ONT Operations</h3>
-    <p class="mt-2 text-sm text-amber-800 dark:text-amber-300">
-        Coordinated provisioning is not available in the operations UI. Run explicit ONT actions instead:
-        clone service-ports when needed, configure management IP, bind a TR-069 server profile, reboot via OMCI, and apply profile or service-port changes individually.
+<div class="rounded-lg border border-blue-200 bg-blue-50 p-5 shadow-sm dark:border-blue-900/30 dark:bg-blue-900/10">
+    <h3 class="text-sm font-semibold text-blue-900 dark:text-blue-200">Provision ONT</h3>
+    <p class="mt-2 text-sm text-blue-800 dark:text-blue-300">
+        Complete management, internet, LAN, WiFi, and profile selections on one page before running provisioning actions.
     </p>
+    <a href="/admin/network/onts/{{ ont.id }}/provision"
+       class="mt-4 inline-flex items-center rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700">
+        Open Provisioning Page
+    </a>
 </div>

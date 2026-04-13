@@ -54,6 +54,45 @@
             const poolNas = this.poolNasMap[poolId];
             if (!poolNas) return true;
             return poolNas === vlanNas;
+        },
+        isIp(value) {
+            return /^(\d{1,3}\.){3}\d{1,3}$/.test((value || "").trim());
+        },
+        missingPrerequisites() {
+            const issues = [];
+            if (!this.profileId) issues.push("Select service profile");
+            if (!this.selectedMgmtVlan) issues.push("Select management VLAN");
+            if (!this.mgmtIpMode) issues.push("Select management IP method");
+            if (this.mgmtIpMode === "static") {
+                if (!this.isIp(this.mgmtIp)) issues.push("Enter valid management IP");
+                if (!this.isIp(this.mgmtSubnet)) issues.push("Enter valid management subnet");
+                if (!this.isIp(this.mgmtGateway)) issues.push("Enter valid management gateway");
+            }
+            if (!this.selectedVlan) issues.push("Select internet VLAN");
+            if (!this.wanProtocol) issues.push("Select internet deployment method");
+            if (this.onuMode === "bridging" && this.wanProtocol !== "bridged") issues.push("Bridge ONU mode requires bridged WAN");
+            if (this.wanProtocol === "pppoe" && !this.pppoeUser) issues.push("Enter PPPoE username");
+            if (this.wanProtocol === "static") {
+                if (!this.staticIpPoolId && !this.isIp(this.staticIp)) issues.push("Select static IP pool or enter static IP");
+                if (!this.isIp(this.staticSubnet)) issues.push("Enter valid static subnet");
+                if (!this.isIp(this.staticGateway)) issues.push("Enter valid static gateway");
+            }
+            if (this.onuMode === "routing") {
+                if (!this.isIp(this.lanIp)) issues.push("Enter LAN gateway IP");
+                if (!this.isIp(this.lanSubnet)) issues.push("Enter LAN subnet");
+                if (this.dhcpEnabled === true || this.dhcpEnabled === "true") {
+                    if (!this.isIp(this.dhcpStart)) issues.push("Enter DHCP start");
+                    if (!this.isIp(this.dhcpEnd)) issues.push("Enter DHCP end");
+                }
+            }
+            if (this.wifiEnabled === true || this.wifiEnabled === "true") {
+                if (!this.wifiSsid) issues.push("Enter WiFi SSID");
+                if (this.wifiPassword && this.wifiPassword.length < 8) issues.push("WiFi password must be at least 8 characters");
+            }
+            return issues;
+        },
+        canProceed() {
+            return this.missingPrerequisites().length === 0;
         }
      }'
      x-init="
@@ -94,6 +133,12 @@
             </a>
         </div>
     </div>
+
+    {% if provision_feedback %}
+    <div class="rounded-lg border px-4 py-3 text-sm {% if provision_feedback.status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-rose-200 bg-rose-50 text-rose-800 dark:border-rose-900/30 dark:bg-rose-900/10 dark:text-rose-300{% endif %}">
+        {{ provision_feedback.message }}
+    </div>
+    {% endif %}
 
     {# ── Hidden input for getFormData() compatibility ── #}
     <input type="hidden" id="profile_id" name="profile_id" :value="profileId">
@@ -604,13 +649,44 @@
                 </div>
             </details>
 
-            {# ── Section 4: Save Settings ── #}
-            <div class="rounded-xl border border-blue-200 bg-blue-50/50 p-4 dark:border-blue-800/40 dark:bg-blue-900/10">
-                <p class="text-sm text-blue-800 dark:text-blue-300">
-                    <strong>Save settings</strong> to store WAN configuration on the ONT record. Then use the per-step provisioning controls on the
-                    <a href="/admin/network/onts/{{ ont.id }}?tab=service" class="font-semibold underline hover:no-underline">Service tab</a>
-                    to execute device operations (service-ports, TR-069, PPPoE push).
-                </p>
+            {# ── Section 4: Provision Gate ── #}
+            <div class="rounded-lg border p-4"
+                 :class="canProceed() ? 'border-emerald-200 bg-emerald-50/60 dark:border-emerald-900/30 dark:bg-emerald-900/10' : 'border-amber-200 bg-amber-50/60 dark:border-amber-900/30 dark:bg-amber-900/10'">
+                <div class="flex items-start justify-between gap-4">
+                    <div>
+                        <h3 class="text-sm font-semibold"
+                            :class="canProceed() ? 'text-emerald-900 dark:text-emerald-200' : 'text-amber-900 dark:text-amber-200'">
+                            Provisioning gate
+                        </h3>
+                        <p class="mt-1 text-sm"
+                           :class="canProceed() ? 'text-emerald-800 dark:text-emerald-300' : 'text-amber-800 dark:text-amber-300'">
+                            Complete the required selections here before continuing to device actions.
+                        </p>
+                    </div>
+                    <span class="rounded-md px-2 py-1 text-xs font-semibold"
+                          :class="canProceed() ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200' : 'bg-amber-100 text-amber-800 dark:bg-amber-900 dark:text-amber-200'"
+                          x-text="canProceed() ? 'Ready' : 'Blocked'"></span>
+                </div>
+                <template x-if="missingPrerequisites().length">
+                    <ul class="mt-3 space-y-1 text-sm text-amber-800 dark:text-amber-300">
+                        <template x-for="issue in missingPrerequisites()" :key="issue">
+                            <li class="flex gap-2">
+                                <span aria-hidden="true">-</span>
+                                <span x-text="issue"></span>
+                            </li>
+                        </template>
+                    </ul>
+                </template>
+                {% if provision_gate_issues %}
+                <div class="mt-3 border-t border-amber-200 pt-3 text-sm text-amber-800 dark:border-amber-900/30 dark:text-amber-300">
+                    <p class="font-medium">Saved configuration still needs:</p>
+                    <ul class="mt-1 space-y-1">
+                        {% for issue in provision_gate_issues %}
+                        <li>- {{ issue }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
             </div>
             <form method="POST" action="/admin/network/onts/{{ ont.id }}/save-provision-settings">
                 {% include "components/forms/csrf_input.html" %}
@@ -642,10 +718,15 @@
                 <input type="hidden" name="pppoe_username" :value="pppoeUser">
                 <input type="hidden" id="pppoe_password_hidden" name="pppoe_password">
                 <button type="submit"
-                    class="inline-flex items-center gap-2 rounded-xl bg-blue-600 px-6 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-blue-700 transition-colors">
+                    :disabled="!canProceed()"
+                    :class="canProceed() ? 'bg-blue-600 text-white hover:bg-blue-700' : 'cursor-not-allowed bg-slate-300 text-slate-500 dark:bg-slate-700 dark:text-slate-400'"
+                    class="inline-flex items-center gap-2 rounded-lg px-6 py-2.5 text-sm font-semibold shadow-sm transition-colors">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
-                    Save Configuration
+                    Save Configuration and Continue
                 </button>
+                <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                    The server repeats these checks before saving, so incomplete provisioning cannot continue from this page.
+                </p>
             </form>
 
         </div>

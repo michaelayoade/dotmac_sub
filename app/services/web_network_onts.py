@@ -9,6 +9,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.network import (
+    IpPool,
     OLTDevice,
     OntUnit,
     PonType,
@@ -356,6 +357,10 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     """Build template context for the ONT provisioning wizard page."""
     from app.services import network as network_service
     from app.services import web_admin as web_admin_service
+    from app.services.network.ont_service_intent import load_ont_plan_for_ont
+    from app.services.web_network_onts_provisioning import (
+        validate_provision_form_fields,
+    )
 
     try:
         ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -365,6 +370,90 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     olt = getattr(ont, "olt_device", None)
     profile = resolve_effective_provisioning_profile(db, ont, olt)
     tr069_profile, tr069_error = resolve_effective_tr069_profile_for_ont(db, ont)
+    tr069_profiles, tr069_profiles_error = get_tr069_profiles_for_ont(db, ont)
+    vlans = get_vlans_for_ont(db, ont)
+    ip_pools = list(
+        db.scalars(
+            select(IpPool)
+            .where(IpPool.is_active.is_(True))
+            .where(
+                or_(
+                    IpPool.olt_device_id == getattr(ont, "olt_device_id", None),
+                    IpPool.olt_device_id.is_(None),
+                )
+            )
+            .order_by(IpPool.name.asc())
+        ).all()
+    )
+    vlan_nas_map = {
+        str(vlan.id): str(vlan.olt_device_id)
+        for vlan in vlans
+        if getattr(vlan, "olt_device_id", None)
+    }
+    pool_nas_map = {
+        str(pool.id): str(pool.olt_device_id)
+        for pool in ip_pools
+        if getattr(pool, "olt_device_id", None)
+    }
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
+    lan_intent = (
+        ont_plan.get("configure_lan_tr069")
+        if isinstance(ont_plan.get("configure_lan_tr069"), dict)
+        else {}
+    )
+    wifi_intent = (
+        ont_plan.get("configure_wifi_tr069")
+        if isinstance(ont_plan.get("configure_wifi_tr069"), dict)
+        else {}
+    )
+    mgmt_mode = (
+        ont.mgmt_ip_mode.value
+        if getattr(ont, "mgmt_ip_mode", None) is not None
+        else "dhcp"
+    )
+    wan_protocol = (
+        ont.wan_mode.value
+        if getattr(ont, "wan_mode", None) is not None
+        else "pppoe"
+    )
+    if wan_protocol == "static_ip":
+        wan_protocol = "static"
+    elif wan_protocol == "bridge":
+        wan_protocol = "bridged"
+
+    provision_gate_issues = validate_provision_form_fields(
+        profile_id=str(profile.id) if profile else None,
+        onu_mode=ont.onu_mode.value if ont.onu_mode else "routing",
+        mgmt_vlan_id=str(ont.mgmt_vlan_id) if ont.mgmt_vlan_id else None,
+        mgmt_ip_mode=mgmt_mode,
+        mgmt_ip_address=ont.mgmt_ip_address,
+        mgmt_subnet=None,
+        mgmt_gateway=None,
+        wan_protocol=wan_protocol,
+        wan_vlan_id=str(ont.wan_vlan_id) if ont.wan_vlan_id else None,
+        pppoe_username=ont.pppoe_username,
+        static_ip_pool_id=None,
+        static_ip=None,
+        static_subnet=None,
+        static_gateway=None,
+        static_dns=None,
+        lan_ip=str(lan_intent.get("lan_ip") or "") or None,
+        lan_subnet=str(lan_intent.get("lan_subnet") or "") or None,
+        dhcp_enabled=(
+            bool(lan_intent.get("dhcp_enabled"))
+            if lan_intent.get("dhcp_enabled") is not None
+            else None
+        ),
+        dhcp_start=str(lan_intent.get("dhcp_start") or "") or None,
+        dhcp_end=str(lan_intent.get("dhcp_end") or "") or None,
+        wifi_enabled=(
+            bool(wifi_intent.get("enabled"))
+            if wifi_intent.get("enabled") is not None
+            else None
+        ),
+        wifi_ssid=str(wifi_intent.get("ssid") or "") or None,
+        wifi_password=None,
+    )
 
     context: dict[str, Any] = {
         "request": request,
@@ -377,11 +466,48 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "provisioning_profile": profile,
         "tr069_profile": tr069_profile,
         "tr069_profile_error": tr069_error,
+        "selected_profile_id": str(profile.id) if profile else "",
+        "selected_tr069_profile_id": getattr(tr069_profile, "profile_id", None),
+        "selected_tr069_profile_name": getattr(tr069_profile, "name", None)
+        or getattr(tr069_profile, "profile_name", None),
+        "resolved_tr069_profile_error": tr069_error,
+        "tr069_profiles": tr069_profiles,
+        "tr069_profiles_error": tr069_profiles_error,
         "profiles": get_profile_templates(
             db, str(ont.olt_device_id) if ont.olt_device_id else None
         ),
-        "vlans": get_vlans_for_ont(db, ont),
+        "vlans": vlans,
+        "ip_pools": ip_pools,
+        "vlan_nas_map": vlan_nas_map,
+        "pool_nas_map": pool_nas_map,
         "tr069_servers": get_tr069_servers(db),
+        "speed_profiles_download": get_speed_profiles(db, "download"),
+        "speed_profiles_upload": get_speed_profiles(db, "upload"),
+        "signal_info": {
+            "online_status": getattr(
+                getattr(ont, "effective_status", None),
+                "value",
+                getattr(ont, "online_status", "unknown"),
+            ),
+            "olt_rx_dbm": getattr(ont, "olt_rx_signal_dbm", None),
+        },
+        "pon_label": (
+            f"{ont.board}/{ont.port}"
+            if getattr(ont, "board", None) and getattr(ont, "port", None)
+            else None
+        ),
+        "subscriber": None,
+        "subscription": None,
+        "acs_bound": bool(
+            getattr(ont, "tr069_acs_server_id", None)
+            or getattr(olt, "tr069_acs_server_id", None)
+        ),
+        "operational_acs_server_name": getattr(
+            getattr(olt, "tr069_acs_server", None), "name", None
+        ),
+        "pppoe_username": getattr(ont, "pppoe_username", None),
+        "ont_plan": ont_plan,
+        "provision_gate_issues": provision_gate_issues,
     }
     return context
 

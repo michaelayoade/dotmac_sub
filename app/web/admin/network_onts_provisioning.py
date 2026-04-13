@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -214,6 +214,8 @@ def ont_preflight_check(
 def ont_save_provision_settings(
     request: Request,
     ont_id: str,
+    profile_id: str | None = Form(default=None),
+    tr069_profile_id: str | None = Form(default=None),
     onu_mode: str | None = Form(default=None),
     mgmt_vlan_id: str | None = Form(default=None),
     mgmt_ip_mode: str | None = Form(default=None),
@@ -241,11 +243,13 @@ def ont_save_provision_settings(
     pppoe_username: str | None = Form(default=None),
     pppoe_password: str | None = Form(default=None),
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> Response:
     """Persist provision-page WAN settings without starting provisioning."""
     result = web_onts_provisioning_service.save_provision_settings(
         db,
         ont_id=ont_id,
+        profile_id=profile_id,
+        tr069_profile_id=tr069_profile_id,
         onu_mode=onu_mode,
         mgmt_vlan_id=mgmt_vlan_id,
         mgmt_ip_mode=mgmt_ip_mode,
@@ -273,6 +277,25 @@ def ont_save_provision_settings(
         pppoe_username=pppoe_username,
         pppoe_password=pppoe_password,
     )
+    success = bool(result.content.get("success"))
+    message = str(result.content.get("message") or "Provision settings failed")
+    log_network_action_result(
+        request=request,
+        resource_type="ont",
+        resource_id=ont_id,
+        action="Save Provisioning Configuration",
+        success=success,
+        message=message,
+        metadata={"status_code": result.status_code},
+    )
+    if request.headers.get("HX-Request") != "true":
+        status = "success" if success else "error"
+        from urllib.parse import quote_plus
+
+        return RedirectResponse(
+            f"/admin/network/onts/{ont_id}/provision?status={status}&message={quote_plus(message)}",
+            status_code=303,
+        )
     return JSONResponse(
         status_code=result.status_code,
         content=result.content,

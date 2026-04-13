@@ -19,6 +19,7 @@ from app.db import get_db
 from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
+from app.services import web_network_onts as web_network_onts_service
 from app.services import web_network_operations as web_network_operations_service
 from app.services import web_network_service_ports as web_network_service_ports_service
 from app.services.audit_helpers import build_audit_activities
@@ -383,6 +384,31 @@ def ont_firmware_form(
         **ont_web_forms_service.firmware_form_context(db, ont_id),
     }
     return templates.TemplateResponse("admin/network/onts/_firmware_form.html", context)
+
+
+@router.get(
+    "/onts/{ont_id}/provision",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_provision_wizard(
+    request: Request,
+    ont_id: str,
+    status: str | None = None,
+    message: str | None = None,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """One-page gated ONT provisioning configuration workflow."""
+    context = web_network_onts_service.provision_wizard_context(request, db, ont_id)
+    if context.get("error"):
+        return templates.TemplateResponse(
+            "admin/errors/404.html",
+            {"request": request, "message": context["error"]},
+            status_code=404,
+        )
+    if status and message:
+        context["provision_feedback"] = {"status": status, "message": message}
+    return templates.TemplateResponse("admin/network/onts/provision.html", context)
 
 
 # -- Service-port management routes --------------------------------------------
