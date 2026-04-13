@@ -1909,14 +1909,20 @@ class OntProvisioningProfile(Base):
     wifi_band: Mapped[str | None] = mapped_column(String(20))
 
     # OLT-level provisioning knobs
+    authorization_line_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="OLT-local ont-lineprofile profile-id used when authorizing ONTs",
+    )
+    authorization_service_profile_id: Mapped[int | None] = mapped_column(
+        Integer,
+        doc="OLT-local ont-srvprofile profile-id used when authorizing ONTs",
+    )
     internet_config_ip_index: Mapped[int | None] = mapped_column(
         Integer,
-        default=0,
         doc="ip-index for ont internet-config command (activates TCP stack)",
     )
     wan_config_profile_id: Mapped[int | None] = mapped_column(
         Integer,
-        default=0,
         doc="profile-id for ont wan-config command (sets route+NAT mode)",
     )
     pppoe_omci_vlan: Mapped[int | None] = mapped_column(

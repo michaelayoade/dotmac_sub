@@ -34,22 +34,62 @@ def verify_ont_authorized(
     """Verify an ONT appears on the OLT after an authorization write.
 
     Uses a direct ONT status query when the write response includes an ONT-ID,
-    otherwise falls back to scanning registered ONT serials.
+    then direct serial lookup and registered serial scan as fallbacks.
     """
     from app.services.network import olt_ssh_ont
 
     normalized_serial = _normalize_serial(serial_number)
 
+    def _registered_scan_verification(
+        reason: str, serial_lookup_failure: str | None = None
+    ) -> OltWriteVerification | None:
+        ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
+        if not ok:
+            detail = (
+                f"{serial_lookup_failure}; registered serial scan failed: {msg}"
+                if serial_lookup_failure
+                else msg
+            )
+            return OltWriteVerification(
+                False,
+                f"OLT accepted the authorization write, but serial readback failed after {reason}: {detail}",
+                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
+            )
+
+        for registered_entry in entries:
+            if _normalize_serial(registered_entry.real_serial) != normalized_serial:
+                continue
+            if registered_entry.fsp != fsp:
+                return OltWriteVerification(
+                    False,
+                    "ONT serial was found on the OLT, but on a different port than expected.",
+                    {
+                        "expected_fsp": fsp,
+                        "observed_fsp": registered_entry.fsp,
+                        "ont_id": registered_entry.onu_id,
+                        "serial_number": registered_entry.real_serial,
+                        "run_state": registered_entry.run_state,
+                    },
+                )
+            return OltWriteVerification(
+                True,
+                f"Verified ONT {serial_number} on {fsp} with ONT-ID {registered_entry.onu_id} by registered serial scan.",
+                {
+                    "fsp": registered_entry.fsp,
+                    "ont_id": registered_entry.onu_id,
+                    "serial_number": registered_entry.real_serial,
+                    "run_state": registered_entry.run_state,
+                },
+            )
+
+        return None
+
     def _verify_by_serial(reason: str) -> OltWriteVerification | None:
         find_ok, find_msg, found = olt_ssh_ont.find_ont_by_serial(olt, serial_number)
         if not find_ok:
-            return OltWriteVerification(
-                False,
-                f"OLT accepted the authorization write, but serial readback failed after {reason}: {find_msg}",
-                {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
-            )
+            return _registered_scan_verification(reason, find_msg)
         if found is None:
-            return None
+            return _registered_scan_verification(reason)
         if found.fsp != fsp:
             return OltWriteVerification(
                 False,
@@ -107,39 +147,9 @@ def verify_ont_authorized(
             },
         )
 
-    ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
-    if not ok:
-        return OltWriteVerification(
-            False,
-            f"OLT accepted the authorization write, but readback failed: {msg}",
-            {"fsp": fsp, "ont_id": ont_id, "serial_number": serial_number},
-        )
-
-    for registered_entry in entries:
-        if _normalize_serial(registered_entry.real_serial) != normalized_serial:
-            continue
-        if registered_entry.fsp != fsp:
-            return OltWriteVerification(
-                False,
-                "ONT serial was found on the OLT, but on a different port than expected.",
-                {
-                    "expected_fsp": fsp,
-                    "observed_fsp": registered_entry.fsp,
-                    "ont_id": registered_entry.onu_id,
-                    "serial_number": registered_entry.real_serial,
-                    "run_state": registered_entry.run_state,
-                },
-            )
-        return OltWriteVerification(
-            True,
-            f"Verified ONT {serial_number} on {fsp} with ONT-ID {registered_entry.onu_id}.",
-            {
-                "fsp": registered_entry.fsp,
-                "ont_id": registered_entry.onu_id,
-                "serial_number": registered_entry.real_serial,
-                "run_state": registered_entry.run_state,
-            },
-        )
+    serial_verification = _verify_by_serial("no ONT-ID available")
+    if serial_verification is not None:
+        return serial_verification
 
     return OltWriteVerification(
         False,

@@ -193,6 +193,12 @@ def parse_profile_form(form: FormData) -> dict[str, object]:
         "wifi_channel": _form_str(form, "wifi_channel") or None,
         "wifi_band": _form_str(form, "wifi_band") or None,
         "voip_enabled": _form_bool(form, "voip_enabled"),
+        "authorization_line_profile_id": _form_int(
+            form, "authorization_line_profile_id"
+        ),
+        "authorization_service_profile_id": _form_int(
+            form, "authorization_service_profile_id"
+        ),
         "internet_config_ip_index": _form_int(form, "internet_config_ip_index"),
         "wan_config_profile_id": _form_int(form, "wan_config_profile_id"),
         "pppoe_omci_vlan": _form_int(form, "pppoe_omci_vlan"),
@@ -224,6 +230,10 @@ def validate_profile_form(values: dict[str, object]) -> str | None:
             return f"Invalid config method: {cm}"
     if not values.get("olt_device_id"):
         return "OLT scope is required."
+    line_profile_id = values.get("authorization_line_profile_id")
+    service_profile_id = values.get("authorization_service_profile_id")
+    if (line_profile_id is None) != (service_profile_id is None):
+        return "Both OLT authorization line and service profile IDs are required."
     om = values.get("onu_mode")
     if om:
         try:
@@ -283,6 +293,16 @@ def handle_create(
         else None,
         wifi_band=str(form_data["wifi_band"]) if form_data.get("wifi_band") else None,
         voip_enabled=bool(form_data.get("voip_enabled")),
+        authorization_line_profile_id=int(
+            str(form_data["authorization_line_profile_id"])
+        )
+        if form_data.get("authorization_line_profile_id") is not None
+        else None,
+        authorization_service_profile_id=int(
+            str(form_data["authorization_service_profile_id"])
+        )
+        if form_data.get("authorization_service_profile_id") is not None
+        else None,
         internet_config_ip_index=int(str(form_data["internet_config_ip_index"]))
         if form_data.get("internet_config_ip_index") is not None
         else 0,
@@ -355,6 +375,16 @@ def handle_update(
         else None,
         wifi_band=str(form_data["wifi_band"]) if form_data.get("wifi_band") else None,
         voip_enabled=bool(form_data.get("voip_enabled")),
+        authorization_line_profile_id=int(
+            str(form_data["authorization_line_profile_id"])
+        )
+        if form_data.get("authorization_line_profile_id") is not None
+        else None,
+        authorization_service_profile_id=int(
+            str(form_data["authorization_service_profile_id"])
+        )
+        if form_data.get("authorization_service_profile_id") is not None
+        else None,
         internet_config_ip_index=int(str(form_data["internet_config_ip_index"]))
         if form_data.get("internet_config_ip_index") is not None
         else 0,

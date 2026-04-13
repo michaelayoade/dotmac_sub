@@ -118,6 +118,21 @@ class OntProvisioningProfiles:
                 )
 
     @staticmethod
+    def _validate_authorization_profile_pair(
+        *,
+        authorization_line_profile_id: int | None,
+        authorization_service_profile_id: int | None,
+    ) -> None:
+        if (authorization_line_profile_id is None) == (
+            authorization_service_profile_id is None
+        ):
+            return
+        raise HTTPException(
+            status_code=400,
+            detail="Both OLT authorization line and service profile IDs are required.",
+        )
+
+    @staticmethod
     def list(
         db: Session,
         *,
@@ -234,8 +249,10 @@ class OntProvisioningProfiles:
         wifi_channel: str | None = None,
         wifi_band: str | None = None,
         voip_enabled: bool = False,
-        internet_config_ip_index: int | None = 0,
-        wan_config_profile_id: int | None = 0,
+        authorization_line_profile_id: int | None = None,
+        authorization_service_profile_id: int | None = None,
+        internet_config_ip_index: int | None = None,
+        wan_config_profile_id: int | None = None,
         pppoe_omci_vlan: int | None = None,
         cr_username: str | None = None,
         cr_password: str | None = None,
@@ -245,6 +262,10 @@ class OntProvisioningProfiles:
         """Create a new provisioning profile."""
         if wifi_ssid_template:
             validate_template_string(wifi_ssid_template, "wifi_ssid_template")
+        OntProvisioningProfiles._validate_authorization_profile_pair(
+            authorization_line_profile_id=authorization_line_profile_id,
+            authorization_service_profile_id=authorization_service_profile_id,
+        )
         OntProvisioningProfiles._validate_profile_vlan_scope(
             db,
             olt_device_id=olt_device_id,
@@ -272,6 +293,8 @@ class OntProvisioningProfiles:
             wifi_channel=wifi_channel,
             wifi_band=wifi_band,
             voip_enabled=voip_enabled,
+            authorization_line_profile_id=authorization_line_profile_id,
+            authorization_service_profile_id=authorization_service_profile_id,
             internet_config_ip_index=internet_config_ip_index,
             wan_config_profile_id=wan_config_profile_id,
             pppoe_omci_vlan=pppoe_omci_vlan,
@@ -300,6 +323,25 @@ class OntProvisioningProfiles:
         wifi_ssid = kwargs.get("wifi_ssid_template")
         if wifi_ssid and isinstance(wifi_ssid, str):
             validate_template_string(wifi_ssid, "wifi_ssid_template")
+        merged_line_profile_id = kwargs.get(
+            "authorization_line_profile_id", profile.authorization_line_profile_id
+        )
+        merged_service_profile_id = kwargs.get(
+            "authorization_service_profile_id",
+            profile.authorization_service_profile_id,
+        )
+        OntProvisioningProfiles._validate_authorization_profile_pair(
+            authorization_line_profile_id=(
+                int(str(merged_line_profile_id))
+                if merged_line_profile_id is not None
+                else None
+            ),
+            authorization_service_profile_id=(
+                int(str(merged_service_profile_id))
+                if merged_service_profile_id is not None
+                else None
+            ),
+        )
         merged_olt_device_id = kwargs.get("olt_device_id", profile.olt_device_id)
         OntProvisioningProfiles._validate_profile_vlan_scope(
             db,

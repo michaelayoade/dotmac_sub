@@ -47,16 +47,15 @@ def resolve_olt_context(db: Session, ont_id: str) -> tuple[OltContext | None, st
 
     board = ont.board or ""
     port = ont.port or ""
-    if board and port:
-        fsp = f"{board}/{port}"
-    elif pon_port.name:
-        fsp = pon_port.name
-    else:
-        return None, "Cannot determine F/S/P"
+    if not board or not port:
+        return (
+            None,
+            "ONT is missing scanned board/port. Run an OLT scan before provisioning.",
+        )
+    fsp = f"{board}/{port}"
 
     olt_ont_id = parse_ont_id_on_olt(ont.external_id)
     if olt_ont_id is None:
         return None, f"No usable ONT-ID in external_id ({ont.external_id!r})"
 
     return OltContext(ont=ont, olt=olt, fsp=fsp, olt_ont_id=olt_ont_id, assignment=assignment), ""
-

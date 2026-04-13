@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntProvisioningProfile, OntUnit
@@ -19,7 +18,7 @@ def resolve_profile(
 ) -> OntProvisioningProfile | None:
     """Resolve a provisioning profile for an ONT.
 
-    Priority: explicit profile_id > ONT's assigned profile > first active profile.
+    Priority: explicit profile_id > ONT's assigned profile.
     """
     selected_id = profile_id or (
         str(ont.provisioning_profile_id) if ont.provisioning_profile_id else None
@@ -40,26 +39,11 @@ def resolve_profile(
             )
             return None
         return profile
-    if not ont.olt_device_id:
-        logger.warning(
-            "ONT %s has no assigned profile and no OLT scope",
-            ont.serial_number,
-        )
-        return None
-    fallback = db.scalars(
-        select(OntProvisioningProfile)
-        .where(
-            OntProvisioningProfile.is_active.is_(True),
-            OntProvisioningProfile.olt_device_id == ont.olt_device_id,
-        )
-    ).first()
-    if fallback:
-        logger.warning(
-            "ONT %s has no assigned profile - falling back to '%s'",
-            ont.serial_number,
-            fallback.name,
-        )
-    return fallback
+    logger.warning(
+        "ONT %s has no selected or assigned provisioning profile; refusing implicit profile fallback",
+        ont.serial_number,
+    )
+    return None
 
 
 def profile_requires_tr069(profile: OntProvisioningProfile | None) -> bool:

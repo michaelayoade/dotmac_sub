@@ -61,15 +61,15 @@ class OntAuthorizationService:
 
         from app.services.network.olt_profile_resolution import (
             ensure_ont_service_profile_match,
-            resolve_authorization_profiles,
+            resolve_authorization_profiles_from_db,
         )
         from app.services.network.olt_ssh import authorize_ont as ssh_authorize
 
         if line_profile_id is None or service_profile_id is None:
-            profiles_ok, profiles_msg, profiles = resolve_authorization_profiles(
+            profiles_ok, profiles_msg, profiles = resolve_authorization_profiles_from_db(
+                db,
                 ctx.olt,
-                model=ctx.ont.model,
-                onu_type=getattr(ctx.ont, "onu_type", None),
+                profile=getattr(ctx.ont, "provisioning_profile", None),
             )
             if not profiles_ok or profiles is None:
                 return StepResult("authorize", False, profiles_msg, critical=True)

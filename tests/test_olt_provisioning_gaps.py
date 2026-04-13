@@ -12,10 +12,12 @@ Covers:
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
 
+from fastapi.routing import APIRoute
 from starlette.routing import Route
 
 from app.models.network import (
@@ -71,6 +73,27 @@ def _create_business_subscriber(db_session) -> Subscriber:
     db_session.commit()
     db_session.refresh(subscriber)
     return subscriber
+
+
+def _add_olt_auth_profile(
+    db_session,
+    olt: OLTDevice,
+    *,
+    line_profile_id: int = 40,
+    service_profile_id: int = 44,
+) -> OntProvisioningProfile:
+    profile = OntProvisioningProfile(
+        name=f"{olt.name} Auth Profile",
+        olt_device_id=olt.id,
+        authorization_line_profile_id=line_profile_id,
+        authorization_service_profile_id=service_profile_id,
+        is_default=True,
+        is_active=True,
+    )
+    db_session.add(profile)
+    db_session.commit()
+    db_session.refresh(profile)
+    return profile
 
 
 def test_reference_ont_options_include_huawei_dotted_external_ids(db_session) -> None:
@@ -168,6 +191,7 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     db_session.add(olt)
     db_session.commit()
     db_session.refresh(olt)
+    _add_olt_auth_profile(db_session, olt)
 
     candidate = OltAutofindCandidate(
         olt_id=olt.id,
@@ -195,19 +219,6 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
             False,
             "OLT rejected command: Failure: SN already exists",
             None,
-        ),
-    )
-    monkeypatch.setattr(
-        "app.services.network.olt_profile_resolution.resolve_authorization_profiles",
-        lambda *_args, **_kwargs: (
-            True,
-            "Resolved OLT profiles from live inventory.",
-            SimpleNamespace(
-                line_profile_id=40,
-                service_profile_id=44,
-                message="Resolved OLT profiles from live inventory.",
-                warnings=[],
-            ),
         ),
     )
     monkeypatch.setattr(
@@ -261,6 +272,343 @@ def test_authorize_autofind_recovers_when_serial_already_exists_on_olt(
     assert ont.offline_reason is None
     assert ont.last_seen_at is not None
     assert ont.last_sync_source == "olt_ssh_readback"
+
+
+def test_force_authorize_requires_autofind_rediscovery_after_delete(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(name="Strict Force OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+    _add_olt_auth_profile(db_session, olt)
+
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.find_ont_by_serial",
+        lambda *_args, **_kwargs: (
+            True,
+            "found",
+            SimpleNamespace(
+                fsp="0/1/3",
+                onu_id=9,
+                real_serial="4857544328201B9A",
+                run_state="online",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.deauthorize_ont",
+        lambda *_args, **_kwargs: (True, "deleted"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_write_reconciliation.verify_ont_absent",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=True,
+            message="Verified ONT registration is absent on the OLT.",
+        ),
+    )
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_autofind_candidate_by_serial",
+        lambda *_args, **_kwargs: None,
+    )
+    sync_calls: list[str] = []
+
+    def _sync_without_rediscovery(*_args, **_kwargs):
+        sync_calls.append("sync")
+        return True, "Refreshed autofind cache.", {"active": 0}
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_autofind.sync_olt_autofind_candidates",
+        _sync_without_rediscovery,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_authorization_workflow.sleep",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _unexpected_authorize(*_args, **_kwargs):
+        raise AssertionError("authorize_ont should not run without autofind rediscovery")
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.authorize_ont",
+        _unexpected_authorize,
+    )
+
+    result = olt_authorization_workflow.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/3",
+        "4857544328201B9A",
+        force_reauthorize=True,
+    )
+
+    assert result.success is False
+    assert result.status == "error"
+    assert "Validate discovered ONT row" in result.message
+    assert result.steps[-1].name == "Validate discovered ONT row"
+    assert result.steps[-1].success is False
+    assert "was not rediscovered in autofind" in result.steps[-1].message
+    assert len(sync_calls) == 3
+
+
+def test_force_authorize_rejects_stale_cached_autofind_after_delete(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(name="Stale Cache OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+    _add_olt_auth_profile(db_session, olt)
+
+    stale_candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/1/3",
+        serial_number="4857544328201B9A",
+        model="HG8546M",
+        is_active=True,
+        first_seen_at=datetime.now(UTC) - timedelta(minutes=30),
+        last_seen_at=datetime.now(UTC) - timedelta(minutes=30),
+    )
+    db_session.add(stale_candidate)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.find_ont_by_serial",
+        lambda *_args, **_kwargs: (
+            True,
+            "found",
+            SimpleNamespace(
+                fsp="0/1/3",
+                onu_id=9,
+                real_serial="4857544328201B9A",
+                run_state="online",
+            ),
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.deauthorize_ont",
+        lambda *_args, **_kwargs: (True, "deleted"),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_write_reconciliation.verify_ont_absent",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=True,
+            message="Verified ONT registration is absent on the OLT.",
+        ),
+    )
+
+    sync_calls: list[str] = []
+
+    def _sync_without_updating_stale_cache(*_args, **_kwargs):
+        sync_calls.append("sync")
+        return True, "Refreshed autofind cache.", {"active": 1}
+
+    monkeypatch.setattr(
+        "app.services.web_network_ont_autofind.sync_olt_autofind_candidates",
+        _sync_without_updating_stale_cache,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_authorization_workflow.sleep",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def _unexpected_authorize(*_args, **_kwargs):
+        raise AssertionError("stale cached autofind data must not authorize after delete")
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.authorize_ont",
+        _unexpected_authorize,
+    )
+
+    result = olt_authorization_workflow.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/3",
+        "4857544328201B9A",
+        force_reauthorize=True,
+    )
+
+    assert result.success is False
+    assert "was not rediscovered in autofind" in result.steps[-1].message
+    assert len(sync_calls) == 3
+
+
+def test_force_authorize_resolves_olt_profiles_before_delete(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(name="Profile Guard OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+
+    def _unexpected_delete(*_args, **_kwargs):
+        raise AssertionError("force authorize must not delete before profiles resolve")
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.deauthorize_ont",
+        _unexpected_delete,
+    )
+
+    result = olt_authorization_workflow.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/6",
+        "4857544328201B9A",
+        force_reauthorize=True,
+    )
+
+    assert result.success is False
+    assert result.steps[-1].name == "Resolve OLT authorization profiles"
+    assert "No active provisioning profile is scoped" in result.steps[-1].message
+
+
+def test_authorize_autofind_uses_configured_olt_profile_ids(
+    db_session, monkeypatch
+) -> None:
+    olt = OLTDevice(name="Configured Profile OLT", vendor="Huawei", model="MA5608T")
+    db_session.add(olt)
+    db_session.commit()
+    db_session.refresh(olt)
+    _add_olt_auth_profile(
+        db_session,
+        olt,
+        line_profile_id=51,
+        service_profile_id=52,
+    )
+    candidate = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/1/3",
+        serial_number="HWTC-8535819A",
+        serial_hex="485754438535819A",
+        vendor_id="HWTC",
+        model="HG8546M",
+        mac="",
+        equipment_sn="",
+        autofind_time="2026-04-06 09:00:00",
+        is_active=True,
+    )
+    db_session.add(candidate)
+    db_session.commit()
+
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "get_olt_or_none",
+        lambda *_args, **_kwargs: olt,
+    )
+
+    def _unexpected_live_profile_scan(*_args, **_kwargs):
+        raise AssertionError("authorization must not scan live OLT profiles")
+
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.resolve_authorization_profiles",
+        _unexpected_live_profile_scan,
+    )
+
+    sent: dict[str, object] = {}
+
+    def _authorize(_olt, fsp, serial_number, **kwargs):
+        sent.update({"fsp": fsp, "serial_number": serial_number, **kwargs})
+        return True, "authorized", 9
+
+    monkeypatch.setattr("app.services.network.olt_ssh.authorize_ont", _authorize)
+    monkeypatch.setattr(
+        "app.services.network.olt_write_reconciliation.verify_ont_authorized",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            success=True,
+            message="Verified ONT on OLT.",
+            details={"ont_id": 9, "run_state": "online"},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_profile_resolution.ensure_ont_service_profile_match",
+        lambda *_args, **_kwargs: (
+            True,
+            "ONT service profile already matches live capability.",
+        ),
+    )
+    monkeypatch.setattr(
+        olt_authorization_workflow,
+        "queue_post_authorization_follow_up",
+        lambda *_args, **_kwargs: (True, "Queued follow-up.", "op-123"),
+    )
+
+    result = olt_authorization_workflow.authorize_autofind_ont(
+        db_session,
+        str(olt.id),
+        "0/1/3",
+        "HWTC-8535819A",
+    )
+
+    assert result.success is True
+    assert sent["line_profile_id"] == 51
+    assert sent["service_profile_id"] == 52
+    assert any(
+        "from provisioning profile" in step.message
+        for step in result.steps
+        if step.name == "Resolve OLT authorization profiles"
+    )
+
+
+def test_queue_authorize_autofind_ont_records_tracked_operation(
+    db_session, monkeypatch
+) -> None:
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+    )
+
+    queued: dict[str, object] = {}
+
+    def _fake_enqueue(task, *, args, correlation_id, source, **_kwargs):
+        queued.update(
+            {
+                "task": task,
+                "args": args,
+                "correlation_id": correlation_id,
+                "source": source,
+            }
+        )
+        return SimpleNamespace(id="celery-123")
+
+    monkeypatch.setattr("app.celery_app.enqueue_celery_task", _fake_enqueue)
+
+    ok, message, operation_id = olt_authorization_workflow.queue_authorize_autofind_ont(
+        db_session,
+        olt_id=str(uuid.uuid4()),
+        fsp="0/1/6",
+        serial_number="4857544328201B9A",
+        force_reauthorize=True,
+    )
+
+    assert ok is True
+    assert "queued" in message
+    assert operation_id is not None
+    op = db_session.get(NetworkOperation, uuid.UUID(operation_id))
+    assert op is not None
+    assert op.status == NetworkOperationStatus.waiting
+    assert op.target_type == NetworkOperationTargetType.olt
+    assert op.input_payload["force_reauthorize"] is True
+    assert queued["args"][0] == operation_id
+    assert queued["args"][4] is True
+    assert queued["source"] == "olt_authorization"
 
 
 def test_post_authorization_binds_resolved_tr069_profile_id(
@@ -1112,7 +1460,7 @@ class TestWebNetworkServicePortsWrappers:
             }
         ]
 
-    def test_list_context_accepts_prefixed_pon_name(
+    def test_list_context_requires_scanned_board_port_not_pon_name_fallback(
         self, db_session, monkeypatch
     ) -> None:
         from app.services.web_network_service_ports import list_context
@@ -1137,22 +1485,15 @@ class TestWebNetworkServicePortsWrappers:
         )
         db_session.commit()
 
-        captured: dict[str, object] = {}
-
-        def _fake_get_service_ports_for_ont(_olt, fsp, ont_id):
-            captured["fsp"] = fsp
-            captured["ont_id"] = ont_id
-            return True, "ok", []
-
         monkeypatch.setattr(
             "app.services.web_network_service_ports.get_service_ports_for_ont",
-            _fake_get_service_ports_for_ont,
+            lambda *_args, **_kwargs: (True, "ok", []),
         )
 
         ctx = list_context(db_session, str(ont.id))
 
-        assert ctx["error"] is None
-        assert captured == {"fsp": "0/2/1", "ont_id": 7}
+        assert ctx["error"] is not None
+        assert "assignment" in str(ctx["error"]).lower()
 
     def test_handle_create_no_olt_context(self, db_session) -> None:
         from app.services.web_network_service_ports import handle_create
@@ -1580,6 +1921,25 @@ class TestRouteRegistration:
         assert "/network/onts/{ont_id}/provision" in route_paths
         assert "/network/onts/{ont_id}/provision-status" not in all_paths
 
+    def test_configure_page_is_readable_without_write_permission(self) -> None:
+        from app.web.admin.network_onts import router
+
+        route = next(
+            route
+            for route in router.routes
+            if isinstance(route, APIRoute)
+            and route.path == "/network/onts/{ont_id}/provision"
+        )
+        permission_keys = {
+            cell.cell_contents
+            for dependency in route.dependant.dependencies
+            for cell in (getattr(dependency.call, "__closure__", None) or [])
+            if isinstance(cell.cell_contents, str)
+        }
+
+        assert "network:read" in permission_keys
+        assert "network:write" not in permission_keys
+
 
 class TestProvisioningUiTemplates:
     def test_provisioning_widget_links_to_gated_provisioning_page(self) -> None:
@@ -1591,23 +1951,22 @@ class TestProvisioningUiTemplates:
         assert "/admin/network/onts/{{ ont.id }}/provision" in template
         assert "management, internet, LAN, WiFi, and profile selections" in template
 
-    def test_ont_detail_template_includes_live_location_details_card(self) -> None:
+    def test_ont_detail_home_does_not_duplicate_tab_details(self) -> None:
         template = Path("templates/admin/network/onts/detail.html").read_text()
 
-        assert 'card("Location Details"' in template
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/location-details"' in template
-        assert "ODB (Splitter)" in template
-        assert "Address or comment" in template
-        assert "Contact" in template
+        assert 'card("Location Details"' not in template
+        assert 'card("Network Path"' not in template
+        assert 'card("Observed Runtime"' not in template
+        assert "Device Actions" not in template
+        assert "TR-069 Management" not in template
+        assert "Capabilities" not in template
 
     def test_ont_detail_template_locks_discovered_device_info(self) -> None:
         template = Path("templates/admin/network/onts/detail.html").read_text()
 
         assert 'hx-get="/admin/network/onts/{{ ont.id }}/device-info"' not in template
         assert "/admin/network/onts/{{ ont.id }}/edit" not in template
-        assert 'hx-get="/admin/network/onts/{{ ont.id }}/gpon-channel"' in template
         assert "Board" in template
-        assert "GPON Channel" in template
 
     def test_ont_detail_template_keeps_single_status_section(self) -> None:
         detail_template = Path("templates/admin/network/onts/detail.html").read_text()

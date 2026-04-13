@@ -1,8 +1,9 @@
-"""Resolve OLT authorization profiles from live OLT data.
+"""Resolve OLT authorization profiles from configured or live OLT data.
 
 Huawei ONT authorization needs an ONT line profile and service profile. Those
-IDs are OLT-local and can drift, so this module avoids static defaults by
-inspecting the OLT profile inventory and ONT capability readback.
+IDs are OLT-local, so write workflows use OLT-scoped provisioning profile
+records as their prerequisite. Live inventory helpers remain available for
+operator sync/review flows, not as an implicit write-time fallback.
 """
 
 from __future__ import annotations
@@ -11,7 +12,10 @@ import logging
 import re
 from dataclasses import dataclass, field
 
-from app.models.network import OLTDevice, OnuType
+from sqlalchemy import desc, select
+from sqlalchemy.orm import Session
+
+from app.models.network import OLTDevice, OntProvisioningProfile, OnuType
 from app.services.network.olt_ssh import OltProfileEntry
 
 logger = logging.getLogger(__name__)
@@ -207,6 +211,89 @@ def choose_service_profile(
         key=lambda profile: (profile.binding_count, -profile.profile_id),
         reverse=True,
     )[0]
+
+
+def _build_configured_resolution(
+    profile: OntProvisioningProfile,
+) -> tuple[bool, str, AuthorizationProfileResolution | None]:
+    line_profile_id = profile.authorization_line_profile_id
+    service_profile_id = profile.authorization_service_profile_id
+    if line_profile_id is None or service_profile_id is None:
+        return (
+            False,
+            (
+                f"Provisioning profile '{profile.name}' is missing OLT authorization "
+                "line/service profile IDs. Configure them before authorizing ONTs."
+            ),
+            None,
+        )
+
+    return (
+        True,
+        (
+            f"Resolved OLT authorization profiles from provisioning profile "
+            f"'{profile.name}': line {line_profile_id}, service {service_profile_id}."
+        ),
+        AuthorizationProfileResolution(
+            line_profile_id=line_profile_id,
+            service_profile_id=service_profile_id,
+            message=(
+                f"Resolved OLT authorization profiles from provisioning profile "
+                f"'{profile.name}': line {line_profile_id}, service {service_profile_id}."
+            ),
+        ),
+    )
+
+
+def resolve_authorization_profiles_from_db(
+    db: Session,
+    olt: OLTDevice,
+    *,
+    profile: OntProvisioningProfile | None = None,
+) -> tuple[bool, str, AuthorizationProfileResolution | None]:
+    """Resolve OLT-local authorization profile IDs from stored DB config."""
+    if profile is not None:
+        if not profile.is_active:
+            return (
+                False,
+                f"Provisioning profile '{profile.name}' is inactive.",
+                None,
+            )
+        if profile.olt_device_id and profile.olt_device_id != olt.id:
+            return (
+                False,
+                (
+                    f"Provisioning profile '{profile.name}' belongs to another OLT. "
+                    "Select an OLT-scoped profile for this device."
+                ),
+                None,
+            )
+        return _build_configured_resolution(profile)
+
+    stmt = (
+        select(OntProvisioningProfile)
+        .where(
+            OntProvisioningProfile.olt_device_id == olt.id,
+            OntProvisioningProfile.is_active.is_(True),
+        )
+        .order_by(
+            desc(OntProvisioningProfile.is_default),
+            desc(OntProvisioningProfile.updated_at),
+            desc(OntProvisioningProfile.created_at),
+        )
+    )
+    configured_profile = db.scalars(stmt).first()
+    if configured_profile is None:
+        return (
+            False,
+            (
+                f"No active provisioning profile is scoped to OLT '{olt.name}'. "
+                "Create or select the OLT profile before authorizing ONTs."
+            ),
+            None,
+        )
+
+    return _build_configured_resolution(configured_profile)
 
 
 def resolve_authorization_profiles(

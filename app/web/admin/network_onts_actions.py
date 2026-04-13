@@ -68,6 +68,7 @@ def _action_json_response(
     waiting: bool = False,
     status_code: int | None = None,
     detail: str | None = None,
+    hx_refresh: bool = False,
 ) -> JSONResponse:
     """Return a consistent JSON contract for ONT action requests."""
     toast_type = "success" if success else ("info" if waiting else "error")
@@ -81,6 +82,9 @@ def _action_json_response(
         message=message,
         waiting=waiting,
     )
+    headers = _toast_headers(message, toast_type)
+    if hx_refresh:
+        headers["HX-Refresh"] = "true"
     return JSONResponse(
         {
             "success": success or waiting,
@@ -96,7 +100,7 @@ def _action_json_response(
         status_code=status_code
         if status_code is not None
         else (200 if success else (202 if waiting else 400)),
-        headers=_toast_headers(message, toast_type),
+        headers=headers,
     )
 
 
@@ -222,6 +226,27 @@ def ont_refresh(
         request=request,
         ont_id=ont_id,
         waiting=result.waiting,
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/config/refresh",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_config_refresh(
+    request: Request, ont_id: str, db: Session = Depends(get_db)
+) -> JSONResponse:
+    """Refresh the stored last-known TR-069 config snapshot."""
+    result = web_network_ont_actions_service.execute_config_snapshot_refresh(
+        db, ont_id, request=request
+    )
+    return _action_json_response(
+        success=result.success,
+        message=result.message,
+        action="Refresh ONT Config Snapshot",
+        request=request,
+        ont_id=ont_id,
+        hx_refresh=result.success,
     )
 
 
