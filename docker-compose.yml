@@ -275,6 +275,9 @@ services:
     - GENIEACS_UI_JWT_SECRET=${GENIEACS_UI_JWT_SECRET:-l5z4WECFJ_pJ0RLg2hUx1HRo8X3ifQs7xZlGnNlHhng}
     - GENIEACS_CWMP_AUTHENTICATION=${GENIEACS_CWMP_USER:-acs_dotmac}:${GENIEACS_CWMP_PASS:-4TUHM0AssAtu8elrW6NzwwYRYAwVf0jO}
     - NODE_OPTIONS=--enable-source-maps
+    - DOTMAC_WEBHOOK_URL=http://app:8001/api/v1/tr069/inform
+    volumes:
+    - ./docker/genieacs/ext:/opt/genieacs/ext:ro
   genieacs-mongodb:
     image: mongo:4.4
     container_name: dotmac_sub_genieacs_mongodb
@@ -297,6 +300,61 @@ services:
     command:
     - -retentionPeriod=365d
     - -search.maxUniqueTimeseries=1000000
+
+  # Logging Stack - Loki, Promtail, Grafana
+  loki:
+    image: grafana/loki:3.0.0
+    container_name: dotmac_sub_loki
+    restart: unless-stopped
+    ports:
+    - 3100:3100
+    volumes:
+    - ./config/loki/loki-config.yml:/etc/loki/local-config.yaml:ro
+    - loki_data:/loki
+    command: -config.file=/etc/loki/local-config.yaml
+    healthcheck:
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://localhost:3100/ready || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  promtail:
+    image: grafana/promtail:3.0.0
+    container_name: dotmac_sub_promtail
+    restart: unless-stopped
+    volumes:
+    - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      loki:
+        condition: service_healthy
+
+  grafana:
+    image: grafana/grafana:10.3.1
+    container_name: dotmac_sub_grafana
+    restart: unless-stopped
+    ports:
+    - 3001:3000
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-dotmac123}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+      GF_SERVER_ROOT_URL: ${GRAFANA_ROOT_URL:-http://localhost:3001}
+      GF_INSTALL_PLUGINS: grafana-piechart-panel
+      # Database env vars for datasource provisioning
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Bes3SpEVyg61QebbXSpUse7_4vbOVOa_}
+    volumes:
+    - grafana_data:/var/lib/grafana
+    - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+    depends_on:
+      loki:
+        condition: service_healthy
+      victoriametrics:
+        condition: service_started
+
   bandwidth-poller:
     build: .
     container_name: dotmac_sub_bandwidth_poller
@@ -371,6 +429,8 @@ volumes:
   genieacs_mongodb_data: null
   victoriametrics_data: null
   minio_data: null
+  loki_data: null
+  grafana_data: null
 networks:
   default:
     name: dotmac_sub_default

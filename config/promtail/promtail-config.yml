@@ -1,0 +1,236 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  # Docker container logs via docker socket
+  - job_name: docker
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      # Keep only containers from our compose project
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        regex: dotmac_sub
+        action: keep
+
+      # Use container name as job label
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      # Use compose service name
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+      # Add compose project label
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_project']
+        target_label: project
+
+      # Add container ID
+      - source_labels: ['__meta_docker_container_id']
+        target_label: container_id
+
+    pipeline_stages:
+      # Parse JSON logs if present
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            message: message
+            timestamp: timestamp
+            time: time
+          source: log
+
+      # Extract level from various formats
+      - regex:
+          expression: '(?P<level>DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL|FATAL)'
+          source: log
+
+      # Labels for filtering
+      - labels:
+          level:
+
+      # Output the original log line
+      - output:
+          source: log
+
+  # GenieACS specific parsing
+  - job_name: genieacs
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: genieacs
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+    pipeline_stages:
+      # Parse GenieACS log format: timestamp level component message
+      - regex:
+          expression: '^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d+Z)\s+(?P<level>\w+)\s+(?P<component>\w+):\s+(?P<message>.*)$'
+
+      # Extract device IDs from inform messages
+      - regex:
+          expression: 'device=(?P<device_id>[^\s,]+)'
+          source: message
+
+      # Extract serial numbers
+      - regex:
+          expression: 'serial=(?P<serial_number>[^\s,]+)'
+          source: message
+
+      # Extract event types
+      - regex:
+          expression: 'event=(?P<event_type>BOOTSTRAP|BOOT|PERIODIC|VALUE_CHANGE|CONNECTION_REQUEST|\d+)'
+          source: message
+
+      - labels:
+          level:
+          component:
+          device_id:
+          event_type:
+
+  # App (FastAPI) logs
+  - job_name: app
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: app
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+    pipeline_stages:
+      # Parse uvicorn/FastAPI logs
+      - regex:
+          expression: '(?P<level>DEBUG|INFO|WARNING|WARN|ERROR|CRITICAL)'
+
+      # Parse HTTP request logs
+      - regex:
+          expression: '"(?P<method>GET|POST|PUT|DELETE|PATCH|OPTIONS)\s+(?P<path>[^\s]+)\s+HTTP/[^"]+"\s+(?P<status>\d+)'
+
+      - labels:
+          level:
+          method:
+          status:
+
+  # Celery worker logs
+  - job_name: celery
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: 'worker|beat'
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+    pipeline_stages:
+      # Parse Celery task logs
+      - regex:
+          expression: '\[(?P<level>\w+)/(?P<worker>[^\]]+)\]'
+
+      # Extract task names
+      - regex:
+          expression: 'Task\s+(?P<task_name>[^\s\[]+)'
+
+      - labels:
+          level:
+          task_name:
+
+  # Database logs (PostgreSQL)
+  - job_name: postgres
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: db
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+    pipeline_stages:
+      - regex:
+          expression: '(?P<level>LOG|WARNING|ERROR|FATAL|PANIC|DEBUG)'
+
+      - labels:
+          level:
+
+  # Redis logs
+  - job_name: redis
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: redis
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+  # FreeRADIUS logs
+  - job_name: freeradius
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        regex: freeradius
+        action: keep
+
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/?(.*)'
+        target_label: container
+
+      - source_labels: ['__meta_docker_container_label_com_docker_compose_service']
+        target_label: service
+
+    pipeline_stages:
+      # Parse RADIUS auth attempts
+      - regex:
+          expression: '(?P<auth_result>Login OK|Login incorrect|Access-Accept|Access-Reject)'
+
+      # Extract username
+      - regex:
+          expression: 'user=(?P<username>[^\s,\]]+)'
+
+      - labels:
+          auth_result:
