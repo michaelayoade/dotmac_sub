@@ -8,13 +8,21 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.models.ont_autofind import OltAutofindCandidate
 from app.schemas.network import OntAssignmentCreate, OntAssignmentUpdate
 from app.services import network as network_service
 from app.services import subscriber as subscriber_service
 from app.services.common import coerce_uuid
+from app.services.network.olt_autofind import parse_fsp_parts
+from app.services.network.olt_web_topology import ensure_canonical_pon_port
+from app.services.web_network_ont_autofind import (
+    _normalize_serial,
+    _normalized_serial_expr,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,34 +37,109 @@ class AssignmentFormResult:
     not_found_message: str = "ONT not found"
 
 
-def assignment_form_dependencies(db: Session) -> dict[str, object]:
-    """Return common select options for ONT assignment form.
+def resolve_pon_port_for_ont(db: Session, ont) -> dict[str, object]:
+    """Resolve PON port from ONT's board/port or autofind candidate.
 
-    Note: ONT assignments link directly to subscribers, not subscriptions.
-    This enables independent OLT management without requiring subscription context.
+    Checks in order:
+    1. ONT's board/port fields (set after authorization)
+    2. Active autofind candidate (known from discovery before authorization)
+
+    Returns dict with:
+        - pon_port_id: UUID if resolved, None otherwise
+        - pon_port_label: Human-readable label for display
+        - pon_port_resolved: True if auto-resolved
     """
-    return {
-        "pon_ports": network_service.pon_ports.list(
-            db=db,
-            olt_id=None,
-            is_active=True,
-            order_by="name",
-            order_dir="asc",
-            limit=500,
-            offset=0,
-        ),
-        # Accounts are now fetched via HTMX typeahead search instead
-        # of loading all 500 into a static <select> dropdown.
+    olt_device_id = getattr(ont, "olt_device_id", None)
+    board = getattr(ont, "board", None)
+    port = getattr(ont, "port", None)
+
+    # If ONT doesn't have board/port, check autofind candidate
+    if not board or not port:
+        # First try by ont_unit_id (direct link)
+        candidate = db.scalars(
+            select(OltAutofindCandidate)
+            .where(
+                OltAutofindCandidate.ont_unit_id == ont.id,
+                OltAutofindCandidate.is_active.is_(True),
+            )
+            .order_by(OltAutofindCandidate.last_seen_at.desc())
+            .limit(1)
+        ).first()
+        # Fallback to serial number match
+        if not candidate:
+            normalized_serial = _normalize_serial(ont.serial_number)
+            candidate = db.scalars(
+                select(OltAutofindCandidate)
+                .where(
+                    _normalized_serial_expr(OltAutofindCandidate.serial_number)
+                    == normalized_serial,
+                    OltAutofindCandidate.is_active.is_(True),
+                )
+                .order_by(OltAutofindCandidate.last_seen_at.desc())
+                .limit(1)
+            ).first()
+        if candidate:
+            olt_device_id = candidate.olt_id
+            board, port = parse_fsp_parts(candidate.fsp)
+
+    if not olt_device_id or not board or not port:
+        return {
+            "pon_port_id": None,
+            "pon_port_label": None,
+            "pon_port_resolved": False,
+        }
+
+    fsp = f"{board}/{port}"
+    try:
+        pon_port = ensure_canonical_pon_port(
+            db, olt_id=olt_device_id, fsp=fsp, board=board, port=port
+        )
+        # Get OLT name for display
+        olt_name = ""
+        olt_device = getattr(ont, "olt_device", None)
+        if not olt_device:
+            from app.models.network import OLTDevice
+            olt_device = db.get(OLTDevice, olt_device_id)
+        if olt_device:
+            olt_name = f" ({olt_device.name})"
+        return {
+            "pon_port_id": str(pon_port.id),
+            "pon_port_label": f"{fsp}{olt_name}",
+            "pon_port_resolved": True,
+        }
+    except Exception:
+        logger.exception("Failed to resolve PON port for ONT %s", ont.id)
+        return {
+            "pon_port_id": None,
+            "pon_port_label": None,
+            "pon_port_resolved": False,
+        }
+
+
+def assignment_form_dependencies(db: Session, ont=None) -> dict[str, object]:
+    """Return form context for ONT assignment.
+
+    When ont is provided, auto-resolves PON port from discovered board/port.
+    Subscriber accounts are fetched via HTMX typeahead search.
+    """
+    result: dict[str, object] = {
+        # Accounts fetched via HTMX typeahead, not static dropdown
         "accounts": [],
-        "addresses": subscriber_service.addresses.list(
-            db=db,
-            subscriber_id=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=500,
-            offset=0,
-        ),
+        # Addresses will be resolved from selected subscriber
+        "addresses": [],
+        # Subscriptions will be resolved from selected subscriber
+        "subscriptions": [],
     }
+
+    # Auto-resolve PON port from ONT discovery data
+    if ont is not None:
+        result.update(resolve_pon_port_for_ont(db, ont))
+    else:
+        result["pon_port_id"] = None
+        result["pon_port_label"] = None
+        result["pon_port_resolved"] = False
+
+    return result
 
 
 def parse_form_values(form) -> dict[str, object]:
@@ -91,24 +174,60 @@ def has_active_assignment(db: Session, ont_id: str) -> bool:
     return any(a.active for a in assignments)
 
 
-def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
-    """Create ONT assignment and activate ONT."""
-    resolved_pon_port_id = (
-        coerce_uuid(str(values["pon_port_id"]))
-        if values.get("pon_port_id")
-        else getattr(ont, "pon_port_id", None)
+def resolve_pon_port_id_for_assignment(
+    db: Session, ont, values: dict[str, object]
+) -> str | None:
+    """Resolve PON port ID for assignment, auto-detecting from ONT if possible."""
+    # Use explicitly provided value first
+    if values.get("pon_port_id"):
+        return str(values["pon_port_id"])
+
+    # Auto-resolve from ONT's discovered board/port
+    resolved = resolve_pon_port_for_ont(db, ont)
+    if resolved.get("pon_port_id"):
+        return str(resolved["pon_port_id"])
+
+    # For TR-069-only devices, PON port is optional
+    return None
+
+
+def resolve_service_address_for_subscriber(
+    db: Session, subscriber_id: str
+) -> str | None:
+    """Get the subscriber's primary/first service address."""
+    addresses = subscriber_service.addresses.list(
+        db=db,
+        subscriber_id=subscriber_id,
+        order_by="created_at",
+        order_dir="asc",
+        limit=1,
+        offset=0,
     )
-    if resolved_pon_port_id is None:
-        raise ValueError("PON port is required")
+    if addresses:
+        return str(addresses[0].id)
+    return None
+
+
+def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
+    """Create ONT assignment, auto-resolving PON port and address."""
+    pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
+    pon_port_id = coerce_uuid(pon_port_id_str) if pon_port_id_str else None
+
+    subscriber_id = str(values["account_id"])
+
+    # Auto-resolve service address from subscriber if not provided
+    service_address_id_str = (
+        str(values["service_address_id"])
+        if values.get("service_address_id")
+        else resolve_service_address_for_subscriber(db, subscriber_id)
+    )
 
     payload = OntAssignmentCreate(
         ont_unit_id=ont.id,
-        pon_port_id=resolved_pon_port_id,
-        subscriber_id=coerce_uuid(str(values["account_id"])),
+        pon_port_id=pon_port_id,
+        subscriber_id=coerce_uuid(subscriber_id),
         service_address_id=(
-            coerce_uuid(str(values["service_address_id"]))
-            if values.get("service_address_id")
-            else None
+            coerce_uuid(service_address_id_str) if service_address_id_str else None
         ),
         assigned_at=datetime.now(UTC),
         active=True,
@@ -117,15 +236,41 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     network_service.ont_assignments.create(db=db, payload=payload)
 
 
-def form_payload(values: dict[str, object]) -> dict[str, object]:
-    """Return template-friendly form payload."""
-    return {
+def form_payload(values: dict[str, object], db: Session | None = None) -> dict[str, object]:
+    """Return template-friendly form payload.
+
+    If db is provided and account_id is set, looks up the subscriber label
+    so the typeahead field can be repopulated on validation errors.
+    """
+    result = {
         "pon_port_id": values.get("pon_port_id"),
         "account_id": values.get("account_id"),
+        "account_label": "",
         "subscription_id": values.get("subscription_id"),
         "service_address_id": values.get("service_address_id"),
         "notes": values.get("notes"),
     }
+    # Look up subscriber label for typeahead repopulation
+    if db and values.get("account_id"):
+        try:
+            subscriber = subscriber_service.subscribers.get(
+                db, str(values["account_id"])
+            )
+            if subscriber:
+                if subscriber.category == subscriber.category.business:
+                    result["account_label"] = (
+                        subscriber.company_name
+                        or subscriber.display_name
+                        or subscriber.full_name
+                    )
+                else:
+                    label = f"{subscriber.first_name} {subscriber.last_name}"
+                    if subscriber.email:
+                        label = f"{label} ({subscriber.email})"
+                    result["account_label"] = label
+        except Exception:
+            pass  # Keep empty label on lookup failure
+    return result
 
 
 def assignment_form_payload_from_assignment(assignment) -> dict[str, object]:

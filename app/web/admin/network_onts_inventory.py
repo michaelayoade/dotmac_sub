@@ -105,7 +105,7 @@ def _assignment_form_context(
     mode: str = "create",
     assignment=None,
 ) -> dict[str, object]:
-    deps = web_network_ont_assignments_service.assignment_form_dependencies(db)
+    deps = web_network_ont_assignments_service.assignment_form_dependencies(db, ont=ont)
     context = _base_context(request, db, active_page="onts")
     context.update(
         {
@@ -333,7 +333,10 @@ def ont_detail(
     dependencies=[Depends(require_permission("network:read"))],
 )
 def ont_assign_new(
-    request: Request, ont_id: str, db: Session = Depends(get_db)
+    request: Request,
+    ont_id: str,
+    return_to: str | None = None,
+    db: Session = Depends(get_db),
 ) -> HTMLResponse:
     result = web_network_ont_assignments_service.get_ont_for_assignment_form(db, ont_id)
     if result.not_found:
@@ -351,6 +354,8 @@ def ont_assign_new(
         action_url=f"/admin/network/onts/{result.ont.id}/assign",
         mode="create",
     )
+    if return_to in ("provision",):
+        context["return_to"] = return_to
     return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
 
@@ -360,10 +365,12 @@ def ont_assign_new(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_db)):
+    form = parse_form_data_sync(request)
+    return_to = _form_str(form, "return_to")
     result = web_network_ont_assignments_service.create_assignment_from_form(
         db,
         ont_id,
-        parse_form_data_sync(request),
+        form,
     )
     if result.not_found:
         return templates.TemplateResponse(
@@ -380,12 +387,20 @@ def ont_assign_create(request: Request, ont_id: str, db: Session = Depends(get_d
             ont=result.ont,
             action_url=f"/admin/network/onts/{result.ont.id}/assign",
             error=result.error,
-            form=web_network_ont_assignments_service.form_payload(result.values or {}),
+            form=web_network_ont_assignments_service.form_payload(result.values or {}, db),
             mode="create",
         )
+        if return_to in ("provision",):
+            context["return_to"] = return_to
         return templates.TemplateResponse("admin/network/onts/assign.html", context)
 
     assert result.ont is not None
+    # Redirect back to provision page if that's where the user came from
+    if return_to == "provision":
+        return RedirectResponse(
+            url=f"/admin/network/onts/{result.ont.id}/provision?status=success&message=ONT+assignment+created.",
+            status_code=303,
+        )
     return _ont_redirect(
         str(result.ont.id),
         status="success",
@@ -463,7 +478,7 @@ def ont_assignment_update(
             ont=result.ont,
             action_url=f"/admin/network/onts/{result.ont.id}/assignments/{result.assignment.id}/edit",
             error=result.error,
-            form=web_network_ont_assignments_service.form_payload(result.values or {}),
+            form=web_network_ont_assignments_service.form_payload(result.values or {}, db),
             mode="edit",
             assignment=result.assignment,
         )

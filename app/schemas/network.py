@@ -570,7 +570,7 @@ class OntAssignmentBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     ont_unit_id: UUID
-    pon_port_id: UUID
+    pon_port_id: UUID | None = None  # Optional for TR-069-only devices
     subscriber_id: UUID | None = Field(
         default=None, validation_alias="account_id", serialization_alias="account_id"
     )

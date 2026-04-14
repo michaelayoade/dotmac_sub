@@ -20,7 +20,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OntUnit, OnuOnlineStatus
+from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_assignment_alignment import (
@@ -122,6 +122,126 @@ def _resolve_authorized_autofind_candidate(
             exc,
         )
         return False, f"Failed to mark discovered ONT as authorized: {exc}"
+
+
+def _configure_management_ip_for_authorization(
+    db: Session,
+    *,
+    olt: OLTDevice,
+    fsp: str,
+    ont_id_on_olt: int,
+) -> tuple[bool, str]:
+    """Configure ONT management IP/VLAN so it can reach the ACS server.
+
+    Uses the OLT's provisioning profile settings (mgmt_vlan_tag, mgmt_ip_mode)
+    to configure management connectivity. This enables the ONT to contact
+    the TR-069 ACS after authorization.
+
+    Returns:
+        (success, message) tuple. Returns (True, "skipped") if profile has
+        no management VLAN configured.
+    """
+    from sqlalchemy import desc, select
+
+    from app.models.network import OntProvisioningProfile
+    from app.services.network.olt_ssh_ont import (
+        configure_ont_internet_config,
+        configure_ont_iphost,
+    )
+
+    # Get the OLT's provisioning profile (is_default first, then most recent)
+    stmt = (
+        select(OntProvisioningProfile)
+        .where(
+            OntProvisioningProfile.olt_device_id == olt.id,
+            OntProvisioningProfile.is_active.is_(True),
+        )
+        .order_by(
+            desc(OntProvisioningProfile.is_default),
+            desc(OntProvisioningProfile.updated_at),
+            desc(OntProvisioningProfile.created_at),
+        )
+    )
+    profile = db.scalars(stmt).first()
+    if profile is None:
+        logger.info(
+            "Skipping management IP config for ONT on %s: no provisioning profile found for OLT %s",
+            fsp,
+            olt.name,
+        )
+        return True, "Skipped: no provisioning profile configured for this OLT."
+
+    mgmt_vlan_tag = getattr(profile, "mgmt_vlan_tag", None)
+    if mgmt_vlan_tag is None:
+        logger.info(
+            "Skipping management IP config for ONT on %s: profile '%s' has no mgmt_vlan_tag",
+            fsp,
+            profile.name,
+        )
+        return True, f"Skipped: profile '{profile.name}' has no management VLAN configured."
+
+    # Determine IP mode (default to DHCP)
+    mgmt_ip_mode_raw = getattr(profile, "mgmt_ip_mode", None)
+    mgmt_ip_mode = "dhcp"
+    if mgmt_ip_mode_raw is not None:
+        if hasattr(mgmt_ip_mode_raw, "value"):
+            mgmt_ip_mode = mgmt_ip_mode_raw.value
+        else:
+            mgmt_ip_mode = str(mgmt_ip_mode_raw)
+
+    logger.info(
+        "Configuring management IP for ONT on %s %s: VLAN %d, mode %s (profile '%s')",
+        olt.name,
+        fsp,
+        mgmt_vlan_tag,
+        mgmt_ip_mode,
+        profile.name,
+    )
+
+    # Configure management IP via OLT SSH
+    iphost_ok, iphost_msg = configure_ont_iphost(
+        olt,
+        fsp,
+        ont_id_on_olt,
+        vlan_id=int(mgmt_vlan_tag),
+        ip_mode=mgmt_ip_mode,
+    )
+    if not iphost_ok:
+        logger.warning(
+            "Management IP config failed for ONT on %s %s: %s",
+            olt.name,
+            fsp,
+            iphost_msg,
+        )
+        return False, f"Management IP config failed: {iphost_msg}"
+
+    # Activate TCP stack if internet_config_ip_index is set
+    internet_config_ip_index = getattr(profile, "internet_config_ip_index", None)
+    if internet_config_ip_index is not None:
+        logger.info(
+            "Activating internet-config for ONT on %s %s: ip-index %d",
+            olt.name,
+            fsp,
+            internet_config_ip_index,
+        )
+        ic_ok, ic_msg = configure_ont_internet_config(
+            olt,
+            fsp,
+            ont_id_on_olt,
+            ip_index=int(internet_config_ip_index),
+        )
+        if not ic_ok:
+            logger.warning(
+                "Internet-config activation failed for ONT on %s %s: %s",
+                olt.name,
+                fsp,
+                ic_msg,
+            )
+            # Continue anyway - iphost config succeeded
+            return True, f"{iphost_msg} (internet-config failed: {ic_msg})"
+        return True, f"{iphost_msg}; {ic_msg}"
+
+    return True, iphost_msg
 
 
 def _validate_autofind_candidate(
@@ -958,8 +1078,20 @@ def run_post_authorization_follow_up(
     if not resolve_ok:
         return False, resolve_msg, steps
 
+    # Configure management IP so ONT can reach ACS (must happen before TR-069 bind)
+    olt = get_olt_or_none(db, olt_id)
+    if olt is not None:
+        mgmt_ok, mgmt_msg = _configure_management_ip_for_authorization(
+            db,
+            olt=olt,
+            fsp=fsp,
+            ont_id_on_olt=ont_id_on_olt,
+        )
+        _add_step("Configure management IP", mgmt_ok, mgmt_msg)
+        # Continue even if management IP config fails - it may already be configured
+        # or the profile may not specify a management VLAN
+
     try:
-        olt = get_olt_or_none(db, olt_id)
         if olt is not None:
             from app.services.network.olt_ssh_ont import bind_tr069_server_profile
             from app.services.network.olt_tr069_admin import (

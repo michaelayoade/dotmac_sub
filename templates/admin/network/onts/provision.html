@@ -163,7 +163,7 @@
                         <a href="/admin/customers/person/{{ subscriber.id }}" class="text-xs text-indigo-600 hover:text-indigo-800 dark:text-indigo-400">View</a>
                     </div>
                     {% else %}
-                    <p class="mt-1 text-sm text-amber-600 dark:text-amber-400">No subscriber assigned. <a href="/admin/network/onts/{{ ont.id }}" class="underline">Assign first</a>.</p>
+                    <p class="mt-1 text-sm text-amber-600 dark:text-amber-400">No subscriber assigned. <a href="/admin/network/onts/{{ ont.id }}/assign?return_to=provision" class="underline">Assign first</a>.</p>
                     {% endif %}
                 </div>
                 <div>
