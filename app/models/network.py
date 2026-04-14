@@ -1144,6 +1144,13 @@ class OntUnit(Base):
     mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
     voip_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    # LAN configuration (independent of service orders)
+    lan_gateway_ip: Mapped[str | None] = mapped_column(String(64))
+    lan_subnet_mask: Mapped[str | None] = mapped_column(String(64))
+    lan_dhcp_enabled: Mapped[bool | None] = mapped_column(Boolean)
+    lan_dhcp_start: Mapped[str | None] = mapped_column(String(64))
+    lan_dhcp_end: Mapped[str | None] = mapped_column(String(64))
+
     # Provisioning profile tracking (desired → observed state bridge)
     provisioning_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("ont_provisioning_profiles.id")

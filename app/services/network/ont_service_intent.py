@@ -45,15 +45,25 @@ def build_service_intent(
 ) -> dict[str, object]:
     """Return a normalized desired-service summary for an ONT.
 
-    The ONT model contains the durable service intent we have today. Service
-    order execution context fills gaps for values that are not yet first-class
-    ONT columns, such as LAN DHCP ranges and WiFi settings.
+    The ONT model contains the durable service intent. LAN configuration is
+    stored directly on the ONT (independent of service orders). Service order
+    execution context provides fallback for backwards compatibility and fills
+    gaps for values not yet on the ONT model, such as WiFi settings.
     """
     subscriber_info = subscriber_info or {}
     ont_plan = ont_plan or {}
     mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
     wan_plan = _plan_section(ont_plan, "configure_wan_tr069")
-    lan_plan = _plan_section(ont_plan, "configure_lan_tr069")
+    lan_plan_from_order = _plan_section(ont_plan, "configure_lan_tr069")
+    # LAN config is now stored directly on ONT; fall back to service order for
+    # backwards compatibility with in-flight orders
+    lan_plan = lan_plan_from_order or {
+        "lan_ip": getattr(ont, "lan_gateway_ip", None),
+        "lan_subnet": getattr(ont, "lan_subnet_mask", None),
+        "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
+        "dhcp_start": getattr(ont, "lan_dhcp_start", None),
+        "dhcp_end": getattr(ont, "lan_dhcp_end", None),
+    }
     wifi_plan = _plan_section(ont_plan, "configure_wifi_tr069")
     service_port_plan = _plan_section(ont_plan, "create_service_port")
     pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069")

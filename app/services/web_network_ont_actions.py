@@ -1110,7 +1110,11 @@ def _build_ont_operations_runbook(
         or _intent_step_present(ont_plan, "push_pppoe_tr069")
         or _intent_step_present(ont_plan, "push_pppoe_omci")
     )
-    has_lan_intent = _intent_step_present(ont_plan, "configure_lan_tr069")
+    has_lan_intent = bool(
+        getattr(ont, "lan_gateway_ip", None)
+        or getattr(ont, "lan_subnet_mask", None)
+        or _intent_step_present(ont_plan, "configure_lan_tr069")
+    )
     has_wifi_intent = _intent_step_present(ont_plan, "configure_wifi_tr069")
     has_running_snapshot = bool(snapshots)
 

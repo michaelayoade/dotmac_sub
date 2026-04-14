@@ -401,11 +401,20 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         if getattr(pool, "vlan_id", None)
     }
     ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-    lan_intent = (
+    lan_intent_from_order = (
         ont_plan.get("configure_lan_tr069")
         if isinstance(ont_plan.get("configure_lan_tr069"), dict)
         else {}
     )
+    # Fall back to ONT model fields when no service order LAN intent exists
+    # (LAN config is now stored directly on ONT, independent of service orders)
+    lan_intent = lan_intent_from_order or {
+        "lan_ip": getattr(ont, "lan_gateway_ip", None),
+        "lan_subnet": getattr(ont, "lan_subnet_mask", None),
+        "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
+        "dhcp_start": getattr(ont, "lan_dhcp_start", None),
+        "dhcp_end": getattr(ont, "lan_dhcp_end", None),
+    }
     wifi_intent = (
         ont_plan.get("configure_wifi_tr069")
         if isinstance(ont_plan.get("configure_wifi_tr069"), dict)

@@ -725,6 +725,12 @@ def save_provision_settings(
         pppoe_password=encrypt_credential(pppoe_password_value)
         if wan_protocol_value == "pppoe" and pppoe_password_value
         else None,
+        # LAN configuration (persisted directly on ONT, independent of service orders)
+        lan_gateway_ip=lan_ip_value,
+        lan_subnet_mask=lan_subnet_value,
+        lan_dhcp_enabled=dhcp_enabled_value,
+        lan_dhcp_start=dhcp_start_value,
+        lan_dhcp_end=dhcp_end_value,
     )
     try:
         for key, value in payload.model_dump(exclude_unset=True).items():

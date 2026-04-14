@@ -538,6 +538,12 @@ class OntUnitUpdate(BaseModel):
     mgmt_ip_address: str | None = Field(default=None, max_length=64)
     mgmt_remote_access: bool | None = None
     voip_enabled: bool | None = None
+    # LAN configuration (independent of service orders)
+    lan_gateway_ip: str | None = Field(default=None, max_length=64)
+    lan_subnet_mask: str | None = Field(default=None, max_length=64)
+    lan_dhcp_enabled: bool | None = None
+    lan_dhcp_start: str | None = Field(default=None, max_length=64)
+    lan_dhcp_end: str | None = Field(default=None, max_length=64)
 
 
 class OntUnitRead(OntUnitBase):
@@ -562,6 +568,12 @@ class OntUnitRead(OntUnitBase):
     observed_wifi_clients: int | None = None
     observed_lan_hosts: int | None = None
     observed_runtime_updated_at: datetime | None = None
+    # LAN configuration (independent of service orders)
+    lan_gateway_ip: str | None = None
+    lan_subnet_mask: str | None = None
+    lan_dhcp_enabled: bool | None = None
+    lan_dhcp_start: str | None = None
+    lan_dhcp_end: str | None = None
     created_at: datetime
     updated_at: datetime
 
