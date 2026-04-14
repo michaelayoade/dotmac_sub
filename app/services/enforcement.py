@@ -95,12 +95,38 @@ def _default_address_list(db: Session) -> str | None:
 
 
 def _resolve_effective_profile(
-    db: Session, subscription: Subscription
+    db: Session,
+    subscription: Subscription,
+    credential: AccessCredential | None = None,
 ) -> RadiusProfile | None:
+    """Resolve the effective RADIUS profile for a subscription.
+
+    Resolution priority:
+    1. Credential-level override (if credential provided)
+    2. Subscription-level override
+    3. Offer's default profile (via OfferRadiusProfile)
+
+    Args:
+        db: Database session
+        subscription: The subscription to resolve profile for
+        credential: Optional credential to check for override
+
+    Returns:
+        RadiusProfile or None if no profile is configured
+    """
+    # 1. Check credential-level override first
+    if credential and credential.radius_profile_id:
+        profile = db.get(RadiusProfile, credential.radius_profile_id)
+        if profile:
+            return profile
+
+    # 2. Check subscription-level override
     if subscription.radius_profile_id:
         profile = db.get(RadiusProfile, subscription.radius_profile_id)
         if profile:
             return profile
+
+    # 3. Fall back to offer's default profile
     offer_profile = (
         db.query(OfferRadiusProfile)
         .filter(OfferRadiusProfile.offer_id == subscription.offer_id)
@@ -288,18 +314,12 @@ def update_subscription_sessions(
     """Send CoA-Update to active sessions to apply new profile in-place.
 
     Falls back to disconnect+reconnect if CoA-Update is not supported
-    or fails.
+    or fails. Uses credential-level profile override if available.
     """
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
         raise HTTPException(status_code=404, detail="Subscription not found")
-    profile = _resolve_effective_profile(db, subscription)
-    if not profile:
-        logger.warning(
-            "No profile found for subscription %s, skipping CoA update.",
-            subscription_id,
-        )
-        return 0
+
     sessions = (
         db.query(RadiusAccountingSession)
         .filter(RadiusAccountingSession.subscription_id == subscription.id)
@@ -309,9 +329,19 @@ def update_subscription_sessions(
     )
     if not sessions:
         return 0
+
     count = 0
     for session in sessions:
         credential = db.get(AccessCredential, session.access_credential_id)
+        # Resolve profile with credential-level override support
+        profile = _resolve_effective_profile(db, subscription, credential)
+        if not profile:
+            logger.warning(
+                "No profile found for session %s, skipping CoA update.",
+                session.id,
+            )
+            continue
+
         nas_device = _resolve_nas_device(db, session)
         username = credential.username if credential else None
         framed_ip = subscription.ipv4_address
@@ -696,6 +726,148 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
     db.flush()
     logger.info(
         "Subscription %s cancellation cleanup: %s",
+        subscription_id,
+        stats,
+    )
+    return stats
+
+
+def cleanup_subscription_on_suspend(db: Session, subscription_id: str) -> dict[str, int]:
+    """Cleanup when a subscription is suspended.
+
+    Unlike cancellation, suspension is reversible so we:
+    1. Disconnect all active RADIUS sessions
+    2. Deactivate RadiusUser records (prevents new auth)
+    3. Remove credentials from external RADIUS DB
+    4. Optionally add to blocked address list
+
+    Credentials themselves remain active for when the subscription
+    is restored.
+
+    Returns:
+        Dict with counts of each cleanup action
+    """
+    from app.models.radius import RadiusUser
+
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    if not subscription:
+        return {"error": 1}
+
+    stats: dict[str, int] = {
+        "sessions_disconnected": 0,
+        "radius_users_deactivated": 0,
+        "external_radius_removed": 0,
+        "address_list_blocked": 0,
+    }
+
+    # 1. Disconnect active sessions
+    try:
+        stats["sessions_disconnected"] = disconnect_subscription_sessions(
+            db,
+            subscription_id,
+            reason="suspended",
+        )
+    except Exception as exc:
+        logger.warning("Session disconnect on suspend failed: %s", exc)
+
+    # 2. Deactivate RadiusUser records for this subscription
+    # This prevents new authentication attempts while suspended
+    radius_users = (
+        db.query(RadiusUser)
+        .filter(RadiusUser.subscription_id == subscription.id)
+        .filter(RadiusUser.is_active.is_(True))
+        .all()
+    )
+    for ru in radius_users:
+        ru.is_active = False
+        stats["radius_users_deactivated"] += 1
+
+    # 3. Remove credentials from external RADIUS DB
+    credentials = (
+        db.query(AccessCredential)
+        .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
+        .filter(AccessCredential.is_active.is_(True))
+        .all()
+    )
+    if credentials:
+        try:
+            _remove_credentials_from_external_radius(db, credentials)
+            stats["external_radius_removed"] = len(credentials)
+        except Exception as exc:
+            logger.warning("External RADIUS removal on suspend failed: %s", exc)
+
+    # 4. Apply address list block if configured
+    try:
+        stats["address_list_blocked"] = apply_subscription_address_list_block(
+            db, subscription_id
+        )
+    except Exception as exc:
+        logger.warning("Address list block on suspend failed: %s", exc)
+
+    db.flush()
+    logger.info(
+        "Subscription %s suspension cleanup: %s",
+        subscription_id,
+        stats,
+    )
+    return stats
+
+
+def restore_subscription_connectivity(
+    db: Session, subscription_id: str
+) -> dict[str, int]:
+    """Restore RADIUS connectivity when a subscription is resumed.
+
+    Reverses the suspension cleanup:
+    1. Reactivate RadiusUser records
+    2. Sync credentials back to external RADIUS DB
+    3. Remove address list blocks
+
+    Returns:
+        Dict with counts of each restore action
+    """
+    from app.models.radius import RadiusUser
+    from app.services.radius import reconcile_subscription_connectivity
+
+    subscription = db.get(Subscription, coerce_uuid(subscription_id))
+    if not subscription:
+        return {"error": 1}
+
+    stats: dict[str, int] = {
+        "radius_users_reactivated": 0,
+        "external_radius_synced": 0,
+        "address_list_unblocked": 0,
+    }
+
+    # 1. Reactivate RadiusUser records
+    radius_users = (
+        db.query(RadiusUser)
+        .filter(RadiusUser.subscription_id == subscription.id)
+        .filter(RadiusUser.is_active.is_(False))
+        .all()
+    )
+    for ru in radius_users:
+        ru.is_active = True
+        stats["radius_users_reactivated"] += 1
+
+    # 2. Sync credentials back to external RADIUS
+    try:
+        result = reconcile_subscription_connectivity(db, subscription_id)
+        stats["external_radius_synced"] = result.get("external_credentials_synced", 0)
+    except Exception as exc:
+        logger.warning("RADIUS sync on restore failed: %s", exc)
+
+    # 3. Remove address list blocks
+    try:
+        stats["address_list_unblocked"] = remove_subscription_address_list_block(
+            db, subscription_id
+        )
+    except Exception as exc:
+        logger.warning("Address list unblock on restore failed: %s", exc)
+
+    db.flush()
+    logger.info(
+        "Subscription %s restore cleanup: %s",
         subscription_id,
         stats,
     )

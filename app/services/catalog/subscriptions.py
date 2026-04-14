@@ -170,6 +170,59 @@ def _sync_credentials_to_radius(db: Session, subscriber_id) -> None:
         )
 
 
+def _select_nas_for_subscriber(db: Session, subscriber_id: str):
+    """Select an appropriate NAS device for a subscriber based on their POP site.
+
+    Selection priority:
+    1. Active NAS devices in subscriber's POP site
+    2. Prefer NAS with lowest current_subscriber_count (load balancing)
+    3. Fall back to None if no suitable NAS found
+
+    Returns:
+        NasDevice ID or None
+    """
+    from app.models.catalog import NasDevice, NasDeviceStatus
+    from app.models.network_monitoring import PopSite
+    from app.models.subscriber import Subscriber
+
+    subscriber = db.get(Subscriber, subscriber_id)
+    if not subscriber or not subscriber.pop_site_id:
+        return None
+
+    pop_site = db.get(PopSite, subscriber.pop_site_id)
+    if not pop_site:
+        return None
+
+    # Find active NAS devices in this POP site, ordered by load
+    nas_device = (
+        db.query(NasDevice)
+        .filter(NasDevice.pop_site_id == pop_site.id)
+        .filter(NasDevice.is_active.is_(True))
+        .filter(NasDevice.status == NasDeviceStatus.active)
+        .order_by(
+            NasDevice.current_subscriber_count.asc().nullsfirst(),
+            NasDevice.created_at.asc(),
+        )
+        .first()
+    )
+
+    if nas_device:
+        logger.debug(
+            "Auto-selected NAS device %s for subscriber %s (POP: %s)",
+            nas_device.id,
+            subscriber_id,
+            pop_site.name,
+        )
+        return nas_device.id
+
+    logger.debug(
+        "No active NAS device found in POP %s for subscriber %s",
+        pop_site.name,
+        subscriber_id,
+    )
+    return None
+
+
 def _auto_generate_pppoe(
     db: Session,
     subscription: Subscription,
@@ -253,7 +306,11 @@ def _emit_subscription_status_event(
     from_status: SubscriptionStatus | None,
     to_status: SubscriptionStatus | None,
 ) -> None:
-    """Emit the appropriate event based on subscription status transition."""
+    """Emit the appropriate event based on subscription status transition.
+
+    IMPORTANT: For activation, credentials are synced BEFORE events are emitted
+    to ensure provisioning handlers have access to RadiusUser records.
+    """
     if to_status is None:
         return
 
@@ -273,7 +330,22 @@ def _emit_subscription_status_event(
         # Generate PPPoE BEFORE events so provisioning handler sees credentials
         _auto_generate_pppoe(db, subscription)
 
+        # CRITICAL: Sync credentials to RADIUS BEFORE emitting events
+        # This ensures provisioning handlers can access RadiusUser records
+        _sync_credentials_to_radius(db, subscription.subscriber_id)
+
+        # If resuming from suspension, restore connectivity
         if from_status == SubscriptionStatus.suspended:
+            try:
+                from app.services.enforcement import restore_subscription_connectivity
+
+                restore_subscription_connectivity(db, str(subscription.id))
+            except Exception as exc:
+                logger.warning(
+                    "Failed to restore connectivity for subscription %s: %s",
+                    subscription.id,
+                    exc,
+                )
             emit_event(
                 db,
                 EventType.subscription_resumed,
@@ -292,10 +364,18 @@ def _emit_subscription_status_event(
             # Generate prorated invoice for new activations
             _generate_proration_if_enabled(db, subscription, from_status)
 
-        # Sync credentials to RADIUS immediately on activation/resume
-        _sync_credentials_to_radius(db, subscription.subscriber_id)
-
     elif to_status == SubscriptionStatus.suspended:
+        # Cleanup RADIUS connectivity on suspension
+        try:
+            from app.services.enforcement import cleanup_subscription_on_suspend
+
+            cleanup_subscription_on_suspend(db, str(subscription.id))
+        except Exception as exc:
+            logger.warning(
+                "Failed to cleanup on suspend for subscription %s: %s",
+                subscription.id,
+                exc,
+            )
         emit_event(
             db,
             EventType.subscription_suspended,
@@ -965,6 +1045,15 @@ class Subscriptions(ListResponseMixin):
             end_at = _compute_contract_end_at(start_at, data["contract_term"])
             if end_at:
                 data["end_at"] = end_at
+
+        # Auto-select NAS device from subscriber's POP site if not provided
+        if "provisioning_nas_device_id" not in fields_set or not data.get(
+            "provisioning_nas_device_id"
+        ):
+            nas_device_id = _select_nas_for_subscriber(db, str(payload.subscriber_id))
+            if nas_device_id:
+                data["provisioning_nas_device_id"] = nas_device_id
+
         subscription = Subscription(**data)
         apply_offer_radius_profile(
             db,
@@ -996,10 +1085,14 @@ class Subscriptions(ListResponseMixin):
             account_id=subscription.subscriber_id,
         )
 
-        # If created as active, generate credentials FIRST so the provisioning
-        # handler (triggered by the activation event) sees them.
+        # If created as active, generate credentials and sync to RADIUS FIRST
+        # so the provisioning handler (triggered by the activation event) sees them.
         if subscription.status == SubscriptionStatus.active:
             _auto_generate_pppoe(db, subscription)
+
+            # CRITICAL: Sync credentials to RADIUS BEFORE emitting events
+            # This ensures provisioning handlers can access RadiusUser records
+            _sync_credentials_to_radius(db, subscription.subscriber_id)
 
             emit_event(
                 db,
@@ -1015,7 +1108,6 @@ class Subscriptions(ListResponseMixin):
                 subscription_id=subscription.id,
                 account_id=subscription.subscriber_id,
             )
-            _sync_credentials_to_radius(db, subscription.subscriber_id)
 
         # SQLite drops tzinfo even when DateTime(timezone=True), and emit_event()
         # commits may expire the instance. Normalize to UTC right before returning
@@ -1189,6 +1281,17 @@ class Subscriptions(ListResponseMixin):
             end_at = _compute_contract_end_at(start_at, term)
             if end_at:
                 data["end_at"] = end_at
+
+        # Auto-select NAS device when activating if not already set
+        if (
+            status == SubscriptionStatus.active
+            and not subscription.provisioning_nas_device_id
+            and "provisioning_nas_device_id" not in data
+        ):
+            nas_device_id = _select_nas_for_subscriber(db, subscriber_id)
+            if nas_device_id:
+                data["provisioning_nas_device_id"] = nas_device_id
+
         for key, value in data.items():
             setattr(subscription, key, value)
         if "radius_profile_id" in data:
