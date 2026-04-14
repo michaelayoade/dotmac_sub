@@ -799,6 +799,344 @@ class TestSuspendResumeServiceLayer:
         assert lock.is_active is False
 
 
+class TestVacationHoldUsageLimits:
+    """Tests for vacation hold usage limits and cooldown periods."""
+
+    def test_get_vacation_hold_usage_counts_holds_this_year(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import UTC, datetime
+
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import _get_vacation_hold_usage
+
+        # Create a resolved hold from this year
+        lock = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.customer_hold,
+            source="test",
+            is_active=False,
+            resolved_at=datetime.now(UTC),
+            resolved_by="test",
+            created_at=datetime.now(UTC),
+        )
+        db_session.add(lock)
+        db_session.commit()
+
+        usage = _get_vacation_hold_usage(db_session, str(subscription.id))
+
+        assert usage["holds_this_year"] == 1
+        assert usage["last_hold_date"] is not None
+        assert usage["days_since_last"] is not None
+        assert usage["days_since_last"] >= 0
+
+    def test_get_vacation_hold_usage_returns_zero_for_no_holds(
+        self, db_session, subscription
+    ) -> None:
+        from app.services.customer_portal_flow_services import _get_vacation_hold_usage
+
+        usage = _get_vacation_hold_usage(db_session, str(subscription.id))
+
+        assert usage["holds_this_year"] == 0
+        assert usage["last_hold_date"] is None
+        assert usage["days_since_last"] is None
+
+    def test_apply_service_suspend_rejects_when_max_holds_reached(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from unittest.mock import patch
+
+        import pytest
+
+        from app.models.catalog import SubscriptionStatus
+        from app.services.customer_portal_flow_services import apply_service_suspend
+
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        # Mock the settings and usage to simulate max holds reached
+        def mock_resolve_value(db, domain, key):
+            if key == "max_suspend_holds_per_year":
+                return 2
+            if key == "customer_suspend_enabled":
+                return True
+            if key == "max_suspend_days":
+                return 30
+            if key == "suspend_cooldown_days":
+                return 0
+            return None
+
+        # Mock usage to show 2 holds already used
+        mock_usage = {
+            "holds_this_year": 2,
+            "last_hold_date": None,
+            "days_since_last": None,
+        }
+
+        with patch(
+            "app.services.settings_spec.resolve_value",
+            side_effect=mock_resolve_value,
+        ):
+            with patch(
+                "app.services.customer_portal_flow_services._get_vacation_hold_usage",
+                return_value=mock_usage,
+            ):
+                with pytest.raises(ValueError, match="maximum of 2 vacation holds"):
+                    apply_service_suspend(
+                        db_session,
+                        {"account_id": subscriber.id},
+                        str(subscription.id),
+                        days=7,
+                    )
+
+    def test_apply_service_suspend_rejects_during_cooldown(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        import pytest
+
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import apply_service_suspend
+
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        # Create a recent hold (within cooldown period)
+        lock = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.customer_hold,
+            source="test",
+            is_active=False,
+            resolved_at=datetime.now(UTC),
+            resolved_by="test",
+            created_at=datetime.now(UTC),  # Just created today
+        )
+        db_session.add(lock)
+        db_session.commit()
+
+        # Mock the setting to have 7 day cooldown
+        def mock_resolve_value(db, domain, key):
+            if key == "suspend_cooldown_days":
+                return 7
+            if key == "customer_suspend_enabled":
+                return True
+            if key == "max_suspend_days":
+                return 30
+            if key == "max_suspend_holds_per_year":
+                return 0  # Unlimited
+            return None
+
+        with patch(
+            "app.services.settings_spec.resolve_value",
+            side_effect=mock_resolve_value,
+        ):
+            with pytest.raises(ValueError, match="wait .* more day"):
+                apply_service_suspend(
+                    db_session,
+                    {"account_id": subscriber.id},
+                    str(subscription.id),
+                    days=7,
+                )
+
+    def test_get_suspend_page_shows_block_reason_when_limit_reached(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import UTC, datetime
+        from unittest.mock import patch
+
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import get_suspend_page
+
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        # Create 1 hold (simulating max_holds_per_year=1)
+        lock = EnforcementLock(
+            subscription_id=subscription.id,
+            subscriber_id=subscriber.id,
+            reason=EnforcementReason.customer_hold,
+            source="test",
+            is_active=False,
+            resolved_at=datetime.now(UTC),
+            resolved_by="test",
+            created_at=datetime.now(UTC),
+        )
+        db_session.add(lock)
+        db_session.commit()
+
+        def mock_resolve_value(db, domain, key):
+            if key == "max_suspend_holds_per_year":
+                return 1
+            if key == "customer_suspend_enabled":
+                return True
+            if key == "max_suspend_days":
+                return 30
+            if key == "suspend_cooldown_days":
+                return 0
+            return None
+
+        with patch(
+            "app.services.settings_spec.resolve_value",
+            side_effect=mock_resolve_value,
+        ):
+            result = get_suspend_page(
+                db_session,
+                {"account_id": subscriber.id},
+                str(subscription.id),
+            )
+
+        assert result is not None
+        assert result["can_suspend"] is False
+        assert result["block_reason"] is not None
+        assert "maximum" in result["block_reason"]
+
+
+class TestVacationHoldCeleryTask:
+    """Tests for the vacation hold auto-resume Celery task."""
+
+    def test_resume_expired_holds_processes_expired_locks(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import MagicMock, patch
+
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementReason
+        from app.services.account_lifecycle import suspend_subscription
+
+        # First suspend the subscription properly
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        lock = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.customer_hold,
+            source="test",
+        )
+        # Set resume_at to the past
+        lock.resume_at = datetime.now(UTC) - timedelta(hours=1)
+        db_session.commit()
+
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
+
+        # Import and run the task function directly
+        from app.tasks.vacation_holds import resume_expired_holds
+
+        # Create a mock session that delegates to db_session but doesn't close
+        mock_session = MagicMock(wraps=db_session)
+        mock_session.close = MagicMock()  # Don't close test session
+        mock_session.commit = db_session.commit
+        mock_session.rollback = db_session.rollback
+        mock_session.scalars = db_session.scalars
+
+        with patch(
+            "app.tasks.vacation_holds.SessionLocal", return_value=mock_session
+        ):
+            result = resume_expired_holds()
+
+        assert result["total"] >= 1
+        assert result["resumed"] >= 1
+
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.active
+
+    def test_resume_expired_holds_skips_non_expired_locks(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import MagicMock, patch
+
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementReason
+        from app.services.account_lifecycle import suspend_subscription
+
+        # Suspend the subscription
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        lock = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.customer_hold,
+            source="test",
+        )
+        # Set resume_at to the future
+        lock.resume_at = datetime.now(UTC) + timedelta(days=7)
+        db_session.commit()
+
+        from app.tasks.vacation_holds import resume_expired_holds
+
+        mock_session = MagicMock(wraps=db_session)
+        mock_session.close = MagicMock()
+        mock_session.commit = db_session.commit
+        mock_session.rollback = db_session.rollback
+        mock_session.scalars = db_session.scalars
+
+        with patch(
+            "app.tasks.vacation_holds.SessionLocal", return_value=mock_session
+        ):
+            result = resume_expired_holds()
+
+        # Should not resume since resume_at is in the future
+        assert result["resumed"] == 0
+
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
+
+    def test_resume_expired_holds_handles_errors_gracefully(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from datetime import UTC, datetime, timedelta
+        from unittest.mock import MagicMock, patch
+
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementReason
+        from app.services.account_lifecycle import suspend_subscription
+
+        # Suspend the subscription
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        lock = suspend_subscription(
+            db_session,
+            str(subscription.id),
+            reason=EnforcementReason.customer_hold,
+            source="test",
+        )
+        lock.resume_at = datetime.now(UTC) - timedelta(hours=1)
+        db_session.commit()
+
+        from app.tasks.vacation_holds import resume_expired_holds
+
+        mock_session = MagicMock(wraps=db_session)
+        mock_session.close = MagicMock()
+        mock_session.commit = db_session.commit
+        mock_session.rollback = db_session.rollback
+        mock_session.scalars = db_session.scalars
+
+        # Mock restore_subscription to raise an error
+        with patch(
+            "app.tasks.vacation_holds.SessionLocal", return_value=mock_session
+        ):
+            with patch(
+                "app.tasks.vacation_holds.restore_subscription",
+                side_effect=Exception("Test error"),
+            ):
+                result = resume_expired_holds()
+
+        # Should count as failed but not crash
+        assert result["failed"] >= 1
+        assert result["resumed"] == 0
+
+
 class TestPlaywrightPortalRoutes:
     def test_usage_page_object_uses_canonical_portal_route(self) -> None:
         from tests.playwright.pages.customer.usage_page import CustomerUsagePage

@@ -3,8 +3,16 @@
 import logging
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
+
+
+class VacationHoldUsage(TypedDict):
+    """Usage stats for vacation holds."""
+
+    holds_this_year: int
+    last_hold_date: datetime | None
+    days_since_last: int | None
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -747,7 +755,7 @@ __all__ = [
 def _get_vacation_hold_usage(
     db: Session,
     subscription_id: str,
-) -> dict:
+) -> VacationHoldUsage:
     """Get vacation hold usage stats for a subscription this calendar year."""
     from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 
@@ -772,10 +780,14 @@ def _get_vacation_hold_usage(
         .first()
     )
 
-    last_hold_date = last_hold.created_at if last_hold else None
-    days_since_last = None
+    last_hold_date: datetime | None = last_hold.created_at if last_hold else None
+    days_since_last: int | None = None
     if last_hold_date:
-        days_since_last = (datetime.now(UTC) - last_hold_date).days
+        # Handle timezone-naive datetimes (e.g., from SQLite in tests)
+        now = datetime.now(UTC)
+        if last_hold_date.tzinfo is None:
+            last_hold_date = last_hold_date.replace(tzinfo=UTC)
+        days_since_last = (now - last_hold_date).days
 
     return {
         "holds_this_year": holds_this_year,

@@ -40,10 +40,11 @@ def resume_expired_holds() -> dict:
         failed = 0
         for lock in expired_holds:
             try:
+                # Use "customer" trigger since auto-resume honors customer's scheduled time
                 restored = restore_subscription(
                     session,
                     str(lock.subscription_id),
-                    trigger="system",
+                    trigger="customer",
                     resolved_by="vacation_hold:auto_resume",
                     reason=EnforcementReason.customer_hold,
                     notes="Automatic resume after vacation hold period expired",
