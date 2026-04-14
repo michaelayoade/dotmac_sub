@@ -29,14 +29,35 @@ from app.services.network.ont_assignment_alignment import (
 
 logger = logging.getLogger(__name__)
 
-FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS = 3
-FORCE_REAUTHORIZE_AUTOFIND_RETRY_DELAY_SECONDS = 2.0
-AUTOFIND_CANDIDATE_FRESHNESS_SECONDS = 300
+# Authorization workflow constants — configurable via DomainSettings (provisioning domain).
+# Module-level variables kept for backward compatibility with test patching.
+from app.services.network.provisioning_settings import (
+    DEFAULTS as _PROVISIONING_DEFAULTS,
+)
+from app.services.network.provisioning_settings import (
+    get_autofind_freshness_sec,
+    get_force_reauthorize_attempts,
+    get_force_reauthorize_retry_delay,
+)
+
+FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS = _PROVISIONING_DEFAULTS.force_reauthorize_autofind_attempts
+FORCE_REAUTHORIZE_AUTOFIND_RETRY_DELAY_SECONDS = _PROVISIONING_DEFAULTS.force_reauthorize_retry_delay_sec
+AUTOFIND_CANDIDATE_FRESHNESS_SECONDS = _PROVISIONING_DEFAULTS.autofind_candidate_freshness_sec
 
 
 def _is_serial_already_registered_message(message: str | None) -> bool:
     lowered = str(message or "").lower()
     return "sn already exists" in lowered or "serial already exists" in lowered
+
+
+@dataclass
+class AutofindValidationResult:
+    """Result of validating/refreshing autofind candidate data."""
+
+    success: bool
+    candidate: object | None
+    steps_added: list[tuple[str, bool, str, float]]  # (name, success, message, started_at)
+    error_message: str | None = None
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -101,6 +122,154 @@ def _resolve_authorized_autofind_candidate(
             exc,
         )
         return False, f"Failed to mark discovered ONT as authorized: {exc}"
+
+
+def _validate_autofind_candidate(
+    db: Session,
+    *,
+    olt_id: str,
+    olt_name: str | None,
+    fsp: str,
+    serial_number: str,
+    require_seen_after: datetime | None,
+    autofind_freshness: int,
+    deleted_existing: bool,
+    reauthorize_attempts: int,
+    reauthorize_retry_delay: float,
+) -> AutofindValidationResult:
+    """Validate autofind candidate, refreshing cache if needed.
+
+    This handles the complex retry logic when force_reauthorize deletes an
+    existing registration and we need to wait for the ONT to reappear in autofind.
+
+    Returns:
+        AutofindValidationResult with candidate if found, or error details.
+    """
+    from app.services.web_network_ont_autofind import sync_olt_autofind_candidates
+
+    steps: list[tuple[str, bool, str, float]] = []
+
+    matched_candidate = get_autofind_candidate_by_serial(
+        db, olt_id, serial_number, fsp=fsp
+    )
+
+    if _autofind_candidate_is_usable(
+        matched_candidate,
+        require_seen_after=require_seen_after,
+        freshness_seconds=autofind_freshness,
+    ):
+        return AutofindValidationResult(
+            success=True,
+            candidate=matched_candidate,
+            steps_added=steps,
+        )
+
+    # Candidate is stale or missing — need to refresh
+    if matched_candidate is not None:
+        logger.info(
+            "Cached autofind candidate is stale for authorization; refreshing olt_id=%s fsp=%s serial=%s last_seen_at=%s require_seen_after=%s",
+            olt_id,
+            fsp,
+            serial_number,
+            getattr(matched_candidate, "last_seen_at", None),
+            require_seen_after,
+        )
+
+    refresh_started_at = monotonic()
+    sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(db, olt_id)
+    if not sync_ok:
+        steps.append(("Refresh autofind cache", False, f"Autofind refresh failed: {sync_message}", refresh_started_at))
+        return AutofindValidationResult(
+            success=False,
+            candidate=None,
+            steps_added=steps,
+            error_message=f"Autofind refresh failed: {sync_message}",
+        )
+    steps.append(("Refresh autofind cache", True, sync_message, refresh_started_at))
+
+    matched_candidate = get_autofind_candidate_by_serial(
+        db, olt_id, serial_number, fsp=fsp
+    )
+    if _autofind_candidate_is_usable(
+        matched_candidate,
+        require_seen_after=require_seen_after,
+        freshness_seconds=autofind_freshness,
+    ):
+        return AutofindValidationResult(
+            success=True,
+            candidate=matched_candidate,
+            steps_added=steps,
+        )
+
+    # Still not usable — if we deleted an existing registration, retry
+    if deleted_existing:
+        for attempt in range(2, reauthorize_attempts + 1):
+            sleep(reauthorize_retry_delay)
+            retry_started_at = monotonic()
+            sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(db, olt_id)
+            if not sync_ok:
+                steps.append((
+                    "Refresh autofind cache",
+                    False,
+                    f"Autofind refresh failed while waiting for force rediscovery: {sync_message}",
+                    retry_started_at,
+                ))
+                return AutofindValidationResult(
+                    success=False,
+                    candidate=None,
+                    steps_added=steps,
+                    error_message=f"Autofind refresh failed while waiting for force rediscovery: {sync_message}",
+                )
+            steps.append((
+                "Refresh autofind cache",
+                True,
+                f"Retry {attempt}/{reauthorize_attempts}: {sync_message}",
+                retry_started_at,
+            ))
+            matched_candidate = get_autofind_candidate_by_serial(
+                db, olt_id, serial_number, fsp=fsp
+            )
+            if _autofind_candidate_is_usable(
+                matched_candidate,
+                require_seen_after=require_seen_after,
+                freshness_seconds=autofind_freshness,
+            ):
+                return AutofindValidationResult(
+                    success=True,
+                    candidate=matched_candidate,
+                    steps_added=steps,
+                )
+
+        # Exhausted retries after deleting existing
+        logger.warning(
+            "Force ONT authorization stopped after delete because autofind did not rediscover the ONT olt_id=%s olt_name=%s fsp=%s serial=%s attempts=%s",
+            olt_id,
+            olt_name,
+            fsp,
+            serial_number,
+            reauthorize_attempts,
+        )
+        return AutofindValidationResult(
+            success=False,
+            candidate=None,
+            steps_added=steps,
+            error_message="Force authorize deleted the existing registration, but the ONT was not rediscovered in autofind on the requested port after retrying. Check the physical link and rescan before authorizing.",
+        )
+
+    # No deleted existing and still not usable
+    logger.warning(
+        "ONT authorization validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s",
+        olt_id,
+        olt_name,
+        fsp,
+        serial_number,
+    )
+    return AutofindValidationResult(
+        success=False,
+        candidate=None,
+        steps_added=steps,
+        error_message="The discovered ONT entry is no longer active for that port/serial after refreshing autofind data.",
+    )
 
 
 @dataclass
@@ -203,7 +372,11 @@ def authorize_autofind_ont(
         verify_ont_absent,
         verify_ont_authorized,
     )
-    from app.services.web_network_ont_autofind import sync_olt_autofind_candidates
+
+    # Get configurable settings from DomainSettings (or use defaults)
+    autofind_freshness = get_autofind_freshness_sec(db)
+    reauthorize_attempts = get_force_reauthorize_attempts(db)
+    reauthorize_retry_delay = get_force_reauthorize_retry_delay(db)
 
     steps: list[AuthorizationStepResult] = []
     started_at = monotonic()
@@ -380,119 +553,46 @@ def authorize_autofind_ont(
         s.name == "Delete existing ONT registration" and s.success for s in steps
     )
 
+    # Validate autofind candidate (refreshing cache if needed)
     validate_started_at = monotonic()
-    matched_candidate = get_autofind_candidate_by_serial(
-        db, olt_id, serial_number, fsp=fsp
-    )
-    if not _autofind_candidate_is_usable(
-        matched_candidate,
+    validation = _validate_autofind_candidate(
+        db,
+        olt_id=olt_id,
+        olt_name=getattr(olt, "name", None),
+        fsp=fsp,
+        serial_number=serial_number,
         require_seen_after=require_autofind_seen_after,
-    ):
-        if matched_candidate is not None:
-            logger.info(
-                "Cached autofind candidate is stale for authorization; refreshing olt_id=%s fsp=%s serial=%s last_seen_at=%s require_seen_after=%s",
-                olt_id,
-                fsp,
-                serial_number,
-                getattr(matched_candidate, "last_seen_at", None),
-                require_autofind_seen_after,
+        autofind_freshness=autofind_freshness,
+        deleted_existing=deleted_existing,
+        reauthorize_attempts=reauthorize_attempts,
+        reauthorize_retry_delay=reauthorize_retry_delay,
+    )
+
+    # Apply steps from validation (refresh cache retries, etc.)
+    for step_name, step_success, step_message, step_started in validation.steps_added:
+        _append_step(step_name, step_success, step_message, step_started_at=step_started)
+        if not step_success:
+            return _finalize(
+                AuthorizationWorkflowResult(
+                    success=False,
+                    message=f"Authorization failed at step {len(steps)}: {step_name}",
+                    steps=steps,
+                ),
+                failure_detail=step_message,
             )
-        matched_candidate = None
-        refresh_started_at = monotonic()
-        sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(db, olt_id)
-        if not sync_ok:
-            return _fail(
-                "Refresh autofind cache",
-                f"Autofind refresh failed: {sync_message}",
-                step_started_at=refresh_started_at,
-            )
-        _append_step(
-            "Refresh autofind cache",
-            True,
-            sync_message,
-            step_started_at=refresh_started_at,
+
+    if not validation.success:
+        return _fail(
+            "Validate discovered ONT row",
+            validation.error_message or "Autofind validation failed",
+            step_started_at=validate_started_at,
         )
-        matched_candidate = get_autofind_candidate_by_serial(
-            db, olt_id, serial_number, fsp=fsp
-        )
-        if not _autofind_candidate_is_usable(
-            matched_candidate,
-            require_seen_after=require_autofind_seen_after,
-        ):
-            matched_candidate = None
-            if deleted_existing:
-                for attempt in range(2, FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS + 1):
-                    sleep(FORCE_REAUTHORIZE_AUTOFIND_RETRY_DELAY_SECONDS)
-                    retry_started_at = monotonic()
-                    sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(
-                        db, olt_id
-                    )
-                    if not sync_ok:
-                        return _fail(
-                            "Refresh autofind cache",
-                            f"Autofind refresh failed while waiting for force rediscovery: {sync_message}",
-                            step_started_at=retry_started_at,
-                        )
-                    _append_step(
-                        "Refresh autofind cache",
-                        True,
-                        f"Retry {attempt}/{FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS}: {sync_message}",
-                        step_started_at=retry_started_at,
-                    )
-                    matched_candidate = get_autofind_candidate_by_serial(
-                        db, olt_id, serial_number, fsp=fsp
-                    )
-                    if _autofind_candidate_is_usable(
-                        matched_candidate,
-                        require_seen_after=require_autofind_seen_after,
-                    ):
-                        break
-                    matched_candidate = None
-            if matched_candidate is None:
-                if deleted_existing:
-                    attempts = FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS
-                    logger.warning(
-                        "Force ONT authorization stopped after delete because autofind did not rediscover the ONT olt_id=%s olt_name=%s fsp=%s serial=%s attempts=%s sync_message=%s sync_stats=%s",
-                        olt_id,
-                        getattr(olt, "name", None),
-                        fsp,
-                        serial_number,
-                        attempts,
-                        sync_message,
-                        _sync_stats,
-                    )
-                    return _fail(
-                        "Validate discovered ONT row",
-                        "Force authorize deleted the existing registration, but the ONT was not rediscovered in autofind on the requested port after retrying. Check the physical link and rescan before authorizing.",
-                        step_started_at=validate_started_at,
-                    )
-                logger.warning(
-                    "ONT authorization validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s sync_message=%s sync_stats=%s failure_step=%s",
-                    olt_id,
-                    getattr(olt, "name", None),
-                    fsp,
-                    serial_number,
-                    sync_message,
-                    _sync_stats,
-                    "Validate discovered ONT row",
-                )
-                return _fail(
-                    "Validate discovered ONT row",
-                    "The discovered ONT entry is no longer active for that port/serial after refreshing autofind data.",
-                    step_started_at=validate_started_at,
-                )
-        if matched_candidate is None:
-            # Unreachable defensive guard for type checkers and future edits.
-            return _fail(
-                "Validate discovered ONT row",
-                "The discovered ONT entry is no longer active for that port/serial after refreshing autofind data.",
-                step_started_at=validate_started_at,
-            )
+
     _append_step(
         "Validate discovered ONT row",
         True,
         "Validated discovered ONT row."
-        if len(steps) == 0
+        if not validation.steps_added
         else "Validated discovered ONT row after refreshing autofind data.",
         step_started_at=validate_started_at,
     )

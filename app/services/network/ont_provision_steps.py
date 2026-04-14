@@ -47,13 +47,25 @@ from app.services.network.ont_provisioning.result import StepResult as StepResul
 
 logger = logging.getLogger(__name__)
 
-# Bootstrap polling constants (patchable in tests)
-_BOOTSTRAP_TIMEOUT_SEC = 120
-_BOOTSTRAP_POLL_INTERVAL_SEC = 10
-_TR069_TASK_READY_TIMEOUT_SEC = 45
-_TR069_TASK_READY_POLL_INTERVAL_SEC = 5
-_PPPOE_PUSH_MAX_ATTEMPTS = 3
-_PPPOE_PUSH_RETRY_DELAY_SEC = 10
+# Bootstrap polling constants — configurable via DomainSettings (provisioning domain).
+# These module-level variables are kept for backward compatibility with test patching.
+# At runtime, use the getter functions which check DomainSettings first.
+from app.services.network.provisioning_settings import (
+    DEFAULTS as _PROVISIONING_DEFAULTS,
+)
+from app.services.network.provisioning_settings import (
+    get_pppoe_push_max_attempts,
+    get_pppoe_push_retry_delay,
+    get_tr069_bootstrap_poll_interval,
+    get_tr069_bootstrap_timeout,
+)
+
+_BOOTSTRAP_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_bootstrap_timeout_sec
+_BOOTSTRAP_POLL_INTERVAL_SEC = _PROVISIONING_DEFAULTS.tr069_bootstrap_poll_interval_sec
+_TR069_TASK_READY_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_timeout_sec
+_TR069_TASK_READY_POLL_INTERVAL_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
+_PPPOE_PUSH_MAX_ATTEMPTS = _PROVISIONING_DEFAULTS.pppoe_push_max_attempts
+_PPPOE_PUSH_RETRY_DELAY_SEC = _PROVISIONING_DEFAULTS.pppoe_push_retry_delay_sec
 
 
 # ---------------------------------------------------------------------------
@@ -360,25 +372,102 @@ def bind_tr069(
 # ---------------------------------------------------------------------------
 
 
+def _is_celery_task_context() -> bool:
+    """Check if we're running inside a Celery task.
+
+    Returns True if current execution is within a Celery worker task,
+    False if running in a web request or other context.
+    """
+    try:
+        from celery import current_task
+
+        return current_task is not None and current_task.request.id is not None
+    except (ImportError, AttributeError):
+        return False
+
+
+def _is_background_context() -> bool:
+    """Check if we're in a safe context for blocking operations.
+
+    Returns True if running in Celery task, thread pool, or explicit background context.
+    Returns False if running on the main thread (likely a web request handler).
+    """
+    import threading
+
+    # Check Celery task context first — always safe
+    if _is_celery_task_context():
+        return True
+
+    # Main thread is NOT safe for blocking (uvicorn/gunicorn web workers)
+    # Check this BEFORE pattern matching since "MainThread" contains "thread"
+    if threading.current_thread() is threading.main_thread():
+        return False
+
+    # Check thread name patterns used by background executors
+    # Only reached for non-main threads
+    thread_name = threading.current_thread().name.lower()
+    background_patterns = (
+        "celery",
+        "threadpool",  # More specific than "thread"
+        "pool",
+        "worker",
+        "background",
+        "executor",
+    )
+    if any(pattern in thread_name for pattern in background_patterns):
+        return True
+
+    # Non-main thread without recognized pattern — assume safe
+    # (Better to allow than block legitimate background work)
+    return True
+
+
+class BlockingOperationError(RuntimeError):
+    """Raised when a blocking operation is called from a web request context."""
+
+    pass
+
+
 def wait_tr069_bootstrap(
     db: Session,
     ont_id: str,
+    *,
+    allow_blocking: bool = False,
 ) -> StepResult:
     """Poll GenieACS until the ONT registers after TR-069 binding.
 
     Args:
         db: Database session.
         ont_id: OntUnit primary key.
+        allow_blocking: If True, skip the background context check. Use only
+            when you explicitly want blocking behavior (e.g., in tests).
+
+    Raises:
+        BlockingOperationError: If called from a web request context without
+            allow_blocking=True. Use queue_wait_tr069_bootstrap() instead.
 
     Warning:
         This function blocks with time.sleep() for up to 120 seconds.
         Call only from a Celery task or background thread, never from
         a web request handler.
     """
+    # Guard against accidental blocking in web request handlers
+    if not allow_blocking and not _is_background_context():
+        raise BlockingOperationError(
+            "wait_tr069_bootstrap() blocks for up to 120 seconds and should not be "
+            "called from a web request handler. Use queue_wait_tr069_bootstrap() "
+            "to run this operation in the background, or pass allow_blocking=True "
+            "if you explicitly need blocking behavior."
+        )
+
     t0 = time.monotonic()
     ont = db.get(OntUnit, ont_id)
     if not ont:
         return StepResult("wait_tr069_bootstrap", False, "ONT not found")
+
+    # Get configurable timeouts from DomainSettings (or use defaults)
+    bootstrap_timeout = get_tr069_bootstrap_timeout(db)
+    poll_interval = get_tr069_bootstrap_poll_interval(db)
 
     try:
         from app.services.network._resolve import resolve_genieacs_with_reason
@@ -387,10 +476,10 @@ def wait_tr069_bootstrap(
             "TR-069 bootstrap wait started: ont_id=%s serial=%s timeout_sec=%s poll_interval_sec=%s",
             ont.id,
             ont.serial_number,
-            _BOOTSTRAP_TIMEOUT_SEC,
-            _BOOTSTRAP_POLL_INTERVAL_SEC,
+            bootstrap_timeout,
+            poll_interval,
         )
-        deadline = time.monotonic() + _BOOTSTRAP_TIMEOUT_SEC
+        deadline = time.monotonic() + bootstrap_timeout
         attempt = 0
         last_poll_error = ""
         while time.monotonic() < deadline:
@@ -407,7 +496,7 @@ def wait_tr069_bootstrap(
                     attempt,
                     exc,
                 )
-                time.sleep(_BOOTSTRAP_POLL_INTERVAL_SEC)
+                time.sleep(poll_interval)
                 continue
             if resolved:
                 _client, device_id = resolved
@@ -431,22 +520,22 @@ def wait_tr069_bootstrap(
                 attempt,
                 reason,
             )
-            time.sleep(_BOOTSTRAP_POLL_INTERVAL_SEC)
+            time.sleep(poll_interval)
 
         logger.warning(
             "TR-069 bootstrap timeout: ont_id=%s serial=%s timeout_sec=%s",
             ont.id,
             ont.serial_number,
-            _BOOTSTRAP_TIMEOUT_SEC,
+            bootstrap_timeout,
         )
         ms = int((time.monotonic() - t0) * 1000)
         result = StepResult(
             "wait_tr069_bootstrap",
             False,
             (
-                f"Device not found in ACS after {_BOOTSTRAP_TIMEOUT_SEC}s"
+                f"Device not found in ACS after {bootstrap_timeout}s"
                 if not last_poll_error
-                else f"Device not found in ACS after {_BOOTSTRAP_TIMEOUT_SEC}s; last poll error: {last_poll_error}"
+                else f"Device not found in ACS after {bootstrap_timeout}s; last poll error: {last_poll_error}"
             ),
             ms,
         )
@@ -662,7 +751,9 @@ def push_pppoe_tr069(
     )
 
     t0 = time.monotonic()
-    max_attempts = _PPPOE_PUSH_MAX_ATTEMPTS if retry else 1
+    # Get configurable retry settings from DomainSettings (or use defaults)
+    max_attempts = get_pppoe_push_max_attempts(db) if retry else 1
+    retry_delay = get_pppoe_push_retry_delay(db)
     last_result = None
 
     for attempt in range(1, max_attempts + 1):
@@ -679,7 +770,7 @@ def push_pppoe_tr069(
             attempt,
             last_result.message,
         )
-        time.sleep(_PPPOE_PUSH_RETRY_DELAY_SEC)
+        time.sleep(retry_delay)
 
     ms = int((time.monotonic() - t0) * 1000)
     if last_result is None:
