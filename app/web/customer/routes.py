@@ -1060,6 +1060,183 @@ def customer_submit_change_plan(
         raise
 
 
+# =============================================================================
+# Service Suspend/Resume Self-Service
+# =============================================================================
+
+
+@router.get("/services/{subscription_id}/suspend", response_class=HTMLResponse)
+def customer_suspend_service(
+    request: Request,
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show vacation hold confirmation page."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services.customer_portal_flow_services import get_suspend_page
+
+    page_data = get_suspend_page(db, customer, str(subscription_id))
+    if not page_data:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {
+                "request": request,
+                "message": "Subscription not found or cannot be suspended",
+            },
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "customer/services/suspend.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "active_page": "services",
+        },
+    )
+
+
+@router.post("/services/{subscription_id}/suspend", response_class=HTMLResponse)
+def customer_submit_suspend_service(
+    request: Request,
+    subscription_id: UUID,
+    days: int = Form(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Apply vacation hold to subscription."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services.customer_portal_flow_services import (
+        apply_service_suspend,
+        get_suspend_page,
+    )
+
+    try:
+        apply_service_suspend(db, customer, str(subscription_id), days)
+        _emit_customer_event(
+            db,
+            "customer_service_suspended",
+            {
+                "subscription_id": str(subscription_id),
+                "days": days,
+            },
+        )
+        return RedirectResponse(
+            url=f"/portal/services/{subscription_id}?suspended=true",
+            status_code=303,
+        )
+    except ValueError as exc:
+        page_data = get_suspend_page(db, customer, str(subscription_id))
+        if not page_data:
+            return templates.TemplateResponse(
+                "customer/errors/404.html",
+                {"request": request, "message": str(exc)},
+                status_code=404,
+            )
+        return templates.TemplateResponse(
+            "customer/services/suspend.html",
+            {
+                "request": request,
+                "customer": customer,
+                **page_data,
+                "error": str(exc),
+                "active_page": "services",
+            },
+            status_code=400,
+        )
+
+
+@router.get("/services/{subscription_id}/resume", response_class=HTMLResponse)
+def customer_resume_service(
+    request: Request,
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Show resume service confirmation page."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services.customer_portal_flow_services import get_resume_page
+
+    page_data = get_resume_page(db, customer, str(subscription_id))
+    if not page_data:
+        return templates.TemplateResponse(
+            "customer/errors/404.html",
+            {
+                "request": request,
+                "message": "Subscription not found or cannot be resumed",
+            },
+            status_code=404,
+        )
+
+    return templates.TemplateResponse(
+        "customer/services/resume.html",
+        {
+            "request": request,
+            "customer": customer,
+            **page_data,
+            "active_page": "services",
+        },
+    )
+
+
+@router.post("/services/{subscription_id}/resume", response_class=HTMLResponse)
+def customer_submit_resume_service(
+    request: Request,
+    subscription_id: UUID,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Resume subscription from vacation hold."""
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+
+    from app.services.customer_portal_flow_services import (
+        apply_service_resume,
+        get_resume_page,
+    )
+
+    try:
+        apply_service_resume(db, customer, str(subscription_id))
+        _emit_customer_event(
+            db,
+            "customer_service_resumed",
+            {
+                "subscription_id": str(subscription_id),
+            },
+        )
+        return RedirectResponse(
+            url=f"/portal/services/{subscription_id}?resumed=true",
+            status_code=303,
+        )
+    except ValueError as exc:
+        page_data = get_resume_page(db, customer, str(subscription_id))
+        if not page_data:
+            return templates.TemplateResponse(
+                "customer/errors/404.html",
+                {"request": request, "message": str(exc)},
+                status_code=404,
+            )
+        return templates.TemplateResponse(
+            "customer/services/resume.html",
+            {
+                "request": request,
+                "customer": customer,
+                **page_data,
+                "error": str(exc),
+                "active_page": "services",
+            },
+            status_code=400,
+        )
+
+
 @router.get("/change-requests", response_class=HTMLResponse)
 def customer_change_requests(
     request: Request,

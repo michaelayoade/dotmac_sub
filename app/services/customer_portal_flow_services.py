@@ -739,6 +739,8 @@ __all__ = [
     "get_installation_detail",
     "get_suspend_page",
     "apply_service_suspend",
+    "get_resume_page",
+    "apply_service_resume",
 ]
 
 
@@ -832,4 +834,114 @@ def apply_service_suspend(
         "subscription_id": subscription_id,
         "days": days,
         "lock_id": str(lock.id),
+    }
+
+
+def get_resume_page(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+) -> dict | None:
+    """Build context for the resume service confirmation page."""
+    from app.models.domain_settings import SettingDomain
+    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+    from app.services.settings_spec import resolve_value
+
+    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
+    if enabled is False:
+        return None
+
+    account_id = customer.get("account_id")
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription or str(subscription.subscriber_id) != str(account_id):
+        return None
+
+    # Only allow resume for suspended subscriptions with customer_hold lock
+    if subscription.status != SubscriptionStatus.suspended:
+        return None
+
+    # Check for active customer_hold lock
+    lock = (
+        db.query(EnforcementLock)
+        .filter(
+            EnforcementLock.subscription_id == coerce_uuid(subscription_id),
+            EnforcementLock.reason == EnforcementReason.customer_hold,
+            EnforcementLock.is_active.is_(True),
+        )
+        .first()
+    )
+    if not lock:
+        # No customer-initiated hold found - cannot self-service resume
+        return None
+
+    offer = subscription.offer
+    return {
+        "subscription": subscription,
+        "offer_name": offer.name if offer else "Service",
+        "lock": lock,
+        "suspended_since": lock.created_at,
+    }
+
+
+def apply_service_resume(
+    db: Session,
+    customer: dict,
+    subscription_id: str,
+) -> dict:
+    """Resume a customer-initiated vacation hold on a subscription."""
+    from app.models.domain_settings import SettingDomain
+    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+    from app.services.account_lifecycle import restore_subscription
+    from app.services.settings_spec import resolve_value
+
+    enabled = resolve_value(db, SettingDomain.catalog, "customer_suspend_enabled")
+    if enabled is False:
+        raise ValueError("Self-service suspension is not enabled")
+
+    account_id = customer.get("account_id")
+    subscription = db.get(Subscription, subscription_id)
+    if not subscription or str(subscription.subscriber_id) != str(account_id):
+        raise ValueError("Subscription not found")
+
+    if subscription.status != SubscriptionStatus.suspended:
+        raise ValueError("Subscription is not suspended")
+
+    # Check for active customer_hold lock
+    lock = (
+        db.query(EnforcementLock)
+        .filter(
+            EnforcementLock.subscription_id == coerce_uuid(subscription_id),
+            EnforcementLock.reason == EnforcementReason.customer_hold,
+            EnforcementLock.is_active.is_(True),
+        )
+        .first()
+    )
+    if not lock:
+        raise ValueError(
+            "Cannot resume: no customer-initiated hold found. "
+            "Please contact support if your service was suspended for another reason."
+        )
+
+    subscriber_id = str(subscription.subscriber_id)
+    restored = restore_subscription(
+        db,
+        subscription_id,
+        trigger="customer",
+        resolved_by=f"customer_portal:resume:{subscriber_id}",
+        reason=EnforcementReason.customer_hold,
+        notes="Customer-initiated resume via portal",
+    )
+
+    db.flush()
+
+    logger.info(
+        "Customer %s resumed subscription %s (vacation hold lifted, restored=%s)",
+        subscriber_id,
+        subscription_id,
+        restored,
+    )
+
+    return {
+        "subscription_id": subscription_id,
+        "restored": restored,
     }

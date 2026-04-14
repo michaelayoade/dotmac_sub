@@ -623,6 +623,182 @@ class TestRestrictedStatusMetadata:
         assert "last_restricted_ended_at" in subscriber.metadata_
 
 
+class TestSuspendResumeRoutes:
+    def test_suspend_get_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        found = False
+        for route in router.routes:
+            path = getattr(route, "path", "")
+            methods = getattr(route, "methods", set())
+            if "/portal/services/" in path and "suspend" in path and "GET" in methods:
+                found = True
+                break
+        assert found, "GET /portal/services/{id}/suspend route not found"
+
+    def test_suspend_post_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        found = False
+        for route in router.routes:
+            path = getattr(route, "path", "")
+            methods = getattr(route, "methods", set())
+            if "/portal/services/" in path and "suspend" in path and "POST" in methods:
+                found = True
+                break
+        assert found, "POST /portal/services/{id}/suspend route not found"
+
+    def test_resume_get_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        found = False
+        for route in router.routes:
+            path = getattr(route, "path", "")
+            methods = getattr(route, "methods", set())
+            if "/portal/services/" in path and "resume" in path and "GET" in methods:
+                found = True
+                break
+        assert found, "GET /portal/services/{id}/resume route not found"
+
+    def test_resume_post_route_exists(self) -> None:
+        from app.web.customer.routes import router
+
+        found = False
+        for route in router.routes:
+            path = getattr(route, "path", "")
+            methods = getattr(route, "methods", set())
+            if "/portal/services/" in path and "resume" in path and "POST" in methods:
+                found = True
+                break
+        assert found, "POST /portal/services/{id}/resume route not found"
+
+
+class TestSuspendResumeServiceLayer:
+    def test_get_suspend_page_returns_none_for_non_active_subscription(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import SubscriptionStatus
+        from app.services.customer_portal_flow_services import get_suspend_page
+
+        subscription.status = SubscriptionStatus.suspended
+        db_session.commit()
+
+        result = get_suspend_page(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+        )
+
+        assert result is None
+
+    def test_get_suspend_page_returns_context_for_active_subscription(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import SubscriptionStatus
+        from app.services.customer_portal_flow_services import get_suspend_page
+
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        result = get_suspend_page(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+        )
+
+        assert result is not None
+        assert "subscription" in result
+        assert "max_days" in result
+
+    def test_apply_service_suspend_creates_enforcement_lock(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import apply_service_suspend
+
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        result = apply_service_suspend(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+            days=7,
+        )
+
+        assert result["subscription_id"] == str(subscription.id)
+        assert result["days"] == 7
+
+        # Verify lock was created
+        lock = db_session.query(EnforcementLock).filter(
+            EnforcementLock.subscription_id == subscription.id,
+            EnforcementLock.reason == EnforcementReason.customer_hold,
+        ).first()
+        assert lock is not None
+        assert lock.is_active is True
+
+    def test_get_resume_page_returns_none_without_customer_hold_lock(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import SubscriptionStatus
+        from app.services.customer_portal_flow_services import get_resume_page
+
+        subscription.status = SubscriptionStatus.suspended
+        db_session.commit()
+
+        result = get_resume_page(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+        )
+
+        # No customer_hold lock exists, so cannot self-service resume
+        assert result is None
+
+    def test_apply_service_resume_restores_subscription(
+        self, db_session, subscription, subscriber
+    ) -> None:
+        from app.models.catalog import SubscriptionStatus
+        from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+        from app.services.customer_portal_flow_services import (
+            apply_service_resume,
+            apply_service_suspend,
+        )
+
+        # First suspend the subscription
+        subscription.status = SubscriptionStatus.active
+        db_session.commit()
+
+        apply_service_suspend(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+            days=7,
+        )
+        db_session.refresh(subscription)
+        assert subscription.status == SubscriptionStatus.suspended
+
+        # Now resume it
+        result = apply_service_resume(
+            db_session,
+            {"account_id": subscriber.id},
+            str(subscription.id),
+        )
+
+        db_session.refresh(subscription)
+        assert result["restored"] is True
+        assert subscription.status == SubscriptionStatus.active
+
+        # Verify lock was resolved
+        lock = db_session.query(EnforcementLock).filter(
+            EnforcementLock.subscription_id == subscription.id,
+            EnforcementLock.reason == EnforcementReason.customer_hold,
+        ).first()
+        assert lock is not None
+        assert lock.is_active is False
+
+
 class TestPlaywrightPortalRoutes:
     def test_usage_page_object_uses_canonical_portal_route(self) -> None:
         from tests.playwright.pages.customer.usage_page import CustomerUsagePage
