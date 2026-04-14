@@ -119,11 +119,14 @@ def create_service_port(
     gem_index: int = 1,
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
+    idempotent: bool = True,
 ) -> StepResult:
     """Create a single L2 service-port VLAN/GEM binding on the OLT.
 
-    Validates the VLAN exists in the system before sending the SSH command,
-    then delegates to ``ont_write.update_service_port`` for SSH + DB persistence.
+    When idempotent=True (default), uses the reconciler to check if the
+    service-port already exists with matching configuration. If it does,
+    returns success without attempting to create (NOOP). This prevents
+    "already exists" errors on re-provisioning.
 
     Args:
         db: Database session.
@@ -132,6 +135,7 @@ def create_service_port(
         gem_index: GEM port index (default 1).
         user_vlan: User-side VLAN (optional).
         tag_transform: Tag transform mode (default "translate").
+        idempotent: If True, check for existing port before creating (default True).
     """
     from sqlalchemy import select as sa_select
 
@@ -163,6 +167,23 @@ def create_service_port(
         _record_step(db, ctx.ont, "create_service_port", result)
         return result
 
+    # Idempotency check: see if port already exists with matching config
+    if idempotent:
+        existing_check = _check_existing_service_port(
+            ctx.olt, ctx.fsp, ctx.olt_ont_id, vlan_id, gem_index, tag_transform
+        )
+        if existing_check.get("exists_and_matches"):
+            ms = int((time.monotonic() - t0) * 1000)
+            result = StepResult(
+                "create_service_port",
+                True,
+                f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent NOOP)",
+                ms,
+                data={"idempotent_noop": True, "existing_index": existing_check.get("index")},
+            )
+            _record_step(db, ctx.ont, "create_service_port", result)
+            return result
+
     resolved_user_vlan = (
         int(user_vlan)
         if isinstance(user_vlan, str) and user_vlan.isdigit()
@@ -178,12 +199,62 @@ def create_service_port(
         user_vlan=resolved_user_vlan,
         tag_transform=tag_transform,
     )
+
+    # Handle "already exists" as success (idempotent behavior)
+    success = action_result.success
+    message = action_result.message
+    if not success and _is_existing_service_port_conflict(message):
+        success = True
+        message = f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent success)"
+
     ms = int((time.monotonic() - t0) * 1000)
-    result = StepResult(
-        "create_service_port", action_result.success, action_result.message, ms
-    )
+    result = StepResult("create_service_port", success, message, ms)
     _record_step(db, ctx.ont, "create_service_port", result)
     return result
+
+
+def _check_existing_service_port(
+    olt,
+    fsp: str,
+    olt_ont_id: int,
+    vlan_id: int,
+    gem_index: int,
+    tag_transform: str,
+) -> dict:
+    """Check if a matching service-port already exists on the OLT.
+
+    Uses the reconciler's state reading to check for existing ports.
+
+    Returns:
+        Dict with 'exists_and_matches', 'index', and 'message' keys.
+    """
+    try:
+        from app.services.network.ont_provisioning.state import read_actual_state
+
+        actual, err = read_actual_state(olt, fsp, olt_ont_id)
+        if not actual:
+            return {"exists_and_matches": False, "message": err}
+
+        # Check for matching port
+        for port in actual.service_ports:
+            if port.vlan_id == vlan_id and port.gem_index == gem_index:
+                # Check tag_transform if available
+                if port.tag_transform and port.tag_transform != tag_transform:
+                    return {
+                        "exists_and_matches": False,
+                        "index": port.index,
+                        "message": f"Port exists but tag_transform differs: {port.tag_transform} vs {tag_transform}",
+                    }
+                return {
+                    "exists_and_matches": True,
+                    "index": port.index,
+                    "message": "Matching service-port found",
+                }
+
+        return {"exists_and_matches": False, "message": "No matching port found"}
+    except Exception as exc:
+        logger.debug("Idempotency check failed, proceeding with create: %s", exc)
+        return {"exists_and_matches": False, "message": str(exc)}
 
 
 # ---------------------------------------------------------------------------
@@ -1059,3 +1130,250 @@ def rollback_service_ports(
 
 # Profile resolution, preflight validation, and command preview live in
 # app.services.network.ont_provisioning.* and are imported above for compatibility.
+
+
+# ---------------------------------------------------------------------------
+# STATE RECONCILIATION-BASED PROVISIONING
+# ---------------------------------------------------------------------------
+
+
+def provision_with_reconciliation(
+    db: Session,
+    ont_id: str,
+    *,
+    profile_id: str | None = None,
+    tr069_olt_profile_id: int | None = None,
+    dry_run: bool = False,
+    allow_low_optical_margin: bool = False,
+) -> StepResult:
+    """Provision an ONT using state reconciliation.
+
+    This is the recommended approach for ONT provisioning. It:
+    1. Builds desired state from the profile (no reference cloning)
+    2. Reads actual state from the OLT (single SSH session)
+    3. Computes delta (existing matching ports = NOOP = idempotent)
+    4. Validates (optical budget, VLAN trunk, ip_index bounds)
+    5. Executes with compensation log (rollback on failure)
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit primary key.
+        profile_id: Optional explicit profile ID.
+        tr069_olt_profile_id: Optional explicit OLT-local TR-069 profile ID.
+        dry_run: If True, compute delta but don't execute.
+        allow_low_optical_margin: If True, proceed even with low optical margin.
+
+    Returns:
+        StepResult with provisioning outcome.
+    """
+    from app.services.network.ont_provisioning.executor import execute_delta
+    from app.services.network.ont_provisioning.reconciler import (
+        get_delta_summary,
+        reconcile_ont_state,
+    )
+    from app.services.network.ont_provisioning.state import (
+        build_desired_state_from_profile,
+    )
+
+    t0 = time.monotonic()
+
+    # Get context first for logging
+    ctx, err = resolve_olt_context(db, ont_id)
+    if not ctx:
+        return StepResult("provision_reconciled", False, err)
+
+    logger.info(
+        "Starting reconciled provisioning for ONT %s serial=%s olt=%s fsp=%s",
+        ont_id,
+        ctx.ont.serial_number,
+        ctx.olt.name,
+        ctx.fsp,
+    )
+
+    # Reconcile state
+    delta, err = reconcile_ont_state(
+        db,
+        ont_id,
+        profile_id,
+        tr069_olt_profile_id=tr069_olt_profile_id,
+    )
+    if not delta:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult("provision_reconciled", False, f"Reconciliation failed: {err}", ms)
+
+    # Check validations
+    if not delta.is_valid:
+        # If only optical budget failed and we're allowing low margin, override
+        if (
+            allow_low_optical_margin
+            and not delta.optical_budget_ok
+            and delta.mgmt_vlan_trunked
+            and delta.ip_index_valid
+        ):
+            logger.warning(
+                "Proceeding despite low optical margin for ONT %s: %s",
+                ctx.ont.serial_number,
+                delta.optical_budget_message,
+            )
+            delta.optical_budget_ok = True
+        else:
+            ms = int((time.monotonic() - t0) * 1000)
+            summary = get_delta_summary(delta)
+            return StepResult(
+                "provision_reconciled",
+                False,
+                f"Validation failed: {summary['validations']}",
+                ms,
+                data=summary,
+            )
+
+    # Check if there are any changes
+    if not delta.has_changes:
+        ms = int((time.monotonic() - t0) * 1000)
+        result = StepResult(
+            "provision_reconciled",
+            True,
+            "No changes needed - ONT already matches desired state",
+            ms,
+            data=get_delta_summary(delta),
+        )
+        _record_step(db, ctx.ont, "provision_reconciled", result)
+        return result
+
+    # Build desired state for execution
+    desired, err = build_desired_state_from_profile(
+        db,
+        ont_id,
+        tr069_olt_profile_id=tr069_olt_profile_id,
+    )
+    if not desired:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult("provision_reconciled", False, f"Failed to build desired state: {err}", ms)
+
+    if dry_run:
+        ms = int((time.monotonic() - t0) * 1000)
+        summary = get_delta_summary(delta)
+        return StepResult(
+            "provision_reconciled",
+            True,
+            f"Dry run: {summary['service_ports']['create']} port(s) to create",
+            ms,
+            data={"dry_run": True, **summary},
+        )
+
+    # Execute the delta
+    exec_result = execute_delta(ctx.olt, delta, desired)
+
+    ms = int((time.monotonic() - t0) * 1000)
+
+    if exec_result.success:
+        logger.info(
+            "Reconciled provisioning complete for ONT %s: %d step(s)",
+            ctx.ont.serial_number,
+            len(exec_result.steps_completed),
+        )
+        result = StepResult(
+            "provision_reconciled",
+            True,
+            exec_result.message,
+            ms,
+            data={
+                "steps_completed": exec_result.steps_completed,
+                **get_delta_summary(delta),
+            },
+        )
+    else:
+        logger.error(
+            "Reconciled provisioning failed for ONT %s: %s",
+            ctx.ont.serial_number,
+            exec_result.message,
+        )
+
+        # Attempt rollback if there are compensation entries
+        rollback_results = []
+        if exec_result.compensation_log:
+            logger.info(
+                "Initiating rollback for ONT %s (%d compensation entries)",
+                ctx.ont.serial_number,
+                len(exec_result.compensation_log),
+            )
+            rollback_results = exec_result.rollback(ctx.olt)
+
+        result = StepResult(
+            "provision_reconciled",
+            False,
+            exec_result.message,
+            ms,
+            data={
+                "steps_completed": exec_result.steps_completed,
+                "steps_failed": exec_result.steps_failed,
+                "errors": exec_result.errors,
+                "rollback_performed": len(rollback_results) > 0,
+                "rollback_results": [
+                    {"step": r[0], "success": r[1], "message": r[2]}
+                    for r in rollback_results
+                ],
+            },
+        )
+
+    _record_step(db, ctx.ont, "provision_reconciled", result)
+    return result
+
+
+def preview_reconciliation(
+    db: Session,
+    ont_id: str,
+    *,
+    profile_id: str | None = None,
+    tr069_olt_profile_id: int | None = None,
+) -> dict:
+    """Preview what reconciliation would do without executing.
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit primary key.
+        profile_id: Optional explicit profile ID.
+
+    Returns:
+        Dictionary with delta summary and validation results.
+    """
+    from app.services.network.ont_provisioning.reconciler import (
+        get_delta_summary,
+        reconcile_ont_state,
+    )
+
+    delta, err = reconcile_ont_state(
+        db,
+        ont_id,
+        profile_id,
+        tr069_olt_profile_id=tr069_olt_profile_id,
+    )
+    if not delta:
+        return {"error": err, "has_changes": False, "is_valid": False}
+
+    summary = get_delta_summary(delta)
+    summary["error"] = None
+
+    # Add detail about each service port action
+    port_details: list[dict] = []
+    for sp_delta in delta.service_port_deltas:
+        detail: dict = {
+            "action": sp_delta.action.value,
+            "message": sp_delta.message,
+        }
+        if sp_delta.desired:
+            detail["desired"] = {
+                "vlan_id": sp_delta.desired.vlan_id,
+                "gem_index": sp_delta.desired.gem_index,
+                "tag_transform": sp_delta.desired.tag_transform,
+            }
+        if sp_delta.actual:
+            detail["actual"] = {
+                "index": sp_delta.actual.index,
+                "vlan_id": sp_delta.actual.vlan_id,
+                "gem_index": sp_delta.actual.gem_index,
+            }
+        port_details.append(detail)
+    summary["service_port_details"] = port_details
+
+    return summary

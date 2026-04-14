@@ -335,7 +335,10 @@ def _process_single_alert_rule(
 
     # Acquire advisory lock for this rule+device+interface combination
     # This serializes alert creation to prevent duplicates
-    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+    # Only available on PostgreSQL; skip on SQLite (used in tests)
+    dialect_name = db.bind.dialect.name if db.bind else ""
+    if dialect_name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
 
     violated = _violates_rule(db, rule, metric)
     existing = (

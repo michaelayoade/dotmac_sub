@@ -359,6 +359,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     from app.services import web_admin as web_admin_service
     from app.services.network.ont_service_intent import load_ont_plan_for_ont
     from app.services.web_network_onts_provisioning import (
+        preflight_result,
         validate_provision_form_fields,
     )
 
@@ -468,6 +469,12 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         wifi_ssid=str(wifi_intent.get("ssid") or "") or None,
         wifi_password=None,
     )
+    provision_preflight = preflight_result(
+        db,
+        ont_id=ont_id,
+        profile_id=str(profile.id) if profile else None,
+        tr069_profile_id=getattr(tr069_profile, "profile_id", None),
+    )
 
     context: dict[str, Any] = {
         "request": request,
@@ -523,6 +530,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "pppoe_username": getattr(ont, "pppoe_username", None),
         "ont_plan": ont_plan,
         "provision_gate_issues": provision_gate_issues,
+        "provision_preflight": provision_preflight,
     }
     return context
 
@@ -552,7 +560,7 @@ def resolve_effective_tr069_profile_for_ont(
     Returns (profile_data, error_message). profile_data may be a namespace
     with ``profile_id`` and ``profile_name`` attributes if found, or None.
     """
-    profiles = get_tr069_profiles_for_ont(db, ont)
+    profiles, error = get_tr069_profiles_for_ont(db, ont)
     if profiles:
         return profiles[0], None
-    return None, "No TR-069 profile found for this ONT"
+    return None, error or "No TR-069 profile found for this ONT"
