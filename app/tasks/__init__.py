@@ -80,6 +80,7 @@ from app.tasks.tr069 import (
     sync_all_acs_devices as tr069_sync_all_acs_devices,
 )
 from app.tasks.usage import import_radius_accounting, run_usage_rating
+from app.tasks.vacation_holds import resume_expired_holds
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.webhooks import (
     deliver_webhook,
@@ -159,4 +160,5 @@ __all__ = [
     "cleanup_device_metrics",
     "sync_nas_devices_to_monitoring",
     "retired_detect_sla_breaches",
+    "resume_expired_holds",
 ]

@@ -442,7 +442,11 @@ def catalog_subscription_edit(
 
 @router.get("/subscriptions/{subscription_id}", response_class=HTMLResponse)
 def catalog_subscription_detail(
-    request: Request, subscription_id: str, db: Session = Depends(get_db)
+    request: Request,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+    notice: str | None = None,
+    error: str | None = None,
 ) -> HTMLResponse:
     detail_context = (
         web_catalog_subscription_workflows_service.subscription_detail_page_context(
@@ -459,6 +463,8 @@ def catalog_subscription_detail(
         )
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(detail_context)
+    context["notice"] = notice
+    context["error"] = error
     return templates.TemplateResponse("admin/catalog/subscription_detail.html", context)
 
 
@@ -496,6 +502,27 @@ def catalog_subscription_send_credentials(
         web_catalog_subscription_workflows_service.send_subscription_credentials_redirect(
             db,
             subscription_id=subscription_id,
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/subscriptions/{subscription_id}/resume-vacation-hold",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("catalog:write"))],
+)
+def catalog_subscription_resume_vacation_hold(
+    request: Request,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Admin action to resume a customer vacation hold."""
+    return RedirectResponse(
+        web_catalog_subscription_workflows_service.admin_resume_vacation_hold_redirect(
+            db,
+            subscription_id=subscription_id,
+            actor_id=_get_actor_id(request),
         ),
         status_code=303,
     )

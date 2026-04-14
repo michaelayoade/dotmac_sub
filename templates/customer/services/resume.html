@@ -59,6 +59,14 @@
                 </div>
             </div>
             {% endif %}
+            {% if resume_at %}
+            <div class="flex items-center justify-between rounded-xl bg-stone-50 px-4 py-3 dark:bg-stone-700/40">
+                <div>
+                    <p class="text-xs font-medium text-stone-500 dark:text-stone-400">Scheduled Auto-Resume</p>
+                    <p class="mt-0.5 font-semibold text-stone-900 dark:text-white">{{ resume_at.strftime('%B %d, %Y at %I:%M %p') }}</p>
+                </div>
+            </div>
+            {% endif %}
         </div>
 
         <form action="/portal/services/{{ subscription.id }}/resume" method="POST" class="mt-6">

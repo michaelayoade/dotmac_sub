@@ -383,6 +383,29 @@ def build_beat_schedule() -> dict:
             enabled=subscription_expiration_enabled,
             interval_seconds=subscription_expiration_interval_seconds,
         )
+        # Vacation hold auto-resume - runs hourly to resume expired holds
+        vacation_hold_resume_enabled = _effective_bool(
+            session,
+            SettingDomain.catalog,
+            "vacation_hold_auto_resume_enabled",
+            "VACATION_HOLD_AUTO_RESUME_ENABLED",
+            True,
+        )
+        vacation_hold_resume_interval = _effective_int(
+            session,
+            SettingDomain.catalog,
+            "vacation_hold_resume_interval_seconds",
+            "VACATION_HOLD_RESUME_INTERVAL_SECONDS",
+            3600,  # Hourly
+        )
+        vacation_hold_resume_interval = max(vacation_hold_resume_interval, 300)
+        _sync_scheduled_task(
+            session,
+            name="vacation_hold_auto_resume",
+            task_name="app.tasks.vacation_holds.resume_expired_holds",
+            enabled=vacation_hold_resume_enabled,
+            interval_seconds=vacation_hold_resume_interval,
+        )
         notification_queue_enabled = _effective_bool(
             session,
             SettingDomain.notification,

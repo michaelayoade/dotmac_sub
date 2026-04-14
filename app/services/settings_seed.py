@@ -444,6 +444,28 @@ def _seed_missing_notification_templates(db: Session) -> int:
             ),
         },
         {
+            "code": "subscription_resumed",
+            "name": "Subscription Resumed",
+            "channel": NotificationChannel.email,
+            "subject": "Your service has been resumed",
+            "body": (
+                "Dear {subscriber_name},\n\n"
+                "Your {offer_name} subscription has been resumed. "
+                "Your service is now fully active and ready to use.\n\n"
+                "Thank you for being a valued customer."
+            ),
+        },
+        {
+            "code": "subscription_resumed",
+            "name": "Subscription Resumed SMS",
+            "channel": NotificationChannel.sms,
+            "subject": None,
+            "body": (
+                "Hi {subscriber_name}, your {offer_name} service has been resumed. "
+                "You can now use your service as normal."
+            ),
+        },
+        {
             "code": "suspension_warning",
             "name": "Suspension Warning",
             "channel": NotificationChannel.email,

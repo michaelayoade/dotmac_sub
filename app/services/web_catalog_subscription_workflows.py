@@ -221,6 +221,40 @@ def send_subscription_credentials_redirect(
     return f"/admin/catalog/subscriptions/{subscription_id}/edit?{query}"
 
 
+def admin_resume_vacation_hold_redirect(
+    db: Session,
+    *,
+    subscription_id: str,
+    actor_id: str | None,
+) -> str:
+    """Admin action to resume a customer vacation hold and return redirect URL."""
+    from app.models.enforcement_lock import EnforcementReason
+    from app.services.account_lifecycle import restore_subscription
+
+    admin_ref = f"admin:{actor_id or 'unknown'}"
+    try:
+        restore_subscription(
+            db,
+            subscription_id,
+            trigger=admin_ref,
+            resolved_by=admin_ref,
+            reason=EnforcementReason.customer_hold,
+        )
+        db.commit()
+        notice = "Vacation hold has been cleared. Service resumed successfully."
+        query = f"notice={quote_plus(notice)}"
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Failed to resume vacation hold for subscription %s: %s",
+            subscription_id,
+            exc,
+            exc_info=True,
+        )
+        query = f"error={quote_plus(str(exc))}"
+    return f"/admin/catalog/subscriptions/{subscription_id}?{query}"
+
+
 def bulk_activate_response(
     db: Session,
     *,

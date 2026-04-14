@@ -116,6 +116,9 @@ class EnforcementLock(Base):
     resolved_by: Mapped[str | None] = mapped_column(
         String(255), nullable=True
     )  # "payment:{id}", "admin:{user_id}", "cap_reset"
+    resume_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )  # Scheduled auto-resume for vacation holds
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     subscription = relationship("Subscription", backref="enforcement_locks")

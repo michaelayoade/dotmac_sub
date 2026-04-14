@@ -744,6 +744,46 @@ __all__ = [
 ]
 
 
+def _get_vacation_hold_usage(
+    db: Session,
+    subscription_id: str,
+) -> dict:
+    """Get vacation hold usage stats for a subscription this calendar year."""
+    from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+
+    current_year = datetime.now(UTC).year
+    year_start = datetime(current_year, 1, 1, tzinfo=UTC)
+
+    # Count holds created this year (both active and resolved)
+    holds_this_year = (
+        db.query(EnforcementLock)
+        .filter(EnforcementLock.subscription_id == subscription_id)
+        .filter(EnforcementLock.reason == EnforcementReason.customer_hold)
+        .filter(EnforcementLock.created_at >= year_start)
+        .count()
+    )
+
+    # Get most recent hold (active or resolved) for cooldown calculation
+    last_hold = (
+        db.query(EnforcementLock)
+        .filter(EnforcementLock.subscription_id == subscription_id)
+        .filter(EnforcementLock.reason == EnforcementReason.customer_hold)
+        .order_by(EnforcementLock.created_at.desc())
+        .first()
+    )
+
+    last_hold_date = last_hold.created_at if last_hold else None
+    days_since_last = None
+    if last_hold_date:
+        days_since_last = (datetime.now(UTC) - last_hold_date).days
+
+    return {
+        "holds_this_year": holds_this_year,
+        "last_hold_date": last_hold_date,
+        "days_since_last": days_since_last,
+    }
+
+
 def get_suspend_page(
     db: Session,
     customer: dict,
@@ -770,6 +810,36 @@ def get_suspend_page(
     if subscription.status != SubscriptionStatus.active:
         return None
 
+    # Get usage limits and current usage
+    max_holds_val = resolve_value(
+        db, SettingDomain.catalog, "max_suspend_holds_per_year"
+    )
+    max_holds_per_year = (
+        int(max_holds_val) if isinstance(max_holds_val, (str, int, float)) else 0
+    )
+    cooldown_val = resolve_value(db, SettingDomain.catalog, "suspend_cooldown_days")
+    cooldown_days = (
+        int(cooldown_val) if isinstance(cooldown_val, (str, int, float)) else 0
+    )
+
+    usage = _get_vacation_hold_usage(db, subscription_id)
+    holds_remaining = None
+    if max_holds_per_year > 0:
+        holds_remaining = max(0, max_holds_per_year - usage["holds_this_year"])
+
+    # Check if user can actually suspend (usage limits)
+    can_suspend = True
+    block_reason = None
+
+    if max_holds_per_year > 0 and usage["holds_this_year"] >= max_holds_per_year:
+        can_suspend = False
+        block_reason = f"You have reached the maximum of {max_holds_per_year} vacation holds per year."
+    elif cooldown_days > 0 and usage["days_since_last"] is not None:
+        if usage["days_since_last"] < cooldown_days:
+            can_suspend = False
+            days_remaining = cooldown_days - usage["days_since_last"]
+            block_reason = f"Please wait {days_remaining} more day(s) before using another vacation hold."
+
     offer = subscription.offer
     return {
         "subscription": subscription,
@@ -778,6 +848,13 @@ def get_suspend_page(
         if subscription.billing_mode
         else "postpaid",
         "max_days": max_days,
+        "holds_this_year": usage["holds_this_year"],
+        "holds_remaining": holds_remaining,
+        "max_holds_per_year": max_holds_per_year if max_holds_per_year > 0 else None,
+        "cooldown_days": cooldown_days if cooldown_days > 0 else None,
+        "days_since_last": usage["days_since_last"],
+        "can_suspend": can_suspend,
+        "block_reason": block_reason,
     }
 
 
@@ -812,6 +889,32 @@ def apply_service_suspend(
     if subscription.status != SubscriptionStatus.active:
         raise ValueError("Only active subscriptions can be suspended")
 
+    # Check usage limits
+    max_holds_val = resolve_value(
+        db, SettingDomain.catalog, "max_suspend_holds_per_year"
+    )
+    max_holds_per_year = (
+        int(max_holds_val) if isinstance(max_holds_val, (str, int, float)) else 0
+    )
+    cooldown_val = resolve_value(db, SettingDomain.catalog, "suspend_cooldown_days")
+    cooldown_days = (
+        int(cooldown_val) if isinstance(cooldown_val, (str, int, float)) else 0
+    )
+
+    usage = _get_vacation_hold_usage(db, subscription_id)
+
+    if max_holds_per_year > 0 and usage["holds_this_year"] >= max_holds_per_year:
+        raise ValueError(
+            f"You have reached the maximum of {max_holds_per_year} vacation holds per year"
+        )
+
+    if cooldown_days > 0 and usage["days_since_last"] is not None:
+        if usage["days_since_last"] < cooldown_days:
+            days_remaining = cooldown_days - usage["days_since_last"]
+            raise ValueError(
+                f"Please wait {days_remaining} more day(s) before using another vacation hold"
+            )
+
     subscriber_id = str(subscription.subscriber_id)
     lock = suspend_subscription(
         db,
@@ -821,19 +924,25 @@ def apply_service_suspend(
         notes=f"Customer-initiated vacation hold for {days} days",
     )
 
+    # Set scheduled auto-resume date
+    resume_at = datetime.now(UTC) + timedelta(days=days)
+    lock.resume_at = resume_at
+
     db.flush()
 
     logger.info(
-        "Customer %s suspended subscription %s for %d days (vacation hold)",
+        "Customer %s suspended subscription %s for %d days (vacation hold, resume_at=%s)",
         subscriber_id,
         subscription_id,
         days,
+        resume_at.isoformat(),
     )
 
     return {
         "subscription_id": subscription_id,
         "days": days,
         "lock_id": str(lock.id),
+        "resume_at": resume_at.isoformat(),
     }
 
 
@@ -880,6 +989,7 @@ def get_resume_page(
         "offer_name": offer.name if offer else "Service",
         "lock": lock,
         "suspended_since": lock.created_at,
+        "resume_at": lock.resume_at,
     }
 
 

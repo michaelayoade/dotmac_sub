@@ -37,6 +37,7 @@ EVENT_TYPE_TO_TEMPLATE = {
     EventType.subscription_created: "subscription_created",
     EventType.subscription_activated: "subscription_activated",
     EventType.subscription_suspended: "subscription_suspended",
+    EventType.subscription_resumed: "subscription_resumed",
     EventType.subscription_canceled: "subscription_canceled",
     EventType.subscription_expiring: "subscription_expiring",
     EventType.subscription_suspension_warning: "suspension_warning",

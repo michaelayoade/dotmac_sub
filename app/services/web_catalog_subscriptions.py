@@ -25,6 +25,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
+from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.event_store import EventStore
 from app.models.network import IPAssignment, IpBlock, IpPool, IPv4Address, IPVersion
 from app.models.notification import Notification, NotificationTemplate
@@ -1543,6 +1544,31 @@ def _subscription_radius_sync_evidence(
     }
 
 
+def _subscription_vacation_hold(
+    db: Session, subscription: Subscription
+) -> dict[str, object] | None:
+    """Get active vacation hold (customer_hold) info for a subscription.
+
+    Returns None if no active vacation hold exists.
+    """
+    lock = (
+        db.query(EnforcementLock)
+        .filter(EnforcementLock.subscription_id == subscription.id)
+        .filter(EnforcementLock.reason == EnforcementReason.customer_hold)
+        .filter(EnforcementLock.is_active.is_(True))
+        .first()
+    )
+    if not lock:
+        return None
+    return {
+        "lock_id": str(lock.id),
+        "created_at": lock.created_at,
+        "resume_at": lock.resume_at,
+        "notes": lock.notes,
+        "source": lock.source,
+    }
+
+
 def _subscription_enforcement_state(
     db: Session, subscription: Subscription
 ) -> dict[str, object]:
@@ -1640,6 +1666,7 @@ def subscription_detail_context(
     )
     enforcement_state = _subscription_enforcement_state(db, subscription)
     external_radius_rows = _subscription_external_radius_rows(db, credential)
+    vacation_hold = _subscription_vacation_hold(db, subscription)
     return {
         "access_credential": credential,
         "password_sync": password_sync,
@@ -1657,6 +1684,7 @@ def subscription_detail_context(
         "radius_sync_evidence": radius_sync_evidence,
         "enforcement_state": enforcement_state,
         "external_radius_rows": external_radius_rows,
+        "vacation_hold": vacation_hold,
     }
 
 
