@@ -7,7 +7,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 from fastapi import HTTPException
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.network import FdhCabinet
@@ -311,59 +311,85 @@ def _process_alerts(db: Session, metric: DeviceMetric) -> None:
     for rule in rules:
         if not _rule_matches(rule, metric):
             continue
-        violated = _violates_rule(db, rule, metric)
-        existing = (
-            db.query(Alert)
-            .filter(Alert.rule_id == rule.id)
-            .filter(Alert.device_id == metric.device_id)
-            .filter(Alert.interface_id == metric.interface_id)
-            .filter(Alert.status.in_([AlertStatus.open, AlertStatus.acknowledged]))
-            .first()
+        _process_single_alert_rule(db, rule, metric)
+
+
+def _process_single_alert_rule(
+    db: Session, rule: AlertRule, metric: DeviceMetric
+) -> None:
+    """Process a single alert rule for a metric with deduplication.
+
+    Uses advisory lock to prevent duplicate alert creation under concurrent
+    metric ingestion. Lock key is derived from rule_id + device_id + interface_id.
+    """
+    from sqlalchemy import text
+
+    # Build advisory lock key from rule + device + interface combination
+    # Using hash to fit into bigint range for pg_advisory_xact_lock
+    lock_parts = [
+        str(rule.id) if rule.id else "",
+        str(metric.device_id) if metric.device_id else "",
+        str(metric.interface_id) if metric.interface_id else "",
+    ]
+    lock_key = hash("_".join(lock_parts)) & 0x7FFFFFFFFFFFFFFF  # Ensure positive bigint
+
+    # Acquire advisory lock for this rule+device+interface combination
+    # This serializes alert creation to prevent duplicates
+    db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+
+    violated = _violates_rule(db, rule, metric)
+    existing = (
+        db.query(Alert)
+        .filter(Alert.rule_id == rule.id)
+        .filter(Alert.device_id == metric.device_id)
+        .filter(Alert.interface_id == metric.interface_id)
+        .filter(Alert.status.in_([AlertStatus.open, AlertStatus.acknowledged]))
+        .first()
+    )
+    if violated:
+        if existing:
+            existing.measured_value = float(metric.value)
+            return
+        if not _can_create_alert_for_metric(db, rule, metric):
+            return
+        alert = Alert(
+            rule_id=rule.id,
+            device_id=metric.device_id,
+            interface_id=metric.interface_id,
+            metric_type=metric.metric_type,
+            measured_value=float(metric.value),
+            status=AlertStatus.open,
+            severity=rule.severity or AlertSeverity.warning,
+            triggered_at=metric.recorded_at or datetime.now(UTC),
         )
-        if violated:
-            if existing:
-                existing.measured_value = float(metric.value)
-                continue
-            if not _can_create_alert_for_metric(db, rule, metric):
-                continue
-            alert = Alert(
-                rule_id=rule.id,
-                device_id=metric.device_id,
-                interface_id=metric.interface_id,
-                metric_type=metric.metric_type,
-                measured_value=float(metric.value),
-                status=AlertStatus.open,
-                severity=rule.severity or AlertSeverity.warning,
-                triggered_at=metric.recorded_at or datetime.now(UTC),
-            )
-            db.add(alert)
-            db.flush()
+        db.add(alert)
+        db.flush()
+        event = AlertEvent(
+            alert_id=alert.id,
+            status=AlertStatus.open,
+            message="Alert triggered",
+        )
+        db.add(event)
+        from app.services import notification as notification_service
+
+        notification_service.alert_notification_policies.emit_for_alert(
+            db, alert, AlertStatus.open
+        )
+    else:
+        if existing:
+            existing.status = AlertStatus.resolved
+            existing.resolved_at = datetime.now(UTC)
             event = AlertEvent(
-                alert_id=alert.id,
-                status=AlertStatus.open,
-                message="Alert triggered",
+                alert_id=existing.id,
+                status=AlertStatus.resolved,
+                message="Alert resolved",
             )
             db.add(event)
             from app.services import notification as notification_service
 
             notification_service.alert_notification_policies.emit_for_alert(
-                db, alert, AlertStatus.open
+                db, existing, AlertStatus.resolved
             )
-        else:
-            if existing:
-                existing.status = AlertStatus.resolved
-                existing.resolved_at = datetime.now(UTC)
-                event = AlertEvent(
-                    alert_id=existing.id,
-                    status=AlertStatus.resolved,
-                    message="Alert resolved",
-                )
-                db.add(event)
-                from app.services import notification as notification_service
-
-                notification_service.alert_notification_policies.emit_for_alert(
-                    db, existing, AlertStatus.resolved
-                )
 
 
 def _can_create_alert_for_metric(
@@ -432,7 +458,7 @@ class PopSites(ListResponseMixin):
     def create(db: Session, payload: PopSiteCreate):
         site = PopSite(**payload.model_dump())
         db.add(site)
-        db.commit()
+        db.flush()
         db.refresh(site)
         return site
 
@@ -452,18 +478,19 @@ class PopSites(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(PopSite)
+        stmt = select(PopSite)
         if is_active is None:
-            query = query.filter(PopSite.is_active.is_(True))
+            stmt = stmt.where(PopSite.is_active.is_(True))
         else:
-            query = query.filter(PopSite.is_active == is_active)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(PopSite.is_active == is_active)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": PopSite.created_at, "name": PopSite.name},
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
     @staticmethod
     def update(db: Session, site_id: str, payload: PopSiteUpdate):
@@ -472,7 +499,7 @@ class PopSites(ListResponseMixin):
             raise HTTPException(status_code=404, detail="PoP site not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(site, key, value)
-        db.commit()
+        db.flush()
         db.refresh(site)
         return site
 
@@ -482,7 +509,7 @@ class PopSites(ListResponseMixin):
         if not site:
             raise HTTPException(status_code=404, detail="PoP site not found")
         site.is_active = False
-        db.commit()
+        db.flush()
 
 
 class NetworkDevices(ListResponseMixin):
@@ -490,7 +517,7 @@ class NetworkDevices(ListResponseMixin):
     def create(db: Session, payload: NetworkDeviceCreate):
         device = NetworkDevice(**payload.model_dump())
         db.add(device)
-        db.commit()
+        db.flush()
         db.refresh(device)
         return device
 
@@ -511,20 +538,21 @@ class NetworkDevices(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(NetworkDevice)
+        stmt = select(NetworkDevice)
         if pop_site_id:
-            query = query.filter(NetworkDevice.pop_site_id == pop_site_id)
+            stmt = stmt.where(NetworkDevice.pop_site_id == pop_site_id)
         if is_active is None:
-            query = query.filter(NetworkDevice.is_active.is_(True))
+            stmt = stmt.where(NetworkDevice.is_active.is_(True))
         else:
-            query = query.filter(NetworkDevice.is_active == is_active)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(NetworkDevice.is_active == is_active)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": NetworkDevice.created_at, "name": NetworkDevice.name},
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
     @staticmethod
     def update(db: Session, device_id: str, payload: NetworkDeviceUpdate):
@@ -533,7 +561,7 @@ class NetworkDevices(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Network device not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(device, key, value)
-        db.commit()
+        db.flush()
         db.refresh(device)
         return device
 
@@ -543,7 +571,7 @@ class NetworkDevices(ListResponseMixin):
         if not device:
             raise HTTPException(status_code=404, detail="Network device not found")
         device.is_active = False
-        db.commit()
+        db.flush()
 
     @staticmethod
     def get_dashboard_stats(db: Session) -> dict:
@@ -667,24 +695,21 @@ class NetworkDevices(ListResponseMixin):
         """
         from sqlalchemy import and_ as sa_and
         from sqlalchemy import func as sa_func
+        from sqlalchemy import or_ as sa_or
 
         from app.models.network_monitoring import DeviceStatus as DStatus
         from app.models.network_monitoring import MetricType as MT
         from app.models.usage import AccountingStatus, RadiusAccountingSession
 
-        # ---- Device counts (reuse base logic inline) ----
-        devices = (
-            db.query(NetworkDevice)
-            .filter(NetworkDevice.is_active.is_(True))
-            .order_by(NetworkDevice.name)
-            .all()
-        )
-        filter_value = (query or "").strip()
+        filter_value = (query or "").strip().lower()
+
+        # ---- Device counts (always from all devices for accurate stats) ----
+        base_query = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True))
+        devices = base_query.order_by(NetworkDevice.name).all()
         online_statuses = {DStatus.online, DStatus.degraded, DStatus.maintenance}
         devices_online = sum(1 for d in devices if d.status in online_statuses)
         devices_offline = sum(1 for d in devices if d.status == DStatus.offline)
 
-        len(devices)
         online_count = sum(1 for d in devices if d.status == DStatus.online)
         degraded_count = sum(1 for d in devices if d.status == DStatus.degraded)
         offline_count = devices_offline
@@ -767,19 +792,28 @@ class NetworkDevices(ListResponseMixin):
         avg_cpu = sum(cpu_values) / len(cpu_values) if cpu_values else None
         avg_mem = sum(mem_values) / len(mem_values) if mem_values else None
 
-        # ---- Device health table ----
+        # ---- Device health table (with SQL-level search filtering) ----
+        if filter_value:
+            # Apply search filter at SQL level for better performance
+            search_pattern = f"%{filter_value}%"
+            filtered_devices = (
+                base_query.filter(
+                    sa_or(
+                        NetworkDevice.name.ilike(search_pattern),
+                        NetworkDevice.hostname.ilike(search_pattern),
+                        NetworkDevice.mgmt_ip.ilike(search_pattern),
+                        NetworkDevice.vendor.ilike(search_pattern),
+                        NetworkDevice.model.ilike(search_pattern),
+                    )
+                )
+                .order_by(NetworkDevice.name)
+                .all()
+            )
+        else:
+            filtered_devices = devices
+
         device_health = []
-        for device in devices:
-            if filter_value:
-                filter_lower = filter_value.lower()
-                if (
-                    filter_lower not in (device.name or "").lower()
-                    and filter_lower not in (device.hostname or "").lower()
-                    and filter_lower not in (device.mgmt_ip or "").lower()
-                    and filter_lower not in (device.vendor or "").lower()
-                    and filter_lower not in (device.model or "").lower()
-                ):
-                    continue
+        for device in filtered_devices:
             dm = metrics_by_device.get(str(device.id), {})
             cpu_m = dm.get(MT.cpu)
             mem_m = dm.get(MT.memory)
@@ -829,7 +863,7 @@ class DeviceInterfaces(ListResponseMixin):
     def create(db: Session, payload: DeviceInterfaceCreate):
         interface = DeviceInterface(**payload.model_dump())
         db.add(interface)
-        db.commit()
+        db.flush()
         db.refresh(interface)
         return interface
 
@@ -849,16 +883,17 @@ class DeviceInterfaces(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(DeviceInterface)
+        stmt = select(DeviceInterface)
         if device_id:
-            query = query.filter(DeviceInterface.device_id == device_id)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(DeviceInterface.device_id == device_id)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": DeviceInterface.created_at, "name": DeviceInterface.name},
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
     @staticmethod
     def update(db: Session, interface_id: str, payload: DeviceInterfaceUpdate):
@@ -867,7 +902,7 @@ class DeviceInterfaces(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Device interface not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(interface, key, value)
-        db.commit()
+        db.flush()
         db.refresh(interface)
         return interface
 
@@ -877,7 +912,7 @@ class DeviceInterfaces(ListResponseMixin):
         if not interface:
             raise HTTPException(status_code=404, detail="Device interface not found")
         db.delete(interface)
-        db.commit()
+        db.flush()
 
 
 class DeviceMetrics(ListResponseMixin):
@@ -887,7 +922,7 @@ class DeviceMetrics(ListResponseMixin):
         db.add(metric)
         db.flush()
         _process_alerts(db, metric)
-        db.commit()
+        db.flush()
         db.refresh(metric)
         return metric
 
@@ -908,13 +943,13 @@ class DeviceMetrics(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(DeviceMetric)
+        stmt = select(DeviceMetric)
         if device_id:
-            query = query.filter(DeviceMetric.device_id == device_id)
+            stmt = stmt.where(DeviceMetric.device_id == device_id)
         if interface_id:
-            query = query.filter(DeviceMetric.interface_id == interface_id)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(DeviceMetric.interface_id == interface_id)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {
@@ -922,7 +957,8 @@ class DeviceMetrics(ListResponseMixin):
                 "recorded_at": DeviceMetric.recorded_at,
             },
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
     @staticmethod
     def update(db: Session, metric_id: str, payload: DeviceMetricUpdate):
@@ -931,7 +967,7 @@ class DeviceMetrics(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Device metric not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(metric, key, value)
-        db.commit()
+        db.flush()
         db.refresh(metric)
         return metric
 
@@ -941,7 +977,7 @@ class DeviceMetrics(ListResponseMixin):
         if not metric:
             raise HTTPException(status_code=404, detail="Device metric not found")
         db.delete(metric)
-        db.commit()
+        db.flush()
 
 
 class AlertRules(ListResponseMixin):
@@ -949,7 +985,7 @@ class AlertRules(ListResponseMixin):
     def create(db: Session, payload: AlertRuleCreate):
         rule = AlertRule(**payload.model_dump())
         db.add(rule)
-        db.commit()
+        db.flush()
         db.refresh(rule)
         return rule
 
@@ -972,27 +1008,28 @@ class AlertRules(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(AlertRule)
+        stmt = select(AlertRule)
         if metric_type:
-            query = query.filter(
+            stmt = stmt.where(
                 AlertRule.metric_type
                 == validate_enum(metric_type, MetricType, "metric_type")
             )
         if device_id:
-            query = query.filter(AlertRule.device_id == device_id)
+            stmt = stmt.where(AlertRule.device_id == device_id)
         if interface_id:
-            query = query.filter(AlertRule.interface_id == interface_id)
+            stmt = stmt.where(AlertRule.interface_id == interface_id)
         if is_active is None:
-            query = query.filter(AlertRule.is_active.is_(True))
+            stmt = stmt.where(AlertRule.is_active.is_(True))
         else:
-            query = query.filter(AlertRule.is_active == is_active)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(AlertRule.is_active == is_active)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": AlertRule.created_at, "name": AlertRule.name},
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
     @staticmethod
     def update(db: Session, rule_id: str, payload: AlertRuleUpdate):
@@ -1001,7 +1038,7 @@ class AlertRules(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Alert rule not found")
         for key, value in payload.model_dump(exclude_unset=True).items():
             setattr(rule, key, value)
-        db.commit()
+        db.flush()
         db.refresh(rule)
         return rule
 
@@ -1011,7 +1048,7 @@ class AlertRules(ListResponseMixin):
         if not rule:
             raise HTTPException(status_code=404, detail="Alert rule not found")
         rule.is_active = False
-        db.commit()
+        db.flush()
 
     @staticmethod
     def bulk_update(db: Session, payload: AlertRuleBulkUpdateRequest) -> int:
@@ -1025,7 +1062,7 @@ class AlertRules(ListResponseMixin):
             )
         for rule in rules:
             rule.is_active = payload.is_active
-        db.commit()
+        db.flush()
         return len(rules)
 
     @staticmethod
@@ -1055,28 +1092,29 @@ class Alerts(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(Alert)
+        stmt = select(Alert)
         if rule_id:
-            query = query.filter(Alert.rule_id == rule_id)
+            stmt = stmt.where(Alert.rule_id == rule_id)
         if device_id:
-            query = query.filter(Alert.device_id == device_id)
+            stmt = stmt.where(Alert.device_id == device_id)
         if interface_id:
-            query = query.filter(Alert.interface_id == interface_id)
+            stmt = stmt.where(Alert.interface_id == interface_id)
         if status:
-            query = query.filter(
+            stmt = stmt.where(
                 Alert.status == validate_enum(status, AlertStatus, "status")
             )
         if severity:
-            query = query.filter(
+            stmt = stmt.where(
                 Alert.severity == validate_enum(severity, AlertSeverity, "severity")
             )
-        query = apply_ordering(
-            query,
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": Alert.created_at, "triggered_at": Alert.triggered_at},
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
     @staticmethod
     def acknowledge(db: Session, alert_id: str, payload: AlertAcknowledgeRequest):
@@ -1091,7 +1129,7 @@ class Alerts(ListResponseMixin):
             message=payload.message or "Alert acknowledged",
         )
         db.add(event)
-        db.commit()
+        db.flush()
         db.refresh(alert)
         return alert
 
@@ -1108,7 +1146,7 @@ class Alerts(ListResponseMixin):
             message=payload.message or "Alert resolved",
         )
         db.add(event)
-        db.commit()
+        db.flush()
         db.refresh(alert)
         return alert
 
@@ -1132,7 +1170,7 @@ class Alerts(ListResponseMixin):
                 message=payload.message or "Alert acknowledged",
             )
             db.add(event)
-        db.commit()
+        db.flush()
         return len(alerts)
 
     @staticmethod
@@ -1162,7 +1200,7 @@ class Alerts(ListResponseMixin):
                 message=payload.message or "Alert resolved",
             )
             db.add(event)
-        db.commit()
+        db.flush()
         return len(alerts)
 
     @staticmethod
@@ -1183,16 +1221,17 @@ class AlertEvents(ListResponseMixin):
         limit: int,
         offset: int,
     ):
-        query = db.query(AlertEvent)
+        stmt = select(AlertEvent)
         if alert_id:
-            query = query.filter(AlertEvent.alert_id == alert_id)
-        query = apply_ordering(
-            query,
+            stmt = stmt.where(AlertEvent.alert_id == alert_id)
+        stmt = apply_ordering(
+            stmt,
             order_by,
             order_dir,
             {"created_at": AlertEvent.created_at},
         )
-        return apply_pagination(query, limit, offset).all()
+        stmt = apply_pagination(stmt, limit, offset)
+        return list(db.scalars(stmt).all())
 
 
 def get_onu_status_summary(db: Session) -> dict[str, int]:

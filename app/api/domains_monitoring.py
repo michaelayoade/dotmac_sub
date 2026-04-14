@@ -75,7 +75,9 @@ def list_pop_sites(
     dependencies=[Depends(require_permission("monitoring:write"))],
 )
 def create_pop_site(payload: PopSiteCreate, db: Session = Depends(get_db)):
-    return monitoring_service.pop_sites.create(db, payload)
+    result = monitoring_service.pop_sites.create(db, payload)
+    db.commit()
+    return result
 
 
 @router.get(
@@ -97,7 +99,9 @@ def get_pop_site(site_id: str, db: Session = Depends(get_db)):
 def update_pop_site(
     site_id: str, payload: PopSiteUpdate, db: Session = Depends(get_db)
 ):
-    return monitoring_service.pop_sites.update(db, site_id, payload)
+    result = monitoring_service.pop_sites.update(db, site_id, payload)
+    db.commit()
+    return result
 
 
 @router.delete(
@@ -108,6 +112,7 @@ def update_pop_site(
 )
 def delete_pop_site(site_id: str, db: Session = Depends(get_db)):
     monitoring_service.pop_sites.delete(db, site_id)
+    db.commit()
 
 
 @router.get(
@@ -138,7 +143,9 @@ def list_network_devices(
     dependencies=[Depends(require_permission("monitoring:write"))],
 )
 def create_network_device(payload: NetworkDeviceCreate, db: Session = Depends(get_db)):
-    return monitoring_service.network_devices.create(db, payload)
+    result = monitoring_service.network_devices.create(db, payload)
+    db.commit()
+    return result
 
 
 @router.get(
@@ -160,7 +167,9 @@ def get_network_device(device_id: str, db: Session = Depends(get_db)):
 def update_network_device(
     device_id: str, payload: NetworkDeviceUpdate, db: Session = Depends(get_db)
 ):
-    return monitoring_service.network_devices.update(db, device_id, payload)
+    result = monitoring_service.network_devices.update(db, device_id, payload)
+    db.commit()
+    return result
 
 
 @router.delete(
@@ -171,6 +180,7 @@ def update_network_device(
 )
 def delete_network_device(device_id: str, db: Session = Depends(get_db)):
     monitoring_service.network_devices.delete(db, device_id)
+    db.commit()
 
 
 @router.get(
@@ -202,7 +212,9 @@ def list_device_interfaces(
 def create_device_interface(
     payload: DeviceInterfaceCreate, db: Session = Depends(get_db)
 ):
-    return monitoring_service.device_interfaces.create(db, payload)
+    result = monitoring_service.device_interfaces.create(db, payload)
+    db.commit()
+    return result
 
 
 @router.get(
@@ -224,7 +236,9 @@ def get_device_interface(interface_id: str, db: Session = Depends(get_db)):
 def update_device_interface(
     interface_id: str, payload: DeviceInterfaceUpdate, db: Session = Depends(get_db)
 ):
-    return monitoring_service.device_interfaces.update(db, interface_id, payload)
+    result = monitoring_service.device_interfaces.update(db, interface_id, payload)
+    db.commit()
+    return result
 
 
 @router.delete(
@@ -235,6 +249,7 @@ def update_device_interface(
 )
 def delete_device_interface(interface_id: str, db: Session = Depends(get_db)):
     monitoring_service.device_interfaces.delete(db, interface_id)
+    db.commit()
 
 
 @router.get(
@@ -265,7 +280,9 @@ def list_device_metrics(
     dependencies=[Depends(require_permission("monitoring:write"))],
 )
 def create_device_metric(payload: DeviceMetricCreate, db: Session = Depends(get_db)):
-    return monitoring_service.device_metrics.create(db, payload)
+    result = monitoring_service.device_metrics.create(db, payload)
+    db.commit()
+    return result
 
 
 @router.get(
@@ -286,6 +303,7 @@ def get_device_metric(metric_id: str, db: Session = Depends(get_db)):
 )
 def delete_device_metric(metric_id: str, db: Session = Depends(get_db)):
     monitoring_service.device_metrics.delete(db, metric_id)
+    db.commit()
 
 
 @router.get(
@@ -317,7 +335,9 @@ def list_alert_rules(
     dependencies=[Depends(require_permission("monitoring:write"))],
 )
 def create_alert_rule(payload: AlertRuleCreate, db: Session = Depends(get_db)):
-    return monitoring_service.alert_rules.create(db, payload)
+    result = monitoring_service.alert_rules.create(db, payload)
+    db.commit()
+    return result
 
 
 @router.get(
@@ -339,7 +359,9 @@ def get_alert_rule(rule_id: str, db: Session = Depends(get_db)):
 def update_alert_rule(
     rule_id: str, payload: AlertRuleUpdate, db: Session = Depends(get_db)
 ):
-    return monitoring_service.alert_rules.update(db, rule_id, payload)
+    result = monitoring_service.alert_rules.update(db, rule_id, payload)
+    db.commit()
+    return result
 
 
 @router.delete(
@@ -350,6 +372,7 @@ def update_alert_rule(
 )
 def delete_alert_rule(rule_id: str, db: Session = Depends(get_db)):
     monitoring_service.alert_rules.delete(db, rule_id)
+    db.commit()
 
 
 @router.post(
@@ -362,6 +385,7 @@ def bulk_update_alert_rules(
     payload: AlertRuleBulkUpdateRequest, db: Session = Depends(get_db)
 ):
     response = monitoring_service.alert_rules.bulk_update_response(db, payload)
+    db.commit()
     return AlertRuleBulkUpdateResponse(**response)
 
 
@@ -416,7 +440,9 @@ def get_alert(alert_id: str, db: Session = Depends(get_db)):
 def acknowledge_alert(
     alert_id: str, payload: AlertAcknowledgeRequest, db: Session = Depends(get_db)
 ):
-    return monitoring_service.alerts.acknowledge(db, alert_id, payload)
+    result = monitoring_service.alerts.acknowledge(db, alert_id, payload)
+    db.commit()
+    return result
 
 
 @router.post(
@@ -428,7 +454,9 @@ def acknowledge_alert(
 def resolve_alert(
     alert_id: str, payload: AlertResolveRequest, db: Session = Depends(get_db)
 ):
-    return monitoring_service.alerts.resolve(db, alert_id, payload)
+    result = monitoring_service.alerts.resolve(db, alert_id, payload)
+    db.commit()
+    return result
 
 
 @router.post(
@@ -444,6 +472,7 @@ def bulk_acknowledge_alerts(
     response = monitoring_service.alerts.bulk_acknowledge_response(
         db, [str(alert_id) for alert_id in payload.alert_ids], ack_payload
     )
+    db.commit()
     return AlertBulkActionResponse(**response)
 
 
@@ -460,6 +489,7 @@ def bulk_resolve_alerts(
     response = monitoring_service.alerts.bulk_resolve_response(
         db, [str(alert_id) for alert_id in payload.alert_ids], resolve_payload
     )
+    db.commit()
     return AlertBulkActionResponse(**response)
 
 

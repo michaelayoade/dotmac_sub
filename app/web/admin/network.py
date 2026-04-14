@@ -104,9 +104,14 @@ def devices_filter(
     dependencies=[Depends(require_permission("network:device:write"))],
 )
 def devices_discover(request: Request, db: Session = Depends(get_db)):
+    """Queue SNMP interface discovery for all SNMP-enabled devices."""
+    from app.tasks.snmp import discover_interfaces
+
+    discover_interfaces.delay()
     return HTMLResponse(
-        '<div class="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">'
-        "Discovery queued. Devices will appear as they are detected."
+        '<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 shadow-sm dark:border-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">'
+        '<span class="font-medium">Discovery queued.</span> '
+        "SNMP interface discovery is running for all enabled devices."
         "</div>"
     )
 
