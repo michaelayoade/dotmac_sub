@@ -578,3 +578,138 @@ class TestBuildDesiredStateFromProfile:
         assert len(desired.service_ports) == 1
         assert desired.service_ports[0].vlan_id == 100
         assert desired.service_ports[0].gem_index == 1
+
+
+# ---------------------------------------------------------------------------
+# Preflight Tests
+# ---------------------------------------------------------------------------
+
+
+class TestProvisioningPreflight:
+    """Test provisioning readiness gates before device actions are allowed."""
+
+    def _create_preflight_ont(self, db_session, *, authorized: bool = False):
+        from app.models.network import (
+            OLTDevice,
+            OntAssignment,
+            OntAuthorizationStatus,
+            OntProvisioningProfile,
+            OntUnit,
+            PonPort,
+        )
+
+        olt = OLTDevice(
+            name="Preflight OLT",
+            vendor="Huawei",
+            model="MA5608T",
+            ssh_username="admin",
+            ssh_password="secret",
+        )
+        db_session.add(olt)
+        db_session.flush()
+
+        pon = PonPort(olt_id=olt.id, name="0/2/1")
+        profile = OntProvisioningProfile(
+            name="Preflight Profile",
+            olt_device_id=olt.id,
+            authorization_line_profile_id=10,
+            authorization_service_profile_id=20,
+        )
+        db_session.add_all([pon, profile])
+        db_session.flush()
+
+        ont = OntUnit(
+            serial_number="PRE-FLIGHT-001",
+            olt_device_id=olt.id,
+            board="0/2",
+            port="1",
+            external_id="5",
+            provisioning_profile_id=profile.id,
+            authorization_status=(
+                OntAuthorizationStatus.authorized if authorized else None
+            ),
+        )
+        db_session.add(ont)
+        db_session.flush()
+
+        assignment = OntAssignment(
+            ont_unit_id=ont.id,
+            pon_port_id=pon.id,
+            active=True,
+        )
+        db_session.add(assignment)
+        db_session.commit()
+        return ont
+
+    def test_preflight_blocks_before_olt_authorization(self, db_session) -> None:
+        from app.services.network.ont_provisioning.preflight import (
+            validate_prerequisites,
+        )
+
+        ont = self._create_preflight_ont(db_session, authorized=False)
+
+        result = validate_prerequisites(db_session, str(ont.id))
+        checks = {check["name"]: check for check in result["checks"]}
+
+        assert result["ready"] is False
+        assert result["ready_to_authorize"] is True
+        assert result["ready_to_provision"] is False
+        assert checks["OLT authorization"]["status"] == "fail"
+        assert "Authorize the ONT" in checks["OLT authorization"]["message"]
+        assert checks["OLT authorization"]["blocks_authorization"] is False
+
+    def test_preflight_allows_authorized_ont_with_required_inventory(self, db_session) -> None:
+        from app.services.network.ont_provisioning.preflight import (
+            validate_prerequisites,
+        )
+
+        ont = self._create_preflight_ont(db_session, authorized=True)
+
+        result = validate_prerequisites(db_session, str(ont.id))
+        checks = {check["name"]: check for check in result["checks"]}
+
+        assert result["ready"] is True
+        assert result["ready_to_authorize"] is True
+        assert result["ready_to_provision"] is True
+        assert checks["OLT authorization"]["status"] == "ok"
+        assert checks["OLT ONT-ID"]["status"] == "ok"
+        assert checks["Active PON assignment"]["status"] == "ok"
+        assert checks["Authorization profiles"]["status"] == "ok"
+
+    def test_preflight_requires_pon_assignment(self, db_session) -> None:
+        from app.models.network import OntAssignment
+        from app.services.network.ont_provisioning.preflight import (
+            validate_prerequisites,
+        )
+
+        ont = self._create_preflight_ont(db_session, authorized=True)
+        for assignment in db_session.query(OntAssignment).all():
+            assignment.active = False
+        db_session.commit()
+
+        result = validate_prerequisites(db_session, str(ont.id))
+        checks = {check["name"]: check for check in result["checks"]}
+
+        assert result["ready"] is False
+        assert result["ready_to_authorize"] is False
+        assert checks["Active PON assignment"]["status"] == "fail"
+
+    def test_effective_tr069_profile_returns_first_profile(self, monkeypatch) -> None:
+        from types import SimpleNamespace
+
+        from app.services import web_network_onts
+
+        expected = SimpleNamespace(profile_id=7, name="ACS")
+        monkeypatch.setattr(
+            web_network_onts,
+            "get_tr069_profiles_for_ont",
+            lambda db, ont: ([expected], None),
+        )
+
+        profile, error = web_network_onts.resolve_effective_tr069_profile_for_ont(
+            object(),
+            object(),
+        )
+
+        assert error is None
+        assert profile is expected
