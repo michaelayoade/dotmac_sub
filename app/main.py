@@ -68,6 +68,7 @@ from app.api.validation import router as validation_router
 from app.api.webhooks import router as webhooks_router
 from app.api.wireguard import public_router as wireguard_public_router
 from app.api.wireguard import router as wireguard_router
+from app.api.zabbix import router as zabbix_router
 from app.csrf import (
     CSRF_COOKIE_NAME,
     CSRF_HEADER_NAME,
@@ -766,6 +767,7 @@ _include_api_router(provisioning_api_router, dependencies=[Depends(require_user_
 _include_api_router(bandwidth_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(validation_router, dependencies=[Depends(require_user_auth)])
 _include_api_router(defaults_router, dependencies=[Depends(require_user_auth)])
+_include_api_router(zabbix_router, dependencies=[Depends(require_user_auth)])
 # WireGuard provisioning public endpoints - no auth required (token-based)
 _include_api_router(wireguard_public_router)
 # TR-069 inform callback - no auth required (called by GenieACS)
