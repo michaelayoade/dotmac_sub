@@ -17,6 +17,8 @@ class EventType(str, Enum):
     USER_TYPING = "user_typing"
     CONNECTION_ACK = "connection_ack"
     HEARTBEAT = "heartbeat"
+    # Network operations
+    OPERATION_STATUS = "operation_status"
 
 
 class WebSocketEvent(BaseModel):

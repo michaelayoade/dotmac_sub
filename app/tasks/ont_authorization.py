@@ -79,17 +79,38 @@ def run_authorize_autofind_ont_task(
     force_reauthorize: bool = False,
 ) -> dict[str, object]:
     """Run the full OLT autofind authorization workflow in the background."""
+    from app.models.network import OLTDevice
     from app.services.network.olt_authorization_workflow import (
-        authorize_autofind_ont_audited,
+        authorize_autofind_ont_and_provision_network_audited,
     )
     from app.services.network_operations import network_operations
+    from app.services.operation_notifications import publish_operation_status
 
     db = SessionLocal()
+    olt_name = None
+    start_time = None
     try:
+        import time
+        start_time = time.time()
+
+        # Get OLT name for notifications
+        olt = db.get(OLTDevice, olt_id)
+        olt_name = olt.name if olt else None
+
         network_operations.mark_running(db, operation_id)
         db.commit()
 
-        result = authorize_autofind_ont_audited(
+        # Notify UI that authorization is running
+        publish_operation_status(
+            operation_id,
+            "running",
+            f"Authorizing ONT {serial_number} on {olt_name or 'OLT'}...",
+            target_id=olt_id,
+            target_name=olt_name,
+            extra={"fsp": fsp, "serial_number": serial_number},
+        )
+
+        result = authorize_autofind_ont_and_provision_network_audited(
             db,
             olt_id,
             fsp,
@@ -98,11 +119,31 @@ def run_authorize_autofind_ont_task(
             request=None,
         )
         payload = result.to_dict()
+        duration_ms = int((time.time() - start_time) * 1000) if start_time else None
+
         if result.success:
             network_operations.mark_succeeded(
                 db,
                 operation_id,
                 output_payload=payload,
+            )
+            # Notify UI of success with ONT link info
+            publish_operation_status(
+                operation_id,
+                "succeeded",
+                result.message,
+                target_id=olt_id,
+                target_name=olt_name,
+                duration_ms=duration_ms,
+                extra={
+                    "fsp": fsp,
+                    "serial_number": serial_number,
+                    "ont_id_on_olt": payload.get("ont_id_on_olt"),
+                    "ont_unit_id": payload.get("ont_unit_id"),
+                    "view_url": f"/admin/network/onts/{payload.get('ont_unit_id')}"
+                    if payload.get("ont_unit_id")
+                    else None,
+                },
             )
         else:
             network_operations.mark_failed(
@@ -110,6 +151,16 @@ def run_authorize_autofind_ont_task(
                 operation_id,
                 result.message,
                 output_payload=payload,
+            )
+            # Notify UI of failure
+            publish_operation_status(
+                operation_id,
+                "failed",
+                result.message,
+                target_id=olt_id,
+                target_name=olt_name,
+                duration_ms=duration_ms,
+                extra={"fsp": fsp, "serial_number": serial_number},
             )
         db.commit()
         return payload
@@ -121,6 +172,15 @@ def run_authorize_autofind_ont_task(
             olt_id,
             exc,
             exc_info=True,
+        )
+        # Notify UI of error
+        publish_operation_status(
+            operation_id,
+            "failed",
+            f"Authorization failed: {exc}",
+            target_id=olt_id,
+            target_name=olt_name,
+            extra={"fsp": fsp, "serial_number": serial_number, "error": str(exc)},
         )
         try:
             network_operations.mark_failed(db, operation_id, str(exc))
