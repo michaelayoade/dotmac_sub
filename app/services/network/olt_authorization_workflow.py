@@ -20,12 +20,20 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
+from app.models.network import (
+    OLTDevice,
+    OntAuthorizationStatus,
+    OntProvisioningStatus,
+    OntUnit,
+    OnuOnlineStatus,
+)
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
+from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import search_candidates as serial_search_candidates
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +51,24 @@ from app.services.network.provisioning_settings import (
 FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS = _PROVISIONING_DEFAULTS.force_reauthorize_autofind_attempts
 FORCE_REAUTHORIZE_AUTOFIND_RETRY_DELAY_SECONDS = _PROVISIONING_DEFAULTS.force_reauthorize_retry_delay_sec
 AUTOFIND_CANDIDATE_FRESHNESS_SECONDS = _PROVISIONING_DEFAULTS.autofind_candidate_freshness_sec
+
+
+def _set_ont_activation_status(
+    db: Session,
+    ont_unit_id: str | None,
+    *,
+    provisioning_status: OntProvisioningStatus | None = None,
+) -> None:
+    """Persist UI-facing activation state after OLT authorization readback."""
+    if not ont_unit_id:
+        return
+    ont = db.get(OntUnit, ont_unit_id)
+    if ont is None:
+        return
+    ont.authorization_status = OntAuthorizationStatus.authorized
+    if provisioning_status is not None:
+        ont.provisioning_status = provisioning_status
+    db.flush()
 
 
 def _is_serial_already_registered_message(message: str | None) -> bool:
@@ -124,12 +150,120 @@ def _resolve_authorized_autofind_candidate(
         return False, f"Failed to mark discovered ONT as authorized: {exc}"
 
 
+def _allocate_mgmt_ip_from_pool(
+    db: Session,
+    pool_id: uuid.UUID,
+    ont_serial: str | None = None,
+) -> tuple[bool, str | None, str | None, str | None, str]:
+    """Allocate the next available IP from a management IP pool.
+
+    Args:
+        db: Database session
+        pool_id: UUID of the IP pool to allocate from
+        ont_serial: Optional ONT serial for logging/notes
+
+    Returns:
+        (success, ip_address, subnet_mask, gateway, message) tuple.
+        On failure, ip_address/subnet_mask/gateway will be None.
+    """
+    import ipaddress
+
+    from app.models.network import IpBlock, IpPool, IPv4Address
+
+    pool = db.get(IpPool, pool_id)
+    if not pool:
+        return False, None, None, None, f"IP pool {pool_id} not found"
+
+    if not pool.is_active:
+        return False, None, None, None, f"IP pool '{pool.name}' is not active"
+
+    # Get gateway from pool
+    gateway = pool.gateway
+    if not gateway:
+        return False, None, None, None, f"IP pool '{pool.name}' has no gateway configured"
+
+    # Calculate subnet mask from pool CIDR
+    try:
+        network = ipaddress.ip_network(str(pool.cidr), strict=False)
+        subnet_mask = str(network.netmask)
+    except ValueError as e:
+        return False, None, None, None, f"Invalid pool CIDR '{pool.cidr}': {e}"
+
+    # Get all blocks for this pool
+    blocks = (
+        db.query(IpBlock)
+        .filter(IpBlock.pool_id == pool_id)
+        .filter(IpBlock.is_active.is_(True))
+        .all()
+    )
+
+    if not blocks:
+        # Fall back to using pool CIDR directly if no blocks defined
+        blocks = [type("FakeBlock", (), {"cidr": pool.cidr, "pool_id": pool_id})]
+
+    # Get all existing addresses in this pool
+    existing_addresses = set(
+        str(addr.address)
+        for addr in db.query(IPv4Address).filter(IPv4Address.pool_id == pool_id).all()
+    )
+
+    # Find first available IP across all blocks
+    available_ip = None
+    for block in blocks:
+        try:
+            block_network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+
+        if block_network.version != 4:
+            continue
+
+        # Iterate through usable hosts (skip network and broadcast)
+        for ip in block_network.hosts():
+            ip_str = str(ip)
+            if ip_str not in existing_addresses and ip_str != gateway:
+                available_ip = ip_str
+                break
+
+        if available_ip:
+            break
+
+    if not available_ip:
+        return False, None, None, None, f"No available IPs in pool '{pool.name}'"
+
+    # Create IPv4Address record to mark as allocated
+    notes = f"Management IP for ONT"
+    if ont_serial:
+        notes += f" {ont_serial}"
+
+    address_record = IPv4Address(
+        address=available_ip,
+        pool_id=pool_id,
+        is_reserved=True,  # Mark as reserved to prevent reallocation
+        notes=notes,
+    )
+    db.add(address_record)
+    db.flush()
+
+    logger.info(
+        "Allocated management IP %s from pool '%s' (gateway=%s, subnet=%s)",
+        available_ip,
+        pool.name,
+        gateway,
+        subnet_mask,
+    )
+
+    return True, available_ip, subnet_mask, gateway, f"Allocated {available_ip} from pool '{pool.name}'"
+
+
 def _configure_management_ip_for_authorization(
     db: Session,
     *,
     olt: OLTDevice,
     fsp: str,
     ont_id_on_olt: int,
+    ont_unit_id: str | None = None,
+    serial_number: str | None = None,
 ) -> tuple[bool, str]:
     """Configure ONT management IP/VLAN so it can reach the ACS server.
 
@@ -137,13 +271,24 @@ def _configure_management_ip_for_authorization(
     to configure management connectivity. This enables the ONT to contact
     the TR-069 ACS after authorization.
 
+    For static_ip mode, allocates an IP from the profile's mgmt_ip_pool and
+    stores it on the ONT record.
+
+    Args:
+        db: Database session
+        olt: OLT device object
+        fsp: Frame/Slot/Port string
+        ont_id_on_olt: ONT ID on the OLT
+        ont_unit_id: Optional ONT unit UUID for updating mgmt_ip_address
+        serial_number: Optional serial number for logging
+
     Returns:
         (success, message) tuple. Returns (True, "skipped") if profile has
         no management VLAN configured.
     """
     from sqlalchemy import desc, select
 
-    from app.models.network import OntProvisioningProfile
+    from app.models.network import MgmtIpMode, OntProvisioningProfile, Vlan
     from app.services.network.olt_ssh_ont import (
         configure_ont_internet_config,
         configure_ont_iphost,
@@ -189,6 +334,16 @@ def _configure_management_ip_for_authorization(
         else:
             mgmt_ip_mode = str(mgmt_ip_mode_raw)
 
+    # Skip if mode is explicitly inactive
+    if mgmt_ip_mode == "inactive":
+        logger.info(
+            "Skipping management IP config for ONT on %s %s: mode is inactive (profile '%s')",
+            olt.name,
+            fsp,
+            profile.name,
+        )
+        return True, f"Skipped: management IP mode is inactive (profile '{profile.name}')"
+
     logger.info(
         "Configuring management IP for ONT on %s %s: VLAN %d, mode %s (profile '%s')",
         olt.name,
@@ -198,14 +353,62 @@ def _configure_management_ip_for_authorization(
         profile.name,
     )
 
+    # For static IP mode, allocate from pool
+    allocated_ip: str | None = None
+    subnet_mask: str | None = None
+    gateway: str | None = None
+
+    if mgmt_ip_mode == "static_ip":
+        mgmt_ip_pool_id = getattr(profile, "mgmt_ip_pool_id", None)
+        if not mgmt_ip_pool_id:
+            logger.warning(
+                "Static IP mode requested but no mgmt_ip_pool_id configured in profile '%s'",
+                profile.name,
+            )
+            return False, f"Static IP mode requires mgmt_ip_pool_id in profile '{profile.name}'"
+
+        alloc_ok, allocated_ip, subnet_mask, gateway, alloc_msg = _allocate_mgmt_ip_from_pool(
+            db, mgmt_ip_pool_id, ont_serial=serial_number
+        )
+        if not alloc_ok:
+            logger.warning(
+                "Failed to allocate management IP for ONT on %s %s: %s",
+                olt.name,
+                fsp,
+                alloc_msg,
+            )
+            return False, f"IP allocation failed: {alloc_msg}"
+
+        logger.info(
+            "Allocated static management IP for ONT on %s %s: %s/%s gw %s",
+            olt.name,
+            fsp,
+            allocated_ip,
+            subnet_mask,
+            gateway,
+        )
+
     # Configure management IP via OLT SSH
-    iphost_ok, iphost_msg = configure_ont_iphost(
-        olt,
-        fsp,
-        ont_id_on_olt,
-        vlan_id=int(mgmt_vlan_tag),
-        ip_mode=mgmt_ip_mode,
-    )
+    if mgmt_ip_mode == "static_ip" and allocated_ip and subnet_mask and gateway:
+        iphost_ok, iphost_msg = configure_ont_iphost(
+            olt,
+            fsp,
+            ont_id_on_olt,
+            vlan_id=int(mgmt_vlan_tag),
+            ip_mode="static",
+            ip_address=allocated_ip,
+            subnet=subnet_mask,
+            gateway=gateway,
+        )
+    else:
+        iphost_ok, iphost_msg = configure_ont_iphost(
+            olt,
+            fsp,
+            ont_id_on_olt,
+            vlan_id=int(mgmt_vlan_tag),
+            ip_mode="dhcp",
+        )
+
     if not iphost_ok:
         logger.warning(
             "Management IP config failed for ONT on %s %s: %s",
@@ -214,6 +417,38 @@ def _configure_management_ip_for_authorization(
             iphost_msg,
         )
         return False, f"Management IP config failed: {iphost_msg}"
+
+    # Update ONT record with management IP info
+    if ont_unit_id:
+        ont = db.get(OntUnit, ont_unit_id)
+        if ont:
+            # Resolve VLAN record by tag for this OLT's region
+            mgmt_vlan = None
+            if olt.region_id:
+                mgmt_vlan = db.scalars(
+                    select(Vlan).where(
+                        Vlan.tag == mgmt_vlan_tag,
+                        Vlan.region_id == olt.region_id,
+                        Vlan.is_active.is_(True),
+                    )
+                ).first()
+
+            ont.mgmt_ip_mode = (
+                MgmtIpMode.static_ip if mgmt_ip_mode == "static_ip" else MgmtIpMode.dhcp
+            )
+            if mgmt_vlan:
+                ont.mgmt_vlan_id = mgmt_vlan.id
+            if allocated_ip:
+                ont.mgmt_ip_address = allocated_ip
+            ont.mgmt_remote_access = bool(getattr(profile, "mgmt_remote_access", False))
+            db.flush()
+            logger.info(
+                "Updated ONT %s with management IP config: mode=%s, vlan=%s, ip=%s",
+                ont_unit_id,
+                mgmt_ip_mode,
+                mgmt_vlan_tag,
+                allocated_ip or "dhcp",
+            )
 
     # Activate TCP stack if internet_config_ip_index is set
     internet_config_ip_index = getattr(profile, "internet_config_ip_index", None)
@@ -475,6 +710,7 @@ def authorize_autofind_ont(
     serial_number: str,
     *,
     force_reauthorize: bool = False,
+    queue_follow_up: bool = True,
 ):
     """Authorize an unregistered ONT on an OLT with a fail-fast workflow.
 
@@ -485,6 +721,9 @@ def authorize_autofind_ont(
         serial_number: ONT serial number
         force_reauthorize: If True, delete any existing registration of this
             serial on the OLT before authorizing on the specified port.
+        queue_follow_up: If True, queue the legacy post-authorization sync after
+            OLT authorization. Callers that continue into inline network
+            provisioning should set this to False.
     """
     from app.services.network import olt_ssh as olt_ssh_service
     from app.services.network import olt_ssh_ont as olt_ssh_ont_service
@@ -747,13 +986,78 @@ def authorize_autofind_ont(
         )
 
     authorize_started_at = monotonic()
-    ok, msg, ont_id = olt_ssh_service.authorize_ont(
-        olt,
-        fsp,
-        serial_number,
-        line_profile_id=authorization_profiles.line_profile_id,
-        service_profile_id=authorization_profiles.service_profile_id,
-    )
+
+    # Try NETCONF first if enabled on the OLT, with automatic fallback to SSH
+    auth_method = "SSH"
+    netconf_fallback_reason: str | None = None
+    if olt.netconf_enabled:
+        from app.services.network import olt_netconf_ont
+
+        netconf_ok, netconf_reason = olt_netconf_ont.can_authorize_via_netconf(olt)
+        if netconf_ok:
+            auth_method = "NETCONF"
+            logger.info(
+                "ONT authorization starting via NETCONF: olt=%s olt_id=%s fsp=%s serial=%s",
+                olt.name,
+                olt_id,
+                fsp,
+                serial_number,
+            )
+            ok, msg, ont_id = olt_netconf_ont.authorize_ont(
+                olt,
+                fsp,
+                serial_number,
+                line_profile_id=authorization_profiles.line_profile_id,
+                service_profile_id=authorization_profiles.service_profile_id,
+            )
+            if ok:
+                logger.info(
+                    "ONT authorization succeeded via NETCONF: olt=%s fsp=%s serial=%s ont_id=%s",
+                    olt.name,
+                    fsp,
+                    serial_number,
+                    ont_id,
+                )
+            else:
+                logger.warning(
+                    "ONT authorization failed via NETCONF: olt=%s fsp=%s serial=%s error=%s",
+                    olt.name,
+                    fsp,
+                    serial_number,
+                    msg,
+                )
+        else:
+            netconf_fallback_reason = netconf_reason
+            logger.info(
+                "NETCONF unavailable for OLT %s (%s), using SSH instead: olt_id=%s fsp=%s serial=%s",
+                olt.name,
+                netconf_reason,
+                olt_id,
+                fsp,
+                serial_number,
+            )
+            ok, msg, ont_id = olt_ssh_service.authorize_ont(
+                olt,
+                fsp,
+                serial_number,
+                line_profile_id=authorization_profiles.line_profile_id,
+                service_profile_id=authorization_profiles.service_profile_id,
+            )
+    else:
+        logger.info(
+            "ONT authorization starting via SSH: olt=%s olt_id=%s fsp=%s serial=%s netconf_enabled=False",
+            olt.name,
+            olt_id,
+            fsp,
+            serial_number,
+        )
+        ok, msg, ont_id = olt_ssh_service.authorize_ont(
+            olt,
+            fsp,
+            serial_number,
+            line_profile_id=authorization_profiles.line_profile_id,
+            service_profile_id=authorization_profiles.service_profile_id,
+        )
     if not ok or ont_id is None:
         failure_message = msg
         if ok and ont_id is None:
@@ -783,7 +1087,7 @@ def authorize_autofind_ont(
                     and str(verified_ont_id).isdigit()
                     else None
                 )
-                recovery_message = "ONT serial was already registered on the OLT; reusing the existing registration."
+                recovery_message = f"[{auth_method}] ONT serial was already registered on the OLT; reusing the existing registration."
                 if ont_id is not None:
                     recovery_message += f" Resolved ONT-ID {ont_id} on {fsp}."
                 else:
@@ -805,23 +1109,29 @@ def authorize_autofind_ont(
             else:
                 return _fail(
                     "Authorize ONT on OLT",
-                    "OLT reported the serial already exists, but readback could not confirm a matching ONT registration "
+                    f"[{auth_method}] OLT reported the serial already exists, but readback could not confirm a matching ONT registration "
                     f"on {fsp}: {duplicate_verification.message}",
                     step_started_at=authorize_started_at,
                 )
         else:
             return _fail(
                 "Authorize ONT on OLT",
-                failure_message,
+                f"[{auth_method}] {failure_message}",
                 step_started_at=authorize_started_at,
             )
     if steps and steps[-1].name == "Authorize ONT on OLT" and steps[-1].success:
         pass
     else:
+        # Build step message with method info
+        step_msg = f"[{auth_method}] {msg}"
+        if ont_id is not None:
+            step_msg += f" Resolved ONT-ID {ont_id} on {fsp}."
+        if netconf_fallback_reason:
+            step_msg += f" (NETCONF fallback: {netconf_fallback_reason})"
         _append_step(
             "Authorize ONT on OLT",
             True,
-            f"{msg} Resolved ONT-ID {ont_id} on {fsp}.",
+            step_msg,
             step_started_at=authorize_started_at,
         )
 
@@ -846,36 +1156,35 @@ def authorize_autofind_ont(
         step_started_at=verify_started_at,
     )
 
+    # Service profile match verification is non-blocking - continue even if it fails
     match_started_at = monotonic()
-    if ont_id is None:
-        return _fail(
-            "Verify ONT service profile match",
-            "ONT ID on OLT is not available",
-            step_started_at=match_started_at,
-            ont_id_on_olt=ont_id,
-            status="warning",
-            completed_authorization=True,
+    if ont_id is not None:
+        match_ok, match_msg = ensure_ont_service_profile_match(
+            olt,
+            fsp=fsp,
+            ont_id=ont_id,
         )
-    match_ok, match_msg = ensure_ont_service_profile_match(
-        olt,
-        fsp=fsp,
-        ont_id=ont_id,
-    )
-    if not match_ok:
-        return _fail(
+        _append_step(
             "Verify ONT service profile match",
+            match_ok,
             match_msg,
             step_started_at=match_started_at,
-            ont_id_on_olt=ont_id,
-            status="warning",
-            completed_authorization=True,
         )
-    _append_step(
-        "Verify ONT service profile match",
-        True,
-        match_msg,
-        step_started_at=match_started_at,
-    )
+        if not match_ok:
+            logger.warning(
+                "ONT service profile match failed (non-blocking) olt=%s fsp=%s ont_id=%d: %s",
+                olt.name,
+                fsp,
+                ont_id,
+                match_msg,
+            )
+    else:
+        _append_step(
+            "Verify ONT service profile match",
+            False,
+            "Skipped - ONT ID not available",
+            step_started_at=match_started_at,
+        )
 
     ont_record_started_at = monotonic()
     ont_unit_id, create_msg = create_or_find_ont_for_authorized_serial(
@@ -930,45 +1239,52 @@ def authorize_autofind_ont(
         step_started_at=resolve_started_at,
     )
 
-    queue_started_at = monotonic()
-    if ont_id is None:
-        return _fail(
-            "Queue post-authorization sync",
-            "ONT ID on OLT is not available",
-            step_started_at=queue_started_at,
+    follow_up_operation_id: str | None = None
+    if queue_follow_up:
+        queue_started_at = monotonic()
+        if ont_id is None:
+            return _fail(
+                "Queue post-authorization sync",
+                "ONT ID on OLT is not available",
+                step_started_at=queue_started_at,
+                ont_unit_id=ont_unit_id,
+                status="warning",
+                completed_authorization=True,
+            )
+        queue_ok, queue_msg, follow_up_operation_id = queue_post_authorization_follow_up(
+            db,
             ont_unit_id=ont_unit_id,
-            status="warning",
-            completed_authorization=True,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            ont_id_on_olt=ont_id,
         )
-    queue_ok, queue_msg, follow_up_operation_id = queue_post_authorization_follow_up(
-        db,
-        ont_unit_id=ont_unit_id,
-        olt_id=olt_id,
-        fsp=fsp,
-        serial_number=serial_number,
-        ont_id_on_olt=ont_id,
-    )
-    if not queue_ok:
-        return _fail(
+        if not queue_ok:
+            return _fail(
+                "Queue post-authorization sync",
+                queue_msg,
+                step_started_at=queue_started_at,
+                ont_unit_id=ont_unit_id,
+                ont_id_on_olt=ont_id,
+                status="warning",
+                completed_authorization=True,
+            )
+        _append_step(
             "Queue post-authorization sync",
+            True,
             queue_msg,
             step_started_at=queue_started_at,
-            ont_unit_id=ont_unit_id,
-            ont_id_on_olt=ont_id,
-            status="warning",
-            completed_authorization=True,
         )
-    _append_step(
-        "Queue post-authorization sync",
-        True,
-        queue_msg,
-        step_started_at=queue_started_at,
-    )
 
     return _finalize(
         AuthorizationWorkflowResult(
             success=True,
-            message="ONT authorization completed. Post-authorization sync is running in the background.",
+            message=(
+                "ONT authorization completed. Post-authorization sync is "
+                "running in the background."
+                if queue_follow_up
+                else "ONT authorization completed."
+            ),
             steps=steps,
             ont_unit_id=ont_unit_id,
             ont_id_on_olt=ont_id,
@@ -1011,7 +1327,7 @@ def authorize_autofind_ont_audited(
             "force_reauthorize": force_reauthorize,
         },
         status_code=200 if status in {"success", "warning"} else 500,
-        is_success=status == "success",
+        is_success=result.success,
     )
     log_network_action_result(
         request=request,
@@ -1026,6 +1342,237 @@ def authorize_autofind_ont_audited(
             "force_reauthorize": force_reauthorize,
         },
     )
+    return result
+
+
+def authorize_autofind_ont_and_provision_network(
+    db: Session,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    *,
+    force_reauthorize: bool = False,
+) -> AuthorizationWorkflowResult:
+    """Authorize an autofind ONT, then apply OLT-layer network provisioning.
+
+    The user-facing operation is still "Authorize". Internally it completes
+    the network-layer sequence: discover/validate, authorize, verify, reconcile,
+    and provision the OLT state. It does not configure customer internet
+    service, subscriber plans, PPPoE, LAN, DHCP, or WiFi.
+    """
+    started_at = monotonic()
+    result = authorize_autofind_ont(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+        force_reauthorize=force_reauthorize,
+        queue_follow_up=False,
+    )
+    result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
+    if not result.success:
+        return result
+
+    def _append_step(
+        name: str,
+        success: bool,
+        message: str,
+        *,
+        step_started_at: float,
+    ) -> None:
+        result.steps.append(
+            AuthorizationStepResult(
+                step=len(result.steps) + 1,
+                name=name,
+                success=success,
+                message=message,
+                duration_ms=max(0, int((monotonic() - step_started_at) * 1000)),
+            )
+        )
+
+    def _finish(
+        *,
+        success: bool,
+        status: str,
+        message: str,
+        provisioning_status: OntProvisioningStatus | None = None,
+    ) -> AuthorizationWorkflowResult:
+        _set_ont_activation_status(
+            db,
+            result.ont_unit_id,
+            provisioning_status=provisioning_status,
+        )
+        result.success = success
+        result.status = status
+        result.message = message
+        result.completed_authorization = True
+        result.duration_ms = max(0, int((monotonic() - started_at) * 1000))
+        return result
+
+    if not result.ont_unit_id:
+        return _finish(
+            success=True,
+            status="warning",
+            message=(
+                "Authorization completed on OLT, but OLT network provisioning "
+                "could not run: ONT record is not available."
+            ),
+        )
+
+    assignment_started_at = monotonic()
+    assignment_ok, assignment_msg = ensure_assignment_and_pon_port_for_authorized_ont(
+        db,
+        ont_unit_id=result.ont_unit_id,
+        olt_id=olt_id,
+        fsp=fsp,
+    )
+    _append_step(
+        "Link ONT to PON port",
+        assignment_ok,
+        assignment_msg,
+        step_started_at=assignment_started_at,
+    )
+    if not assignment_ok:
+        return _finish(
+            success=True,
+            status="warning",
+            message=(
+                "Authorization completed on OLT, but OLT network provisioning "
+                f"could not start: {assignment_msg}"
+            ),
+            provisioning_status=OntProvisioningStatus.failed,
+        )
+
+    provision_started_at = monotonic()
+    try:
+        from app.services.network.ont_provision_steps import (
+            provision_with_reconciliation,
+        )
+
+        provision_result = provision_with_reconciliation(db, result.ont_unit_id)
+    except Exception as exc:
+        logger.error(
+            "OLT network provisioning failed after authorization ont_id=%s serial=%s: %s",
+            result.ont_unit_id,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
+        _append_step(
+            "Reconcile and provision OLT network",
+            False,
+            f"OLT network provisioning failed: {exc}",
+            step_started_at=provision_started_at,
+        )
+        return _finish(
+            success=True,
+            status="warning",
+            message=(
+                "Authorization completed on OLT, but OLT network provisioning "
+                f"failed: {exc}"
+            ),
+            provisioning_status=OntProvisioningStatus.failed,
+        )
+
+    _append_step(
+        "Reconcile and provision OLT network",
+        provision_result.success,
+        provision_result.message,
+        step_started_at=provision_started_at,
+    )
+    if not provision_result.success:
+        return _finish(
+            success=True,
+            status="warning",
+            message=(
+                "Authorization completed on OLT, but OLT network provisioning "
+                f"failed: {provision_result.message}"
+            ),
+            provisioning_status=OntProvisioningStatus.failed,
+        )
+
+    return _finish(
+        success=True,
+        status="success",
+        message=(
+            "ONT authorization and OLT network provisioning completed. "
+            "Next action: configure ONT."
+        ),
+        provisioning_status=OntProvisioningStatus.provisioned,
+    )
+
+
+def authorize_autofind_ont_and_provision_network_audited(
+    db: Session,
+    olt_id: str,
+    fsp: str,
+    serial_number: str,
+    *,
+    force_reauthorize: bool = False,
+    request: Request | None = None,
+) -> AuthorizationWorkflowResult:
+    from app.services.network.action_logging import log_network_action_result
+
+    result = authorize_autofind_ont_and_provision_network(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+        force_reauthorize=force_reauthorize,
+    )
+    status = getattr(result, "status", "success" if result.success else "error")
+    try:
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="force_authorize_ont" if force_reauthorize else "authorize_ont",
+            entity_id=olt_id,
+            metadata={
+                "result": status,
+                "message": result.message,
+                "fsp": fsp,
+                "serial_number": serial_number,
+                "force_reauthorize": force_reauthorize,
+                "network_provisioning": True,
+            },
+            status_code=200 if status in {"success", "warning"} else 500,
+            is_success=result.success,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.warning(
+            "Failed to write ONT authorization audit event olt_id=%s fsp=%s serial=%s: %s",
+            olt_id,
+            fsp,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
+
+    try:
+        log_network_action_result(
+            request=request,
+            resource_type="olt",
+            resource_id=olt_id,
+            action="Force Authorize ONT" if force_reauthorize else "Authorize ONT",
+            success=result.success,
+            message=result.message,
+            metadata={
+                "fsp": fsp,
+                "serial_number": serial_number,
+                "force_reauthorize": force_reauthorize,
+                "network_provisioning": True,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to write ONT authorization action log olt_id=%s fsp=%s serial=%s: %s",
+            olt_id,
+            fsp,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
     return result
 
 
@@ -1086,6 +1633,8 @@ def run_post_authorization_follow_up(
             olt=olt,
             fsp=fsp,
             ont_id_on_olt=ont_id_on_olt,
+            ont_unit_id=ont_unit_id,
+            serial_number=serial_number,
         )
         _add_step("Configure management IP", mgmt_ok, mgmt_msg)
         # Continue even if management IP config fails - it may already be configured
@@ -1393,7 +1942,10 @@ def get_autofind_candidate_by_serial(
     """Return the active autofind candidate matching a serial on an OLT."""
     from app.models.ont_autofind import OltAutofindCandidate
 
-    clean_serial = re.sub(r"[^A-Za-z0-9]", "", serial_number or "").upper()
+    clean_serials = {
+        normalize_serial(candidate)
+        for candidate in serial_search_candidates(serial_number)
+    }
     candidates = db.scalars(
         select(OltAutofindCandidate).where(
             OltAutofindCandidate.olt_id == olt_id,
@@ -1405,8 +1957,13 @@ def get_autofind_candidate_by_serial(
         (
             candidate
             for candidate in candidates
-            if re.sub(r"[^A-Za-z0-9]", "", candidate.serial_number or "").upper()
-            == clean_serial
+            if clean_serials.intersection(
+                {
+                    normalize_serial(value)
+                    for serial in (candidate.serial_number, candidate.serial_hex)
+                    for value in serial_search_candidates(serial)
+                }
+            )
             and (not clean_fsp or (candidate.fsp or "").strip() == clean_fsp)
         ),
         None,
@@ -1426,7 +1983,11 @@ def create_or_find_ont_for_authorized_serial(
     from app.models.ont_autofind import OltAutofindCandidate
     from app.services.network.ont_status import apply_resolved_status_for_model
 
-    clean_serial = re.sub(r"[^A-Za-z0-9]", "", serial_number).upper()
+    clean_serials = [
+        normalize_serial(candidate)
+        for candidate in serial_search_candidates(serial_number)
+    ]
+    clean_serials = [candidate for candidate in dict.fromkeys(clean_serials) if candidate]
     olt = get_olt_or_none(db, olt_id)
     observed_online_status = (
         OnuOnlineStatus.online
@@ -1436,13 +1997,14 @@ def create_or_find_ont_for_authorized_serial(
 
     existing = db.scalars(
         select(OntUnit).where(
-            func.upper(func.replace(OntUnit.serial_number, "-", "")) == clean_serial,
+            func.upper(func.replace(OntUnit.serial_number, "-", "")).in_(clean_serials),
         )
     ).first()
     if existing:
         try:
             existing.olt_device_id = uuid.UUID(olt_id)
             existing.is_active = True
+            existing.authorization_status = OntAuthorizationStatus.authorized
             if ont_id_on_olt is not None:
                 existing.external_id = str(ont_id_on_olt)
             parts = fsp.split("/")
@@ -1477,8 +2039,13 @@ def create_or_find_ont_for_authorized_serial(
         (
             candidate
             for candidate in candidates
-            if re.sub(r"[^A-Za-z0-9]", "", candidate.serial_number or "").upper()
-            == clean_serial
+            if set(clean_serials).intersection(
+                {
+                    normalize_serial(value)
+                    for serial in (candidate.serial_number, candidate.serial_hex)
+                    for value in serial_search_candidates(serial)
+                }
+            )
         ),
         None,
     )
@@ -1501,6 +2068,8 @@ def create_or_find_ont_for_authorized_serial(
         board=board,
         port=port,
         is_active=True,
+        authorization_status=OntAuthorizationStatus.authorized,
+        provisioning_status=OntProvisioningStatus.unprovisioned,
         online_status=observed_online_status or OnuOnlineStatus.unknown,
         offline_reason=None,
         last_seen_at=datetime.now(UTC) if observed_online_status else None,

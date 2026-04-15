@@ -22,8 +22,10 @@ from starlette.routing import Route
 
 from app.models.network import (
     OLTDevice,
+    OntAuthorizationStatus,
     OntAssignment,
     OntProvisioningProfile,
+    OntProvisioningStatus,
     OntStatusSource,
     OntUnit,
     OnuOnlineStatus,
@@ -1674,12 +1676,19 @@ class TestWebNetworkOltsMigration:
     ) -> None:
         from app.services.web_network_olts import authorize_autofind_ont
 
+        workflow_path = (
+            "app.services.network.olt_authorization_workflow."
+            "authorize_autofind_ont_and_provision_network"
+        )
         monkeypatch.setattr(
-            "app.services.network.olt_authorization_workflow.authorize_autofind_ont",
+            workflow_path,
             lambda *_args, **_kwargs: SimpleNamespace(
                 success=True,
                 status="warning",
-                message="Authorization completed on OLT, but follow-up is pending.",
+                message=(
+                    "Authorization completed on OLT, but OLT network "
+                    "provisioning failed."
+                ),
             ),
         )
 
@@ -1692,7 +1701,10 @@ class TestWebNetworkOltsMigration:
 
         assert ok is True
         assert status == "warning"
-        assert msg == "Authorization completed on OLT, but follow-up is pending."
+        assert (
+            msg
+            == "Authorization completed on OLT, but OLT network provisioning failed."
+        )
 
     def test_authorize_autofind_delegates_to_authorization_workflow(
         self, db_session, monkeypatch
@@ -1713,11 +1725,18 @@ class TestWebNetworkOltsMigration:
             return SimpleNamespace(
                 success=True,
                 status="success",
-                message="Queued post-authorization sync and ACS bind in the background.",
+                message=(
+                    "ONT authorization and OLT network provisioning completed. "
+                    "Next action: configure ONT."
+                ),
             )
 
+        workflow_path = (
+            "app.services.network.olt_authorization_workflow."
+            "authorize_autofind_ont_and_provision_network"
+        )
         monkeypatch.setattr(
-            "app.services.network.olt_authorization_workflow.authorize_autofind_ont",
+            workflow_path,
             _fake_authorize_workflow,
         )
 
@@ -1730,13 +1749,209 @@ class TestWebNetworkOltsMigration:
 
         assert ok is True
         assert status == "success"
-        assert msg == "Queued post-authorization sync and ACS bind in the background."
+        assert (
+            msg
+            == "ONT authorization and OLT network provisioning completed. "
+            "Next action: configure ONT."
+        )
         assert captured == {
             "db": db_session,
             "olt_id": "olt-123",
             "fsp": "0/2/1",
             "serial_number": "48575443ABCDEF02",
         }
+
+    def test_authorize_and_provision_runs_inline_network_provisioning(
+        self, db_session, monkeypatch
+    ) -> None:
+        captured: dict[str, object] = {}
+
+        def _fake_authorize(db, olt_id, fsp, serial_number, **kwargs):
+            captured["authorize_kwargs"] = kwargs
+            return olt_authorization_workflow.AuthorizationWorkflowResult(
+                success=True,
+                status="success",
+                message="ONT authorization completed.",
+                ont_unit_id="ont-123",
+                ont_id_on_olt=9,
+                completed_authorization=True,
+            )
+
+        def _fake_assignment(db, *, ont_unit_id, olt_id, fsp):
+            captured["assignment"] = {
+                "ont_unit_id": ont_unit_id,
+                "olt_id": olt_id,
+                "fsp": fsp,
+            }
+            return True, "Linked ONT to PON port 0/2/1."
+
+        def _fake_provision(db, ont_id):
+            captured["provision_ont_id"] = ont_id
+            from app.services.network.ont_provision_steps import StepResult
+
+            return StepResult(
+                "provision_reconciled",
+                True,
+                "No changes needed - ONT already matches desired state",
+            )
+
+        monkeypatch.setattr(
+            olt_authorization_workflow,
+            "authorize_autofind_ont",
+            _fake_authorize,
+        )
+        monkeypatch.setattr(
+            olt_authorization_workflow,
+            "ensure_assignment_and_pon_port_for_authorized_ont",
+            _fake_assignment,
+        )
+        monkeypatch.setattr(
+            "app.services.network.ont_provision_steps.provision_with_reconciliation",
+            _fake_provision,
+        )
+
+        result = (
+            olt_authorization_workflow.authorize_autofind_ont_and_provision_network(
+                db_session,
+                "olt-123",
+                "0/2/1",
+                "48575443ABCDEF03",
+            )
+        )
+
+        assert result.success is True
+        assert result.status == "success"
+        assert (
+            result.message
+            == "ONT authorization and OLT network provisioning completed. "
+            "Next action: configure ONT."
+        )
+        assert captured["authorize_kwargs"]["queue_follow_up"] is False
+        assert captured["assignment"] == {
+            "ont_unit_id": "ont-123",
+            "olt_id": "olt-123",
+            "fsp": "0/2/1",
+        }
+        assert captured["provision_ont_id"] == "ont-123"
+        assert result.steps[-1].name == "Reconcile and provision OLT network"
+
+    def test_authorize_and_provision_warning_still_completes_authorize(
+        self, db_session, monkeypatch
+    ) -> None:
+        def _fake_authorize(db, olt_id, fsp, serial_number, **kwargs):
+            return olt_authorization_workflow.AuthorizationWorkflowResult(
+                success=True,
+                status="success",
+                message="ONT authorization completed.",
+                ont_unit_id="ont-123",
+                ont_id_on_olt=9,
+                completed_authorization=True,
+            )
+
+        def _fake_assignment(db, *, ont_unit_id, olt_id, fsp):
+            return True, "Linked ONT to PON port 0/2/1."
+
+        def _fake_provision(db, ont_id):
+            from app.services.network.ont_provision_steps import StepResult
+
+            return StepResult(
+                "provision_reconciled",
+                False,
+                "No provisioning profile assigned or specified",
+            )
+
+        monkeypatch.setattr(
+            olt_authorization_workflow,
+            "authorize_autofind_ont",
+            _fake_authorize,
+        )
+        monkeypatch.setattr(
+            olt_authorization_workflow,
+            "ensure_assignment_and_pon_port_for_authorized_ont",
+            _fake_assignment,
+        )
+        monkeypatch.setattr(
+            "app.services.network.ont_provision_steps.provision_with_reconciliation",
+            _fake_provision,
+        )
+
+        result = (
+            olt_authorization_workflow.authorize_autofind_ont_and_provision_network(
+                db_session,
+                "olt-123",
+                "0/2/1",
+                "48575443ABCDEF04",
+            )
+        )
+
+        assert result.success is True
+        assert result.status == "warning"
+        assert "Authorization completed on OLT" in result.message
+        assert "No provisioning profile assigned or specified" in result.message
+
+    def test_authorize_and_provision_persists_olt_state(
+        self, db_session, monkeypatch
+    ) -> None:
+        ont_id = str(uuid.uuid4())
+        ont = OntUnit(
+            id=ont_id,
+            serial_number="48575443ABCDEF05",
+            authorization_status=None,
+            provisioning_status=OntProvisioningStatus.unprovisioned,
+        )
+        db_session.add(ont)
+        db_session.commit()
+
+        def _fake_authorize(db, olt_id, fsp, serial_number, **kwargs):
+            return olt_authorization_workflow.AuthorizationWorkflowResult(
+                success=True,
+                status="success",
+                message="ONT authorization completed.",
+                ont_unit_id=ont_id,
+                ont_id_on_olt=9,
+                completed_authorization=True,
+            )
+
+        def _fake_assignment(db, *, ont_unit_id, olt_id, fsp):
+            return True, "Linked ONT to PON port 0/2/1."
+
+        def _fake_provision(db, ont_id):
+            from app.services.network.ont_provision_steps import StepResult
+
+            return StepResult(
+                "provision_reconciled",
+                True,
+                "No changes needed - ONT already matches desired state",
+            )
+
+        monkeypatch.setattr(
+            olt_authorization_workflow,
+            "authorize_autofind_ont",
+            _fake_authorize,
+        )
+        monkeypatch.setattr(
+            olt_authorization_workflow,
+            "ensure_assignment_and_pon_port_for_authorized_ont",
+            _fake_assignment,
+        )
+        monkeypatch.setattr(
+            "app.services.network.ont_provision_steps.provision_with_reconciliation",
+            _fake_provision,
+        )
+
+        result = (
+            olt_authorization_workflow.authorize_autofind_ont_and_provision_network(
+                db_session,
+                "olt-123",
+                "0/2/1",
+                "48575443ABCDEF05",
+            )
+        )
+        db_session.refresh(ont)
+
+        assert result.success is True
+        assert ont.authorization_status == OntAuthorizationStatus.authorized
+        assert ont.provisioning_status == OntProvisioningStatus.provisioned
 
     def test_command_preview_profile_not_found(self, db_session) -> None:
         from app.services.web_network_olt_profiles import command_preview_context
@@ -2470,3 +2685,160 @@ class TestOltCommandSetDataclass:
         assert len(cs.commands) == 2
         assert cs.description == "Some desc"
         assert cs.requires_config_mode is False
+
+
+# ---------------------------------------------------------------------------
+# Management IP Allocation Tests
+# ---------------------------------------------------------------------------
+
+
+class TestManagementIpAllocation:
+    """Test the _allocate_mgmt_ip_from_pool function."""
+
+    def test_allocate_ip_from_pool_success(self, db_session) -> None:
+        from app.models.network import IpBlock, IpPool, IPVersion
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        pool = IpPool(
+            name="Test Mgmt Pool",
+            cidr="10.0.100.0/24",
+            gateway="10.0.100.1",
+            dns_primary="8.8.8.8",
+            ip_version=IPVersion.ipv4,
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.commit()
+        db_session.refresh(pool)
+
+        block = IpBlock(
+            pool_id=pool.id,
+            cidr="10.0.100.0/28",
+            is_active=True,
+        )
+        db_session.add(block)
+        db_session.commit()
+
+        success, ip, subnet, gw, msg = _allocate_mgmt_ip_from_pool(
+            db_session, pool.id, ont_serial="TEST-ONT-001"
+        )
+
+        assert success is True
+        assert ip == "10.0.100.2"  # .1 is gateway, so first allocated is .2
+        assert subnet == "255.255.255.0"
+        assert gw == "10.0.100.1"
+        assert "Allocated" in msg
+
+    def test_allocate_ip_skips_existing_addresses(self, db_session) -> None:
+        from app.models.network import IpBlock, IpPool, IPv4Address, IPVersion
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        pool = IpPool(
+            name="Test Pool Skip Existing",
+            cidr="10.0.200.0/24",
+            gateway="10.0.200.1",
+            ip_version=IPVersion.ipv4,
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.commit()
+        db_session.refresh(pool)
+
+        block = IpBlock(
+            pool_id=pool.id,
+            cidr="10.0.200.0/28",
+            is_active=True,
+        )
+        db_session.add(block)
+        db_session.commit()
+
+        # Pre-allocate .2 to force skipping to .3
+        existing = IPv4Address(address="10.0.200.2", pool_id=pool.id)
+        db_session.add(existing)
+        db_session.commit()
+
+        success, ip, subnet, gw, msg = _allocate_mgmt_ip_from_pool(db_session, pool.id)
+
+        assert success is True
+        assert ip == "10.0.200.3"  # .1 is gateway, .2 exists, so .3 is allocated
+        assert subnet == "255.255.255.0"
+
+    def test_allocate_ip_pool_not_found(self, db_session) -> None:
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        fake_id = uuid.uuid4()
+        success, ip, subnet, gw, msg = _allocate_mgmt_ip_from_pool(db_session, fake_id)
+
+        assert success is False
+        assert ip is None
+        assert "not found" in msg
+
+    def test_allocate_ip_pool_no_gateway(self, db_session) -> None:
+        from app.models.network import IpPool, IPVersion
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        pool = IpPool(
+            name="Pool No Gateway",
+            cidr="10.0.150.0/24",
+            gateway=None,  # No gateway
+            ip_version=IPVersion.ipv4,
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.commit()
+        db_session.refresh(pool)
+
+        success, ip, subnet, gw, msg = _allocate_mgmt_ip_from_pool(db_session, pool.id)
+
+        assert success is False
+        assert "no gateway" in msg.lower()
+
+    def test_allocate_ip_pool_inactive(self, db_session) -> None:
+        from app.models.network import IpPool, IPVersion
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        pool = IpPool(
+            name="Inactive Pool",
+            cidr="10.0.160.0/24",
+            gateway="10.0.160.1",
+            ip_version=IPVersion.ipv4,
+            is_active=False,  # Inactive
+        )
+        db_session.add(pool)
+        db_session.commit()
+        db_session.refresh(pool)
+
+        success, ip, subnet, gw, msg = _allocate_mgmt_ip_from_pool(db_session, pool.id)
+
+        assert success is False
+        assert "not active" in msg.lower()
+
+    def test_allocate_mgmt_ip_function_exists(self) -> None:
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        assert callable(_allocate_mgmt_ip_from_pool)
+
+    def test_configure_management_ip_accepts_new_params(self) -> None:
+        import inspect
+
+        from app.services.network.olt_authorization_workflow import (
+            _configure_management_ip_for_authorization,
+        )
+
+        sig = inspect.signature(_configure_management_ip_for_authorization)
+        params = list(sig.parameters.keys())
+
+        assert "ont_unit_id" in params
+        assert "serial_number" in params
