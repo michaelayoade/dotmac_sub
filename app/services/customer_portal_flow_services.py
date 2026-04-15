@@ -431,20 +431,45 @@ def get_usage_page(
         )
     start_at, end_at = _usage_period_bounds(period, activated_at=activated_at)
 
-    usage_records, total = _daily_bandwidth_usage(
-        db,
-        subscription_id=subscription_id_str,
-        start_at=start_at,
-        end_at=end_at,
-        page=page,
-        per_page=per_page,
-    )
-    usage_summary = _usage_summary_stats(
-        db,
-        subscription_id=subscription_id_str,
-        start_at=start_at,
-        end_at=end_at,
-    )
+    usage_source = "postgres"
+    zabbix_usage = None
+    if subscription:
+        try:
+            from app.services.zabbix_engine import get_zabbix_engine
+
+            zabbix_usage = get_zabbix_engine().get_cached_customer_usage(
+                subscription_id_str,
+                period,
+                page,
+                per_page,
+            )
+        except Exception:
+            logger.info(
+                "customer_zabbix_usage_cache_fallback",
+                extra={"event": "customer_zabbix_usage_cache_fallback"},
+            )
+            zabbix_usage = None
+
+    if zabbix_usage:
+        usage_records = zabbix_usage["usage_records"]
+        total = int(zabbix_usage["total"])
+        usage_summary = zabbix_usage["usage_summary"]
+        usage_source = "zabbix"
+    else:
+        usage_records, total = _daily_bandwidth_usage(
+            db,
+            subscription_id=subscription_id_str,
+            start_at=start_at,
+            end_at=end_at,
+            page=page,
+            per_page=per_page,
+        )
+        usage_summary = _usage_summary_stats(
+            db,
+            subscription_id=subscription_id_str,
+            start_at=start_at,
+            end_at=end_at,
+        )
 
     # Resolve FUP status from subscriber's primary subscription offer
     fup_status = None
@@ -464,6 +489,7 @@ def get_usage_page(
         "total_pages": _compute_total_pages(total, per_page),
         "usage_summary": usage_summary,
         "fup_status": fup_status,
+        "usage_source": usage_source,
     }
 
 

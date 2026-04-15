@@ -1,7 +1,7 @@
 """Customer portal web routes."""
 
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID
 
 import anyio
@@ -427,6 +427,38 @@ def customer_bandwidth_series(
     if not subscription:
         return JSONResponse({"data": [], "total": 0, "source": "postgres"})
 
+    try:
+        from app.services.zabbix_engine import get_zabbix_engine
+
+        cached = get_zabbix_engine().get_cached_customer_usage(
+            str(subscription.id),
+            "current",
+            1,
+            10000,
+        )
+        if cached and cached.get("graph"):
+            result = {
+                "data": [
+                    {
+                        "timestamp": datetime.fromtimestamp(
+                            point["timestamp"],
+                            tz=UTC,
+                        ),
+                        "rx_bps": point["download_bps"],
+                        "tx_bps": point["upload_bps"],
+                    }
+                    for point in cached["graph"]
+                ],
+                "total": len(cached["graph"]),
+                "source": "zabbix",
+            }
+            return JSONResponse(content=jsonable_encoder(result))
+    except Exception:
+        logger.info(
+            "customer_zabbix_bandwidth_series_fallback",
+            extra={"event": "customer_zabbix_bandwidth_series_fallback"},
+        )
+
     result = anyio.from_thread.run(
         bandwidth_samples.get_bandwidth_series,
         db,
@@ -459,6 +491,45 @@ def customer_bandwidth_stats(
                 "total_tx_bytes": 0,
                 "sample_count": 0,
             }
+        )
+
+    try:
+        from app.services.zabbix_engine import get_zabbix_engine
+
+        cached = get_zabbix_engine().get_cached_customer_usage(
+            str(subscription.id),
+            "current",
+            1,
+            10000,
+        )
+        if cached and cached.get("graph"):
+            graph = cached["graph"]
+            latest = graph[-1] if graph else {}
+            stats = {
+                "current_rx_bps": float(latest.get("download_bps") or 0),
+                "current_tx_bps": float(latest.get("upload_bps") or 0),
+                "peak_rx_bps": max(
+                    (float(point.get("download_bps") or 0) for point in graph),
+                    default=0,
+                ),
+                "peak_tx_bps": max(
+                    (float(point.get("upload_bps") or 0) for point in graph),
+                    default=0,
+                ),
+                "total_rx_bytes": int(
+                    float(cached.get("totalDownloadGB") or 0) * (1024**3)
+                ),
+                "total_tx_bytes": int(
+                    float(cached.get("totalUploadGB") or 0) * (1024**3)
+                ),
+                "sample_count": len(graph),
+                "source": "zabbix",
+            }
+            return JSONResponse(stats)
+    except Exception:
+        logger.info(
+            "customer_zabbix_bandwidth_stats_fallback",
+            extra={"event": "customer_zabbix_bandwidth_stats_fallback"},
         )
 
     stats = anyio.from_thread.run(
