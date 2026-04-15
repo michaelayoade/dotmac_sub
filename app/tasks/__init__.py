@@ -48,9 +48,9 @@ from app.tasks.ont_authorization import (
     run_authorize_autofind_ont_task,
     run_post_authorization_follow_up_task,
 )
-from app.tasks.ont_autofind import discover_all_olt_autofind
+from app.tasks.ont_autofind import autofind_single_olt, discover_all_olt_autofind
 from app.tasks.ont_bulk import execute_bulk_action as execute_ont_bulk_action
-from app.tasks.ont_discovery import discover_all_olt_onts
+from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_onts
 from app.tasks.ont_provisioning import (
     auto_link_profiles,
     detect_profile_drift,
@@ -96,6 +96,11 @@ from app.tasks.wireguard import (
     generate_connection_log_report as wireguard_connection_report,
 )
 from app.tasks.workflow import detect_sla_breaches as retired_detect_sla_breaches
+from app.tasks.zabbix_ingestion import (
+    dispatch_portal_usage_ingestion,
+    ingest_portal_usage,
+    ingest_portal_usage_chunk,
+)
 
 __all__ = [
     "cleanup_old_operations",
@@ -129,6 +134,7 @@ __all__ = [
     "poll_single_olt",
     "finalize_olt_polling",
     "discover_all_olt_onts",
+    "discover_single_olt_onts",
     "run_bulk_activation_job",
     "run_service_migration_job",
     "run_incremental_sync",
@@ -153,6 +159,7 @@ __all__ = [
     "check_nas_health",
     "execute_ont_bulk_action",
     "discover_all_olt_autofind",
+    "autofind_single_olt",
     "run_authorize_autofind_ont_task",
     "run_post_authorization_follow_up_task",
     "run_enforcement",
@@ -161,4 +168,7 @@ __all__ = [
     "sync_nas_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
+    "dispatch_portal_usage_ingestion",
+    "ingest_portal_usage",
+    "ingest_portal_usage_chunk",
 ]
