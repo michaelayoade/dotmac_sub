@@ -2842,3 +2842,89 @@ class TestManagementIpAllocation:
 
         assert "ont_unit_id" in params
         assert "serial_number" in params
+
+    def test_allocate_ip_updates_pool_cache(self, db_session) -> None:
+        """Test that allocation updates next_available_ip and available_count."""
+        from app.models.network import IpBlock, IpPool, IPVersion
+        from app.services.network.olt_authorization_workflow import (
+            _allocate_mgmt_ip_from_pool,
+        )
+
+        pool = IpPool(
+            name="Test Cache Pool",
+            cidr="10.0.250.0/28",  # /28 = 14 usable hosts
+            gateway="10.0.250.1",
+            ip_version=IPVersion.ipv4,
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.commit()
+        db_session.refresh(pool)
+
+        block = IpBlock(
+            pool_id=pool.id,
+            cidr="10.0.250.0/28",
+            is_active=True,
+        )
+        db_session.add(block)
+        db_session.commit()
+
+        # First allocation
+        success, ip1, _, _, _ = _allocate_mgmt_ip_from_pool(db_session, pool.id)
+        assert success is True
+        assert ip1 == "10.0.250.2"
+
+        # Refresh pool and check cache was updated
+        db_session.refresh(pool)
+        assert pool.next_available_ip == "10.0.250.3"
+        assert pool.available_count == 12  # 14 - gateway - 1 allocated = 12
+
+        # Second allocation should use cached value
+        success, ip2, _, _, _ = _allocate_mgmt_ip_from_pool(db_session, pool.id)
+        assert success is True
+        assert ip2 == "10.0.250.3"
+
+        db_session.refresh(pool)
+        assert pool.next_available_ip == "10.0.250.4"
+        assert pool.available_count == 11
+
+    def test_refresh_pool_availability_function(self, db_session) -> None:
+        """Test the refresh_pool_availability helper function."""
+        from app.models.network import IpBlock, IpPool, IPv4Address, IPVersion
+        from app.services.network.olt_authorization_workflow import (
+            refresh_pool_availability,
+        )
+
+        pool = IpPool(
+            name="Refresh Test Pool",
+            cidr="10.0.251.0/28",
+            gateway="10.0.251.1",
+            ip_version=IPVersion.ipv4,
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.commit()
+        db_session.refresh(pool)
+
+        block = IpBlock(
+            pool_id=pool.id,
+            cidr="10.0.251.0/28",
+            is_active=True,
+        )
+        db_session.add(block)
+
+        # Pre-allocate some IPs
+        for i in [2, 3, 5]:
+            addr = IPv4Address(address=f"10.0.251.{i}", pool_id=pool.id)
+            db_session.add(addr)
+        db_session.commit()
+
+        # Refresh availability
+        next_ip, count = refresh_pool_availability(db_session, pool.id)
+
+        assert next_ip == "10.0.251.4"  # .1 gateway, .2,.3,.5 allocated, .4 is next
+        assert count == 10  # 14 usable - 1 gateway - 3 allocated = 10
+
+        db_session.refresh(pool)
+        assert pool.next_available_ip == "10.0.251.4"
+        assert pool.available_count == 10

@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.network import (
+    IpPool,
     OLTDevice,
     OntAuthorizationStatus,
     OntProvisioningStatus,
@@ -150,12 +151,103 @@ def _resolve_authorized_autofind_candidate(
         return False, f"Failed to mark discovered ONT as authorized: {exc}"
 
 
+def _compute_pool_availability(
+    db: Session,
+    pool: IpPool,
+    gateway: str | None = None,
+) -> tuple[str | None, int]:
+    """Compute the next available IP and total available count for a pool.
+
+    Args:
+        db: Database session
+        pool: IpPool instance
+        gateway: Optional gateway IP to exclude from allocation
+
+    Returns:
+        (next_available_ip, available_count) tuple
+    """
+    import ipaddress
+
+    from app.models.network import IpBlock, IPv4Address
+
+    gateway = gateway or pool.gateway
+
+    # Get all blocks for this pool
+    blocks = (
+        db.query(IpBlock)
+        .filter(IpBlock.pool_id == pool.id)
+        .filter(IpBlock.is_active.is_(True))
+        .all()
+    )
+
+    if not blocks:
+        # Fall back to using pool CIDR directly if no blocks defined
+        from types import SimpleNamespace
+
+        fake_block = SimpleNamespace(cidr=pool.cidr, pool_id=pool.id)
+        blocks = [fake_block]  # type: ignore[list-item]
+
+    # Get all existing addresses in this pool as a set for O(1) lookup
+    existing_addresses = set(
+        str(addr.address)
+        for addr in db.query(IPv4Address).filter(IPv4Address.pool_id == pool.id).all()
+    )
+
+    next_available = None
+    available_count = 0
+
+    for block in blocks:
+        try:
+            block_network = ipaddress.ip_network(str(block.cidr), strict=False)
+        except ValueError:
+            continue
+
+        if block_network.version != 4:
+            continue
+
+        for ip in block_network.hosts():
+            ip_str = str(ip)
+            if ip_str not in existing_addresses and ip_str != gateway:
+                available_count += 1
+                if next_available is None:
+                    next_available = ip_str
+
+    return next_available, available_count
+
+
+def refresh_pool_availability(db: Session, pool_id: uuid.UUID) -> tuple[str | None, int]:
+    """Refresh and save the next_available_ip and available_count for a pool.
+
+    Args:
+        db: Database session
+        pool_id: UUID of the pool to refresh
+
+    Returns:
+        (next_available_ip, available_count) tuple
+    """
+    from app.models.network import IpPool
+
+    pool = db.get(IpPool, pool_id)
+    if not pool:
+        return None, 0
+
+    next_ip, count = _compute_pool_availability(db, pool)
+    pool.next_available_ip = next_ip
+    pool.available_count = count
+    db.flush()
+
+    return next_ip, count
+
+
 def _allocate_mgmt_ip_from_pool(
     db: Session,
     pool_id: uuid.UUID,
     ont_serial: str | None = None,
 ) -> tuple[bool, str | None, str | None, str | None, str]:
     """Allocate the next available IP from a management IP pool.
+
+    Uses cached next_available_ip if available and valid, otherwise
+    computes it on demand. Updates the cache after allocation.
 
     Args:
         db: Database session
@@ -168,7 +260,7 @@ def _allocate_mgmt_ip_from_pool(
     """
     import ipaddress
 
-    from app.models.network import IpBlock, IpPool, IPv4Address
+    from app.models.network import IpPool, IPv4Address
 
     pool = db.get(IpPool, pool_id)
     if not pool:
@@ -189,46 +281,30 @@ def _allocate_mgmt_ip_from_pool(
     except ValueError as e:
         return False, None, None, None, f"Invalid pool CIDR '{pool.cidr}': {e}"
 
-    # Get all blocks for this pool
-    blocks = (
-        db.query(IpBlock)
-        .filter(IpBlock.pool_id == pool_id)
-        .filter(IpBlock.is_active.is_(True))
-        .all()
-    )
-
-    if not blocks:
-        # Fall back to using pool CIDR directly if no blocks defined
-        blocks = [type("FakeBlock", (), {"cidr": pool.cidr, "pool_id": pool_id})]
-
-    # Get all existing addresses in this pool
-    existing_addresses = set(
-        str(addr.address)
-        for addr in db.query(IPv4Address).filter(IPv4Address.pool_id == pool_id).all()
-    )
-
-    # Find first available IP across all blocks
+    # Try to use cached next_available_ip first
     available_ip = None
-    for block in blocks:
-        try:
-            block_network = ipaddress.ip_network(str(block.cidr), strict=False)
-        except ValueError:
-            continue
+    if pool.next_available_ip:
+        # Verify it's still available (not allocated since cache was updated)
+        existing = (
+            db.query(IPv4Address)
+            .filter(IPv4Address.address == pool.next_available_ip)
+            .first()
+        )
+        if not existing:
+            available_ip = pool.next_available_ip
+            logger.debug("Using cached next_available_ip: %s", available_ip)
 
-        if block_network.version != 4:
-            continue
-
-        # Iterate through usable hosts (skip network and broadcast)
-        for ip in block_network.hosts():
-            ip_str = str(ip)
-            if ip_str not in existing_addresses and ip_str != gateway:
-                available_ip = ip_str
-                break
-
+    # If cache miss or stale, compute on demand
+    if not available_ip:
+        next_ip, count = _compute_pool_availability(db, pool, gateway)
+        available_ip = next_ip
         if available_ip:
-            break
+            logger.debug("Computed next available IP: %s (available: %d)", available_ip, count)
 
     if not available_ip:
+        pool.next_available_ip = None
+        pool.available_count = 0
+        db.flush()
         return False, None, None, None, f"No available IPs in pool '{pool.name}'"
 
     # Create IPv4Address record to mark as allocated
@@ -245,12 +321,19 @@ def _allocate_mgmt_ip_from_pool(
     db.add(address_record)
     db.flush()
 
+    # Update cache: compute new next_available_ip and decrement count
+    new_next_ip, new_count = _compute_pool_availability(db, pool, gateway)
+    pool.next_available_ip = new_next_ip
+    pool.available_count = new_count
+    db.flush()
+
     logger.info(
-        "Allocated management IP %s from pool '%s' (gateway=%s, subnet=%s)",
+        "Allocated management IP %s from pool '%s' (gateway=%s, subnet=%s, remaining=%d)",
         available_ip,
         pool.name,
         gateway,
         subnet_mask,
+        new_count,
     )
 
     return True, available_ip, subnet_mask, gateway, f"Allocated {available_ip} from pool '{pool.name}'"

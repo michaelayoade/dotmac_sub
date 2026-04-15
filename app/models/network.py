@@ -519,6 +519,10 @@ class IpPool(Base):
     )
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # Cached allocation tracking for faster IP allocation
+    next_available_ip: Mapped[str | None] = mapped_column(String(64))
+    available_count: Mapped[int | None] = mapped_column(Integer)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1906,6 +1910,12 @@ class OntProvisioningProfile(Base):
         Enum(MgmtIpMode, name="mgmtipmode", create_constraint=False),
     )
     mgmt_vlan_tag: Mapped[int | None] = mapped_column(Integer)
+    mgmt_ip_pool_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ip_pools.id", ondelete="SET NULL"),
+        index=True,
+        doc="IP pool for static management IP assignment",
+    )
     mgmt_remote_access: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # WiFi defaults
@@ -1969,6 +1979,7 @@ class OntProvisioningProfile(Base):
         foreign_keys=[owner_subscriber_id],
     )
     olt_device = relationship("OLTDevice")
+    mgmt_ip_pool = relationship("IpPool", foreign_keys=[mgmt_ip_pool_id])
     download_speed_profile = relationship(
         "SpeedProfile", foreign_keys=[download_speed_profile_id]
     )
