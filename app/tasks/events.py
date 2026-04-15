@@ -6,6 +6,8 @@ Handles retry of failed events and cleanup of old event records.
 import logging
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import text
+
 from app.celery_app import celery_app
 from app.db import SessionLocal
 
@@ -16,6 +18,10 @@ MAX_RETRIES = 3
 MAX_EVENT_AGE_HOURS = 24
 BATCH_SIZE = 100
 
+# Advisory lock keys for preventing concurrent task runs
+_EVENT_RETRY_LOCK_KEY = 70420801
+_EVENT_STALE_LOCK_KEY = 70420802
+
 
 @celery_app.task(name="app.tasks.events.retry_failed_events")
 def retry_failed_events():
@@ -23,12 +29,23 @@ def retry_failed_events():
 
     This task finds events that failed handler processing and retries them.
     Events are retried up to MAX_RETRIES times within MAX_EVENT_AGE_HOURS.
+    Uses advisory lock to prevent concurrent runs.
     """
     from app.models.event_store import EventStatus, EventStore
     from app.services.events.dispatcher import get_dispatcher
 
     session = SessionLocal()
+    lock_acquired = False
     try:
+        lock_acquired = bool(
+            session.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": _EVENT_RETRY_LOCK_KEY},
+            ).scalar()
+        )
+        if not lock_acquired:
+            logger.debug("Skipping event retry: previous run still in progress")
+            return {"skipped_due_to_lock": 1}
         cutoff = datetime.now(UTC) - timedelta(hours=MAX_EVENT_AGE_HOURS)
 
         # Find failed events eligible for retry
@@ -82,6 +99,14 @@ def retry_failed_events():
         session.rollback()
         raise
     finally:
+        if lock_acquired:
+            try:
+                session.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": _EVENT_RETRY_LOCK_KEY},
+                )
+            except Exception:
+                logger.exception("Failed to release event retry lock")
         session.close()
 
 
@@ -127,6 +152,7 @@ def mark_stale_processing_events(stale_minutes: int = 30):
 
     Events that have been in 'processing' status for longer than
     stale_minutes are marked as failed so they can be retried.
+    Uses advisory lock to prevent concurrent runs.
 
     Args:
         stale_minutes: Minutes after which processing events are considered stuck
@@ -134,7 +160,17 @@ def mark_stale_processing_events(stale_minutes: int = 30):
     from app.models.event_store import EventStatus, EventStore
 
     session = SessionLocal()
+    lock_acquired = False
     try:
+        lock_acquired = bool(
+            session.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": _EVENT_STALE_LOCK_KEY},
+            ).scalar()
+        )
+        if not lock_acquired:
+            logger.debug("Skipping stale event marking: previous run still in progress")
+            return {"skipped_due_to_lock": 1}
         cutoff = datetime.now(UTC) - timedelta(minutes=stale_minutes)
 
         # Find and mark stuck processing events
@@ -162,4 +198,12 @@ def mark_stale_processing_events(stale_minutes: int = 30):
         session.rollback()
         raise
     finally:
+        if lock_acquired:
+            try:
+                session.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": _EVENT_STALE_LOCK_KEY},
+                )
+            except Exception:
+                logger.exception("Failed to release stale event marking lock")
         session.close()

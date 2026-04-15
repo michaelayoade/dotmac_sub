@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import text
+
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.models.network_monitoring import NetworkDevice
@@ -12,12 +14,31 @@ from app.services.network_vendor_polling import refresh_device_from_vendor_api
 
 logger = logging.getLogger(__name__)
 
+# Advisory lock keys for preventing concurrent task runs
+_PING_REFRESH_LOCK_KEY = 70420701
+_SNMP_REFRESH_LOCK_KEY = 70420702
+
 
 @celery_app.task(name="app.tasks.network_monitoring.refresh_core_device_ping")
 def refresh_core_device_ping() -> dict[str, int]:
-    """Refresh ping status for active devices with ping enabled."""
+    """Refresh ping status for active devices with ping enabled.
+
+    Uses advisory lock to prevent concurrent runs - if a previous run is still
+    in progress, this invocation will be skipped.
+    """
     session = SessionLocal()
+    lock_acquired = False
     try:
+        lock_acquired = bool(
+            session.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": _PING_REFRESH_LOCK_KEY},
+            ).scalar()
+        )
+        if not lock_acquired:
+            logger.info("Skipping ping refresh: previous run still in progress")
+            return {"skipped_due_to_lock": 1}
+
         devices = (
             session.query(NetworkDevice)
             .filter(NetworkDevice.is_active.is_(True))
@@ -37,17 +58,40 @@ def refresh_core_device_ping() -> dict[str, int]:
         logger.exception("Periodic ping refresh failed")
         raise
     finally:
+        if lock_acquired:
+            try:
+                session.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": _PING_REFRESH_LOCK_KEY},
+                )
+            except Exception:
+                logger.exception("Failed to release ping refresh lock")
         session.close()
 
 
 @celery_app.task(name="app.tasks.network_monitoring.refresh_core_device_snmp")
 def refresh_core_device_snmp() -> dict[str, int]:
-    """Refresh SNMP health + metrics for active SNMP-enabled devices."""
+    """Refresh SNMP health + metrics for active SNMP-enabled devices.
+
+    Uses advisory lock to prevent concurrent runs - if a previous run is still
+    in progress, this invocation will be skipped.
+    """
     session = SessionLocal()
+    lock_acquired = False
     checked = 0
     updated = 0
     failed = 0
     try:
+        lock_acquired = bool(
+            session.execute(
+                text("SELECT pg_try_advisory_lock(:key)"),
+                {"key": _SNMP_REFRESH_LOCK_KEY},
+            ).scalar()
+        )
+        if not lock_acquired:
+            logger.info("Skipping SNMP refresh: previous run still in progress")
+            return {"skipped_due_to_lock": 1}
+
         devices = (
             session.query(NetworkDevice)
             .filter(NetworkDevice.is_active.is_(True))
@@ -144,4 +188,12 @@ def refresh_core_device_snmp() -> dict[str, int]:
         logger.exception("Periodic SNMP refresh failed")
         raise
     finally:
+        if lock_acquired:
+            try:
+                session.execute(
+                    text("SELECT pg_advisory_unlock(:key)"),
+                    {"key": _SNMP_REFRESH_LOCK_KEY},
+                )
+            except Exception:
+                logger.exception("Failed to release SNMP refresh lock")
         session.close()
