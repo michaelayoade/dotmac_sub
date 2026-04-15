@@ -422,16 +422,15 @@ def _configure_management_ip_for_authorization(
     if ont_unit_id:
         ont = db.get(OntUnit, ont_unit_id)
         if ont:
-            # Resolve VLAN record by tag for this OLT's region
-            mgmt_vlan = None
-            if olt.region_id:
-                mgmt_vlan = db.scalars(
-                    select(Vlan).where(
-                        Vlan.tag == mgmt_vlan_tag,
-                        Vlan.region_id == olt.region_id,
-                        Vlan.is_active.is_(True),
-                    )
-                ).first()
+            # Resolve VLAN record by tag for this OLT
+            # First try to find a VLAN linked directly to this OLT
+            mgmt_vlan = db.scalars(
+                select(Vlan).where(
+                    Vlan.tag == mgmt_vlan_tag,
+                    Vlan.olt_device_id == olt.id,
+                    Vlan.is_active.is_(True),
+                )
+            ).first()
 
             ont.mgmt_ip_mode = (
                 MgmtIpMode.static_ip if mgmt_ip_mode == "static_ip" else MgmtIpMode.dhcp
