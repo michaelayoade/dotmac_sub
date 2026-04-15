@@ -10,6 +10,7 @@ from starlette.datastructures import FormData
 
 from app.models.network import (
     ConfigMethod,
+    IpPool,
     IpProtocol,
     MgmtIpMode,
     OLTDevice,
@@ -86,6 +87,26 @@ def _active_vlan_options(db: Session) -> list[dict[str, object]]:
     ]
 
 
+def _active_mgmt_ip_pool_options(db: Session) -> list[dict[str, object]]:
+    """Return IP pools that can be used for management IP assignment."""
+    from sqlalchemy import select
+
+    stmt = (
+        select(IpPool)
+        .where(IpPool.is_active.is_(True))
+        .order_by(IpPool.olt_device_id.nulls_first(), IpPool.name)
+    )
+    return [
+        {
+            "id": str(pool.id),
+            "olt_device_id": str(pool.olt_device_id) if pool.olt_device_id else "",
+            "name": pool.name,
+            "cidr": pool.cidr,
+        }
+        for pool in db.scalars(stmt).all()
+    ]
+
+
 def list_context(
     request: Request,
     db: Session,
@@ -159,6 +180,7 @@ def form_context(
         # FK choices
         "olt_devices": _active_olts(db),
         "vlan_options": _active_vlan_options(db),
+        "mgmt_ip_pool_options": _active_mgmt_ip_pool_options(db),
         "download_speed_profiles": dl_profiles,
         "upload_speed_profiles": ul_profiles,
         "action_url": (
@@ -186,6 +208,7 @@ def parse_profile_form(form: FormData) -> dict[str, object]:
         "olt_device_id": _form_str(form, "olt_device_id") or None,
         "mgmt_ip_mode": _form_str(form, "mgmt_ip_mode") or None,
         "mgmt_vlan_tag": _form_int(form, "mgmt_vlan_tag"),
+        "mgmt_ip_pool_id": _form_str(form, "mgmt_ip_pool_id") or None,
         "mgmt_remote_access": _form_bool(form, "mgmt_remote_access"),
         "wifi_enabled": _form_bool(form, "wifi_enabled"),
         "wifi_ssid_template": _form_str(form, "wifi_ssid_template") or None,
@@ -280,6 +303,9 @@ def handle_create(
         mgmt_vlan_tag=int(str(form_data["mgmt_vlan_tag"]))
         if form_data.get("mgmt_vlan_tag") is not None
         else None,
+        mgmt_ip_pool_id=str(form_data["mgmt_ip_pool_id"])
+        if form_data.get("mgmt_ip_pool_id")
+        else None,
         mgmt_remote_access=bool(form_data.get("mgmt_remote_access")),
         wifi_enabled=bool(form_data.get("wifi_enabled")),
         wifi_ssid_template=str(form_data["wifi_ssid_template"])
@@ -361,6 +387,9 @@ def handle_update(
         else None,
         mgmt_vlan_tag=int(str(form_data["mgmt_vlan_tag"]))
         if form_data.get("mgmt_vlan_tag") is not None
+        else None,
+        mgmt_ip_pool_id=str(form_data["mgmt_ip_pool_id"])
+        if form_data.get("mgmt_ip_pool_id")
         else None,
         mgmt_remote_access=bool(form_data.get("mgmt_remote_access")),
         wifi_enabled=bool(form_data.get("wifi_enabled")),

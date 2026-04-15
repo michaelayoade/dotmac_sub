@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from collections.abc import Iterable
 from datetime import UTC, datetime
 from urllib.parse import quote_plus
@@ -16,12 +15,33 @@ from app.models.network import OLTDevice, OntUnit
 from app.models.ont_autofind import OltAutofindCandidate
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import (
+    search_candidates as serial_search_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
 
+def _entry_serial(entry: object) -> str:
+    serial_number = str(getattr(entry, "serial_number", "") or "").strip()
+    if serial_number:
+        return serial_number
+    return str(getattr(entry, "serial_hex", "") or "").strip()
+
+
 def _normalize_serial(value: str | None) -> str:
-    return re.sub(r"[^A-Za-z0-9]+", "", str(value or "").strip()).upper()
+    return normalize_serial(value)
+
+
+def _candidate_serial_values(candidate: OltAutofindCandidate) -> list[str]:
+    values: list[str] = []
+    for value in (candidate.serial_number, candidate.serial_hex):
+        for serial in serial_search_candidates(value):
+            normalized = normalize_serial(serial)
+            if normalized and normalized not in values:
+                values.append(normalized)
+    return values
 
 
 def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
@@ -32,12 +52,16 @@ def _normalized_serial_expr(column):  # type: ignore[no-untyped-def]
 
 
 def _find_ont_by_serial(db: Session, serial_number: str | None) -> OntUnit | None:
-    normalized = _normalize_serial(serial_number)
-    if not normalized:
+    candidates = [
+        normalize_serial(candidate)
+        for candidate in serial_search_candidates(serial_number)
+    ]
+    candidates = [candidate for candidate in dict.fromkeys(candidates) if candidate]
+    if not candidates:
         return None
     stmt = (
         select(OntUnit)
-        .where(_normalized_serial_expr(OntUnit.serial_number) == normalized)
+        .where(_normalized_serial_expr(OntUnit.serial_number).in_(candidates))
         .where(OntUnit.is_active.is_(True))
         .order_by(OntUnit.updated_at.desc(), OntUnit.created_at.desc())
     )
@@ -59,6 +83,50 @@ def sync_olt_autofind_candidates(
 
     stats = sync_olt_autofind_entries(db, olt_id=olt_id, entries=entries)
     return True, message, stats
+
+
+def refresh_returned_ont_autofind(
+    db: Session,
+    *,
+    olt_id: str | None,
+    serial_number: str | None,
+    fsp: str | None = None,
+) -> dict[str, object]:
+    """Refresh autofind after an ONT release and return list navigation context."""
+    target_url = build_unconfigured_onts_redirect_url(
+        search=serial_number or None,
+        olt_id=olt_id or None,
+    )
+    if not olt_id:
+        return {
+            "ok": False,
+            "message": "No previous OLT available for autofind refresh",
+            "rediscovered": False,
+            "url": target_url,
+        }
+
+    ok, message, stats = sync_olt_autofind_candidates(db, olt_id)
+    rediscovered = False
+    normalized_serial = _normalize_serial(serial_number)
+    if ok and normalized_serial:
+        query = select(OltAutofindCandidate).where(
+            OltAutofindCandidate.olt_id == olt_id,
+            OltAutofindCandidate.is_active.is_(True),
+        )
+        if fsp:
+            query = query.where(OltAutofindCandidate.fsp == fsp)
+        for candidate in db.scalars(query).all():
+            if normalized_serial in _candidate_serial_values(candidate):
+                rediscovered = True
+                break
+
+    return {
+        "ok": ok,
+        "message": message,
+        "stats": stats,
+        "rediscovered": rediscovered,
+        "url": target_url,
+    }
 
 
 def scan_olt_autofind_results_context(
@@ -119,23 +187,42 @@ def sync_olt_autofind_entries(
     active_entries = [
         candidate for candidate in existing_candidates if candidate.is_active
     ]
-    by_key = {
-        (item.fsp, _normalize_serial(item.serial_number)): item
-        for item in existing_candidates
-    }
+    by_key: dict[tuple[str, str], OltAutofindCandidate] = {}
+    for item in existing_candidates:
+        for serial in _candidate_serial_values(item):
+            by_key.setdefault((item.fsp, serial), item)
     seen_keys: set[tuple[str, str]] = set()
     created = 0
     updated = 0
     resolved = 0
 
     for entry in entry_list:
-        serial_number = str(getattr(entry, "serial_number", "") or "").strip()
+        serial_number = _entry_serial(entry)
         fsp = str(getattr(entry, "fsp", "") or "").strip()
         if not fsp or not serial_number:
             continue
-        key = (fsp, _normalize_serial(serial_number))
+        serial_hex = str(getattr(entry, "serial_hex", "") or "").strip()
+        entry_serials = [
+            normalize_serial(candidate)
+            for candidate in serial_search_candidates(serial_number)
+        ]
+        entry_serials.extend(
+            normalize_serial(candidate)
+            for candidate in serial_search_candidates(serial_hex)
+        )
+        entry_serials = [
+            candidate for candidate in dict.fromkeys(entry_serials) if candidate
+        ]
+        key = (fsp, entry_serials[0])
         seen_keys.add(key)
-        candidate = by_key.get(key)
+        candidate = next(
+            (
+                by_key.get((fsp, serial))
+                for serial in entry_serials
+                if by_key.get((fsp, serial))
+            ),
+            None,
+        )
         matched_ont = _find_ont_by_serial(db, serial_number)
         if candidate is None:
             candidate = OltAutofindCandidate(
@@ -143,7 +230,7 @@ def sync_olt_autofind_entries(
                 ont_unit_id=matched_ont.id if matched_ont else None,
                 fsp=fsp,
                 serial_number=serial_number,
-                serial_hex=getattr(entry, "serial_hex", None),
+                serial_hex=serial_hex or None,
                 vendor_id=getattr(entry, "vendor_id", None),
                 model=getattr(entry, "model", None),
                 software_version=getattr(entry, "software_version", None),
@@ -162,7 +249,7 @@ def sync_olt_autofind_entries(
             )
             candidate.fsp = fsp
             candidate.serial_number = serial_number
-            candidate.serial_hex = getattr(entry, "serial_hex", None)
+            candidate.serial_hex = serial_hex or None
             candidate.vendor_id = getattr(entry, "vendor_id", None)
             candidate.model = getattr(entry, "model", None)
             candidate.software_version = getattr(entry, "software_version", None)
@@ -176,8 +263,11 @@ def sync_olt_autofind_entries(
             updated += 1
 
     for candidate in active_entries:
-        key = (candidate.fsp, _normalize_serial(candidate.serial_number))
-        if key in seen_keys:
+        keys = {
+            (candidate.fsp, serial)
+            for serial in _candidate_serial_values(candidate)
+        }
+        if keys.intersection(seen_keys):
             continue
         candidate.is_active = False
         candidate.resolution_reason = "disappeared"

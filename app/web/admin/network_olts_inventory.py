@@ -1005,40 +1005,88 @@ def olt_authorize_ont(
             )
         return RedirectResponse(target, status_code=303)
 
-    from app.services.network.olt_authorization_workflow import (
-        queue_authorize_autofind_ont,
-    )
+    force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
+    initiated_by = None
+    try:
+        from app.services.network.olt_authorization_workflow import (
+            queue_authorize_autofind_ont,
+        )
 
-    force = force_reauthorize.lower() in ("true", "1", "on", "yes")
-    initiated_by = actor_label(request)
-    queue_ok, queue_msg, operation_id = queue_authorize_autofind_ont(
-        db,
-        olt_id=olt_id,
-        fsp=fsp,
-        serial_number=serial_number,
-        force_reauthorize=force,
-        initiated_by=initiated_by,
-    )
+        initiated_by = actor_label(request)
+        # Queue authorization to run in background via Celery
+        queue_ok, queue_msg, operation_id = queue_authorize_autofind_ont(
+            db,
+            olt_id=olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            force_reauthorize=force,
+            initiated_by=initiated_by,
+            request=request,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Failed to queue ONT authorization from web route olt_id=%s fsp=%s serial=%s: %s",
+            olt_id,
+            fsp,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
+        queue_ok = False
+        queue_msg = f"Authorization failed: {exc}"
+        operation_id = None
     status = "success" if queue_ok else "error"
-    from app.services.network.olt_web_audit import log_olt_audit_event
 
-    log_olt_audit_event(
-        db,
-        request=request,
-        action="force_authorize_ont_queued" if force else "authorize_ont_queued",
-        entity_id=olt_id,
-        metadata={
-            "result": status,
-            "message": queue_msg,
-            "fsp": fsp,
-            "serial_number": serial_number,
-            "force_reauthorize": force,
-            "operation_id": operation_id,
-            "initiated_by": initiated_by,
-        },
-        status_code=202 if queue_ok else 500,
-        is_success=queue_ok,
-    )
+    try:
+        from app.services.network.olt_web_audit import log_olt_audit_event
+
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="force_authorize_ont" if force else "authorize_ont",
+            entity_id=olt_id,
+            metadata={
+                "result": status,
+                "message": queue_msg,
+                "fsp": fsp,
+                "serial_number": serial_number,
+                "force_reauthorize": force,
+                "follow_up_operation_id": operation_id,
+                "initiated_by": initiated_by,
+            },
+            status_code=200 if queue_ok else 500,
+            is_success=queue_ok,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Failed to audit ONT authorization olt_id=%s fsp=%s serial=%s: %s",
+            olt_id,
+            fsp,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
+    # For queued operations, send a special event to trigger WebSocket subscription
+    if queue_ok and operation_id and is_htmx:
+        # Return immediately with operation tracking info
+        # The UI will subscribe to WebSocket for real-time updates
+        trigger_data = {
+            "showToast": {"message": queue_msg, "type": "info"},
+            "operationQueued": {
+                "operation_id": operation_id,
+                "serial_number": serial_number,
+                "fsp": fsp,
+                "olt_id": olt_id,
+            },
+        }
+        return Response(
+            status_code=200,
+            headers={
+                "HX-Trigger": json.dumps(trigger_data, ensure_ascii=True),
+            },
+        )
+
     if return_to in (
         "/admin/network/unconfigured-onts",
         "/admin/network/onts",

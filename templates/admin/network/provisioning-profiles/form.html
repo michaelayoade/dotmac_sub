@@ -8,6 +8,10 @@
     onu_mode: "{{ item.onu_mode.value if item and item.onu_mode else '' }}",
     selectedOlt: "{{ form_values.olt_device_id if form_values is defined and form_values else (item.olt_device_id|string if item and item.olt_device_id else '') }}",
     mgmtVlan: "{{ form_values.mgmt_vlan_tag if form_values is defined and form_values and form_values.mgmt_vlan_tag is not none else (item.mgmt_vlan_tag if item and item.mgmt_vlan_tag else '') }}",
+    mgmtIpPoolId: "{{ form_values.mgmt_ip_pool_id if form_values is defined and form_values else (item.mgmt_ip_pool_id|string if item and item.mgmt_ip_pool_id else '') }}",
+    mgmtIpMode: "{{ form_values.mgmt_ip_mode if form_values is defined and form_values else (item.mgmt_ip_mode.value if item and item.mgmt_ip_mode else '') }}",
+    mgmtIpPoolOptions: {{ mgmt_ip_pool_options|tojson }},
+    filteredMgmtIpPools() { return this.mgmtIpPoolOptions.filter((pool) => pool.olt_device_id === this.selectedOlt || pool.olt_device_id === ''); },
     pppoeOmciVlan: "{{ form_values.pppoe_omci_vlan if form_values is defined and form_values and form_values.pppoe_omci_vlan is not none else (item.pppoe_omci_vlan if item and item.pppoe_omci_vlan else '') }}",
     wanSVlan: "{{ wan_form_values.s_vlan if wan_form_values is defined and wan_form_values and wan_form_values.s_vlan is not none else '' }}",
     wifi_enabled: {{ 'true' if (not item or item.wifi_enabled) else 'false' }},
@@ -191,10 +195,10 @@
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Out-of-band management settings</p>
             </div>
             <div class="p-6">
-                <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                <div class="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
                     <div>
                         <label for="mgmt_ip_mode" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP Mode</label>
-                        <select name="mgmt_ip_mode" id="mgmt_ip_mode"
+                        <select name="mgmt_ip_mode" id="mgmt_ip_mode" x-model="mgmtIpMode"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Not Set</option>
                             {% for mm in mgmt_ip_modes %}
@@ -212,6 +216,17 @@
                             </template>
                         </select>
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Only active VLANs defined on the selected OLT are available.</p>
+                    </div>
+                    <div x-show="mgmtIpMode === 'static'" x-transition>
+                        <label for="mgmt_ip_pool_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Management IP Pool</label>
+                        <select name="mgmt_ip_pool_id" id="mgmt_ip_pool_id" x-model="mgmtIpPoolId"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Not Set (manual entry)</option>
+                            <template x-for="pool in filteredMgmtIpPools()" :key="`mgmt-pool-${pool.id}`">
+                                <option :value="pool.id" x-text="`${pool.name} (${pool.cidr})`"></option>
+                            </template>
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Select pool for automatic IP assignment from available addresses.</p>
                     </div>
                     <div>
                         <label class="flex items-center gap-2 mt-7">

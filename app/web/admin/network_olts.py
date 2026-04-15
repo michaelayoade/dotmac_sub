@@ -681,7 +681,7 @@ def olt_authorize_ont(
         )
 
     # Parse force_reauthorize checkbox value
-    force = force_reauthorize.lower() in ("true", "1", "on", "yes")
+    force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
     logger.info(
         "authorize_ont route: serial=%s force_reauthorize_raw=%r force=%s",
         serial_number,
@@ -689,14 +689,30 @@ def olt_authorize_ont(
         force,
     )
 
-    auth_result = olt_api_operations_service.queue_authorize_ont(
-        db,
-        olt_id,
-        fsp=fsp,
-        serial_number=serial_number,
-        force_reauthorize=force,
-        request=request,
-    )
+    try:
+        auth_result = olt_api_operations_service.queue_authorize_ont(
+            db,
+            olt_id,
+            fsp=fsp,
+            serial_number=serial_number,
+            force_reauthorize=force,
+            request=request,
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Failed to queue ONT authorization from OLT detail route olt_id=%s fsp=%s serial=%s: %s",
+            olt_id,
+            fsp,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
+        auth_result = olt_api_operations_service.OltApiWriteResult(
+            False,
+            f"Failed to queue authorization: {exc}",
+            None,
+        )
     status = "success" if auth_result.success else "error"
     message = auth_result.message
 

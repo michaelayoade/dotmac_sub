@@ -18,7 +18,13 @@
     {% endif %}
     {% if sync_message %}
     <div class="rounded-lg border px-4 py-3 text-sm {% if sync_status == 'success' %}border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300{% else %}border-red-200 bg-red-50 text-red-700 dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300{% endif %}">
-        {{ sync_message }}
+        <div class="flex items-center gap-2">
+            {% if sync_status == 'success' and 'Authorization queued' in sync_message %}
+            <span class="h-2 w-2 animate-pulse rounded-full bg-blue-500"></span>
+            <span class="font-semibold text-blue-700 dark:text-blue-300">Authorize running.</span>
+            {% endif %}
+            <span>{{ sync_message }}</span>
+        </div>
     </div>
     {% endif %}
 
