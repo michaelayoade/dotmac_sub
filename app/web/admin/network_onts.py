@@ -24,6 +24,7 @@ from app.services import web_network_operations as web_network_operations_servic
 from app.services import web_network_service_ports as web_network_service_ports_service
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
+from app.models.network import OntAuthorizationStatus
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.action_logging import log_network_action_result
 from app.web.request_parsing import parse_form_data_sync
@@ -138,8 +139,11 @@ def ont_detail_preview(
         "tr069",
         "charts",
         "service-ports",
-        "configuration",
+        "configure",
+        "device-status",
     }
+    if tab == "configuration":
+        tab = "configure"
     active_tab = tab if tab in allowed_tabs else "overview"
 
     activities = build_audit_activities(db, "ont", str(ont_id))
@@ -405,6 +409,17 @@ def ont_provision_wizard(
             "admin/errors/404.html",
             {"request": request, "message": context["error"]},
             status_code=404,
+        )
+    ont = context.get("ont")
+    if getattr(ont, "authorization_status", None) != OntAuthorizationStatus.authorized:
+        from urllib.parse import quote_plus
+
+        return RedirectResponse(
+            (
+                f"/admin/network/onts/{ont_id}?feedback_status=error"
+                f"&feedback_message={quote_plus('Authorize the ONT on the OLT before configuring it.')}"
+            ),
+            status_code=303,
         )
     if status and message:
         context["provision_feedback"] = {"status": status, "message": message}
@@ -679,3 +694,118 @@ def ont_config_diagnostics(
     return templates.TemplateResponse(
         "admin/network/onts/_config_diagnostics.html", context
     )
+
+
+# -- Configure Tab Routes (Database-backed ONT configuration) ------------------
+
+
+@router.get(
+    "/onts/{ont_id}/configure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_configure_form(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """HTMX partial: Configure form populated from OntUnit DB fields."""
+    context = _base_context(request, db, active_page="onts")
+    context.update(web_network_ont_actions_service.configure_form_context(db, ont_id))
+    return templates.TemplateResponse(
+        "admin/network/onts/_configure_form.html", context
+    )
+
+
+@router.post(
+    "/onts/{ont_id}/configure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_configure_submit(
+    request: Request,
+    ont_id: str,
+    wan_mode: str = Form(default=""),
+    wan_vlan_id: str = Form(default=""),
+    config_method: str = Form(default=""),
+    ip_protocol: str = Form(default=""),
+    pppoe_username: str = Form(default=""),
+    pppoe_password: str = Form(default=""),
+    mgmt_ip_mode: str = Form(default=""),
+    mgmt_vlan_id: str = Form(default=""),
+    mgmt_ip_address: str = Form(default=""),
+    mgmt_remote_access: bool = Form(default=False),
+    lan_gateway_ip: str = Form(default=""),
+    lan_subnet_mask: str = Form(default=""),
+    lan_dhcp_enabled: str = Form(default=""),
+    lan_dhcp_start: str = Form(default=""),
+    lan_dhcp_end: str = Form(default=""),
+    wifi_enabled: bool = Form(default=False),
+    wifi_ssid: str = Form(default=""),
+    wifi_channel: str = Form(default=""),
+    wifi_security_mode: str = Form(default=""),
+    wifi_password: str = Form(default=""),
+    voip_enabled: bool = Form(default=False),
+    push_to_device: bool = Form(default=False),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Handle ONT configure form submission."""
+    # Convert string to bool for checkbox that may be empty
+    dhcp_enabled: bool | None = None
+    if lan_dhcp_enabled == "true":
+        dhcp_enabled = True
+    elif lan_dhcp_enabled == "false":
+        dhcp_enabled = False
+
+    result = web_network_ont_actions_service.update_ont_config(
+        db,
+        ont_id,
+        wan_mode=wan_mode or None,
+        wan_vlan_id=wan_vlan_id or None,
+        config_method=config_method or None,
+        ip_protocol=ip_protocol or None,
+        pppoe_username=pppoe_username or None,
+        pppoe_password=pppoe_password or None,
+        mgmt_ip_mode=mgmt_ip_mode or None,
+        mgmt_vlan_id=mgmt_vlan_id or None,
+        mgmt_ip_address=mgmt_ip_address or None,
+        mgmt_remote_access=mgmt_remote_access,
+        lan_gateway_ip=lan_gateway_ip or None,
+        lan_subnet_mask=lan_subnet_mask or None,
+        lan_dhcp_enabled=dhcp_enabled,
+        lan_dhcp_start=lan_dhcp_start or None,
+        lan_dhcp_end=lan_dhcp_end or None,
+        wifi_enabled=wifi_enabled,
+        wifi_ssid=wifi_ssid or None,
+        wifi_channel=wifi_channel or None,
+        wifi_security_mode=wifi_security_mode or None,
+        wifi_password=wifi_password or None,
+        voip_enabled=voip_enabled,
+        push_to_device=push_to_device,
+        request=request,
+    )
+
+    _log_ont_action_result(
+        request=request,
+        ont_id=ont_id,
+        action="Configure ONT",
+        ok=result.success,
+        message=result.message,
+        metadata={"push_to_device": push_to_device},
+    )
+
+    # Return updated form with success/error message
+    context = _base_context(request, db, active_page="onts")
+    context.update(web_network_ont_actions_service.configure_form_context(db, ont_id))
+    context["config_result"] = result
+
+    response = templates.TemplateResponse(
+        "admin/network/onts/_configure_form.html", context
+    )
+    response.headers.update(
+        _toast_headers(
+            result.message,
+            "success" if result.success else "error",
+        )
+    )
+    return response

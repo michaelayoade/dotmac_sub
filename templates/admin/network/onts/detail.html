@@ -19,10 +19,10 @@
             const trigger = document.querySelector('[data-tab=\"service-ports\"]');
             if (trigger) trigger.dataset.loaded = '1';
             htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/service-ports', {target: '#service-ports-content', swap: 'innerHTML'});
-        } else if (activeTab === 'configuration') {
-            const trigger = document.querySelector('[data-tab=\"configuration\"]');
+        } else if (activeTab === 'device-status') {
+            const trigger = document.querySelector('[data-tab=\"device-status\"]');
             if (trigger) trigger.dataset.loaded = '1';
-            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#configuration-content', swap: 'innerHTML'});
+            htmx.ajax('GET', '/admin/network/onts/{{ ont.id }}/unified-config', {target: '#device-status-content', swap: 'innerHTML'});
         }
      ">
     {# Header — Clean Professional Layout for NOC Technicians #}
@@ -82,6 +82,41 @@
                                 Inactive
                             </span>
                             {% endif %}
+                            {# Actions Dropdown #}
+                            <div x-data="{ open: false }" class="relative">
+                                <button @click="open = !open" @click.outside="open = false" type="button"
+                                    class="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">
+                                    Actions
+                                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+                                </button>
+                                <div x-show="open" x-cloak x-transition
+                                    class="absolute right-0 z-20 mt-1 w-48 origin-top-right rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                                    <a href="/admin/network/onts/{{ ont.id }}/edit"
+                                       class="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
+                                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                                        Edit ONT
+                                    </a>
+                                    <hr class="my-1 border-slate-200 dark:border-slate-700">
+                                    <button
+                                        hx-post="/admin/network/onts/{{ ont.id }}/factory-reset"
+                                        hx-swap="none"
+                                        hx-confirm="Factory reset will ERASE ALL configuration on this ONT. The device will reboot and return to factory defaults. Continue?"
+                                        @click="open = false"
+                                        class="flex w-full items-center gap-2 px-3 py-2 text-xs text-rose-600 hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-900/30">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+                                        Factory Reset
+                                    </button>
+                                    <button
+                                        hx-post="/admin/network/onts/{{ ont.id }}/return-to-inventory"
+                                        hx-swap="none"
+                                        hx-confirm="Return this ONT to inventory? This will clear subscriber assignment and reset provisioning status."
+                                        @click="open = false"
+                                        class="flex w-full items-center gap-2 px-3 py-2 text-xs text-amber-600 hover:bg-amber-50 dark:text-amber-400 dark:hover:bg-amber-900/30">
+                                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
+                                        Return to Inventory
+                                    </button>
+                                </div>
+                            </div>
                         </div>
                     </div>
 
@@ -120,17 +155,27 @@
                     </div>
                 </div>
 
+                {% set authorization_status = ont.authorization_status.value if ont.authorization_status and ont.authorization_status.value is defined else (ont.authorization_status if ont.authorization_status else '') %}
                 {% set provisioning_status = ont.provisioning_status.value if ont.provisioning_status and ont.provisioning_status.value is defined else (ont.provisioning_status if ont.provisioning_status else 'unprovisioned') %}
-                {% set show_provision_cta = inventory_ready or provisioning_status != 'provisioned' %}
+                {% set authorized_for_configuration = authorization_status == 'authorized' %}
+                {% set show_provision_cta = authorized_for_configuration and (inventory_ready or provisioning_status != 'provisioned') %}
                 {% if show_provision_cta %}
-                {# Right: Provisioning Action #}
+                {# Right: ONT Configuration Action #}
                 <div class="flex flex-col justify-center gap-2 border-t border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-700/80 dark:bg-slate-900/30 lg:w-56 lg:border-l lg:border-t-0 lg:p-5">
                     <a href="/admin/network/onts/{{ ont.id }}/provision"
                        class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                        Provision ONT
+                        Configure ONT
                     </a>
-                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Initial service activation and provisioning profile setup.</p>
+                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Use after OLT authorization and provisioning are complete.</p>
+                </div>
+                {% elif not authorized_for_configuration %}
+                <div class="flex flex-col justify-center gap-2 border-t border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-700/80 dark:bg-slate-900/30 lg:w-56 lg:border-l lg:border-t-0 lg:p-5">
+                    <div class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
+                        Configure ONT
+                    </div>
+                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Authorize on the OLT before configuring the ONT.</p>
                 </div>
                 {% endif %}
             </div>
@@ -320,7 +365,7 @@
 
     {# Tab Navigation #}
     <div x-data="{
-            tabs: ['overview', 'network', 'history', 'tr069', 'charts', 'service-ports', 'configuration'],
+            tabs: ['overview', 'network', 'history', 'tr069', 'charts', 'service-ports', 'configure', 'device-status'],
             showTabTooltip: false,
             tabTooltipLabel: '',
             tabTooltipTop: 0,
@@ -453,25 +498,42 @@
                 <span class="whitespace-nowrap">Ports</span>
             </button>
             <button type="button"
-                    data-tab="configuration"
-                    hx-get="/admin/network/onts/{{ ont.id }}/unified-config"
-                    hx-target="#configuration-content"
-                    hx-swap="innerHTML"
-                    @click="activeTab = 'configuration'; $el.dataset.loaded = '1'"
-                    @mouseenter="openTabTooltip($el, 'View Config')"
+                    @click="activeTab = 'configure'"
+                    @mouseenter="openTabTooltip($el, 'Configure ONT')"
                     @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'View Config')"
+                    @focus="openTabTooltip($el, 'Configure ONT')"
                     @blur="closeTabTooltip()"
                     role="tab"
-                    :aria-selected="activeTab === 'configuration'"
-                    :tabindex="activeTab === 'configuration' ? 0 : -1"
-                    aria-label="View Config"
-                    id="tab-configuration"
-                    aria-controls="panel-configuration"
-                    :class="activeTab === 'configuration' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    :aria-selected="activeTab === 'configure'"
+                    :tabindex="activeTab === 'configure' ? 0 : -1"
+                    aria-label="Configure ONT"
+                    id="tab-configure"
+                    aria-controls="panel-configure"
+                    :class="activeTab === 'configure' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
-                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
-                <span class="whitespace-nowrap">View Config</span>
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
+                <span class="whitespace-nowrap">Configure</span>
+            </button>
+            <button type="button"
+                    data-tab="device-status"
+                    hx-get="/admin/network/onts/{{ ont.id }}/unified-config"
+                    hx-target="#device-status-content"
+                    hx-swap="innerHTML"
+                    @click="activeTab = 'device-status'; $el.dataset.loaded = '1'"
+                    @mouseenter="openTabTooltip($el, 'Device Status')"
+                    @mouseleave="closeTabTooltip()"
+                    @focus="openTabTooltip($el, 'Device Status')"
+                    @blur="closeTabTooltip()"
+                    role="tab"
+                    :aria-selected="activeTab === 'device-status'"
+                    :tabindex="activeTab === 'device-status' ? 0 : -1"
+                    aria-label="Device Status"
+                    id="tab-device-status"
+                    aria-controls="panel-device-status"
+                    :class="activeTab === 'device-status' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
+                <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
+                <span class="whitespace-nowrap">Device Status</span>
             </button>
         </nav>
         <div x-show="showTabTooltip"
@@ -1222,15 +1284,23 @@
         </div>
     </div>
 
-    {# ===================== CONFIGURATION TAB ===================== #}
-    <div x-show="activeTab === 'configuration'" x-transition x-cloak role="tabpanel" id="panel-configuration" aria-labelledby="tab-configuration">
-        <div id="configuration-content" aria-live="polite" aria-atomic="false">
+    {# ===================== CONFIGURE TAB ===================== #}
+    <div x-show="activeTab === 'configure'" x-transition x-cloak role="tabpanel" id="panel-configure" aria-labelledby="tab-configure">
+        <div id="configure-content" aria-live="polite" aria-atomic="false">
+            {% with vlans=configure_vlans, ont_id=ont.id|string %}
+            {% include "admin/network/onts/_configure_form.html" %}
+            {% endwith %}
+        </div>
+    </div>
+
+    {# ===================== DEVICE STATUS TAB ===================== #}
+    <div x-show="activeTab === 'device-status'" x-transition x-cloak role="tabpanel" id="panel-device-status" aria-labelledby="tab-device-status">
+        <div id="device-status-content" aria-live="polite" aria-atomic="false">
             <div class="flex items-center justify-center py-12">
                 <svg class="h-6 w-6 animate-spin text-slate-400" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
-                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading configuration data...</span>
+                <span class="ml-3 text-sm text-slate-500 dark:text-slate-400">Loading device status...</span>
             </div>
         </div>
-
     </div>
 </div>
 

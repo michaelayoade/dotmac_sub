@@ -59,10 +59,50 @@
                 {# Management IP Address #}
                 <div x-show="mgmtIpMode === 'static_ip'" x-transition x-cloak>
                     <label for="mgmt_ip_address" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Management IP Address</label>
+                    {% if available_mgmt_ips %}
+                    {# IP Pool available - show dropdown #}
+                    <div x-data="{ useManual: false }">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-xs text-slate-500 dark:text-slate-400">
+                                Pool: <span class="font-medium">{{ mgmt_ip_pool.name }}</span>
+                                ({{ mgmt_ip_pool.cidr }})
+                            </span>
+                            <button type="button" @click="useManual = !useManual"
+                                    class="text-xs text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+                                <span x-text="useManual ? 'Use pool' : 'Enter manually'"></span>
+                            </button>
+                        </div>
+                        <div x-show="!useManual">
+                            <select name="mgmt_ip_address" id="mgmt_ip_address"
+                                    class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                                <option value="">Select an available IP</option>
+                                {% for ip in available_mgmt_ips %}
+                                <option value="{{ ip.address }}" {% if ont.mgmt_ip_address == ip.address %}selected{% endif %}>
+                                    {{ ip.address }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ available_mgmt_ips|length }} available IP(s) in pool</p>
+                        </div>
+                        <div x-show="useManual" x-cloak>
+                            <input type="text" name="mgmt_ip_address_manual" id="mgmt_ip_address_manual"
+                                   value="{{ ont.mgmt_ip_address or '' }}"
+                                   @input="$el.form.querySelector('[name=mgmt_ip_address]').value = $el.value"
+                                   class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
+                                   placeholder="e.g. 192.168.1.100">
+                            <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Manual entry bypasses pool tracking</p>
+                        </div>
+                    </div>
+                    {% else %}
+                    {# No pool configured - show text input #}
                     <input type="text" name="mgmt_ip_address" id="mgmt_ip_address"
                            value="{{ ont.mgmt_ip_address or '' }}"
                            class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-mono text-slate-900 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white"
                            placeholder="e.g. 192.168.1.100">
+                    {% if mgmt_ip_pool %}
+                    <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Pool "{{ mgmt_ip_pool.name }}" has no available IPs</p>
+                    {% endif %}
+                    {% endif %}
                 </div>
 
                 {# Allow Remote Access #}

@@ -289,8 +289,11 @@ def ont_detail(
         "tr069",
         "charts",
         "service-ports",
-        "configuration",
+        "configure",
+        "device-status",
     }
+    if tab == "configuration":
+        tab = "configure"
     active_tab = tab if tab in allowed_tabs else "overview"
 
     activities = build_audit_activities(db, "ont", str(ont_id))

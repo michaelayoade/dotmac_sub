@@ -311,7 +311,7 @@ def ont_olt_status(
 def ont_return_to_inventory(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> Response:
-    """Deactivate an ONT and reset it to reusable inventory state."""
+    """Reset an ONT to reusable inventory state."""
     result = web_network_ont_actions_service.return_to_inventory_for_web(
         db, ont_id, request=request
     )
@@ -323,7 +323,12 @@ def ont_return_to_inventory(
         )
 
     if result.success:
-        target = "/admin/network/onts"
+        # Redirect to the global unconfigured ONT list so the returned device can be re-authorized.
+        target = (
+            result.data.get("unconfigured_url")
+            if result.data and result.data.get("unconfigured_url")
+            else "/admin/network/onts?view=unconfigured"
+        )
         if request.headers.get("hx-request") == "true":
             return Response(
                 status_code=200,
