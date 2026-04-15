@@ -5,7 +5,6 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import (
     OLTDevice,
     OntAssignment,
@@ -13,7 +12,6 @@ from app.models.network import (
     OntProvisioningProfile,
     OntUnit,
 )
-from app.models.subscriber import Subscriber
 from app.services.common import coerce_uuid
 from app.services.network.ont_provisioning.profiles import (
     profile_requires_tr069,
@@ -28,6 +26,17 @@ _AUTHORIZED_SYNC_SOURCES = {
     "olt_snmp_sync",
     "olt_snmp_targeted",
     "olt_polling",
+}
+
+_AUTHORIZATION_BLOCKER_NAMES = {
+    "ONT exists",
+    "OLT assigned",
+    "OLT position (F/S/P)",
+    "Provisioning profile",
+    "Authorization profiles",
+    "OLT SSH credentials",
+    "Active PON assignment",
+    "TR-069 OLT profile",
 }
 
 
@@ -114,8 +123,8 @@ def validate_prerequisites(
         checks.append(
             {
                 "name": "OLT assigned",
-                "status": "ok",
-                "message": olt.name if olt else str(ont.olt_device_id),
+                "status": "ok" if olt else "fail",
+                "message": olt.name if olt else "Assigned OLT record not found",
                 "can_auto_fix": False,
             }
         )
@@ -190,12 +199,46 @@ def validate_prerequisites(
                 "can_auto_fix": False,
             }
         )
+        if (
+            profile.authorization_line_profile_id is not None
+            and profile.authorization_service_profile_id is not None
+        ):
+            checks.append(
+                {
+                    "name": "Authorization profiles",
+                    "status": "ok",
+                    "message": (
+                        f"Line {profile.authorization_line_profile_id}, "
+                        f"service {profile.authorization_service_profile_id}"
+                    ),
+                    "can_auto_fix": False,
+                }
+            )
+        else:
+            checks.append(
+                {
+                    "name": "Authorization profiles",
+                    "status": "fail",
+                    "message": (
+                        "Set OLT line/service profile IDs before authorizing ONTs"
+                    ),
+                    "can_auto_fix": False,
+                }
+            )
     else:
         checks.append(
             {
                 "name": "Provisioning profile",
                 "status": "fail",
                 "message": "No profile - create one in Catalog -> Provisioning Profiles",
+                "can_auto_fix": False,
+            }
+        )
+        checks.append(
+            {
+                "name": "Authorization profiles",
+                "status": "fail",
+                "message": "No provisioning profile selected for authorization",
                 "can_auto_fix": False,
             }
         )
@@ -235,56 +278,6 @@ def validate_prerequisites(
                 "name": "Active PON assignment",
                 "status": "fail",
                 "message": "Assign the ONT to a PON port before provisioning",
-                "can_auto_fix": False,
-            }
-        )
-
-    if assignment and assignment.subscriber_id:
-        subscriber = db.get(Subscriber, assignment.subscriber_id)
-        subscriber_name = (
-            f"{subscriber.first_name or ''} {subscriber.last_name or ''}".strip()
-            if subscriber
-            else str(assignment.subscriber_id)
-        )
-        checks.append(
-            {
-                "name": "Subscriber assigned",
-                "status": "ok",
-                "message": subscriber_name,
-                "can_auto_fix": False,
-            }
-        )
-
-        active_sub = db.scalars(
-            select(Subscription).where(
-                Subscription.subscriber_id == assignment.subscriber_id,
-                Subscription.status == SubscriptionStatus.active,
-            )
-        ).first()
-        if active_sub:
-            checks.append(
-                {
-                    "name": "Active subscription",
-                    "status": "ok",
-                    "message": str(active_sub.id)[:8] + "...",
-                    "can_auto_fix": False,
-                }
-            )
-        else:
-            checks.append(
-                {
-                    "name": "Active subscription",
-                    "status": "warn",
-                    "message": "No active subscription",
-                    "can_auto_fix": False,
-                }
-            )
-    else:
-        checks.append(
-            {
-                "name": "Subscriber assigned",
-                "status": "warn",
-                "message": "No subscriber - provisioning will skip PPPoE",
                 "can_auto_fix": False,
             }
         )
@@ -342,5 +335,20 @@ def validate_prerequisites(
         }
     )
 
-    ready = authorization_ready and all(check["status"] != "fail" for check in checks)
-    return {"ready": ready, "checks": checks}
+    for check in checks:
+        check["blocks_authorization"] = check["name"] in _AUTHORIZATION_BLOCKER_NAMES
+
+    ready_to_authorize = all(
+        check["status"] != "fail"
+        for check in checks
+        if check["blocks_authorization"]
+    )
+    ready_to_provision = authorization_ready and all(
+        check["status"] != "fail" for check in checks
+    )
+    return {
+        "ready": ready_to_provision,
+        "ready_to_authorize": ready_to_authorize,
+        "ready_to_provision": ready_to_provision,
+        "checks": checks,
+    }

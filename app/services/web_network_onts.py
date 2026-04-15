@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from ipaddress import IPv4Network, ip_address, ip_network
 from typing import Any
 
 from sqlalchemy import or_, select
@@ -10,11 +12,13 @@ from sqlalchemy.orm import Session
 
 from app.models.network import (
     IpPool,
+    IPVersion,
     OLTDevice,
     OntUnit,
     PonType,
     Splitter,
     Vlan,
+    VlanPurpose,
 )
 from app.models.tr069 import Tr069AcsServer
 from app.services.common import coerce_uuid
@@ -23,6 +27,51 @@ from app.services.network.speed_profiles import speed_profiles
 from app.services.network.zones import network_zones
 
 logger = logging.getLogger(__name__)
+
+
+_OLT_MANAGEMENT_NETWORKS_BY_MGMT_IP: dict[str, str] = {
+    "172.16.201.2/24": "172.16.201.0/24",
+    "172.20.100.9/30": "172.20.100.8/30",
+    "172.16.205.1/24": "172.16.205.0/24",
+    "172.16.203.1/24": "172.16.203.0/24",
+    "172.16.204.1/24": "172.16.204.0/24",
+    "172.16.207.1/24": "172.16.207.0/24",
+    "172.16.210.1/24": "172.16.210.0/24",
+}
+
+_OLT_MANAGEMENT_NETWORKS_BY_NAME: dict[str, list[str]] = {
+    "garki": ["172.16.201.0/24"],
+    "garki huawei olt": ["172.16.201.0/24"],
+    "garki olt 1": ["172.16.201.0/24"],
+    "karasana": ["172.16.203.0/24"],
+    "karasana olt 1": ["172.16.203.0/24"],
+    "karsana olt 1": ["172.16.203.0/24"],
+    "boi": ["172.20.100.8/30"],
+    "boi huawei olt": ["172.20.100.8/30"],
+    "boi asokoro olt 1": ["172.20.100.8/30"],
+    "boi olt 1": ["172.20.100.8/30"],
+    "gudu": ["172.16.205.0/24"],
+    "gudu huawei olt": ["172.16.205.0/24"],
+    "gudu olt": ["172.16.205.0/24"],
+    "karsana": ["172.16.203.0/24"],
+    "karsana huawei olt": ["172.16.203.0/24"],
+    "karsana huawei olt 1": ["172.16.203.0/24"],
+    "karsana olt": ["172.16.203.0/24"],
+    "karsana olt 1": ["172.16.203.0/24"],
+    "jabi": ["172.16.204.0/24"],
+    "jabi huawei olt": ["172.16.204.0/24"],
+    "jabi olt-1": ["172.16.204.0/24"],
+    "jabi olt 1": ["172.16.204.0/24"],
+    "jabi olt": ["172.16.204.0/24"],
+    "gwarimpa": ["172.16.207.0/24"],
+    "gwarimpa huawei olt": ["172.16.207.0/24"],
+    "gwarimpa huawei olt 2": ["172.16.207.0/24"],
+    "gwarimpa olt 2": ["172.16.207.0/24"],
+    "spdc": ["172.16.210.0/24"],
+    "spdc huawei olt": ["172.16.210.0/24"],
+    "spdc olt": ["172.16.210.0/24"],
+    "spdc olt 1": ["172.16.210.0/24"],
+}
 
 
 def get_onu_types(db: Session) -> list[Any]:
@@ -44,53 +93,451 @@ def get_vlans(db: Session) -> list[Vlan]:
     return list(db.scalars(stmt).all())
 
 
+def resolve_ont_connected_olt(
+    db: Session, ont: OntUnit | Any | None
+) -> OLTDevice | None:
+    """Resolve the OLT an ONT is connected to via direct FK or active assignment."""
+    if ont is None:
+        return None
+
+    from app.models.network import PonPort
+
+    explicit_olt = getattr(ont, "olt_device", None)
+    if explicit_olt is not None:
+        return explicit_olt
+
+    olt_device_id = getattr(ont, "olt_device_id", None)
+    if olt_device_id:
+        explicit_db_olt = db.get(OLTDevice, olt_device_id)
+        if explicit_db_olt is not None:
+            return explicit_db_olt
+
+    # Resolve from an explicit active assignment only. Avoid using inactive,
+    # potentially stale assignments for UI scoping.
+    for assignment in getattr(ont, "assignments", []):
+        pon_port_id = getattr(assignment, "pon_port_id", None)
+        if not pon_port_id:
+            continue
+        pon_port = getattr(assignment, "pon_port", None) or db.get(
+            PonPort, pon_port_id
+        )
+        olt_id = getattr(pon_port, "olt_id", None) if pon_port else None
+        if not olt_id:
+            continue
+        resolved_olt = getattr(pon_port, "olt", None) or db.get(OLTDevice, olt_id)
+        if not resolved_olt:
+            continue
+        if getattr(assignment, "active", False):
+            return resolved_olt
+
+    return None
+
+
+def _olt_scope_tokens(olt: OLTDevice | Any | None) -> set[str]:
+    if olt is None:
+        return set()
+    generic = {
+        "device",
+        "gpon",
+        "huawei",
+        "ma5600",
+        "ma5800",
+        "olt",
+        "zte",
+    }
+    text = " ".join(
+        str(value or "")
+        for value in [
+            getattr(olt, "name", None),
+            getattr(olt, "hostname", None),
+            getattr(olt, "site_name", None),
+            getattr(olt, "location", None),
+        ]
+    ).lower()
+    return {
+        token
+        for token in re.findall(r"[a-z0-9]+", text)
+        if len(token) >= 3 and token not in generic
+    }
+
+
+def _normalize_olt_identity_text(value: Any) -> str:
+    return " ".join(re.findall(r"[a-z0-9]+", str(value or "").lower()))
+
+
+def _normalize_olt_identity_tokens(value: Any) -> set[str]:
+    return set(re.findall(r"[a-z0-9]+", str(value or "").lower()))
+
+
+def _extract_mgmt_address_from_identity(value: Any) -> str:
+    text = str(value or "")
+    match = re.search(
+        r"\b((?:\d{1,3}\.){3}\d{1,3})(?:/\d{1,2})?\b", text, flags=re.ASCII
+    )
+    if not match:
+        return ""
+    return match.group(1)
+
+
+def _expected_management_networks_for_olt(
+    olt: OLTDevice | Any | None
+) -> set[IPv4Network]:
+    if olt is None:
+        return set()
+
+    candidates: set[IPv4Network] = set()
+    mgmt_value = str(getattr(olt, "mgmt_ip", "") or "").strip()
+    if not mgmt_value:
+        mgmt_value = _extract_mgmt_address_from_identity(
+            " ".join(
+                str(value or "")
+                for value in [
+                    getattr(olt, "name", None),
+                    getattr(olt, "hostname", None),
+                    getattr(olt, "site_name", None),
+                    getattr(olt, "location", None),
+                ]
+            )
+        )
+
+    if mgmt_value:
+        mgmt_host = mgmt_value.split("/")[0]
+        try:
+            mgmt_address = ip_address(mgmt_host)
+        except ValueError:
+            mgmt_address = None
+        try:
+            declared_network = ip_network(mgmt_value, strict=False)
+        except ValueError:
+            declared_network = None
+
+        for mgmt_key, cidr in _OLT_MANAGEMENT_NETWORKS_BY_MGMT_IP.items():
+            try:
+                known_network = ip_network(mgmt_key, strict=False)
+            except ValueError:
+                continue
+            if mgmt_address is not None and mgmt_address in known_network:
+                try:
+                    candidates.add(ip_network(cidr, strict=False))
+                except ValueError:
+                    continue
+            if (
+                declared_network is not None
+                and declared_network.overlaps(known_network)
+            ):
+                try:
+                    candidates.add(ip_network(cidr, strict=False))
+                except ValueError:
+                    continue
+
+    if not candidates:
+        identity_tokens = _normalize_olt_identity_tokens(
+            " ".join(
+                str(value or "")
+                for value in [
+                    getattr(olt, "name", None),
+                    getattr(olt, "hostname", None),
+                    getattr(olt, "site_name", None),
+                    getattr(olt, "location", None),
+                ]
+            )
+        )
+        identity = _normalize_olt_identity_text(
+            " ".join(
+                str(value or "")
+                for value in [
+                    getattr(olt, "name", None),
+                    getattr(olt, "hostname", None),
+                    getattr(olt, "site_name", None),
+                    getattr(olt, "location", None),
+                ]
+            )
+        )
+        for key, cidrs in _OLT_MANAGEMENT_NETWORKS_BY_NAME.items():
+            key_tokens = set(key.split())
+            if key in identity or key_tokens.issubset(identity_tokens):
+                for cidr in cidrs:
+                    try:
+                        candidates.add(ip_network(cidr, strict=False))
+                    except ValueError:
+                        continue
+
+    return candidates
+
+
+def _pool_in_management_networks(
+    pool: IpPool, networks: set[IPv4Network]
+) -> bool:
+    if not networks:
+        return False
+    try:
+        pool_network = ip_network(str(pool.cidr), strict=False)
+    except ValueError:
+        return False
+    try:
+        return any(pool_network.overlaps(network) for network in networks)
+    except ValueError:
+        return False
+
+
+def _ip_pool_matches_olt(
+    db: Session, pool: IpPool | Any | None, olt_device_id: Any | None
+) -> bool:
+    if pool is None or not olt_device_id:
+        return False
+    if getattr(pool, "olt_device_id", None) == olt_device_id:
+        return True
+    vlan_id = getattr(pool, "vlan_id", None)
+    if not vlan_id:
+        return False
+    vlan = getattr(pool, "vlan", None) or db.get(Vlan, vlan_id)
+    return getattr(vlan, "olt_device_id", None) == olt_device_id
+
+
 def get_vlans_for_olt(
     db: Session,
     olt_device_id: str | None,
     *,
     include_vlan_ids: list[str] | None = None,
+    include_global: bool = True,
 ) -> list[Vlan]:
-    """Fetch VLANs assigned to an OLT, preserving explicitly selected VLANs."""
+    """Fetch VLANs scoped for an OLT, optionally including global records."""
     include_ids = [v for v in (include_vlan_ids or []) if v]
-    if not olt_device_id and not include_ids:
+    if not include_global and not olt_device_id and not include_ids:
         return []
 
     stmt = select(Vlan)
-    if olt_device_id and include_ids:
+    if olt_device_id and include_ids and include_global:
         stmt = stmt.where(
             or_(
                 Vlan.olt_device_id == olt_device_id,
+                Vlan.olt_device_id.is_(None),
                 Vlan.id.in_(include_ids),
             )
         )
+    elif olt_device_id and include_ids:
+        stmt = stmt.where(
+            or_(Vlan.olt_device_id == olt_device_id, Vlan.id.in_(include_ids))
+        )
     elif olt_device_id:
-        stmt = stmt.where(Vlan.olt_device_id == olt_device_id)
+        if include_global:
+            stmt = stmt.where(
+                or_(Vlan.olt_device_id == olt_device_id, Vlan.olt_device_id.is_(None))
+            )
+        else:
+            stmt = stmt.where(Vlan.olt_device_id == olt_device_id)
+    elif include_ids:
+        if include_global:
+            stmt = stmt.where(
+                or_(Vlan.olt_device_id.is_(None), Vlan.id.in_(include_ids))
+            )
+        else:
+            stmt = stmt.where(Vlan.id.in_(include_ids))
     else:
-        stmt = stmt.where(Vlan.id.in_(include_ids))
+        stmt = stmt.where(Vlan.is_active.is_(True))
 
     stmt = stmt.order_by(Vlan.tag)
     return list(db.scalars(stmt).all())
 
 
+def management_ip_choices_for_ont(
+    db: Session,
+    ont: OntUnit | Any | None,
+    *,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Build management static IP choices from the ONT's effective profile pool."""
+    if ont is None:
+        return {
+            "mgmt_ip_pool": None,
+            "available_mgmt_ips": [],
+            "mgmt_ip_choice_message": "No ONT selected.",
+        }
+
+    olt = resolve_ont_connected_olt(db, ont)
+    olt_device_id = getattr(olt, "id", None)
+    managed_networks = _expected_management_networks_for_olt(olt)
+    profile = resolve_effective_provisioning_profile(db, ont, olt)
+    pool = getattr(profile, "mgmt_ip_pool", None) if profile else None
+    pool_id = getattr(profile, "mgmt_ip_pool_id", None) if profile else None
+    if pool is None and pool_id:
+        pool = db.get(IpPool, pool_id)
+    if pool is not None:
+        if not _ip_pool_matches_olt(db, pool, olt_device_id):
+            pool = None
+        elif managed_networks and not _pool_in_management_networks(
+            pool, managed_networks
+        ):
+            pool = None
+
+    from app.services.web_network_onts_provisioning import available_static_ipv4_choices
+
+    pools: list[IpPool] = []
+    if pool is not None:
+        pools = [pool]
+    elif olt_device_id:
+        scoped_pools = list(
+            db.scalars(
+                select(IpPool)
+                .outerjoin(Vlan, IpPool.vlan_id == Vlan.id)
+                .where(IpPool.is_active.is_(True))
+                .where(IpPool.ip_version == IPVersion.ipv4)
+                .where(
+                    or_(
+                        IpPool.olt_device_id == olt_device_id,
+                        Vlan.olt_device_id == olt_device_id,
+                    )
+                )
+                .order_by(IpPool.name.asc())
+            ).all()
+        )
+        if managed_networks:
+            network_scoped_pools = [
+                candidate
+                for candidate in scoped_pools
+                if _pool_in_management_networks(candidate, managed_networks)
+            ]
+            if network_scoped_pools:
+                scoped_pools = network_scoped_pools
+        if not scoped_pools:
+            tokens = _olt_scope_tokens(olt)
+            unscoped_pools = list(
+                db.scalars(
+                    select(IpPool)
+                    .where(IpPool.is_active.is_(True))
+                    .where(IpPool.ip_version == IPVersion.ipv4)
+                    .where(IpPool.olt_device_id.is_(None))
+                    .where(IpPool.vlan_id.is_(None))
+                    .order_by(IpPool.name.asc())
+                ).all()
+            )
+            scoped_pools = [
+                candidate
+                for candidate in unscoped_pools
+                if tokens
+                and any(
+                    token
+                    in " ".join(
+                        str(value or "").lower()
+                        for value in [candidate.name, candidate.notes]
+                    )
+                    for token in tokens
+                )
+            ]
+            scoped_cidrs = {str(candidate.cidr) for candidate in scoped_pools}
+            if scoped_cidrs:
+                pool_ids = {candidate.id for candidate in scoped_pools}
+                scoped_pools.extend(
+                    candidate
+                    for candidate in unscoped_pools
+                    if candidate.id not in pool_ids
+                    and str(candidate.cidr) in scoped_cidrs
+                )
+        if not scoped_pools and managed_networks:
+            all_pools = list(
+                db.scalars(
+                    select(IpPool)
+                    .where(IpPool.is_active.is_(True))
+                    .where(IpPool.ip_version == IPVersion.ipv4)
+                    .order_by(IpPool.name.asc())
+                ).all()
+            )
+            scoped_pools = [
+                candidate for candidate in all_pools if _pool_in_management_networks(candidate, managed_networks)
+            ]
+    else:
+        scoped_pools = []
+
+    if not pools:
+        def looks_like_management_pool(candidate: IpPool) -> bool:
+            vlan = getattr(candidate, "vlan", None)
+            vlan_purpose = getattr(getattr(vlan, "purpose", None), "value", None)
+            haystack = " ".join(
+                str(value or "").lower()
+                for value in [
+                    candidate.name,
+                    candidate.notes,
+                    getattr(vlan, "name", None),
+                    getattr(vlan, "description", None),
+                ]
+            )
+            return (
+                vlan_purpose == VlanPurpose.management.value
+                or "management" in haystack
+                or "mgmt" in haystack
+            )
+
+        pools = [
+            candidate
+            for candidate in scoped_pools
+            if looks_like_management_pool(candidate)
+        ]
+        management_cidrs = {str(candidate.cidr) for candidate in pools}
+        if management_cidrs:
+            pool_ids = {candidate.id for candidate in pools}
+            pools.extend(
+                candidate
+                for candidate in scoped_pools
+                if candidate.id not in pool_ids
+                and str(candidate.cidr) in management_cidrs
+            )
+        if not pools:
+            pools = scoped_pools
+
+    if not pools:
+        return {
+            "mgmt_ip_pool": None,
+            "available_mgmt_ips": [],
+            "mgmt_ip_choice_message": "No active IPv4 pools are available.",
+        }
+
+    choices: list[dict[str, Any]] = []
+    per_pool_limit = max(1, min(limit, max(10, limit // max(len(pools), 1))))
+    selected_ip = getattr(ont, "mgmt_ip_address", None)
+    for candidate_pool in pools:
+        pool_version = getattr(
+            getattr(candidate_pool, "ip_version", None),
+            "value",
+            candidate_pool.ip_version,
+        )
+        if pool_version != IPVersion.ipv4.value:
+            continue
+        state = available_static_ipv4_choices(
+            db,
+            pool_id=str(candidate_pool.id),
+            ont_id=str(getattr(ont, "id", "") or ""),
+            selected_ip=selected_ip,
+            limit=per_pool_limit,
+        )
+        for choice in state.get("choices", []):
+            enriched = dict(choice)
+            enriched["label"] = f"{choice.get('address')} - {candidate_pool.name}"
+            choices.append(enriched)
+            if len(choices) >= limit:
+                break
+        if len(choices) >= limit:
+            break
+
+    return {
+        "mgmt_ip_pool": pools[0] if len(pools) == 1 else None,
+        "available_mgmt_ips": choices,
+        "mgmt_ip_choice_message": None
+        if choices
+        else "No available IPv4 addresses in management IP pools.",
+    }
+
+
 def get_vlans_for_ont(db: Session, ont: OntUnit | Any | None) -> list[Vlan]:
-    """Fetch VLANs scoped to an ONT's OLT, keeping current selections visible."""
+    """Fetch VLANs scoped to an ONT's assigned OLT."""
     if ont is None:
         return []
 
-    selected_vlan_ids = [
-        str(vlan_id)
-        for vlan_id in [
-            getattr(ont, "user_vlan_id", None),
-            getattr(ont, "wan_vlan_id", None),
-            getattr(ont, "mgmt_vlan_id", None),
-        ]
-        if vlan_id
-    ]
-    olt_device_id = getattr(ont, "olt_device_id", None)
+    olt = resolve_ont_connected_olt(db, ont)
+    olt_device_id = getattr(olt, "id", None)
     return get_vlans_for_olt(
         db,
         str(olt_device_id) if olt_device_id else None,
-        include_vlan_ids=selected_vlan_ids,
+        include_global=False,
     )
 
 
@@ -401,7 +848,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         for pool in ip_pools
         if getattr(pool, "vlan_id", None)
     }
-    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
     lan_intent_from_order = (
         ont_plan.get("configure_lan_tr069")
         if isinstance(ont_plan.get("configure_lan_tr069"), dict)

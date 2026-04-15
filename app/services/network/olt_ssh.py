@@ -29,6 +29,7 @@ _SSH_CONNECTION_ERRORS = (
 
 from app.models.network import OLTDevice
 from app.services.credential_crypto import decrypt_credential
+from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.olt_command_gen import build_service_port_command
 
 # TextFSM-based parsers (preferred)
@@ -274,7 +275,9 @@ def _parse_huawei_autofind(output: str) -> list[AutofindEntry]:
                 return [
                     AutofindEntry(
                         fsp=e.fsp,
-                        serial_number=e.serial_number,
+                        serial_number=e.serial_number
+                        or decode_huawei_hex_serial(e.serial_hex)
+                        or e.serial_hex,
                         serial_hex=e.serial_hex,
                         vendor_id=e.vendor_id,
                         model=e.model,

@@ -376,7 +376,9 @@ def read_actual_state(
         _open_shell,
         _parse_service_port_table,
         _read_until_prompt,
+        _run_huawei_cmd,
         _run_huawei_paged_cmd,
+        is_error_output,
     )
 
     try:
@@ -412,11 +414,20 @@ def read_actual_state(
             for p in ont_ports
         )
 
-        # For now, assume ONT is authorized if we got service ports or if we can query it
-        # A more complete implementation would also query ONT authorization status
+        parts = fsp.split("/")
+        is_authorized = False
+        if len(parts) == 3:
+            status_output = _run_huawei_cmd(
+                channel,
+                f"display ont info {parts[0]}/{parts[1]} {parts[2]} {olt_ont_id}",
+            )
+            is_authorized = not is_error_output(status_output)
+        if not is_authorized:
+            return None, f"ONT {olt_ont_id} is not authorized on OLT port {fsp}"
+
         return (
             ActualOntState(
-                is_authorized=True,
+                is_authorized=is_authorized,
                 olt_ont_id=olt_ont_id,
                 service_ports=actual_ports,
             ),

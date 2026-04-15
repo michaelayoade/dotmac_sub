@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -21,10 +20,9 @@ logger = logging.getLogger(__name__)
 
 
 def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
-    """Deactivate an ONT, close active assignments, and clear service state."""
-    from app.models.ont_autofind import OltAutofindCandidate
+    """Return an ONT to reusable inventory, closing assignments and service state."""
     from app.services.web_network_ont_actions import _cleanup_olt_state_for_return
-    from app.services.web_network_ont_autofind import sync_olt_autofind_candidates
+    from app.services.web_network_ont_autofind import refresh_returned_ont_autofind
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     previous_olt_db_id = getattr(ont, "olt_device_id", None)
@@ -32,9 +30,6 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     previous_fsp = None
     if getattr(ont, "board", None) and getattr(ont, "port", None):
         previous_fsp = f"{ont.board}/{ont.port}"
-    normalized_serial = re.sub(
-        r"[^A-Za-z0-9]", "", str(getattr(ont, "serial_number", "") or "")
-    ).upper()
 
     active_assignments = db.scalars(
         select(OntAssignment)
@@ -65,7 +60,7 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     for assignment in active_assignments:
         assignment.active = False
 
-    ont.is_active = False
+    ont.is_active = True
     ont.olt_device_id = None
     ont.board = None
     ont.port = None
@@ -128,36 +123,19 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     parts.append("identity cleared for rediscovery")
     parts.append("service state cleared")
 
-    if previous_olt_id and previous_olt_db_id is not None:
-        sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(
-            db, previous_olt_id
-        )
-        if sync_ok:
-            rediscovered = next(
-                (
-                    candidate
-                    for candidate in db.scalars(
-                        select(OltAutofindCandidate).where(
-                            OltAutofindCandidate.olt_id == previous_olt_db_id,
-                            OltAutofindCandidate.is_active.is_(True),
-                        )
-                    ).all()
-                    if re.sub(
-                        r"[^A-Za-z0-9]",
-                        "",
-                        str(candidate.serial_number or ""),
-                    ).upper()
-                    == normalized_serial
-                    and (not previous_fsp or str(candidate.fsp or "").strip() == previous_fsp)
-                ),
-                None,
-            )
-            if rediscovered is not None:
-                parts.append("autofind refreshed and device rediscovered")
-            else:
-                parts.append("autofind refreshed; device not yet rediscovered")
+    autofind_refresh = refresh_returned_ont_autofind(
+        db,
+        olt_id=previous_olt_id,
+        serial_number=getattr(ont, "serial_number", None),
+        fsp=previous_fsp,
+    )
+    if autofind_refresh.get("ok"):
+        if autofind_refresh.get("rediscovered"):
+            parts.append("autofind refreshed and device rediscovered")
         else:
-            parts.append(f"autofind refresh failed: {sync_message}")
+            parts.append("autofind refreshed; device not yet rediscovered")
+    else:
+        parts.append(f"autofind refresh failed: {autofind_refresh.get('message')}")
 
     return ActionResult(
         success=True,
@@ -166,4 +144,12 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             "Restart or power-cycle the device for changes to take effect; "
             "after it comes back up, autofind can discover it again."
         ),
+        data={
+            "olt_id": previous_olt_id,
+            "fsp": previous_fsp,
+            "serial_number": ont.serial_number,
+            "autofind_refreshed": autofind_refresh.get("ok"),
+            "autofind_rediscovered": autofind_refresh.get("rediscovered"),
+            "unconfigured_url": autofind_refresh.get("url"),
+        },
     )

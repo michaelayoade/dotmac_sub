@@ -2107,6 +2107,14 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     )
     last_config_summary = _ont_last_config_summary(ont)
 
+    # Configure form context (VLANs for dropdowns)
+    from app.services import web_network_onts as web_network_onts_service
+
+    configure_vlans = web_network_onts_service.get_vlans_for_ont(db, ont)
+    configure_mgmt_ip_choices = web_network_onts_service.management_ip_choices_for_ont(
+        db, ont
+    )
+
     return {
         "ont": ont,
         "display_serial_number": display_serial_number,
@@ -2128,6 +2136,9 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
             and not bool(profile_state.get("profile_id"))
             and profile_state.get("status") in (None, "unprovisioned")
         ),
+        # Configure form context
+        "configure_vlans": configure_vlans,
+        **configure_mgmt_ip_choices,
     }
 
 

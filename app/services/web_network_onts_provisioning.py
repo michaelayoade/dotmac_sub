@@ -547,6 +547,86 @@ def save_provision_settings(
     mgmt_vlan_tag_value = _vlan_tag_for_id(db, mgmt_vlan_id_value)
     wan_vlan_tag_value = _vlan_tag_for_id(db, wan_vlan_id_value)
 
+    network_only_profile_save = not any(
+        value
+        for value in [
+            onu_mode_value,
+            mgmt_vlan_id_value,
+            mgmt_ip_mode_value,
+            mgmt_ip_address_value,
+            mgmt_subnet_value,
+            mgmt_gateway_value,
+            wan_protocol_value,
+            pppoe_username_value,
+            pppoe_password_value,
+            wan_vlan_id_value,
+            ip_pool_id_value,
+            static_ip_pool_id_value,
+            static_ip_value,
+            static_subnet_value,
+            static_gateway_value,
+            static_dns_value,
+            lan_ip_value,
+            lan_subnet_value,
+            dhcp_start_value,
+            dhcp_end_value,
+            wifi_ssid_value,
+            wifi_password_value,
+            wifi_security_mode_value,
+            wifi_channel_value,
+        ]
+    ) and dhcp_enabled_value is None and wifi_enabled_value is None
+
+    if network_only_profile_save:
+        if not profile_id_value:
+            return JsonActionResult(
+                status_code=422,
+                content={
+                    "success": False,
+                    "message": "Select OLT provisioning profile",
+                    "issues": ["Select OLT provisioning profile"],
+                },
+            )
+        try:
+            profile_uuid = coerce_uuid(profile_id_value)
+            if profile_uuid is None:
+                return JsonActionResult(
+                    status_code=422,
+                    content={"success": False, "message": "Invalid provisioning profile"},
+                )
+            profile = db.get(OntProvisioningProfile, profile_uuid)
+            if profile is None:
+                return JsonActionResult(
+                    status_code=422,
+                    content={
+                        "success": False,
+                        "message": "Provisioning profile not found",
+                    },
+                )
+            ont.provisioning_profile_id = profile_uuid
+            if tr069_profile_id_value:
+                update_service_order_execution_context_for_ont(
+                    db,
+                    ont_id=ont_id,
+                    step_name="bind_tr069",
+                    values={"tr069_olt_profile_id": tr069_profile_id_value},
+                    commit=False,
+                )
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to save network provisioning profile for ONT %s", ont_id)
+            return JsonActionResult(
+                status_code=500,
+                content={
+                    "success": False,
+                    "message": "Unable to save network provisioning profile. Please try again.",
+                },
+            )
+        return JsonActionResult(
+            content={"success": True, "message": "Network provisioning profile saved"}
+        )
+
     if wan_protocol_value == "static" and static_ip_pool_id_value:
         scope_error = _ip_pool_scope_for_ont_error(
             db,

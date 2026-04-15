@@ -109,12 +109,13 @@ def _sync_scheduled_task(
     enabled: bool,
     interval_seconds: int,
 ) -> None:
-    task = (
+    tasks = list(
         db.query(ScheduledTask)
         .filter(ScheduledTask.task_name == task_name)
         .order_by(ScheduledTask.created_at.desc())
-        .first()
+        .all()
     )
+    task = tasks[0] if tasks else None
     if not task:
         if not enabled:
             return
@@ -129,6 +130,10 @@ def _sync_scheduled_task(
         db.commit()
         return
     changed = False
+    for duplicate in tasks[1:]:
+        if duplicate.enabled:
+            duplicate.enabled = False
+            changed = True
     if task.name != name:
         task.name = name
         changed = True
@@ -268,6 +273,33 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.usage.import_radius_accounting",
             enabled=radius_accounting_enabled,
             interval_seconds=radius_accounting_interval_seconds,
+        )
+        zabbix_usage_enabled_by_default = bool(_env_value("ZABBIX_API_TOKEN"))
+        zabbix_usage_enabled = _effective_bool(
+            session,
+            SettingDomain.usage,
+            "zabbix_portal_usage_ingestion_enabled",
+            "ZABBIX_PORTAL_USAGE_INGESTION_ENABLED",
+            zabbix_usage_enabled_by_default,
+        )
+        zabbix_usage_interval_seconds = _effective_int(
+            session,
+            SettingDomain.usage,
+            "zabbix_portal_usage_ingestion_interval_seconds",
+            "ZABBIX_PORTAL_USAGE_INGESTION_INTERVAL_SECONDS",
+            300,
+        )
+        zabbix_usage_interval_seconds = max(zabbix_usage_interval_seconds, 30)
+        _retire_scheduled_task(
+            session,
+            "app.tasks.zabbix_ingestion.ingest_portal_usage",
+        )
+        _sync_scheduled_task(
+            session,
+            name="zabbix_portal_usage_ingestion",
+            task_name="app.tasks.zabbix_ingestion.dispatch_portal_usage_ingestion",
+            enabled=zabbix_usage_enabled,
+            interval_seconds=zabbix_usage_interval_seconds,
         )
         billing_enabled = _effective_bool(
             session,

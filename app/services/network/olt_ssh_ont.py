@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
+from app.services.network._common import encode_to_hex_serial
 from app.services.network.olt_validators import (
     ValidationError,
     validate_ip_address,
@@ -28,6 +29,30 @@ _SSH_CONNECTION_ERRORS = (
     TimeoutError,
     ConnectionError,
 )
+
+# Delay between characters when using slow send (seconds).
+# Some OLT terminals corrupt commands sent too quickly.
+_SLOW_SEND_CHAR_DELAY = 0.05
+
+
+def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY) -> None:
+    """Send command character-by-character with delay.
+
+    Some OLT terminals (particularly certain Huawei MA5608T units) have terminal
+    processing issues that corrupt commands with spaces when sent at full speed.
+    Sending character-by-character with small delays works around this issue.
+
+    Args:
+        channel: Paramiko SSH channel.
+        command: Command string to send (without trailing newline).
+        char_delay: Delay in seconds between each character.
+    """
+    import time
+
+    for char in command:
+        channel.send(char)
+        time.sleep(char_delay)
+    channel.send("\n")
 
 
 @dataclass
@@ -1479,14 +1504,16 @@ def authorize_ont(
         frame_slot = f"{parts[0]}/{parts[1]}"
         port_num = parts[2]
 
-        channel.send(f"interface gpon {frame_slot}\n")
+        _send_slow(channel, f"interface gpon {frame_slot}")
         core._read_until_prompt(channel, config_prompt, timeout_sec=5)
 
-        # Authorize the ONT — sn-auth uses the serial without dashes
-        sn_clean = serial_number.replace("-", "")
-        channel.send(
-            f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid}\n"
-        )
+        # Authorize the ONT — use hex serial format to avoid terminal corruption
+        # when serial numbers contain characters that could be interpreted as
+        # escape sequences (e.g. '1B' = ESC in ASCII). Hex format is reliably
+        # processed by all OLT terminals.
+        sn_clean = encode_to_hex_serial(serial_number) or serial_number.replace("-", "")
+        auth_cmd = f"ont add {port_num} sn-auth {sn_clean} omci ont-lineprofile-id {line_pid} ont-srvprofile-id {srv_pid}"
+        _send_slow(channel, auth_cmd)
         # Huawei may prompt "{ <cr>|desc<K>|ont-type<K> }:" — send CR to confirm
         initial = core._read_until_prompt(channel, r"[#)]\s*$|<cr>", timeout_sec=10)
         if "<cr>" in initial:

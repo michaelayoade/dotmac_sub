@@ -143,8 +143,11 @@ def authorize_autofind_ont(
         olt_authorization_workflow as olt_authorization_workflow_service,
     )
 
+    authorize_and_provision = (
+        olt_authorization_workflow_service.authorize_autofind_ont_and_provision_network
+    )
     if force_reauthorize:
-        result = olt_authorization_workflow_service.authorize_autofind_ont(
+        result = authorize_and_provision(
             db,
             olt_id,
             fsp,
@@ -152,7 +155,7 @@ def authorize_autofind_ont(
             force_reauthorize=True,
         )
     else:
-        result = olt_authorization_workflow_service.authorize_autofind_ont(
+        result = authorize_and_provision(
             db,
             olt_id,
             fsp,

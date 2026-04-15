@@ -17,7 +17,7 @@ from app.services.network.action_logging import actor_label
 from app.services.network.olt import OLTDevices
 from app.services.network.olt_authorization_workflow import (
     AuthorizationWorkflowResult,
-    authorize_autofind_ont_audited,
+    authorize_autofind_ont_and_provision_network_audited,
     queue_authorize_autofind_ont,
 )
 
@@ -42,7 +42,7 @@ def authorize_ont(
     force_reauthorize: bool = False,
     request: Request | None = None,
 ) -> AuthorizationWorkflowResult:
-    return authorize_autofind_ont_audited(
+    return authorize_autofind_ont_and_provision_network_audited(
         db,
         olt_id,
         fsp,

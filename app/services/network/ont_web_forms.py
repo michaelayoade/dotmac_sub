@@ -655,10 +655,13 @@ def update_mgmt_ip_from_form(
 def mgmt_ip_modal_context(db: Session, ont_id: str) -> dict[str, object]:
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     vlans = web_onts_service.get_vlans_for_ont(db, ont)
+    mgmt_ip_choices = web_onts_service.management_ip_choices_for_ont(db, ont, limit=50)
+
     return {
         "ont": ont,
         "vlans": vlans,
         "mgmt_ip_modes": [e.value for e in MgmtIpMode],
+        **mgmt_ip_choices,
     }
 
 
