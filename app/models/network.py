@@ -1119,6 +1119,9 @@ class OntUnit(Base):
     )
     pppoe_username: Mapped[str | None] = mapped_column(String(120))
     pppoe_password: Mapped[str | None] = mapped_column(String(120))
+    # Desired WiFi configuration (pushed via TR-069 when ONT connects)
+    wifi_ssid: Mapped[str | None] = mapped_column(String(64))
+    wifi_password: Mapped[str | None] = mapped_column(String(120))
     # Observed/runtime identity and access metrics (SNMP/TR-069 sourced)
     mac_address: Mapped[str | None] = mapped_column(String(64))
     observed_wan_ip: Mapped[str | None] = mapped_column(String(64))
@@ -1179,6 +1182,7 @@ class OntUnit(Base):
     tr069_data_model: Mapped[str | None] = mapped_column(
         String(40), doc="'Device' (TR-181) or 'InternetGatewayDevice' (TR-098)"
     )
+    tr069_olt_profile_id: Mapped[int | None] = mapped_column(Integer)
 
     # Sync tracking — which external source last modified this ONT, and when
     last_sync_source: Mapped[str | None] = mapped_column(String(40))
