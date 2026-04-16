@@ -13,6 +13,9 @@ from app.models.network import (
     OntUnit,
 )
 from app.services.common import coerce_uuid
+from app.services.network.ont_provisioning.optical_budget import (
+    validate_optical_budget,
+)
 from app.services.network.ont_provisioning.profiles import (
     profile_requires_tr069,
     resolve_profile,
@@ -281,6 +284,22 @@ def validate_prerequisites(
                 "can_auto_fix": False,
             }
         )
+
+    optical = validate_optical_budget(ont)
+    if not optical.is_valid:
+        optical_status = "fail"
+    elif optical.is_warning or optical.rx_power_dbm is None:
+        optical_status = "warn"
+    else:
+        optical_status = "ok"
+    checks.append(
+        {
+            "name": "Optical signal",
+            "status": optical_status,
+            "message": optical.message,
+            "can_auto_fix": False,
+        }
+    )
 
     acs_server_id = ont.tr069_acs_server_id
     if not acs_server_id and olt is not None:
