@@ -644,3 +644,73 @@ def test_poll_sfp_modules_scopes_to_olt_and_uses_port_number_keys(
     assert sfp.tx_power_dbm == -19.5
     assert sfp.rx_power_dbm == -20.5
     assert other_sfp.tx_power_dbm is None
+
+
+def test_poll_single_olt_device_circuit_breaker_skips_snmp(
+    db_session, monkeypatch
+) -> None:
+    """When ping is down AND consecutive_poll_failures >= threshold, skip SNMP."""
+    from app.models.network import OLTDevice, PollStatus
+    from app.services.network import olt_polling
+    from app.services.network.olt_polling import poll_single_olt_device
+
+    olt = OLTDevice(
+        name="dead-olt",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.254",
+        is_active=True,
+        consecutive_poll_failures=olt_polling._POLL_BREAKER_THRESHOLD,
+    )
+    db_session.add(olt)
+    db_session.commit()
+
+    snmp_called = {"n": 0}
+
+    def _fake_ping(_host):
+        return False
+
+    def _fake_walk(*_args, **_kwargs):
+        snmp_called["n"] += 1
+        return []
+
+    monkeypatch.setattr(olt_polling, "_ping_host", _fake_ping)
+    monkeypatch.setattr(olt_polling, "_run_olt_snmpwalk", _fake_walk)
+
+    result = poll_single_olt_device(db_session, str(olt.id))
+
+    db_session.refresh(olt)
+    assert snmp_called["n"] == 0, "SNMP poll should be skipped when breaker is open"
+    assert result.get("breaker_open") == 1
+    assert olt.last_poll_status == PollStatus.failed
+    assert olt.last_ping_ok is False
+    assert olt.consecutive_poll_failures > olt_polling._POLL_BREAKER_THRESHOLD
+
+
+def test_poll_single_olt_device_breaker_closed_when_pingable(
+    db_session, monkeypatch
+) -> None:
+    """Even with high failure count, ping success bypasses the breaker."""
+    from app.models.network import OLTDevice
+    from app.services.network import olt_polling
+    from app.services.network.olt_polling import poll_single_olt_device
+
+    olt = OLTDevice(
+        name="recovering-olt",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.253",
+        is_active=True,
+        consecutive_poll_failures=olt_polling._POLL_BREAKER_THRESHOLD + 5,
+    )
+    db_session.add(olt)
+    db_session.commit()
+
+    def _fake_ping(_host):
+        return True
+
+    monkeypatch.setattr(olt_polling, "_ping_host", _fake_ping)
+
+    result = poll_single_olt_device(db_session, str(olt.id))
+
+    assert result.get("breaker_open") is None, (
+        "Circuit breaker must not trip when ping succeeds, regardless of prior failures"
+    )

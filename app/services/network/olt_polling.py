@@ -151,6 +151,11 @@ _DEFAULT_SIGNAL_DELTA_DB = 3.0
 _DEFAULT_ALERT_COOLDOWN_MINUTES = 30
 _DEFAULT_OFFLINE_POLL_THRESHOLD = 2
 
+# Circuit breaker: after this many consecutive SNMP failures, skip the SNMP
+# poll on cycles where the OLT is also unpingable. Keeps ping probing so
+# recovery is detected immediately.
+_POLL_BREAKER_THRESHOLD = 3
+
 # DDM health thresholds — alert when exceeded
 _DDM_TEMPERATURE_WARN_C = 65.0
 _DDM_TEMPERATURE_CRIT_C = 75.0
@@ -1266,6 +1271,7 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
     # Ping check first updates reachability, but SNMP remains authoritative for
     # polling status because some operator networks block ICMP to OLTs.
     host = olt.mgmt_ip or olt.hostname
+    ping_ok: bool | None = None
     if host:
         ping_ok = _ping_host(host)
         olt.last_ping_at = datetime.now(UTC)
@@ -1273,6 +1279,27 @@ def poll_single_olt_device(db: Session, olt_id: str) -> dict[str, int | str]:
         if not ping_ok:
             logger.warning("OLT %s (%s) not reachable via ping", olt.name, host)
             result["ping_failed"] = 1
+
+    # Circuit breaker: when a box has failed SNMP repeatedly AND is currently
+    # unpingable, skip the expensive SNMP/health/SFP polls. Each of those
+    # otherwise burns ~90s timing out. Ping still runs every cycle so recovery
+    # is detected on the next attempt. ICMP-blocked OLTs still get tried
+    # because consecutive_poll_failures only reaches the threshold after
+    # real SNMP failures (ping fail alone doesn't trip the breaker).
+    if ping_ok is False and (olt.consecutive_poll_failures or 0) >= _POLL_BREAKER_THRESHOLD:
+        logger.warning(
+            "OLT %s circuit-breaker open (%d consecutive failures, ping down) — skipping SNMP poll",
+            olt.name,
+            olt.consecutive_poll_failures,
+        )
+        olt.last_poll_at = datetime.now(UTC)
+        olt.last_poll_status = PollStatus.failed
+        olt.last_poll_error = "circuit breaker open: ping down + repeated SNMP failures"
+        olt.consecutive_poll_failures = (olt.consecutive_poll_failures or 0) + 1
+        db.commit()
+        result["errors"] = 1
+        result["breaker_open"] = 1
+        return result
 
     # Track polling status for reachability
     poll_failed = False
