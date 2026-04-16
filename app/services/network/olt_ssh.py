@@ -215,7 +215,8 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
         transport.close()
         raise RuntimeError("SSH authentication failed")
     channel = transport.open_session(timeout=20)
-    channel.get_pty(width=200)
+    # Use wider PTY and set terminal type to avoid control sequence issues
+    channel.get_pty(term="dumb", width=400, height=50)
     channel.invoke_shell()
     _read_until_prompt(channel, policy.prompt_regex, timeout_sec=8)
     channel.send("screen-length 0 temporary\n")

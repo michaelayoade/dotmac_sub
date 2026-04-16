@@ -75,6 +75,8 @@ class ProvisioningEnforcement:
             "no_acs_binding": [],
             "no_acs_on_olt": [],
             "pppoe_not_pushed": [],
+            "wifi_pending_sync": [],
+            "mgmt_pending_push": [],
             "stale_wan_ip": [],
         }
 
@@ -105,7 +107,28 @@ class ProvisioningEnforcement:
         for ont in db.scalars(stmt).all():
             gaps["pppoe_not_pushed"].append(str(ont.id))
 
-        # 4. Stale WAN IP — offline with old runtime data
+        # 4. WiFi pending sync — online, ACS-bound, has WiFi config in DB
+        # These ONTs should have WiFi pushed to them via TR-069
+        stmt = base.where(
+            OntUnit.wifi_ssid.isnot(None),
+            OntUnit.tr069_acs_server_id.isnot(None),
+            OntUnit.effective_status == OnuOnlineStatus.online,
+        )
+        for ont in db.scalars(stmt).all():
+            gaps["wifi_pending_sync"].append(str(ont.id))
+
+        # 5. Management config pending push — has mgmt IP in DB and OLT location
+        # These ONTs need service-port and IPHOST pushed to OLT
+        stmt = base.where(
+            OntUnit.mgmt_ip_address.isnot(None),
+            OntUnit.board.isnot(None),
+            OntUnit.port.isnot(None),
+            OntUnit.external_id.isnot(None),
+        )
+        for ont in db.scalars(stmt).all():
+            gaps["mgmt_pending_push"].append(str(ont.id))
+
+        # 6. Stale WAN IP — offline with old runtime data
         stale_hours = get_stale_runtime_hours(db)
         stale_cutoff = datetime.now(UTC) - timedelta(hours=stale_hours)
         stmt = base.where(
@@ -183,6 +206,39 @@ class ProvisioningEnforcement:
                     OntUnit.tr069_acs_server_id.isnot(None),
                     OntUnit.observed_wan_ip.is_(None),
                     OntUnit.effective_status == OnuOnlineStatus.online,
+                )
+            )
+            or 0
+        )
+
+        # WiFi pending sync
+        counts["wifi_pending_sync"] = (
+            db.scalar(
+                select(func.count())
+                .select_from(OntUnit)
+                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+                .where(
+                    *base_where,
+                    OntUnit.wifi_ssid.isnot(None),
+                    OntUnit.tr069_acs_server_id.isnot(None),
+                    OntUnit.effective_status == OnuOnlineStatus.online,
+                )
+            )
+            or 0
+        )
+
+        # Management config pending push
+        counts["mgmt_pending_push"] = (
+            db.scalar(
+                select(func.count())
+                .select_from(OntUnit)
+                .join(OLTDevice, OntUnit.olt_device_id == OLTDevice.id)
+                .where(
+                    *base_where,
+                    OntUnit.mgmt_ip_address.isnot(None),
+                    OntUnit.board.isnot(None),
+                    OntUnit.port.isnot(None),
+                    OntUnit.external_id.isnot(None),
                 )
             )
             or 0
@@ -340,6 +396,196 @@ class ProvisioningEnforcement:
 
         logger.info(
             "PPPoE enforcement: pushed %d, failed %d, skipped %d",
+            pushed,
+            failed,
+            skipped,
+        )
+        return {"pushed": pushed, "failed": failed, "skipped": skipped}
+
+    @staticmethod
+    def enforce_wifi_push(
+        db: Session,
+        ont_ids: list[str],
+    ) -> dict[str, int]:
+        """Push WiFi configuration to ONTs via TR-069.
+
+        Reads wifi_ssid and wifi_password from the OntUnit model and pushes
+        them to the device using GenieACS. This is idempotent - pushing the
+        same config multiple times has no adverse effects.
+        """
+        from app.services.credential_crypto import decrypt_credential
+        from app.services.network.ont_action_wifi import set_wifi_config
+
+        pushed = 0
+        failed = 0
+        skipped = 0
+        for ont_id in ont_ids:
+            ont = db.get(OntUnit, ont_id)
+            if not ont or not ont.wifi_ssid:
+                skipped += 1
+                continue
+
+            # Decrypt stored password if present
+            password: str | None = None
+            if ont.wifi_password:
+                try:
+                    password = decrypt_credential(ont.wifi_password)
+                except ValueError:
+                    logger.warning(
+                        "Cannot decrypt WiFi password for ONT %s, pushing SSID only",
+                        ont.serial_number,
+                    )
+
+            try:
+                result = set_wifi_config(
+                    db,
+                    ont_id,
+                    ssid=ont.wifi_ssid,
+                    password=password,
+                )
+                if result.success:
+                    pushed += 1
+                    logger.info(
+                        "WiFi config pushed to ONT %s (SSID: %s)",
+                        ont.serial_number,
+                        ont.wifi_ssid,
+                    )
+                else:
+                    logger.warning(
+                        "WiFi push failed for ONT %s: %s",
+                        ont.serial_number,
+                        result.message,
+                    )
+                    failed += 1
+            except Exception as exc:
+                logger.warning(
+                    "WiFi push error for ONT %s: %s",
+                    ont.serial_number,
+                    exc,
+                )
+                failed += 1
+
+        logger.info(
+            "WiFi enforcement: pushed %d, failed %d, skipped %d",
+            pushed,
+            failed,
+            skipped,
+        )
+        return {"pushed": pushed, "failed": failed, "skipped": skipped}
+
+    @staticmethod
+    def enforce_management_config(
+        db: Session,
+        ont_ids: list[str],
+    ) -> dict[str, int]:
+        """Push management service-port and IPHOST config to OLTs via SSH.
+
+        Reads mgmt_ip_address, mgmt_vlan from OntUnit and pushes to the OLT.
+        This is idempotent - existing service-ports are detected and skipped.
+        Batches by OLT for connection efficiency.
+        """
+        import ipaddress
+        import time
+
+        from app.models.network import Vlan
+        from app.services.network.olt_ssh_ont import configure_ont_iphost
+        from app.services.network.serial_utils import parse_ont_id_on_olt
+
+        pushed = 0
+        failed = 0
+        skipped = 0
+
+        # Group ONTs by OLT for batching
+        onts_by_olt: dict[str, list[OntUnit]] = {}
+        for ont_id in ont_ids:
+            ont = db.get(OntUnit, ont_id)
+            if not ont or not ont.mgmt_ip_address:
+                skipped += 1
+                continue
+            if not ont.board or not ont.port or not ont.external_id:
+                skipped += 1
+                continue
+            if not ont.olt_device_id:
+                skipped += 1
+                continue
+
+            olt_key = str(ont.olt_device_id)
+            if olt_key not in onts_by_olt:
+                onts_by_olt[olt_key] = []
+            onts_by_olt[olt_key].append(ont)
+
+        # Process each OLT batch
+        for olt_id, onts in onts_by_olt.items():
+            olt = db.get(OLTDevice, olt_id)
+            if not olt:
+                skipped += len(onts)
+                continue
+
+            logger.info(
+                "Management enforcement: processing %d ONTs on %s",
+                len(onts),
+                olt.name,
+            )
+
+            for ont in onts:
+                fsp = f"{ont.board}/{ont.port}"
+                ont_id_on_olt = parse_ont_id_on_olt(ont.external_id)
+
+                if ont_id_on_olt is None:
+                    skipped += 1
+                    continue
+
+                # Resolve VLAN tag
+                mgmt_vlan_tag = 201
+                if ont.mgmt_vlan_id:
+                    vlan = db.get(Vlan, str(ont.mgmt_vlan_id))
+                    if vlan:
+                        mgmt_vlan_tag = vlan.tag
+
+                # Calculate subnet/gateway from IP (assume /24)
+                ip_addr = ont.mgmt_ip_address
+                network = ipaddress.ip_network(f"{ip_addr}/24", strict=False)
+                subnet_mask = "255.255.255.0"
+                gateway = str(network.network_address + 1)
+
+                try:
+                    # Configure IPHOST (management IP on ONT)
+                    # Service-port creation skipped - management uses existing
+                    # service-ports created during internet provisioning
+                    iphost_ok, iphost_msg = configure_ont_iphost(
+                        olt,
+                        fsp,
+                        ont_id_on_olt,
+                        vlan_id=mgmt_vlan_tag,
+                        ip_mode="static",
+                        ip_address=ip_addr,
+                        subnet=subnet_mask,
+                        gateway=gateway,
+                    )
+
+                    if iphost_ok:
+                        pushed += 1
+                    else:
+                        logger.warning(
+                            "Management IPHOST failed for ONT %s: %s",
+                            ont.serial_number,
+                            iphost_msg[:60],
+                        )
+                        failed += 1
+
+                    # Delay between ONTs to prevent OLT connection overload
+                    time.sleep(1.0)
+
+                except Exception as exc:
+                    logger.warning(
+                        "Management push error for ONT %s: %s",
+                        ont.serial_number,
+                        exc,
+                    )
+                    failed += 1
+
+        logger.info(
+            "Management enforcement: pushed %d, failed %d, skipped %d",
             pushed,
             failed,
             skipped,

@@ -540,6 +540,20 @@ def save_provision_settings(
     dhcp_start_value = (dhcp_start or "").strip() or None
     dhcp_end_value = (dhcp_end or "").strip() or None
     wifi_enabled_value = _bool_from_form(wifi_enabled)
+
+    tr069_profile_id_int: int | None = None
+    if tr069_profile_id_value:
+        try:
+            tr069_profile_id_int = int(tr069_profile_id_value)
+        except ValueError:
+            return JsonActionResult(
+                status_code=422,
+                content={
+                    "success": False,
+                    "message": "Invalid TR-069 profile",
+                },
+            )
+
     wifi_ssid_value = (wifi_ssid or "").strip() or None
     wifi_password_value = (wifi_password or "").strip() or None
     wifi_security_mode_value = (wifi_security_mode or "").strip() or None
@@ -604,14 +618,14 @@ def save_provision_settings(
                     },
                 )
             ont.provisioning_profile_id = profile_uuid
-            if tr069_profile_id_value:
-                update_service_order_execution_context_for_ont(
-                    db,
-                    ont_id=ont_id,
-                    step_name="bind_tr069",
-                    values={"tr069_olt_profile_id": tr069_profile_id_value},
-                    commit=False,
-                )
+            ont.tr069_olt_profile_id = tr069_profile_id_int
+            update_service_order_execution_context_for_ont(
+                db,
+                ont_id=ont_id,
+                step_name="bind_tr069",
+                values={"tr069_olt_profile_id": tr069_profile_id_int},
+                commit=False,
+            )
             db.commit()
         except Exception:
             db.rollback()
@@ -818,6 +832,7 @@ def save_provision_settings(
         profile_uuid = coerce_uuid(profile_id_value)
         if profile_uuid is not None:
             ont.provisioning_profile_id = profile_uuid
+        ont.tr069_olt_profile_id = tr069_profile_id_int
 
         if mgmt_vlan_id_value or mgmt_ip_mode_value:
             update_service_order_execution_context_for_ont(
@@ -856,14 +871,13 @@ def save_provision_settings(
                 values=wan_values,
                 commit=False,
             )
-            if tr069_profile_id_value:
-                update_service_order_execution_context_for_ont(
-                    db,
-                    ont_id=ont_id,
-                    step_name="bind_tr069",
-                    values={"tr069_olt_profile_id": tr069_profile_id_value},
-                    commit=False,
-                )
+            update_service_order_execution_context_for_ont(
+                db,
+                ont_id=ont_id,
+                step_name="bind_tr069",
+                values={"tr069_olt_profile_id": tr069_profile_id_int},
+                commit=False,
+            )
             if wan_protocol_value == "pppoe":
                 update_service_order_execution_context_for_ont(
                     db,

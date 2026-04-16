@@ -1008,6 +1008,42 @@ def resolve_effective_tr069_profile_for_ont(
     with ``profile_id`` and ``profile_name`` attributes if found, or None.
     """
     profiles, error = get_tr069_profiles_for_ont(db, ont)
-    if profiles:
-        return profiles[0], None
-    return None, error or "No TR-069 profile found for this ONT"
+    if not profiles:
+        return None, error or "No TR-069 profile found for this ONT"
+
+    # Prefer a persisted ONT-level selection, then fall back to service-order
+    # intent if no explicit ONT value exists.
+    planned_profile_id: Any = getattr(ont, "tr069_olt_profile_id", None)
+    if planned_profile_id is None:
+        try:
+            ont_id = str(getattr(ont, "id", ""))
+            ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
+            bind_tr069 = ont_plan.get("bind_tr069") if isinstance(ont_plan, dict) else None
+            if isinstance(bind_tr069, dict):
+                planned_profile_id = bind_tr069.get("tr069_olt_profile_id")
+        except Exception:
+            planned_profile_id = None
+
+    if planned_profile_id is not None:
+        planned_profile_id_str = str(planned_profile_id).strip()
+        planned_profile_id_int = None
+        if planned_profile_id_str.isdigit():
+            try:
+                planned_profile_id_int = int(planned_profile_id_str)
+            except Exception:
+                planned_profile_id_int = None
+        for profile in profiles:
+            candidate_profile_id = getattr(profile, "profile_id", None)
+            if candidate_profile_id is None:
+                continue
+            candidate_profile_id_str = str(candidate_profile_id).strip()
+            if candidate_profile_id_str == planned_profile_id_str:
+                return profile, None
+            if planned_profile_id_int is not None:
+                try:
+                    if int(candidate_profile_id) == planned_profile_id_int:
+                        return profile, None
+                except Exception:
+                    pass
+
+    return profiles[0], None

@@ -41,6 +41,7 @@ def resolve_service_order_id_for_ont(db: Session, ont_id: str) -> str | None:
         ServiceOrderStatus.submitted,
         ServiceOrderStatus.scheduled,
         ServiceOrderStatus.provisioning,
+        ServiceOrderStatus.active,
     )
     stmt = (
         select(ServiceOrder.id)
@@ -51,6 +52,23 @@ def resolve_service_order_id_for_ont(db: Session, ont_id: str) -> str | None:
         .limit(20)
     )
     for order_id in db.scalars(stmt).all():
+        order = db.get(ServiceOrder, order_id)
+        if not order:
+            continue
+        if str(getattr(order, "ont_unit_id", None) or "") == str(ont_id):
+            return str(order.id)
+        ec = getattr(order, "execution_context", None) or {}
+        if str(ec.get("ont_unit_id", "")) == str(ont_id):
+            return str(order.id)
+    # If no order matches active/in-progress lifecycle states, fall back to
+    # the most recent related order in any status so intent can still be restored
+    # from recently completed/archived workflows.
+    fallback_stmt = (
+        select(ServiceOrder.id)
+        .order_by(ServiceOrder.created_at.desc())
+        .limit(50)
+    )
+    for order_id in db.scalars(fallback_stmt).all():
         order = db.get(ServiceOrder, order_id)
         if not order:
             continue

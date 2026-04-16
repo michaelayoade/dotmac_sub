@@ -334,6 +334,15 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     ok, message = bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)
     if ok:
         try:
+            ont.tr069_olt_profile_id = profile_id
+            db.add(ont)
+            db.flush()
+            _persist_ont_plan_step(
+                db,
+                ont_id,
+                "bind_tr069",
+                {"tr069_olt_profile_id": profile_id},
+            )
             wait_result = queue_wait_tr069_bootstrap(db, ont_id)
             message = f"{message}; {wait_result.message}"
         except Exception as exc:

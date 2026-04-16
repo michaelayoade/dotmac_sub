@@ -87,15 +87,27 @@ def update_ont_config(
     elif mgmt_ip_mode == "":
         ont.mgmt_ip_mode = None
 
-    # UUID fields
+    # UUID fields - validate VLAN belongs to ONT's OLT
     if wan_vlan_id:
         vlan = db.scalars(select(Vlan).where(Vlan.id == wan_vlan_id).limit(1)).first()
+        if vlan and vlan.olt_device_id and ont.olt_device_id:
+            if vlan.olt_device_id != ont.olt_device_id:
+                return ActionResult(
+                    success=False,
+                    message=f"WAN VLAN {vlan.tag} is not configured on this ONT's OLT",
+                )
         ont.wan_vlan_id = vlan.id if vlan else None
     elif wan_vlan_id == "":
         ont.wan_vlan_id = None
 
     if mgmt_vlan_id:
         vlan = db.scalars(select(Vlan).where(Vlan.id == mgmt_vlan_id).limit(1)).first()
+        if vlan and vlan.olt_device_id and ont.olt_device_id:
+            if vlan.olt_device_id != ont.olt_device_id:
+                return ActionResult(
+                    success=False,
+                    message=f"Management VLAN {vlan.tag} is not configured on this ONT's OLT",
+                )
         ont.mgmt_vlan_id = vlan.id if vlan else None
     elif mgmt_vlan_id == "":
         ont.mgmt_vlan_id = None

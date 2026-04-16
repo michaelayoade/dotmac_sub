@@ -56,6 +56,32 @@ def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY)
 
 
 @dataclass
+class OntIphostConfig:
+    """Configuration for a single ONT's IPHOST."""
+
+    fsp: str  # Frame/Slot/Port e.g. "0/1/0"
+    ont_id: int
+    vlan_id: int
+    ip_address: str
+    subnet: str = "255.255.255.0"
+    gateway: str | None = None  # Derived from IP if not provided
+    ip_mode: str = "static"
+    priority: int | None = None
+    serial_number: str | None = None  # For logging/tracking
+
+
+@dataclass
+class OntIphostResult:
+    """Result of configuring a single ONT's IPHOST."""
+
+    fsp: str
+    ont_id: int
+    success: bool
+    message: str
+    serial_number: str | None = None
+
+
+@dataclass
 class OntStatusEntry:
     """Status of a single registered ONT on an OLT port."""
 
@@ -345,143 +371,314 @@ def configure_ont_iphost(
     subnet: str | None = None,
     gateway: str | None = None,
 ) -> tuple[bool, str]:
-    """Configure ONT management IP (IPHOST) via OLT SSH."""
+    """Configure ONT management IP (IPHOST) via OLT.
+
+    Prefers NETCONF when enabled (more reliable for long commands), falls
+    back to SSH CLI if NETCONF is unavailable or fails with schema errors.
+    """
+    # Try NETCONF first if enabled - it avoids SSH terminal escape sequence issues
+    if olt.netconf_enabled:
+        try:
+            from app.services.network import olt_netconf_ont
+
+            ok, msg = olt_netconf_ont.configure_ont_iphost(
+                olt,
+                fsp,
+                ont_id,
+                vlan_id=vlan_id,
+                ip_mode=ip_mode,
+                priority=priority,
+                ip_address=ip_address,
+                subnet=subnet,
+                gateway=gateway,
+            )
+            if ok:
+                return ok, msg
+            # If NETCONF failed with schema/namespace issues, fall back to SSH
+            if "namespace" in msg.lower() or "schema" in msg.lower():
+                logger.info(
+                    "NETCONF IPHOST not supported on OLT %s, falling back to SSH: %s",
+                    olt.name,
+                    msg,
+                )
+            else:
+                # Other NETCONF errors - return the error
+                return ok, msg
+        except Exception as exc:
+            logger.warning(
+                "NETCONF IPHOST failed on OLT %s, falling back to SSH: %s",
+                olt.name,
+                exc,
+            )
+
+    # Fall back to SSH CLI - use batch function with single config
     from app.services.network import olt_ssh as core
 
     ok, err = core._validate_fsp(fsp)
     if not ok:
         return False, err
 
-    # Validate numeric parameters before CLI interpolation
-    try:
-        validate_ont_id(ont_id)
-        validate_vlan_id(vlan_id)
-    except ValidationError as e:
-        return False, e.message
+    # Build config and use batch function (single-item batch)
+    config = OntIphostConfig(
+        fsp=fsp,
+        ont_id=ont_id,
+        vlan_id=vlan_id,
+        ip_address=ip_address or "",
+        subnet=subnet or "255.255.255.0",
+        gateway=gateway,
+        ip_mode=ip_mode,
+        priority=priority,
+    )
 
-    # Validate IP addresses for static mode before CLI interpolation
-    if ip_mode != "dhcp":
-        if not ip_address or not subnet or not gateway:
-            return False, "Static IP mode requires ip_address, subnet, and gateway"
-        try:
-            ip_address = validate_ip_address(ip_address, "ip_address")
-            subnet = validate_subnet_mask(subnet, "subnet_mask")
-            gateway = validate_ip_address(gateway, "gateway")
-        except ValidationError as e:
-            return False, e.message
+    results = configure_ont_iphost_batch(olt, [config])
+    if results:
+        result = results[0]
+        return result.success, result.message
+    return False, "No result from batch configuration"
 
-    parts = fsp.split("/")
-    frame_slot = f"{parts[0]}/{parts[1]}"
-    port_num = parts[2]
+
+def configure_ont_iphost_batch(
+    olt: OLTDevice,
+    configs: list[OntIphostConfig],
+    *,
+    inter_command_delay: float = 0.3,
+) -> list[OntIphostResult]:
+    """Configure IPHOST for multiple ONTs using a single SSH session.
+
+    This is more efficient than calling configure_ont_iphost() repeatedly,
+    as it maintains one SSH connection and groups commands by board/slot.
+
+    Args:
+        olt: The OLT device to configure.
+        configs: List of ONT IPHOST configurations.
+        inter_command_delay: Delay between commands (seconds).
+
+    Returns:
+        List of results for each ONT configuration attempt.
+    """
+    import time
+    from collections import defaultdict
+
+    from app.services.network import olt_ssh as core
+
+    if not configs:
+        return []
+
+    results: list[OntIphostResult] = []
+
+    # Group configs by frame/slot for efficient interface switching
+    by_frame_slot: dict[str, list[OntIphostConfig]] = defaultdict(list)
+    for cfg in configs:
+        parts = cfg.fsp.split("/")
+        if len(parts) >= 2:
+            frame_slot = f"{parts[0]}/{parts[1]}"
+            by_frame_slot[frame_slot].append(cfg)
+
+    # Detect OLT model for terminal handling
+    is_ma5800 = "ma5800" in (olt.model or "").lower()
 
     try:
         transport, channel, _policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
+        # Return failure for all configs
+        return [
+            OntIphostResult(
+                fsp=cfg.fsp,
+                ont_id=cfg.ont_id,
+                success=False,
+                message=f"Connection failed: {exc}",
+                serial_number=cfg.serial_number,
+            )
+            for cfg in configs
+        ]
 
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
         config_prompt = r"[#)]\s*$"
+
+        # Set wide terminal width
+        channel.send("screen-width 512 temporary\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
         core._run_huawei_cmd(channel, "config", prompt=config_prompt)
-        core._run_huawei_cmd(
-            channel, f"interface gpon {frame_slot}", prompt=config_prompt
-        )
+        time.sleep(0.2)
 
-        priority_clause = f" priority {priority}" if priority is not None else ""
-        if ip_mode == "dhcp":
-            cmd = (
-                f"ont ipconfig {port_num} {ont_id} ip-index 0 "
-                f"dhcp vlan {vlan_id}{priority_clause}"
-            )
-        else:
-            # ip_address, subnet, gateway already validated above
-            cmd = (
-                f"ont ipconfig {port_num} {ont_id} "
-                f"ip-index 0 static ip-address {ip_address} "
-                f"mask {subnet} gateway {gateway} vlan {vlan_id}{priority_clause}"
-            )
+        current_interface: str | None = None
 
-        output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
+        for frame_slot, slot_configs in by_frame_slot.items():
+            # Enter interface for this frame/slot
+            if current_interface != frame_slot:
+                if current_interface is not None:
+                    # Exit previous interface
+                    core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+                    time.sleep(0.1)
+
+                channel.send(f"interface gpon {frame_slot}\n")
+                core._read_until_prompt(channel, config_prompt, timeout_sec=8)
+                current_interface = frame_slot
+                time.sleep(0.2)
+
+            # Configure each ONT on this slot
+            for cfg in slot_configs:
+                result = _configure_single_ont_in_session(
+                    channel=channel,
+                    olt=olt,
+                    cfg=cfg,
+                    config_prompt=config_prompt,
+                    is_ma5800=is_ma5800,
+                )
+                results.append(result)
+                time.sleep(inter_command_delay)
+
+        # Exit interface and config mode
+        if current_interface is not None:
+            core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
-        if "make configuration repeatedly" in output.lower():
-            logger.info(
-                "IPHOST config already present for ONT %d on OLT %s (%s VLAN %d)",
-                ont_id,
-                olt.name,
-                ip_mode,
-                vlan_id,
-            )
-            return (
-                True,
-                f"Management IP already configured ({ip_mode} on VLAN {vlan_id})",
-            )
-
-        if core.is_error_output(output):
-            logger.warning(
-                "IPHOST config failed for ONT %d on OLT %s: %s",
-                ont_id,
-                olt.name,
-                output.strip()[-150:],
-            )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
-
-        verify_output = core._run_huawei_cmd(
-            channel, f"display ont ipconfig {port_num} {ont_id}", prompt=config_prompt
-        )
-        if core.is_error_output(verify_output):
-            logger.warning(
-                "IPHOST verification failed for ONT %d on OLT %s: %s",
-                ont_id,
-                olt.name,
-                verify_output.strip()[-150:],
-            )
-            return False, f"OLT verification failed: {verify_output.strip()[-150:]}"
-
-        verified = parse_iphost_config_output(verify_output)
-        verified_mode = (verified.get("mode") or "").lower()
-        verified_vlan = verified.get("vlan")
-        verified_priority = verified.get("priority")
-        if ip_mode == "dhcp":
-            mode_ok = "dhcp" in verified_mode
-            ip_ok = True
-        else:
-            mode_ok = "static" in verified_mode
-            ip_ok = verified.get("ip_address") == ip_address
-        vlan_ok = verified_vlan == str(vlan_id)
-        priority_ok = priority is None or verified_priority == str(priority)
-        if not (mode_ok and ip_ok and vlan_ok and priority_ok):
-            logger.warning(
-                "IPHOST verification mismatch for ONT %d on OLT %s: expected mode=%s "
-                "ip=%s vlan=%s priority=%s, got %s",
-                ont_id,
-                olt.name,
-                ip_mode,
-                ip_address,
-                vlan_id,
-                priority,
-                verified,
-            )
-            return False, "OLT did not apply the requested management IP configuration"
-
+        success_count = sum(1 for r in results if r.success)
         logger.info(
-            "Configured IPHOST for ONT %d on OLT %s (%s VLAN %d)",
-            ont_id,
+            "Batch IPHOST config on OLT %s: %d/%d successful",
             olt.name,
-            ip_mode,
-            vlan_id,
+            success_count,
+            len(results),
         )
-        return True, f"Management IP configured ({ip_mode} on VLAN {vlan_id})"
+
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
-            "Error configuring IPHOST on OLT %s: %s", olt.name, exc, exc_info=True
+            "Error in batch IPHOST config on OLT %s: %s", olt.name, exc, exc_info=True
         )
-        return False, f"Error: {exc}"
+        # Mark remaining configs as failed
+        configured_fsps = {(r.fsp, r.ont_id) for r in results}
+        for cfg in configs:
+            if (cfg.fsp, cfg.ont_id) not in configured_fsps:
+                results.append(
+                    OntIphostResult(
+                        fsp=cfg.fsp,
+                        ont_id=cfg.ont_id,
+                        success=False,
+                        message=f"Session error: {exc}",
+                        serial_number=cfg.serial_number,
+                    )
+                )
     finally:
         transport.close()
+
+    return results
+
+
+def _configure_single_ont_in_session(
+    channel,
+    olt: OLTDevice,
+    cfg: OntIphostConfig,
+    config_prompt: str,
+    is_ma5800: bool,
+) -> OntIphostResult:
+    """Configure a single ONT's IPHOST within an existing SSH session.
+
+    Internal helper for configure_ont_iphost_batch().
+    """
+    import time
+
+    from app.services.network import olt_ssh as core
+
+    # Validate inputs
+    try:
+        validate_ont_id(cfg.ont_id)
+        validate_vlan_id(cfg.vlan_id)
+        if cfg.ip_mode != "dhcp":
+            validate_ip_address(cfg.ip_address, "ip_address")
+            validate_subnet_mask(cfg.subnet, "subnet_mask")
+            if cfg.gateway:
+                validate_ip_address(cfg.gateway, "gateway")
+    except ValidationError as e:
+        return OntIphostResult(
+            fsp=cfg.fsp,
+            ont_id=cfg.ont_id,
+            success=False,
+            message=e.message,
+            serial_number=cfg.serial_number,
+        )
+
+    # Extract port number from fsp
+    parts = cfg.fsp.split("/")
+    port_num = parts[2] if len(parts) > 2 else "0"
+
+    # Derive gateway if not provided
+    gateway = cfg.gateway
+    if not gateway and cfg.ip_address:
+        ip_parts = cfg.ip_address.split(".")
+        gateway = f"{ip_parts[0]}.{ip_parts[1]}.{ip_parts[2]}.1"
+
+    # Build command
+    priority_clause = f" priority {cfg.priority}" if cfg.priority is not None else ""
+    if cfg.ip_mode == "dhcp":
+        cmd = (
+            f"ont ipconfig {port_num} {cfg.ont_id} ip-index 0 "
+            f"dhcp vlan {cfg.vlan_id}{priority_clause}"
+        )
+    else:
+        cmd = (
+            f"ont ipconfig {port_num} {cfg.ont_id} "
+            f"ip-index 0 static ip-address {cfg.ip_address} "
+            f"mask {cfg.subnet} gateway {gateway} vlan {cfg.vlan_id}{priority_clause}"
+        )
+
+    # Send command with appropriate method for OLT model
+    time.sleep(0.1)
+    if is_ma5800:
+        # MA5800 needs slow character-by-character send
+        for char in cmd:
+            channel.send(char)
+            if char == " ":
+                time.sleep(0.15)
+            else:
+                time.sleep(0.03)
+        time.sleep(0.3)
+        channel.send("\n")
+    else:
+        channel.send(f"{cmd}\n")
+
+    time.sleep(0.3)
+    output = core._read_until_prompt(channel, rf"{config_prompt}|<cr>", timeout_sec=10)
+
+    if "<cr>" in output.lower():
+        channel.send("\n")
+        output += core._read_until_prompt(channel, config_prompt, timeout_sec=5)
+
+    # Check result
+    if "make configuration repeatedly" in output.lower():
+        return OntIphostResult(
+            fsp=cfg.fsp,
+            ont_id=cfg.ont_id,
+            success=True,
+            message=f"Already configured ({cfg.ip_mode} VLAN {cfg.vlan_id})",
+            serial_number=cfg.serial_number,
+        )
+
+    if core.is_error_output(output):
+        logger.debug(
+            "IPHOST failed for ONT %d on %s: %s",
+            cfg.ont_id,
+            cfg.fsp,
+            output.strip()[-100:],
+        )
+        return OntIphostResult(
+            fsp=cfg.fsp,
+            ont_id=cfg.ont_id,
+            success=False,
+            message=f"OLT rejected: {output.strip()[-80:]}",
+            serial_number=cfg.serial_number,
+        )
+
+    return OntIphostResult(
+        fsp=cfg.fsp,
+        ont_id=cfg.ont_id,
+        success=True,
+        message=f"Configured ({cfg.ip_mode} VLAN {cfg.vlan_id})",
+        serial_number=cfg.serial_number,
+    )
 
 
 def parse_iphost_config_output(output: str) -> dict[str, str]:

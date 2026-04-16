@@ -8,6 +8,7 @@ service functions in ``app.services.network.ont_provision_steps``.
 from __future__ import annotations
 
 import json
+from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
@@ -325,6 +326,19 @@ def ont_save_provision_settings(
     return JSONResponse(
         status_code=result.status_code,
         content=result.content,
+    )
+
+
+@router.get(
+    "/onts/{ont_id}/save-provision-settings",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def ont_save_provision_settings_get(ont_id: str) -> Response:
+    """Handle accidental GET navigations to the save endpoint gracefully."""
+    message = "Use the Save OLT Profile button to submit this form."
+    return RedirectResponse(
+        f"/admin/network/onts/{ont_id}/provision?status=error&message={quote_plus(message)}",
+        status_code=303,
     )
 
 

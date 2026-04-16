@@ -8,7 +8,6 @@ up, and ONT record/assignment helpers isolated from broader OLT admin logic.
 from __future__ import annotations
 
 import logging
-import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -34,7 +33,9 @@ from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
 from app.services.network.serial_utils import normalize as normalize_serial
-from app.services.network.serial_utils import search_candidates as serial_search_candidates
+from app.services.network.serial_utils import (
+    search_candidates as serial_search_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -308,7 +309,7 @@ def _allocate_mgmt_ip_from_pool(
         return False, None, None, None, f"No available IPs in pool '{pool.name}'"
 
     # Create IPv4Address record to mark as allocated
-    notes = f"Management IP for ONT"
+    notes = "Management IP for ONT"
     if ont_serial:
         notes += f" {ont_serial}"
 
@@ -376,6 +377,7 @@ def _configure_management_ip_for_authorization(
         configure_ont_internet_config,
         configure_ont_iphost,
     )
+    from app.services.network.olt_ssh_service_ports import create_single_service_port
 
     # Get the OLT's provisioning profile (is_default first, then most recent)
     stmt = (
@@ -469,6 +471,48 @@ def _configure_management_ip_for_authorization(
             allocated_ip,
             subnet_mask,
             gateway,
+        )
+
+    # Create management service port before configuring IP
+    # Uses gemport 2 which is the standard for management/TR-069 traffic
+    mgmt_gemport = 2
+    sp_ok, sp_msg = create_single_service_port(
+        olt,
+        fsp,
+        ont_id_on_olt,
+        gem_index=mgmt_gemport,
+        vlan_id=int(mgmt_vlan_tag),
+        user_vlan=int(mgmt_vlan_tag),
+        tag_transform="translate",
+    )
+    if not sp_ok:
+        # Check if it's an idempotent case (port already exists)
+        # Huawei returns "Service virtual port has existed already" or similar
+        sp_msg_lower = sp_msg.lower()
+        if "already exist" in sp_msg_lower or "existed already" in sp_msg_lower or "bindindex" in sp_msg_lower:
+            logger.info(
+                "Management service-port VLAN %d already exists for ONT %d on %s %s (idempotent)",
+                mgmt_vlan_tag,
+                ont_id_on_olt,
+                olt.name,
+                fsp,
+            )
+        else:
+            logger.warning(
+                "Failed to create management service-port for ONT on %s %s: %s",
+                olt.name,
+                fsp,
+                sp_msg,
+            )
+            return False, f"Management service-port creation failed: {sp_msg}"
+    else:
+        logger.info(
+            "Created management service-port VLAN %d GEM %d for ONT %d on %s %s",
+            mgmt_vlan_tag,
+            mgmt_gemport,
+            ont_id_on_olt,
+            olt.name,
+            fsp,
         )
 
     # Configure management IP via OLT SSH
