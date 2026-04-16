@@ -28,6 +28,7 @@ celery_app.conf.task_routes = {
     "app.tasks.tr069.check_device_health": {"queue": "tr069"},
     "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "tr069"},
     "app.tasks.tr069.cleanup_tr069_records": {"queue": "tr069"},
+    "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "tr069"},
     "app.tasks.tr069.execute_bulk_action": {"queue": "tr069"},
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "tr069"},
 }

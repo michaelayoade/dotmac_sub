@@ -854,6 +854,29 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_cleanup_interval,
         )
 
+        # TR-069 GenieACS metrics scrape - pushes pending/faults/inform-age to VictoriaMetrics
+        tr069_metrics_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_metrics_scrape_enabled",
+            "TR069_METRICS_SCRAPE_ENABLED",
+            True,
+        )
+        tr069_metrics_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_metrics_scrape_interval_seconds",
+            300,  # 5 minutes
+        )
+        tr069_metrics_interval = max(tr069_metrics_interval, 60)  # Min: 1 minute
+        _sync_scheduled_task(
+            session,
+            name="tr069_metrics_scrape",
+            task_name="app.tasks.tr069.scrape_genieacs_metrics",
+            enabled=tr069_metrics_enabled,
+            interval_seconds=tr069_metrics_interval,
+        )
+
         # TR-069 ONT runtime refresh - updates observed WAN/WiFi/LAN data
         tr069_runtime_enabled = _effective_bool(
             session,

@@ -715,3 +715,122 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
         raise
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.tr069.scrape_genieacs_metrics")
+def scrape_genieacs_metrics() -> dict[str, int]:
+    """Scrape GenieACS NBI and emit fleet metrics to VictoriaMetrics.
+
+    Metrics:
+      tr069_pending_tasks{age_bucket}           — queued tasks by age
+      tr069_faults{code}                        — current faults grouped by fault code
+      tr069_cpe_inform_age{bucket}              — CPEs bucketed by time since last Inform
+      tr069_online_silent_total                 — ONTs OLT-online but ACS-silent >15min
+    """
+    import os
+    import httpx
+
+    from app.models.network import OntUnit, OnuOnlineStatus
+    from app.services.monitoring_metrics import push_metrics_to_victoriametrics
+
+    nbi_url = os.getenv("GENIEACS_NBI_URL", "http://genieacs:7557")
+    now = datetime.now(UTC)
+
+    lines: list[str] = []
+    stats = {"pending": 0, "faults": 0, "online_silent": 0, "cpes": 0}
+
+    try:
+        with httpx.Client(base_url=nbi_url, timeout=15) as client:
+            tasks = client.get("/tasks/?query=%7B%7D").json()
+            faults = client.get("/faults/?query=%7B%7D").json()
+            devices = client.get(
+                "/devices/?projection=_id,_lastInform"
+            ).json()
+    except Exception as exc:
+        logger.warning("GenieACS scrape failed: %s", exc)
+        return {"error": str(exc)}
+
+    # pending tasks by age bucket
+    task_buckets = {"le_15m": 0, "le_1h": 0, "le_6h": 0, "gt_6h": 0}
+    for t in tasks:
+        ts_str = t.get("timestamp", "").replace("Z", "+00:00")
+        try:
+            age = (now - datetime.fromisoformat(ts_str)).total_seconds()
+        except Exception:
+            continue
+        if age <= 900:
+            task_buckets["le_15m"] += 1
+        elif age <= 3600:
+            task_buckets["le_1h"] += 1
+        elif age <= 21600:
+            task_buckets["le_6h"] += 1
+        else:
+            task_buckets["gt_6h"] += 1
+    for bucket, count in task_buckets.items():
+        lines.append(f"tr069_pending_tasks{{age_bucket=\"{bucket}\"}} {count}")
+    stats["pending"] = sum(task_buckets.values())
+
+    # faults by code
+    fault_codes: dict[str, int] = {}
+    for f in faults:
+        code = str(f.get("code", "unknown"))
+        fault_codes[code] = fault_codes.get(code, 0) + 1
+    for code, count in fault_codes.items():
+        safe_code = code.replace("\"", "").replace("\\", "")
+        lines.append(f"tr069_faults{{code=\"{safe_code}\"}} {count}")
+    stats["faults"] = sum(fault_codes.values())
+
+    # CPE inform age buckets
+    inform_buckets = {"fresh_1h": 0, "stale_6h": 0, "very_stale_24h": 0, "offline_gt_24h": 0, "never": 0}
+    silent_ids: set[str] = set()
+    for d in devices:
+        li = d.get("_lastInform")
+        if not li:
+            inform_buckets["never"] += 1
+            silent_ids.add(d["_id"])
+            continue
+        try:
+            age = (now - datetime.fromisoformat(li.replace("Z", "+00:00"))).total_seconds()
+        except Exception:
+            continue
+        if age <= 3600:
+            inform_buckets["fresh_1h"] += 1
+        elif age <= 21600:
+            inform_buckets["stale_6h"] += 1
+        elif age <= 86400:
+            inform_buckets["very_stale_24h"] += 1
+        else:
+            inform_buckets["offline_gt_24h"] += 1
+        if age > 900:
+            silent_ids.add(d["_id"])
+    for bucket, count in inform_buckets.items():
+        lines.append(f"tr069_cpe_inform_age{{bucket=\"{bucket}\"}} {count}")
+    stats["cpes"] = len(devices)
+
+    # online-silent: ONT online per OLT but ACS silent >15min
+    db = SessionLocal()
+    try:
+        online_serials = {
+            s for s, in db.execute(
+                select(OntUnit.serial_number).where(
+                    OntUnit.is_active.is_(True),
+                    OntUnit.online_status == OnuOnlineStatus.online,
+                    OntUnit.serial_number.is_not(None),
+                )
+            ).all()
+        }
+    finally:
+        db.close()
+
+    silent_serials = {sid.split("-")[-1] for sid in silent_ids}
+    online_silent = len(online_serials & silent_serials)
+    lines.append(f"tr069_online_silent_total {online_silent}")
+    stats["online_silent"] = online_silent
+
+    push_metrics_to_victoriametrics(lines)
+
+    logger.info(
+        "GenieACS metrics scrape: pending=%d faults=%d cpes=%d online_silent=%d",
+        stats["pending"], stats["faults"], stats["cpes"], stats["online_silent"],
+    )
+    return stats
