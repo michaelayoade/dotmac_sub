@@ -77,7 +77,7 @@ def set_connection_request_credentials(
     username: str,
     password: str,
     *,
-    periodic_inform_interval: int = 300,
+    periodic_inform_interval: int = 3600,
 ) -> ActionResult:
     """Set TR-069 Connection Request credentials and periodic inform interval."""
     if not username:

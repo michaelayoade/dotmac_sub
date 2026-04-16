@@ -1605,7 +1605,7 @@ def _build_acs_provision_script(
     cwmp_url: str,
     cwmp_username: str | None = None,
     cwmp_password: str | None = None,
-    periodic_inform_interval: int = 300,  # 5 minutes for timely NOC diagnostics
+    periodic_inform_interval: int = 3600,  # 1 hour (fleet-aligned default)
 ) -> str:
     """Build GenieACS provision script that enforces ACS URL on every inform.
 
@@ -1765,7 +1765,7 @@ def push_acs_enforcement_preset(
         cwmp_url=server.cwmp_url,
         cwmp_username=server.cwmp_username,
         cwmp_password=cwmp_password,
-        periodic_inform_interval=server.periodic_inform_interval or 300,
+        periodic_inform_interval=server.periodic_inform_interval or 3600,
     )
 
     # Build preset

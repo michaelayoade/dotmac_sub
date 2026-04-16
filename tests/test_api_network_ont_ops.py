@@ -57,7 +57,7 @@ class TestOntActionSchemas:
         req = OntConnectionRequestCredentials(
             username="admin", password="secret123"
         )
-        assert req.periodic_inform_interval == 300
+        assert req.periodic_inform_interval == 3600
 
     def test_connection_request_credentials_interval(self):
         req = OntConnectionRequestCredentials(
