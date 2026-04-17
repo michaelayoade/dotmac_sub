@@ -293,6 +293,16 @@ app.add_middleware(ObservabilityMiddleware)
 register_error_handlers(app)
 
 
+@app.post("/api/v1/alerts/grafana-webhook", include_in_schema=False)
+async def grafana_webhook_sink(request: Request) -> Response:
+    """Accept Grafana alert webhooks even when alert ingestion is not configured."""
+    try:
+        await request.body()
+    except Exception:
+        logger.debug("Failed to read Grafana webhook body", exc_info=True)
+    return Response(status_code=204)
+
+
 def _get_cached_audit_settings() -> dict | None:
     """Return cached audit settings if valid, else None."""
     with _AUDIT_SETTINGS_LOCK:

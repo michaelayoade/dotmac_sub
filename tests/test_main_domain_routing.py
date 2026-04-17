@@ -1,3 +1,4 @@
+import asyncio
 from time import monotonic
 
 from sqlalchemy.exc import OperationalError
@@ -85,3 +86,28 @@ async def test_domain_routing_allows_request_when_refresh_fails_without_cache(
 
     assert response.status_code == 200
     assert response.body == b"ok"
+
+
+def test_grafana_webhook_sink_accepts_alert_posts():
+    async def _receive():
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    request = Request(
+        {
+            "type": "http",
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": "/api/v1/alerts/grafana-webhook",
+            "raw_path": b"/api/v1/alerts/grafana-webhook",
+            "query_string": b"",
+            "headers": [(b"host", b"example.com")],
+            "client": ("127.0.0.1", 12345),
+            "server": ("testserver", 80),
+        },
+        receive=_receive,
+    )
+
+    response = asyncio.run(main.grafana_webhook_sink(request))
+
+    assert response.status_code == 204

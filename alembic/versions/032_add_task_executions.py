@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 from sqlalchemy import inspect
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -27,15 +28,19 @@ def upgrade() -> None:
         return
 
     # Create the task_execution_status enum
-    task_execution_status = sa.Enum(
-        "running", "succeeded", "failed", name="taskexecutionstatus"
+    task_execution_status = postgresql.ENUM(
+        "running",
+        "succeeded",
+        "failed",
+        name="taskexecutionstatus",
+        create_type=False,
     )
     task_execution_status.create(bind, checkfirst=True)
 
     op.create_table(
         "task_executions",
         sa.Column(
-            "id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True
+            "id", postgresql.UUID(as_uuid=True), primary_key=True
         ),
         sa.Column(
             "idempotency_key", sa.String(255), unique=True, nullable=False
@@ -49,7 +54,7 @@ def upgrade() -> None:
         ),
         sa.Column("celery_task_id", sa.String(255), nullable=True),
         sa.Column(
-            "result", sa.dialects.postgresql.JSONB, nullable=True
+            "result", postgresql.JSONB, nullable=True
         ),
         sa.Column("error_message", sa.Text, nullable=True),
         sa.Column(

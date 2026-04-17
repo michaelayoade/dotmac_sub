@@ -5,7 +5,7 @@ on a per-vendor or per-model basis. Addresses issue #17 where bulkwalk
 strategy was hardcoded.
 
 Revision ID: 030_add_vendor_snmp_configs
-Revises: 029_add_task_executions
+Revises: 029_harden_network_edge_constraints
 Create Date: 2026-04-17
 """
 
@@ -18,7 +18,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision = "030_add_vendor_snmp_configs"
-down_revision = "029_add_task_executions"
+down_revision = "029_harden_network_edge_constraints"
 branch_labels = None
 depends_on = None
 
