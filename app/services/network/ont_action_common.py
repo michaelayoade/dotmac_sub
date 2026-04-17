@@ -131,6 +131,130 @@ def build_tr069_params(
     return {f"{root}.{path}": value for path, value in params.items()}
 
 
+# ---------------------------------------------------------------------------
+# Verified TR-069 writes
+# ---------------------------------------------------------------------------
+
+
+def read_param_from_cache(
+    client: Any, device_id: str, full_path: str
+) -> tuple[Any, str | None]:
+    """Read a single parameter's (value, timestamp) from the GenieACS cache.
+
+    Returns (None, None) if the path is not present or the cache cannot be read.
+    """
+    from app.services.genieacs import GenieACSError  # local import avoids cycle
+
+    try:
+        device = client.get_device(device_id)
+    except (GenieACSError, Exception) as exc:  # noqa: BLE001 — best-effort cache read
+        logger.debug(
+            "GenieACS device cache read failed for %s path=%s: %s",
+            device_id,
+            full_path,
+            exc,
+        )
+        return None, None
+    node: Any = device
+    for part in full_path.split("."):
+        if not isinstance(node, dict):
+            return None, None
+        node = node.get(part)
+        if node is None:
+            return None, None
+    if not isinstance(node, dict) or "_value" not in node:
+        return None, None
+    return node.get("_value"), node.get("_timestamp")
+
+
+def values_equal(cache_value: Any, requested: str) -> bool:
+    """Compare a cached TR-069 value to the requested string, tolerating bools/ints.
+
+    GenieACS stores booleans as Python bool and integers as int in the cache,
+    but the client always writes string values. Normalize both sides so e.g.
+    ``"true"`` matches ``True`` and ``"6"`` matches ``6``.
+    """
+    if cache_value == requested:
+        return True
+    if isinstance(cache_value, bool):
+        return str(cache_value).lower() == str(requested).lower()
+    if isinstance(cache_value, (int, float)):
+        return str(cache_value) == str(requested)
+    if cache_value is None:
+        return False
+    got = str(cache_value).strip().lower()
+    want = str(requested).strip().lower()
+    truthy = {"1", "true", "enabled"}
+    falsy = {"0", "false", "disabled"}
+    if want in truthy:
+        return got in truthy
+    if want in falsy:
+        return got in falsy
+    return got == want
+
+
+def set_and_verify(
+    client: Any,
+    device_id: str,
+    params: dict[str, str],
+    *,
+    expected: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Apply params via setParameterValues and verify against a live device read.
+
+    Chains two tasks in a single CWMP session:
+      1. setParameterValues with connection_request=False (queued, no CR yet).
+      2. getParameterValues with connection_request=True (fires one CR).
+
+    GenieACS processes tasks FIFO within the session, so the device applies
+    the writes and then returns live values in the same exchange. The GPV
+    populates the GenieACS model cache from the live device read, so the
+    subsequent cache readback reflects what the device actually has — not
+    whatever the client optimistically pushed.
+
+    Raises GenieACSError when any target parameter's cached value after the
+    chained session does not match the requested value. Returns the SPV task
+    result on full verification.
+
+    ``expected`` defaults to ``params``; pass a subset or a differently-cased
+    mapping when some written parameters (booleans, security-mode aliases)
+    need a different cache comparison.
+    """
+    from app.services.genieacs import GenieACSError  # local import avoids cycle
+
+    if not params:
+        raise GenieACSError("set_and_verify called with no parameters")
+    expected_values = expected if expected is not None else params
+
+    spv_result: dict[str, object] = client.set_parameter_values(
+        device_id, params, connection_request=False
+    )
+    readback_paths = list(expected_values.keys())
+    if not readback_paths:
+        return spv_result
+    try:
+        client.get_parameter_values(
+            device_id, readback_paths, connection_request=True
+        )
+    except GenieACSError as exc:
+        raise GenieACSError(
+            f"Readback getParameterValues failed after SPV: {exc}"
+        ) from exc
+
+    mismatches: list[str] = []
+    for path, want in expected_values.items():
+        got, _ = read_param_from_cache(client, device_id, path)
+        if values_equal(got, want):
+            continue
+        mismatches.append(f"{path}: expected={want!r} got={got!r}")
+
+    if mismatches:
+        raise GenieACSError(
+            "Device did not apply setParameterValues: " + "; ".join(mismatches)
+        )
+    return spv_result
+
+
 def get_ont_or_error(
     db: Session, ont_id: str
 ) -> tuple[OntUnit | None, ActionResult | None]:

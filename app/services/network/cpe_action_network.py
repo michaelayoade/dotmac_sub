@@ -18,6 +18,7 @@ from app.services.network.ont_action_common import (
     detect_data_model_root,
     get_cpe_client_or_error,
     persist_data_model_root,
+    set_and_verify,
 )
 from app.services.settings_spec import resolve_value
 
@@ -106,7 +107,15 @@ def set_connection_request_credentials(
         },
     )
     try:
-        result = client.set_parameter_values(device_id, params)
+        # Omit the password from the readback comparison — GenieACS's cache
+        # returns an empty or obfuscated value for credential parameters even
+        # after a successful write. Verify username and inform interval only.
+        expected = {
+            path: value
+            for path, value in params.items()
+            if not path.endswith(".ConnectionRequestPassword")
+        }
+        result = set_and_verify(client, device_id, params, expected=expected)
         logger.info(
             "Connection request credentials set on CPE %s (user: %s, root: %s)",
             cpe.serial_number,

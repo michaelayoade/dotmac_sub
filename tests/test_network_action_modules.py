@@ -20,11 +20,38 @@ def test_ont_actions_facade_exposes_split_methods() -> None:
 def test_set_lan_config_pushes_detected_tr181_paths(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
     refresh_calls: list[tuple[str, str, bool]] = []
+    cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
             calls.append((device_id, params))
+            cache.update(params)
             return {"queued": True, "params": params}
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for p, v in cache.items():
+                n = doc
+                parts = p.split(".")
+                for part in parts[:-1]:
+                    n = n.setdefault(part, {})
+                n[parts[-1]] = {"_value": v, "_timestamp": "now"}
+            return doc
 
         def refresh_object(
             self,
@@ -73,11 +100,38 @@ def test_set_lan_config_pushes_detected_tr181_paths(monkeypatch) -> None:
 
 def test_set_lan_config_pushes_dhcp_server_range(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
+    cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
             calls.append((device_id, params))
+            cache.update(params)
             return {"queued": True, "params": params}
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for p, v in cache.items():
+                n = doc
+                parts = p.split(".")
+                for part in parts[:-1]:
+                    n = n.setdefault(part, {})
+                n[parts[-1]] = {"_value": v, "_timestamp": "now"}
+            return doc
 
         def refresh_object(self, *_args, **_kwargs):
             return {"refreshed": True}
@@ -120,11 +174,38 @@ def test_set_lan_config_pushes_dhcp_server_range(monkeypatch) -> None:
 
 def test_configure_wan_config_pushes_static_igd_paths(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
+    cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
             calls.append((device_id, params))
+            cache.update(params)
             return {"queued": True}
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for p, v in cache.items():
+                n = doc
+                parts = p.split(".")
+                for part in parts[:-1]:
+                    n = n.setdefault(part, {})
+                n[parts[-1]] = {"_value": v, "_timestamp": "now"}
+            return doc
 
         def refresh_object(self, *_args, **_kwargs):
             return {"refreshed": True}

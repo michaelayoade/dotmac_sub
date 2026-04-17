@@ -13,6 +13,7 @@ from app.services.network.ont_action_common import (
     build_tr069_params,
     detect_data_model_root,
     get_ont_client_or_error,
+    set_and_verify,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,112 +127,6 @@ def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
         )
 
 
-def _read_param_from_cache(
-    client: Any, device_id: str, full_path: str
-) -> tuple[Any, str | None]:
-    """Read a single parameter's (value, timestamp) from the GenieACS model cache.
-
-    Returns (None, None) if the path is not present in the cache.
-    """
-    try:
-        device = client.get_device(device_id)
-    except Exception as exc:
-        logger.debug(
-            "GenieACS device cache read failed for %s path=%s: %s",
-            device_id,
-            full_path,
-            exc,
-        )
-        return None, None
-    node: Any = device
-    for part in full_path.split("."):
-        if not isinstance(node, dict):
-            return None, None
-        node = node.get(part)
-        if node is None:
-            return None, None
-    if not isinstance(node, dict) or "_value" not in node:
-        return None, None
-    return node.get("_value"), node.get("_timestamp")
-
-
-def _set_and_verify(
-    client: Any,
-    device_id: str,
-    params: dict[str, str],
-    *,
-    expected: dict[str, str] | None = None,
-) -> dict[str, object]:
-    """Apply params via setParameterValues and verify against a live device read.
-
-    Chains two tasks in a single CWMP session:
-      1. setParameterValues with connection_request=False (queued, no CR yet).
-      2. getParameterValues with connection_request=True (fires one CR).
-
-    GenieACS processes tasks FIFO within the session, so the device applies
-    the writes and then returns live values in the same exchange. The second
-    task populates the GenieACS model cache from the live device read, so the
-    subsequent cache readback reflects what the device actually has — not
-    whatever the client optimistically pushed.
-
-    Raises GenieACSError when any target parameter's cached value after the
-    chained session does not match the requested value. Returns the SPV task
-    result on full verification.
-
-    ``expected`` defaults to ``params``; pass a subset when some written
-    parameters (e.g. booleans normalized to ``"true"``/``"false"``) need a
-    different cache comparison.
-    """
-    if not params:
-        raise GenieACSError("_set_and_verify called with no parameters")
-    full_paths = list(params.keys())
-    expected_values = expected if expected is not None else params
-
-    # Stage the write without triggering the connection request yet.
-    spv_result: dict[str, object] = client.set_parameter_values(
-        device_id, params, connection_request=False
-    )
-    # Chain a live read for the same paths; the CR fires here so both tasks
-    # ride a single CWMP session in FIFO order (SPV first, GPV second).
-    try:
-        client.get_parameter_values(
-            device_id, full_paths, connection_request=True
-        )
-    except GenieACSError as exc:
-        raise GenieACSError(
-            f"Readback getParameterValues failed after SPV: {exc}"
-        ) from exc
-
-    mismatches: list[str] = []
-    for path, want in expected_values.items():
-        got, _ = _read_param_from_cache(client, device_id, path)
-        if _values_equal(got, want):
-            continue
-        mismatches.append(f"{path}: expected={want!r} got={got!r}")
-
-    if mismatches:
-        raise GenieACSError(
-            "Device did not apply setParameterValues: " + "; ".join(mismatches)
-        )
-    return spv_result
-
-
-def _values_equal(cache_value: Any, requested: str) -> bool:
-    """Compare a cached TR-069 value to the requested string, tolerating bools.
-
-    GenieACS stores booleans as Python bool and integers as int in the cache,
-    but the client always writes string values. Normalize both sides so
-    ``"true"`` matches ``True``, ``"6"`` matches ``6``, etc.
-    """
-    if cache_value == requested:
-        return True
-    if isinstance(cache_value, bool):
-        return str(cache_value).lower() == str(requested).lower()
-    if isinstance(cache_value, (int, float)):
-        return str(cache_value) == str(requested)
-    return False
-
-
 def _set_first_supported_path(
     client: Any,
     device_id: str,
@@ -241,7 +136,7 @@ def _set_first_supported_path(
 ) -> dict[str, object]:
     """Try a list of candidate parameter paths until one is verified applied.
 
-    For each candidate, call ``_set_and_verify`` which chains a live read in
+    For each candidate, call ``set_and_verify`` which chains a live read in
     the same CWMP session. On GenieACSError (the path is unsupported or the
     live read shows the device did not apply the value), try the next
     candidate. If none verify, re-raise the last error so the caller surfaces
@@ -252,7 +147,7 @@ def _set_first_supported_path(
         full_path = f"{root}.{candidate}"
         params = build_tr069_params(root, {candidate: value})
         try:
-            result = _set_and_verify(client, device_id, params)
+            result = set_and_verify(client, device_id, params)
         except GenieACSError as exc:
             last_error = exc
             logger.debug(
@@ -283,7 +178,7 @@ def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
     root = detect_data_model_root(db, ont, client, device_id)
     params = build_tr069_params(root, {_WIFI_SSID_PATHS[root]: ssid})
     try:
-        result = _set_and_verify(client, device_id, params)
+        result = set_and_verify(client, device_id, params)
         _request_runtime_refresh(client, device_id, root)
         logger.info("WiFi SSID set on ONT %s to '%s'", ont.serial_number, ssid)
         return ActionResult(
@@ -384,7 +279,7 @@ def set_wifi_config(
         result: dict[str, object] = {}
         if params:
             full_params = build_tr069_params(root, params)
-            result = _set_and_verify(client, device_id, full_params)
+            result = set_and_verify(client, device_id, full_params)
             _request_runtime_refresh(client, device_id, root)
         if password is not None:
             result = _set_first_supported_path(
@@ -424,7 +319,7 @@ def toggle_lan_port(db: Session, ont_id: str, port: int, enabled: bool) -> Actio
     path = _LAN_PORT_PATHS[root].format(port=port)
     params = build_tr069_params(root, {path: value})
     try:
-        result = client.set_parameter_values(device_id, params)
+        result = set_and_verify(client, device_id, params)
         action_word = "enabled" if enabled else "disabled"
         logger.info("LAN port %d %s on ONT %s", port, action_word, ont.serial_number)
         return ActionResult(

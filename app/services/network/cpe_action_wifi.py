@@ -13,6 +13,7 @@ from app.services.network.ont_action_common import (
     build_tr069_params,
     detect_data_model_root,
     get_cpe_client_or_error,
+    set_and_verify,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,22 +64,27 @@ def _set_first_supported_path(
     candidate_paths: list[str],
     value: str,
 ) -> dict[str, object]:
-    """Try a list of candidate parameter paths until one succeeds."""
+    """Try candidate password parameter paths until one SPV task is accepted.
+
+    CPEs commonly mask or omit WiFi password values on readback, so this write
+    intentionally skips readback comparison to avoid false failures.
+    """
     last_error: Exception | None = None
     for candidate in candidate_paths:
         params = build_tr069_params(root, {candidate: value})
         try:
-            result = client.set_parameter_values(device_id, params)
-            _request_runtime_refresh(client, device_id, root)
-            return result
+            result = set_and_verify(client, device_id, params, expected={})
         except GenieACSError as exc:
             last_error = exc
             logger.debug(
-                "TR-069 path %s rejected for device %s: %s",
+                "TR-069 password path %s rejected on CPE %s: %s",
                 f"{root}.{candidate}",
                 device_id,
                 exc,
             )
+            continue
+        _request_runtime_refresh(client, device_id, root)
+        return result
     if last_error is not None:
         raise last_error
     raise GenieACSError("No WiFi parameter paths configured.")
@@ -98,7 +104,7 @@ def set_wifi_ssid(db: Session, cpe_id: str, ssid: str) -> ActionResult:
     root = detect_data_model_root(db, cpe, client, device_id)
     params = build_tr069_params(root, {_WIFI_SSID_PATHS[root]: ssid})
     try:
-        result = client.set_parameter_values(device_id, params)
+        result = set_and_verify(client, device_id, params)
         _request_runtime_refresh(client, device_id, root)
         logger.info("WiFi SSID set on CPE %s to '%s'", cpe.serial_number, ssid)
         return ActionResult(
@@ -164,7 +170,7 @@ def toggle_lan_port(db: Session, cpe_id: str, port: int, enabled: bool) -> Actio
     path = _LAN_PORT_PATHS[root].format(port=port)
     params = build_tr069_params(root, {path: value})
     try:
-        result = client.set_parameter_values(device_id, params)
+        result = set_and_verify(client, device_id, params)
         action_word = "enabled" if enabled else "disabled"
         logger.info("LAN port %d %s on CPE %s", port, action_word, cpe.serial_number)
         return ActionResult(
