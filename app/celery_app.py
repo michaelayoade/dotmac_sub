@@ -20,22 +20,26 @@ celery_app.conf.beat_schedule = build_beat_schedule()
 celery_app.conf.beat_scheduler = "app.celery_scheduler.DbScheduler"
 celery_app.autodiscover_tasks(["app.tasks"])
 
-# Route critical TR-069 tasks to a dedicated queue for priority processing.
-# This prevents TR-069 sync from being starved by slow SNMP/polling tasks.
+# Route critical OLT authorization and ACS/TR-069 tasks to dedicated queues.
+# This prevents ACS work from being starved by slow SNMP/polling/default tasks.
 celery_app.conf.task_routes = {
-    "app.tasks.tr069.sync_all_acs_devices": {"queue": "tr069"},
-    "app.tasks.tr069.execute_pending_jobs": {"queue": "tr069"},
-    "app.tasks.tr069.check_device_health": {"queue": "tr069"},
-    "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "tr069"},
-    "app.tasks.tr069.cleanup_tr069_records": {"queue": "tr069"},
-    "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "tr069"},
-    "app.tasks.tr069.execute_bulk_action": {"queue": "tr069"},
-    "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "tr069"},
+    "app.tasks.ont_authorization.run_authorize_autofind_ont": {"queue": "tr069"},
+    "app.tasks.ont_authorization.run_post_authorization_follow_up": {"queue": "tr069"},
+    "app.tasks.tr069.sync_all_acs_devices": {"queue": "acs"},
+    "app.tasks.tr069.execute_pending_jobs": {"queue": "acs"},
+    "app.tasks.tr069.check_device_health": {"queue": "acs"},
+    "app.tasks.tr069.refresh_ont_runtime_data": {"queue": "acs"},
+    "app.tasks.tr069.cleanup_tr069_records": {"queue": "acs"},
+    "app.tasks.tr069.cleanup_stale_genieacs_tasks": {"queue": "acs"},
+    "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "acs"},
+    "app.tasks.tr069.execute_bulk_action": {"queue": "acs"},
+    "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
 }
 
 celery_app.conf.task_queues = (
     Queue("celery"),  # Default queue
-    Queue("tr069"),   # Dedicated TR-069 queue
+    Queue("tr069"),  # Dedicated OLT authorization follow-up queue
+    Queue("acs"),  # Dedicated GenieACS/TR-069 queue
 )
 
 # Ensure all tasks are registered by importing the tasks package

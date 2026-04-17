@@ -346,16 +346,6 @@ class GenieACSClient:
     ) -> dict:
         """Refresh object tree from device.
 
-        Queues a ``full-refresh`` provision before the ``refreshObject`` so
-        the device's parameter-name index in MongoDB is populated first.
-        Without this, ``refreshObject`` fails with ``Invalid parameter path``
-        on devices whose tree was only partially indexed at bootstrap
-        (observed on Huawei HG8546M / EG8145V5 / HG8145V5 ONTs).
-
-        Both tasks land in the device's queue; GenieACS processes them in
-        order within a single CWMP session, so we only fire one connection
-        request (on the refreshObject task).
-
         Args:
             device_id: Device ID
             object_path: Object path to refresh (e.g., "Device.WiFi.")
@@ -364,21 +354,7 @@ class GenieACSClient:
         Returns:
             Task result for the refreshObject task.
         """
-        seed_task = {"name": "provisions", "provisions": [["full-refresh"]]}
-        try:
-            self.create_task(
-                device_id,
-                seed_task,
-                connection_request=False,
-                dedupe_pending=False,
-            )
-        except Exception as exc:
-            logger.debug(
-                "GenieACS full-refresh seed skipped for %s (continuing with refreshObject): %s",
-                device_id,
-                exc,
-            )
-        task = {"name": "refreshObject", "objectName": object_path}
+        task = {"name": "refreshObject", "objectName": object_path.rstrip(".")}
         return self.create_task(device_id, task, connection_request)
 
     def reboot_device(self, device_id: str, connection_request: bool = True) -> dict:
@@ -452,7 +428,7 @@ class GenieACSClient:
         Returns:
             Task result
         """
-        task = {"name": "addObject", "objectName": object_path}
+        task = {"name": "addObject", "objectName": object_path.rstrip(".")}
         return self.create_task(device_id, task, connection_request)
 
     def delete_object(

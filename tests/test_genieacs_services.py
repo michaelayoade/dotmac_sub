@@ -429,7 +429,7 @@ class TestTaskOperations:
             call_args = mock_client.return_value.__enter__.return_value.request.call_args
             task = call_args.kwargs["json"]
             assert task["name"] == "refreshObject"
-            assert task["objectName"] == "Device.WiFi."
+            assert task["objectName"] == "Device.WiFi"
 
     def test_reboot_device(self, client, mock_response):
         """Test reboot_device creates correct task."""
@@ -489,7 +489,21 @@ class TestTaskOperations:
             call_args = mock_client.return_value.__enter__.return_value.request.call_args
             task = call_args.kwargs["json"]
             assert task["name"] == "addObject"
-            assert task["objectName"] == "Device.NAT.PortMapping."
+            assert task["objectName"] == "Device.NAT.PortMapping"
+
+    def test_refresh_object_does_not_queue_full_refresh_seed(self, client, mock_response):
+        """refreshObject should not queue the broken full-refresh provision first."""
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = mock_response()
+
+            client.refresh_object("device1", "InternetGatewayDevice.DeviceInfo.")
+
+            request_calls = mock_client.return_value.__enter__.return_value.request.call_args_list
+            post_calls = [call for call in request_calls if call.args[0] == "POST"]
+            assert len(post_calls) == 1
+            task = post_calls[0].kwargs["json"]
+            assert task["name"] == "refreshObject"
+            assert task["objectName"] == "InternetGatewayDevice.DeviceInfo"
 
     def test_delete_object(self, client, mock_response):
         """Test delete_object creates correct task."""
