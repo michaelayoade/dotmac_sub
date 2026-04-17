@@ -8,6 +8,7 @@ applying profile config to an ONT, and drift detection.
 from __future__ import annotations
 
 import logging
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -81,6 +82,9 @@ def _profile_matches_ont_scope(
 def resolve_profile_for_ont(
     db: Session,
     ont_id: str,
+    *,
+    owner_subscriber_id: uuid.UUID | str | None = None,
+    owner_is_business: bool | None = None,
 ) -> OntProvisioningProfile | None:
     """Resolve the best provisioning profile for an ONT.
 
@@ -89,6 +93,12 @@ def resolve_profile_for_ont(
     2. Default profile from the linked CatalogOffer (via subscription → offer)
     3. Business account default profile (is_default=True)
     4. None
+
+    The network layer intentionally does not reach into the subscriber
+    domain. Callers that know they are resolving a profile for a business
+    account should pass ``owner_subscriber_id`` and ``owner_is_business=True``
+    so the business-default branch runs. If either is missing or
+    ``owner_is_business`` is not True, step 3 is skipped.
     """
     ont = db.get(OntUnit, coerce_uuid(ont_id))
     if not ont:
@@ -113,36 +123,25 @@ def resolve_profile_for_ont(
                 ont.olt_device_id,
             )
 
-    # 2. Business account default (need business subscriber from assignment)
-    from app.models.network import OntAssignment
-
-    active_assignment = db.scalars(
-        select(OntAssignment).where(
-            OntAssignment.ont_unit_id == ont.id,
-            OntAssignment.active.is_(True),
+    # 2. Business account default.
+    # The caller is responsible for resolving whether the active subscriber is
+    # a business account (since ``Subscriber`` belongs to a different domain).
+    # When the caller has not supplied that context, we skip this step.
+    if owner_is_business and owner_subscriber_id:
+        owner_id = coerce_uuid(str(owner_subscriber_id))
+        stmt = (
+            select(OntProvisioningProfile)
+            .options(selectinload(OntProvisioningProfile.wan_services))
+            .where(
+                OntProvisioningProfile.owner_subscriber_id == owner_id,
+                OntProvisioningProfile.is_default.is_(True),
+                OntProvisioningProfile.is_active.is_(True),
+                OntProvisioningProfile.olt_device_id == ont.olt_device_id,
+            )
         )
-    ).first()
-    if active_assignment and active_assignment.subscriber_id:
-        from app.models.subscriber import Subscriber
-
-        subscriber = db.get(Subscriber, active_assignment.subscriber_id)
-        if subscriber and getattr(subscriber, "is_business", False):
-            owner_subscriber_id = getattr(subscriber, "id", None)
-            if owner_subscriber_id:
-                stmt = (
-                    select(OntProvisioningProfile)
-                    .options(selectinload(OntProvisioningProfile.wan_services))
-                    .where(
-                        OntProvisioningProfile.owner_subscriber_id
-                        == owner_subscriber_id,
-                        OntProvisioningProfile.is_default.is_(True),
-                        OntProvisioningProfile.is_active.is_(True),
-                        OntProvisioningProfile.olt_device_id == ont.olt_device_id,
-                    )
-                )
-                profile = db.scalars(stmt).first()
-                if profile:
-                    return profile
+        profile = db.scalars(stmt).first()
+        if profile:
+            return profile
 
     return None
 

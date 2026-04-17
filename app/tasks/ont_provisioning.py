@@ -57,11 +57,15 @@ def auto_link_profiles() -> dict[str, int]:
         from sqlalchemy import select
 
         from app.models.network import OntAssignment, OntUnit
+        from app.models.subscriber import Subscriber
         from app.services.network.ont_profile_apply import resolve_profile_for_ont
 
-        # Find ONTs with active assignments (to subscribers) but no profile
+        # Find ONTs with active assignments (to subscribers) but no profile.
+        # We also select the assignment's subscriber_id so we can pass the
+        # business/subscriber context through to the network-layer resolver
+        # (which intentionally does not import from the subscriber domain).
         stmt = (
-            select(OntUnit.id)
+            select(OntUnit.id, OntAssignment.subscriber_id)
             .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
             .where(
                 OntUnit.provisioning_profile_id.is_(None),
@@ -71,13 +75,24 @@ def auto_link_profiles() -> dict[str, int]:
             )
             .limit(500)
         )
-        ont_ids = list(db.scalars(stmt).all())
+        ont_rows = list(db.execute(stmt).all())
 
         linked = 0
         errors = 0
-        for ont_id in ont_ids:
+        for ont_id, subscriber_id in ont_rows:
             try:
-                profile = resolve_profile_for_ont(db, str(ont_id))
+                owner_is_business: bool | None = None
+                if subscriber_id is not None:
+                    subscriber = db.get(Subscriber, subscriber_id)
+                    owner_is_business = bool(
+                        subscriber and getattr(subscriber, "is_business", False)
+                    )
+                profile = resolve_profile_for_ont(
+                    db,
+                    str(ont_id),
+                    owner_subscriber_id=subscriber_id,
+                    owner_is_business=owner_is_business,
+                )
                 if profile:
                     ont = db.get(OntUnit, ont_id)
                     if ont:
@@ -95,7 +110,7 @@ def auto_link_profiles() -> dict[str, int]:
 
         return {
             "linked": linked,
-            "skipped": len(ont_ids) - linked - errors,
+            "skipped": len(ont_rows) - linked - errors,
             "errors": errors,
         }
     except Exception as e:
