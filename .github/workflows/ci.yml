@@ -78,6 +78,37 @@ jobs:
       - name: Run mypy
         run: poetry run mypy app/ --ignore-missing-imports --no-incremental
 
+  import-boundaries:
+    name: Import Boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          virtualenvs-create: true
+          virtualenvs-in-project: true
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-${{ env.PYTHON_VERSION }}-${{ hashFiles('poetry.lock') }}
+
+      - name: Install dependencies
+        # import-linter needs to import the app package to build the module
+        # graph, so it needs the full runtime dependency set, not just dev.
+        run: poetry install --no-interaction
+
+      - name: Run import-linter
+        run: poetry run lint-imports
+
   test:
     name: Tests
     runs-on: ubuntu-latest

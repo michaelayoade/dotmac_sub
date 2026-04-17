@@ -6,8 +6,11 @@ help: ## Show this help
 
 # ─── Quality ──────────────────────────────────────────────
 
-lint: ## Run ruff linter
+lint: lint-imports ## Run ruff linter + import boundary checks
 	poetry run ruff check app/
+
+lint-imports: ## Check import boundaries (import-linter contracts)
+	poetry run lint-imports
 
 format: ## Format code with ruff
 	poetry run ruff format app/
