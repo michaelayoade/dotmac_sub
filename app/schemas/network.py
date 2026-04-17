@@ -169,8 +169,14 @@ class PortVlanRead(PortVlanBase):
 
 
 class IPAssignmentBase(BaseModel):
-    subscriber_id: UUID = Field(
-        validation_alias="account_id", serialization_alias="account_id"
+    subscriber_id: UUID | None = Field(
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description=(
+            "Optional caller-supplied ownership reference; not required for "
+            "standalone OLT/ONT operation."
+        ),
     )
     service_address_id: UUID | None = None
     ip_version: IPVersion = IPVersion.ipv4
@@ -234,15 +240,6 @@ class IPAssignmentUpdate(BaseModel):
 class IPAssignmentRead(IPAssignmentBase):
     model_config = ConfigDict(from_attributes=True)
 
-    subscriber_id: UUID | None = Field(  # type: ignore[assignment]
-        default=None,
-        validation_alias="account_id",
-        serialization_alias="account_id",
-        description=(
-            "Optional caller-supplied ownership reference; not required for "
-            "standalone OLT/ONT operation."
-        ),
-    )
     id: UUID
     created_at: datetime
     updated_at: datetime

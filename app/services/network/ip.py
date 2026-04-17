@@ -45,11 +45,17 @@ class IPAssignments(CRUDManager[IPAssignment]):
 
     @staticmethod
     def create(db: Session, payload: IPAssignmentCreate):
-        network_validators.validate_ip_assignment_links(
-            db,
-            str(payload.subscriber_id),
-            str(payload.service_address_id) if payload.service_address_id else None,
-        )
+        if payload.subscriber_id is not None:
+            network_validators.validate_ip_assignment_links(
+                db,
+                str(payload.subscriber_id),
+                str(payload.service_address_id) if payload.service_address_id else None,
+            )
+        elif payload.service_address_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="service_address_id requires subscriber_id",
+            )
         assignment = IPAssignment(**payload.model_dump())
         db.add(assignment)
         db.commit()
@@ -95,15 +101,21 @@ class IPAssignments(CRUDManager[IPAssignment]):
         if not assignment:
             raise HTTPException(status_code=404, detail="IP assignment not found")
         data = payload.model_dump(exclude_unset=True)
-        subscriber_id = str(data.get("subscriber_id", assignment.subscriber_id))
+        resolved_subscriber_id = data.get("subscriber_id", assignment.subscriber_id)
         service_address_id = data.get(
             "service_address_id", assignment.service_address_id
         )
-        network_validators.validate_ip_assignment_links(
-            db,
-            subscriber_id,
-            str(service_address_id) if service_address_id else None,
-        )
+        if resolved_subscriber_id is not None:
+            network_validators.validate_ip_assignment_links(
+                db,
+                str(resolved_subscriber_id),
+                str(service_address_id) if service_address_id else None,
+            )
+        elif service_address_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail="service_address_id requires subscriber_id",
+            )
         for key, value in data.items():
             setattr(assignment, key, value)
         db.commit()
