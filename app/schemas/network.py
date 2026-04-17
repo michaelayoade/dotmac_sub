@@ -24,8 +24,11 @@ from app.models.network import (
 class CPEDeviceBase(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    subscriber_id: UUID = Field(
-        validation_alias="account_id", serialization_alias="account_id"
+    subscriber_id: UUID | None = Field(
+        default=None,
+        validation_alias="account_id",
+        serialization_alias="account_id",
+        description="Optional caller-supplied owner reference; not required for standalone OLT/ONT operation.",
     )
     service_address_id: UUID | None = None
     device_type: DeviceType = DeviceType.router
