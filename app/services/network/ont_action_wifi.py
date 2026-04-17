@@ -71,6 +71,35 @@ def _request_runtime_refresh(client: Any, device_id: str, root: str) -> None:
         )
 
 
+def _read_param_from_cache(
+    client: Any, device_id: str, full_path: str
+) -> tuple[Any, str | None]:
+    """Read a single parameter's (value, timestamp) from the GenieACS model cache.
+
+    Returns (None, None) if the path is not present in the cache.
+    """
+    try:
+        device = client.get_device(device_id)
+    except Exception as exc:
+        logger.debug(
+            "GenieACS device cache read failed for %s path=%s: %s",
+            device_id,
+            full_path,
+            exc,
+        )
+        return None, None
+    node: Any = device
+    for part in full_path.split("."):
+        if not isinstance(node, dict):
+            return None, None
+        node = node.get(part)
+        if node is None:
+            return None, None
+    if not isinstance(node, dict) or "_value" not in node:
+        return None, None
+    return node.get("_value"), node.get("_timestamp")
+
+
 def _set_first_supported_path(
     client: Any,
     device_id: str,
@@ -78,22 +107,62 @@ def _set_first_supported_path(
     candidate_paths: list[str],
     value: str,
 ) -> dict[str, object]:
-    """Try a list of candidate parameter paths until one succeeds."""
+    """Try a list of candidate parameter paths until one is verified applied.
+
+    For each candidate:
+      1. Record the pre-SPV (value, timestamp) from the GenieACS cache.
+      2. Issue setParameterValues.
+      3. Read the post-SPV (value, timestamp) from the cache.
+      4. Accept the path when the post-SPV value matches the target.
+         If the timestamp did not advance, warn but still accept — the target
+         value is already live, so the user's intent is satisfied.
+      5. On value mismatch, try the next candidate. If all candidates end up
+         with a mismatched value, raise GenieACSError so the caller reports
+         failure instead of a misleading success.
+    """
     last_error: Exception | None = None
     for candidate in candidate_paths:
+        full_path = f"{root}.{candidate}"
+        before_value, before_ts = _read_param_from_cache(client, device_id, full_path)
         params = build_tr069_params(root, {candidate: value})
         try:
             result = client.set_parameter_values(device_id, params)
-            _request_runtime_refresh(client, device_id, root)
-            return result
         except GenieACSError as exc:
             last_error = exc
             logger.debug(
                 "TR-069 path %s rejected for device %s: %s",
-                f"{root}.{candidate}",
+                full_path,
                 device_id,
                 exc,
             )
+            continue
+        after_value, after_ts = _read_param_from_cache(client, device_id, full_path)
+        if after_value == value:
+            if before_ts is not None and after_ts == before_ts and before_value == value:
+                logger.info(
+                    "TR-069 param %s on %s already at target value; no device change",
+                    full_path,
+                    device_id,
+                )
+            elif before_ts is not None and after_ts == before_ts:
+                logger.warning(
+                    "TR-069 param %s on %s has target value in cache but timestamp did "
+                    "not advance after setParameterValues; device may not have applied",
+                    full_path,
+                    device_id,
+                )
+            _request_runtime_refresh(client, device_id, root)
+            return result
+        logger.warning(
+            "TR-069 param %s on %s not applied after setParameterValues: expected=%r got=%r",
+            full_path,
+            device_id,
+            value,
+            after_value,
+        )
+        last_error = GenieACSError(
+            f"Value not applied at {full_path} (expected {value!r}, cache has {after_value!r})"
+        )
     if last_error is not None:
         raise last_error
     raise GenieACSError("No WiFi parameter paths configured.")

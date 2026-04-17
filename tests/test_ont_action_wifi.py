@@ -8,14 +8,29 @@ from app.services.network import ont_action_wifi
 def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
     attempts: list[str] = []
     refresh_calls: list[tuple[str, str, bool]] = []
+    # Simulated GenieACS device cache — updated by successful set_parameter_values.
+    cache: dict[str, str] = {}
 
     class FakeClient:
         def set_parameter_values(self, device_id: str, params: dict[str, str]):
             path = next(iter(params))
             attempts.append(path)
             if path.endswith("WLANConfiguration.1.KeyPassphrase"):
+                cache[path] = params[path]
                 return {"device_id": device_id, "path": path}
             raise GenieACSError("invalid parameter name")
+
+        def get_device(self, _device_id: str):
+            # Build a minimal nested dict from the simulated cache for the paths
+            # _read_param_from_cache walks.
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
 
         def refresh_object(
             self,
@@ -49,6 +64,46 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
         "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.KeyPassphrase",
     ]
     assert refresh_calls == [("device-1", "InternetGatewayDevice.", True)]
+
+
+def test_set_wifi_password_fails_when_device_cache_does_not_confirm(monkeypatch) -> None:
+    """Regression: set_parameter_values returning 200 is not proof of applied value.
+
+    If GenieACS accepts the task but the device cache never reflects the target
+    value (observed on some Huawei ONTs that silently ignore the SPV), the UI
+    used to report success. Post-fix, the function must raise so the caller
+    returns an actionable failure instead of a misleading success.
+    """
+
+    class FakeClient:
+        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+            # Accept the task on every candidate but never update the cache.
+            return {"device_id": device_id, "accepted": True}
+
+        def get_device(self, _device_id: str):
+            return {}
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+
+    result = ont_action_wifi.set_wifi_password(None, "ont-1", "NewPass9999")
+
+    assert result.success is False
+    assert "not applied" in result.message.lower() or "failed" in result.message.lower()
 
 
 def test_set_wifi_config_pushes_radio_ssid_channel_and_security(monkeypatch) -> None:
