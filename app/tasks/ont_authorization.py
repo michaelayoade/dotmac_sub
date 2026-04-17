@@ -6,11 +6,15 @@ import logging
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
+from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.ont_authorization.run_post_authorization_follow_up")
+@idempotent_task(
+    key_func=lambda operation_id, ont_unit_id, **kw: f"{ont_unit_id}:{operation_id}"
+)
 def run_post_authorization_follow_up_task(
     operation_id: str,
     ont_unit_id: str,
@@ -73,6 +77,11 @@ def run_post_authorization_follow_up_task(
 
 
 @celery_app.task(name="app.tasks.ont_authorization.run_authorize_autofind_ont")
+@idempotent_task(
+    key_func=lambda operation_id, olt_id, fsp, serial_number, **kw: (
+        f"{olt_id}:{fsp}:{serial_number}:{operation_id}"
+    )
+)
 def run_authorize_autofind_ont_task(
     operation_id: str,
     olt_id: str,
@@ -93,13 +102,17 @@ def run_authorize_autofind_ont_task(
     start_time = None
     try:
         import time
+
         start_time = time.time()
 
         # Get OLT name for notifications
         olt = db.get(OLTDevice, olt_id)
         olt_name = olt.name if olt else None
 
-        from app.models.network_operation import NetworkOperation, NetworkOperationStatus
+        from app.models.network_operation import (
+            NetworkOperation,
+            NetworkOperationStatus,
+        )
 
         operation = db.get(NetworkOperation, operation_id)
         if operation is None:
@@ -147,7 +160,7 @@ def run_authorize_autofind_ont_task(
         payload = result.to_dict()
         duration_ms = int((time.time() - start_time) * 1000) if start_time else None
 
-        operation_succeeded = result.success and result.status != "warning"
+        operation_succeeded = result.success
         if operation_succeeded:
             network_operations.mark_succeeded(
                 db,
@@ -155,9 +168,10 @@ def run_authorize_autofind_ont_task(
                 output_payload=payload,
             )
             # Notify UI of success with ONT link info
+            published_status = "warning" if result.status == "warning" else "succeeded"
             publish_operation_status(
                 operation_id,
-                "succeeded",
+                published_status,
                 result.message,
                 target_id=olt_id,
                 target_name=olt_name,

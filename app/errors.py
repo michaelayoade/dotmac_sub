@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import logging
-from urllib.parse import parse_qs, quote, unquote_plus, urlparse
 from pathlib import Path
+from urllib.parse import parse_qs, quote, unquote_plus, urlparse
 
 from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
@@ -12,6 +12,7 @@ from starlette.datastructures import MutableHeaders, UploadFile
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.services.unit_of_work import ConcurrencyConflict
 from app.web.auth.dependencies import AuthenticationRequired
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,25 @@ class RedirectErrorTemplateMiddleware:
 
 def register_error_handlers(app) -> None:
     app.add_middleware(RedirectErrorTemplateMiddleware)
+
+    @app.exception_handler(ConcurrencyConflict)
+    async def concurrency_conflict_handler(request: Request, exc: ConcurrencyConflict):
+        """Handle concurrency conflicts (optimistic locking failures, etc.)."""
+        if _is_html_request(request):
+            return _template_response(
+                request,
+                status_code=409,
+                message=exc.message,
+            )
+        return JSONResponse(
+            status_code=409,
+            content=_error_payload(
+                "concurrency_conflict",
+                exc.message,
+                None,
+                _request_id(request),
+            ),
+        )
 
     @app.exception_handler(AuthenticationRequired)
     async def auth_required_handler(request: Request, exc: AuthenticationRequired):

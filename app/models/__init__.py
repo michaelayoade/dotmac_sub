@@ -215,12 +215,12 @@ from app.models.network import (  # noqa: F401
     OltPowerUnit,
     OltSfpModule,
     OltShelf,
+    OntAcsStatus,
     OntAssignment,
     OntProfileType,
     OntProfileWanService,
     OntProvisioningProfile,
     OntProvisioningStatus,
-    OntAcsStatus,
     OntStatusSource,
     OntUnit,
     OnuCapability,
@@ -236,6 +236,7 @@ from app.models.network import (  # noqa: F401
     PortType,
     PortVlan,
     PppoePasswordMode,
+    SignalThresholdOverride,
     SpeedProfile,
     SpeedProfileDirection,
     SpeedProfileType,
@@ -245,6 +246,7 @@ from app.models.network import (  # noqa: F401
     SplitterPortType,
     Tr069ParameterMap,
     VendorModelCapability,
+    VendorSnmpConfig,
     Vlan,
     VlanMode,
     WanConnectionType,
@@ -419,10 +421,12 @@ from app.models.subscriber import (  # noqa: F401
     ChannelType,
     ContactMethod,
     Gender,
+    NINVerificationStatus,
     Reseller,
     Subscriber,
     SubscriberChannel,
     SubscriberCustomField,
+    SubscriberNINVerification,
     SubscriberStatus,
 )
 from app.models.subscription_change import (  # noqa: F401
@@ -449,6 +453,10 @@ from app.models.system_user import SystemUser  # noqa: F401
 from app.models.table_column_config import TableColumnConfig  # noqa: F401
 from app.models.table_column_default_config import (  # noqa: F401
     TableColumnDefaultConfig,
+)
+from app.models.task_execution import (  # noqa: F401
+    TaskExecution,
+    TaskExecutionStatus,
 )
 from app.models.tr069 import (  # noqa: F401
     Tr069AcsServer,
