@@ -32,13 +32,13 @@ from app.services.network.olt_web_audit import log_olt_audit_event
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
-from app.services.network.serial_utils import normalize as normalize_serial
-from app.services.network.serial_utils import (
-    search_candidates as serial_search_candidates,
-)
 from app.services.network.ont_status_transitions import (
     set_authorization_status,
     set_provisioning_status,
+)
+from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import (
+    search_candidates as serial_search_candidates,
 )
 
 logger = logging.getLogger(__name__)
@@ -956,6 +956,13 @@ def authorize_autofind_ont(
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return _fail("Authorize ONT on OLT", "OLT not found")
+
+    # Check if OLT accepts new ONT authorizations
+    from app.services.network.olt_lifecycle import is_olt_accepting_new_onts
+
+    can_authorize, block_reason = is_olt_accepting_new_onts(olt)
+    if not can_authorize:
+        return _fail("Authorize ONT on OLT", block_reason)
 
     authorization_profiles = None
     if force_reauthorize:

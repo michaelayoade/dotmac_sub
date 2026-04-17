@@ -44,6 +44,7 @@ class DeviceStatus(enum.Enum):
     active = "active"
     inactive = "inactive"
     maintenance = "maintenance"
+    draining = "draining"  # Blocks new ONT authorizations, preserves existing service
     retired = "retired"
 
 
