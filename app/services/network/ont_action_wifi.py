@@ -38,6 +38,61 @@ _WIFI_SECURITY_PATHS = {
     "InternetGatewayDevice": "LANDevice.1.WLANConfiguration.1.BeaconType",
 }
 
+# Security-mode value normalization by data-model root. The UI/callers use
+# TR-181-style names ("WPA2-Personal", "WPA-WPA2-Personal", ...) but TR-098's
+# BeaconType only accepts None / Basic / WPA / 11i / WPAand11i. Map both
+# directions through a single lower-cased alias table so the same input
+# (from the UI or from another code path) always lands in the device-native
+# value — which is also what the post-SPV readback will see.
+_SECURITY_MODE_ALIASES: dict[str, dict[str, str]] = {
+    "InternetGatewayDevice": {
+        "none": "None",
+        "open": "None",
+        "wep": "Basic",
+        "basic": "Basic",
+        "wpa": "WPA",
+        "wpa-personal": "WPA",
+        "wpa2": "11i",
+        "wpa2-personal": "11i",
+        "11i": "11i",
+        "wpa-wpa2": "WPAand11i",
+        "wpa-wpa2-personal": "WPAand11i",
+        "wpa/wpa2": "WPAand11i",
+        "wpaand11i": "WPAand11i",
+        "mixed": "WPAand11i",
+    },
+    "Device": {
+        "none": "None",
+        "open": "None",
+        "wep": "WEP-128",
+        "wep-64": "WEP-64",
+        "wep-128": "WEP-128",
+        "wpa": "WPA-Personal",
+        "wpa-personal": "WPA-Personal",
+        "wpa2": "WPA2-Personal",
+        "wpa2-personal": "WPA2-Personal",
+        "wpa-wpa2": "WPA-WPA2-Personal",
+        "wpa-wpa2-personal": "WPA-WPA2-Personal",
+        "wpa/wpa2": "WPA-WPA2-Personal",
+        "mixed": "WPA-WPA2-Personal",
+        "wpa3": "WPA3-Personal",
+        "wpa3-personal": "WPA3-Personal",
+        "wpa2-wpa3": "WPA2-WPA3-Personal",
+        "wpa2-wpa3-personal": "WPA2-WPA3-Personal",
+    },
+}
+
+
+def _normalize_security_mode(mode: str, root: str) -> str:
+    """Return the data-model-native security-mode string for ``mode``.
+
+    Falls back to the original input (trimmed) when the alias is unknown —
+    callers can pass an exact device-native value and have it land verbatim.
+    """
+    key = (mode or "").strip().lower()
+    mapping = _SECURITY_MODE_ALIASES.get(root, {})
+    return mapping.get(key, (mode or "").strip())
+
 _WIFI_PSK_PATHS = {
     "Device": [
         "WiFi.AccessPoint.1.Security.KeyPassphrase",
@@ -316,8 +371,9 @@ def set_wifi_config(
         params[_WIFI_CHANNEL_PATHS[root]] = str(channel)
         changed.append(f"channel {channel}")
     if security_mode:
-        params[_WIFI_SECURITY_PATHS[root]] = security_mode
-        changed.append(f"security {security_mode}")
+        normalized_mode = _normalize_security_mode(security_mode, root)
+        params[_WIFI_SECURITY_PATHS[root]] = normalized_mode
+        changed.append(f"security {normalized_mode}")
 
     if not params and password is None:
         return ActionResult(

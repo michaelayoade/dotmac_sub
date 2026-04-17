@@ -5,6 +5,85 @@ from app.services.genieacs import GenieACSError
 from app.services.network import ont_action_wifi
 
 
+def test_normalize_security_mode_maps_tr181_names_to_tr098_beacon_type() -> None:
+    """UI sends TR-181-style names but TR-098 BeaconType has different vocab."""
+    n = ont_action_wifi._normalize_security_mode
+    # Common UI inputs → TR-098 native values
+    assert n("WPA2-Personal", "InternetGatewayDevice") == "11i"
+    assert n("wpa2-personal", "InternetGatewayDevice") == "11i"
+    assert n("WPA-WPA2-Personal", "InternetGatewayDevice") == "WPAand11i"
+    assert n("Mixed", "InternetGatewayDevice") == "WPAand11i"
+    assert n("None", "InternetGatewayDevice") == "None"
+    # TR-098 native values pass through unchanged
+    assert n("11i", "InternetGatewayDevice") == "11i"
+    assert n("WPAand11i", "InternetGatewayDevice") == "WPAand11i"
+    # TR-181 values pass through unchanged on Device root
+    assert n("WPA2-Personal", "Device") == "WPA2-Personal"
+    assert n("WPA-WPA2-Personal", "Device") == "WPA-WPA2-Personal"
+    # Unknown values fall through (operator can pass an exact device value)
+    assert n("SomeCustomMode", "InternetGatewayDevice") == "SomeCustomMode"
+
+
+def test_set_wifi_config_translates_security_mode_for_tr098_device(monkeypatch) -> None:
+    """Regression: BeaconType should receive the device-native value, not the raw UI string."""
+    calls: list[dict[str, str]] = []
+    cache: dict[str, str] = {}
+
+    class FakeClient:
+        def set_parameter_values(
+            self, _device_id, params, *, connection_request=True
+        ):
+            calls.append(dict(params))
+            cache.update(params)
+            return {"queued": True}
+
+        def get_parameter_values(
+            self, _device_id, _paths, *, connection_request=True
+        ):
+            return {"queued": True}
+
+        def get_device(self, _device_id):
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
+
+        def refresh_object(self, *_args, **_kwargs):
+            return {"refreshed": True}
+
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_wifi,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+
+    result = ont_action_wifi.set_wifi_config(
+        None,
+        "ont-1",
+        security_mode="WPA2-Personal",
+    )
+
+    assert result.success is True
+    assert len(calls) == 1
+    sent = calls[0]
+    assert (
+        sent["InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType"]
+        == "11i"
+    )
+
+
 def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
     attempts: list[str] = []
     refresh_calls: list[tuple[str, str, bool]] = []
