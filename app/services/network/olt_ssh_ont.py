@@ -568,6 +568,33 @@ def configure_ont_iphost_batch(
     return results
 
 
+def _verify_iphost_applied(
+    channel,
+    port_num: str,
+    ont_id: int,
+    config_prompt: str,
+) -> str:
+    """Run display ont ipconfig as a best-effort post-apply readback.
+
+    The returned output is informational — we don't parse/validate it here
+    because the apply command already succeeded. Its purpose is to leave an
+    audit trail in the SSH session log showing the applied state, and to
+    surface any device-side inconsistency in logs for operator review.
+    Failures are swallowed since the configuration itself was accepted.
+    """
+    from app.services.network import olt_ssh as core
+
+    try:
+        return core._run_huawei_cmd(
+            channel,
+            f"display ont ipconfig {port_num} {ont_id}",
+            prompt=config_prompt,
+        )
+    except Exception as exc:
+        logger.debug("IPHOST readback skipped for ONT %d: %s", ont_id, exc)
+        return ""
+
+
 def _configure_single_ont_in_session(
     channel,
     olt: OLTDevice,
@@ -649,6 +676,7 @@ def _configure_single_ont_in_session(
 
     # Check result
     if "make configuration repeatedly" in output.lower():
+        _verify_iphost_applied(channel, port_num, cfg.ont_id, config_prompt)
         return OntIphostResult(
             fsp=cfg.fsp,
             ont_id=cfg.ont_id,
@@ -671,6 +699,8 @@ def _configure_single_ont_in_session(
             message=f"OLT rejected: {output.strip()[-80:]}",
             serial_number=cfg.serial_number,
         )
+
+    _verify_iphost_applied(channel, port_num, cfg.ont_id, config_prompt)
 
     return OntIphostResult(
         fsp=cfg.fsp,

@@ -330,12 +330,19 @@ def validate_prerequisites(
     )
     tr069_required = profile_requires or acs_enabled
 
+    effective_tr069_profile_id = tr069_olt_profile_id
+    if effective_tr069_profile_id is None:
+        effective_tr069_profile_id = getattr(ont, "tr069_olt_profile_id", None)
+
     if not tr069_required:
         tr069_status = "ok"
         tr069_msg = "Not required"
-    elif tr069_olt_profile_id is not None:
+    elif effective_tr069_profile_id is not None:
         tr069_status = "ok"
-        tr069_msg = f"Profile ID {tr069_olt_profile_id}"
+        tr069_msg = f"Profile ID {effective_tr069_profile_id}"
+    elif acs_enabled:
+        tr069_status = "ok"
+        tr069_msg = "Profile will be resolved dynamically at provisioning time"
     elif profile_requires and not acs_enabled:
         tr069_status = "fail"
         tr069_msg = (

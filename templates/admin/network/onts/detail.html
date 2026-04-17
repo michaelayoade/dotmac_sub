@@ -91,12 +91,6 @@
                                 </button>
                                 <div x-show="open" x-cloak x-transition
                                     class="absolute right-0 z-20 mt-1 w-48 origin-top-right rounded-lg border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-700 dark:bg-slate-800">
-                                    <a href="/admin/network/onts/{{ ont.id }}/edit"
-                                       class="flex items-center gap-2 px-3 py-2 text-xs text-slate-700 hover:bg-slate-50 dark:text-slate-300 dark:hover:bg-slate-700">
-                                        <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
-                                        Edit ONT
-                                    </a>
-                                    <hr class="my-1 border-slate-200 dark:border-slate-700">
                                     <button
                                         hx-post="/admin/network/onts/{{ ont.id }}/factory-reset"
                                         hx-swap="none"

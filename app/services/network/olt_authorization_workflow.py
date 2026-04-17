@@ -64,6 +64,10 @@ def _set_ont_activation_status(
     """Persist UI-facing activation state after OLT authorization readback."""
     if not ont_unit_id:
         return
+    try:
+        uuid.UUID(str(ont_unit_id))
+    except (ValueError, TypeError):
+        return
     ont = db.get(OntUnit, ont_unit_id)
     if ont is None:
         return
@@ -739,7 +743,7 @@ def _validate_autofind_candidate(
 
     # No deleted existing and still not usable
     logger.warning(
-        "ONT authorization validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s",
+        "ONT authorization step 'Validate discovered ONT row' validation failed after autofind refresh olt_id=%s olt_name=%s fsp=%s serial=%s",
         olt_id,
         olt_name,
         fsp,

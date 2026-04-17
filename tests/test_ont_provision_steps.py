@@ -140,8 +140,10 @@ class TestValidatePrerequisites:
         from app.models.network import (
             OLTDevice,
             OntAssignment,
+            OntAuthorizationStatus,
             OntProvisioningProfile,
             OntUnit,
+            PonPort,
         )
         from app.models.subscriber import Subscriber
         from app.models.tr069 import Tr069AcsServer
@@ -174,8 +176,14 @@ class TestValidatePrerequisites:
             cr_username="cwmp",
             cr_password="secret",
             is_active=True,
+            authorization_line_profile_id=10,
+            authorization_service_profile_id=11,
         )
         db_session.add_all([olt, profile])
+        db_session.flush()
+
+        pon = PonPort(olt_id=olt.id, name="0/2/1")
+        db_session.add(pon)
         db_session.flush()
 
         ont = OntUnit(
@@ -183,7 +191,9 @@ class TestValidatePrerequisites:
             olt_device_id=olt.id,
             board="0/2",
             port="1",
+            external_id="huawei:4194323968.1",
             provisioning_profile_id=profile.id,
+            authorization_status=OntAuthorizationStatus.authorized,
             is_active=True,
         )
         db_session.add(ont)
@@ -192,6 +202,7 @@ class TestValidatePrerequisites:
             OntAssignment(
                 ont_unit_id=ont.id,
                 subscriber_id=subscriber.id,
+                pon_port_id=pon.id,
                 active=True,
             )
         )

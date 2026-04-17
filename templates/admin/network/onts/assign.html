@@ -48,8 +48,9 @@
                             {% elif ont.olt_device %}
                             <span class="text-amber-600 dark:text-amber-400">{{ ont.olt_device.name }} — port pending discovery</span>
                             {% else %}
-                            <span class="text-slate-400">TR-069 only (no OLT)</span>
+                            <span class="text-slate-400">TR-069-only onboarding (no OLT)</span>
                             {% endif %}
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank for TR-069-only assignment.</p>
                         </dd>
                     </div>
                 </dl>
