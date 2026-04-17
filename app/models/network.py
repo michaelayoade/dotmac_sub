@@ -2405,3 +2405,92 @@ class OntConfigSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class VendorSnmpConfig(Base):
+    """Per-vendor/model SNMP configuration for OLT polling.
+
+    Allows customization of SNMP walk strategy, timeouts, and OID overrides
+    on a per-vendor or per-model basis. Supports priority-based resolution
+    where more specific configurations (vendor+model) take precedence.
+    """
+
+    __tablename__ = "vendor_snmp_configs"
+    __table_args__ = (
+        UniqueConstraint("vendor", "model", name="uq_vendor_snmp_config"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vendor: Mapped[str] = mapped_column(String(120), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(120))
+
+    # Walk strategy: "single" (snmpwalk) or "bulk" (snmpbulkwalk)
+    walk_strategy: Mapped[str] = mapped_column(String(20), default="single")
+    walk_timeout_seconds: Mapped[int] = mapped_column(Integer, default=90)
+    walk_max_repetitions: Mapped[int] = mapped_column(Integer, default=50)
+
+    # OID overrides (JSON dict mapping metric name to OID)
+    oid_overrides: Mapped[dict | None] = mapped_column(JSON)
+
+    # Signal scale factor override
+    signal_scale: Mapped[float | None] = mapped_column(Float)
+
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class SignalThresholdOverride(Base):
+    """Per-OLT or per-model signal threshold overrides.
+
+    Allows customization of warning/critical thresholds on a per-OLT
+    or per-model basis. Either olt_device_id or model_pattern can be
+    set, but not both (enforced by check constraint).
+    """
+
+    __tablename__ = "signal_threshold_overrides"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (olt_device_id IS NOT NULL AND model_pattern IS NOT NULL)",
+            name="ck_threshold_override_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    # Scope: either specific OLT OR model pattern (not both)
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="CASCADE")
+    )
+    model_pattern: Mapped[str | None] = mapped_column(String(120))
+
+    # Threshold values (NULL = inherit from global)
+    warning_threshold_dbm: Mapped[float | None] = mapped_column(Float)
+    critical_threshold_dbm: Mapped[float | None] = mapped_column(Float)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt_device = relationship("OLTDevice")

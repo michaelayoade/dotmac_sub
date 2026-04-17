@@ -359,6 +359,7 @@ def apply_profile_to_ont(
     profile_id: str,
     *,
     create_wan_instances: bool = True,
+    push_to_device: bool = False,
 ) -> ApplyResult:
     """Apply a provisioning profile's desired state to an ONT.
 
@@ -369,11 +370,16 @@ def apply_profile_to_ont(
     records for each WAN service in the profile. These instances hold resolved
     PPPoE credentials and VLAN references for multi-WAN provisioning.
 
+    When push_to_device=True, after applying to the DB, also pushes the
+    configuration to the actual device via OLT SSH commands. This ensures
+    the device matches the desired state.
+
     Args:
         db: Database session.
         ont_id: UUID of the ONT to apply the profile to.
         profile_id: UUID of the provisioning profile.
         create_wan_instances: If True, create WAN service instances from profile.
+        push_to_device: If True, push changes to the device after DB update.
 
     Returns:
         ApplyResult with success status and message.
@@ -434,6 +440,19 @@ def apply_profile_to_ont(
     if wan_instances_created:
         message += f", {wan_instances_created} WAN service instances created"
     message += "."
+
+    # Push to device if requested
+    if push_to_device:
+        from app.services.network.ont_profile_push import OntProfilePushService
+
+        push_result = OntProfilePushService.push_profile_to_device(db, ont_id)
+        if not push_result.success:
+            return ApplyResult(
+                success=False,
+                message=f"Profile applied to DB but device push failed: {push_result.message}",
+                fields_updated=fields_updated,
+            )
+        message += f" Device push: {len(push_result.fields_pushed)} field(s) pushed."
 
     return ApplyResult(
         success=True,
