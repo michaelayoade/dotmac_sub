@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
@@ -21,6 +22,7 @@ from app.models.tr069 import (
     Tr069JobStatus,
     Tr069Session,
 )
+from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +126,11 @@ def sync_all_acs_devices() -> dict[str, int]:
 
 
 @celery_app.task(name="app.tasks.tr069.wait_for_ont_bootstrap")
+@idempotent_task(
+    key_func=lambda ont_id, operation_id=None, **kw: (
+        f"{ont_id}:{operation_id or 'no-op'}"
+    )
+)
 def wait_for_ont_bootstrap(
     ont_id: str,
     operation_id: str | None = None,
@@ -143,7 +150,7 @@ def wait_for_ont_bootstrap(
             network_operations.mark_running(db, operation_id)
             db.commit()
 
-        result = wait_tr069_bootstrap(db, ont_id)
+        result = wait_tr069_bootstrap(db, ont_id, allow_blocking=True)
         apply_result = None
         if result.success:
             apply_result = apply_saved_service_config(db, ont_id)
@@ -498,6 +505,11 @@ def _emit_job_event(db, emit_event, event_type, job: Tr069Job) -> None:
 
 
 @celery_app.task(name="app.tasks.tr069.execute_bulk_action")
+@idempotent_task(
+    key_func=lambda device_ids, action, params=None: (
+        f"{action}:{','.join(sorted(device_ids[:5]))}:{len(device_ids)}"
+    )
+)
 def execute_bulk_action(
     device_ids: list[str],
     action: str,
@@ -529,7 +541,9 @@ def execute_bulk_action(
                 device_id = coerce_uuid(device_id_str)
                 device = db.get(Tr069CpeDevice, device_id)
                 if not device:
-                    logger.warning("TR-069 device %s not found, skipping", device_id_str)
+                    logger.warning(
+                        "TR-069 device %s not found, skipping", device_id_str
+                    )
                     skipped += 1
                     continue
 
@@ -598,7 +612,9 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
     if action in job_definitions:
         defn = job_definitions[action]
         payload = Tr069JobCreate(
-            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            device_id=device_id
+            if isinstance(device_id, UUID)
+            else UUID(str(device_id)),
             name=defn["name"],
             command=defn["command"],
             payload=defn["payload"],
@@ -613,7 +629,9 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
             logger.warning("config_push requires parameter_path")
             return None
         payload = Tr069JobCreate(
-            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            device_id=device_id
+            if isinstance(device_id, UUID)
+            else UUID(str(device_id)),
             name="Config Push",
             command="setParameterValues",
             payload={
@@ -635,7 +653,9 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
         if params.get("filename"):
             task_payload["filename"] = params["filename"]
         payload = Tr069JobCreate(
-            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            device_id=device_id
+            if isinstance(device_id, UUID)
+            else UUID(str(device_id)),
             name="Firmware Update",
             command="download",
             payload=task_payload,
@@ -813,7 +833,11 @@ def cleanup_stale_genieacs_tasks(
                     older_than=timedelta(hours=max_age_hours),
                     dry_run=dry_run,
                 )
-                total_tasks += result.get("deleted", 0) if not dry_run else result.get("matched", 0)
+                total_tasks += (
+                    result.get("deleted", 0)
+                    if not dry_run
+                    else result.get("matched", 0)
+                )
 
                 # Clear associated faults for stale tasks
                 if not dry_run:
@@ -860,7 +884,7 @@ def cleanup_stale_genieacs_tasks(
 
 
 @celery_app.task(name="app.tasks.tr069.scrape_genieacs_metrics")
-def scrape_genieacs_metrics() -> dict[str, int]:
+def scrape_genieacs_metrics() -> dict[str, Any]:
     """Scrape GenieACS NBI and emit fleet metrics to VictoriaMetrics.
 
     Metrics:
@@ -880,15 +904,13 @@ def scrape_genieacs_metrics() -> dict[str, int]:
     now = datetime.now(UTC)
 
     lines: list[str] = []
-    stats = {"pending": 0, "faults": 0, "online_silent": 0, "cpes": 0}
+    stats: dict[str, Any] = {"pending": 0, "faults": 0, "online_silent": 0, "cpes": 0}
 
     try:
         with httpx.Client(base_url=nbi_url, timeout=15) as client:
             tasks = client.get("/tasks/?query=%7B%7D").json()
             faults = client.get("/faults/?query=%7B%7D").json()
-            devices = client.get(
-                "/devices/?projection=_id,_lastInform"
-            ).json()
+            devices = client.get("/devices/?projection=_id,_lastInform").json()
     except Exception as exc:
         logger.warning("GenieACS scrape failed: %s", exc)
         return {"error": str(exc)}
@@ -910,7 +932,7 @@ def scrape_genieacs_metrics() -> dict[str, int]:
         else:
             task_buckets["gt_6h"] += 1
     for bucket, count in task_buckets.items():
-        lines.append(f"tr069_pending_tasks{{age_bucket=\"{bucket}\"}} {count}")
+        lines.append(f'tr069_pending_tasks{{age_bucket="{bucket}"}} {count}')
     stats["pending"] = sum(task_buckets.values())
 
     # faults by code
@@ -919,12 +941,18 @@ def scrape_genieacs_metrics() -> dict[str, int]:
         code = str(f.get("code", "unknown"))
         fault_codes[code] = fault_codes.get(code, 0) + 1
     for code, count in fault_codes.items():
-        safe_code = code.replace("\"", "").replace("\\", "")
-        lines.append(f"tr069_faults{{code=\"{safe_code}\"}} {count}")
+        safe_code = code.replace('"', "").replace("\\", "")
+        lines.append(f'tr069_faults{{code="{safe_code}"}} {count}')
     stats["faults"] = sum(fault_codes.values())
 
     # CPE inform age buckets
-    inform_buckets = {"fresh_1h": 0, "stale_6h": 0, "very_stale_24h": 0, "offline_gt_24h": 0, "never": 0}
+    inform_buckets = {
+        "fresh_1h": 0,
+        "stale_6h": 0,
+        "very_stale_24h": 0,
+        "offline_gt_24h": 0,
+        "never": 0,
+    }
     silent_ids: set[str] = set()
     for d in devices:
         li = d.get("_lastInform")
@@ -933,7 +961,9 @@ def scrape_genieacs_metrics() -> dict[str, int]:
             silent_ids.add(d["_id"])
             continue
         try:
-            age = (now - datetime.fromisoformat(li.replace("Z", "+00:00"))).total_seconds()
+            age = (
+                now - datetime.fromisoformat(li.replace("Z", "+00:00"))
+            ).total_seconds()
         except Exception:
             continue
         if age <= 3600:
@@ -947,14 +977,15 @@ def scrape_genieacs_metrics() -> dict[str, int]:
         if age > 900:
             silent_ids.add(d["_id"])
     for bucket, count in inform_buckets.items():
-        lines.append(f"tr069_cpe_inform_age{{bucket=\"{bucket}\"}} {count}")
+        lines.append(f'tr069_cpe_inform_age{{bucket="{bucket}"}} {count}')
     stats["cpes"] = len(devices)
 
     # online-silent: ONT online per OLT but ACS silent >15min
     db = SessionLocal()
     try:
         online_serials = {
-            s for s, in db.execute(
+            s
+            for (s,) in db.execute(
                 select(OntUnit.serial_number).where(
                     OntUnit.is_active.is_(True),
                     OntUnit.online_status == OnuOnlineStatus.online,
@@ -974,6 +1005,9 @@ def scrape_genieacs_metrics() -> dict[str, int]:
 
     logger.info(
         "GenieACS metrics scrape: pending=%d faults=%d cpes=%d online_silent=%d",
-        stats["pending"], stats["faults"], stats["cpes"], stats["online_silent"],
+        stats["pending"],
+        stats["faults"],
+        stats["cpes"],
+        stats["online_silent"],
     )
     return stats

@@ -15,34 +15,47 @@ class TestBillingTask:
     def test_run_invoice_cycle_success(self):
         """Test successful invoice cycle run."""
         mock_session = MagicMock()
+        mock_idempotency_session = MagicMock()
+        # Mock scalars().first() to return None (no existing execution)
+        mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.billing.billing_automation_service.run_invoice_cycle"
-            ) as mock_run:
-                from app.tasks.billing import run_invoice_cycle
+                "app.services.task_idempotency.SessionLocal",
+                return_value=mock_idempotency_session,
+            ):
+                with patch(
+                    "app.tasks.billing.billing_automation_service.run_invoice_cycle"
+                ) as mock_run:
+                    from app.tasks.billing import run_invoice_cycle
 
-                run_invoice_cycle()
+                    run_invoice_cycle()
 
-                mock_run.assert_called_once_with(mock_session)
-                mock_session.close.assert_called_once()
+                    mock_run.assert_called_once_with(mock_session)
+                    mock_session.close.assert_called_once()
 
     def test_run_invoice_cycle_exception_rollback(self):
         """Test exception triggers rollback."""
         mock_session = MagicMock()
+        mock_idempotency_session = MagicMock()
+        mock_idempotency_session.scalars.return_value.first.return_value = None
 
         with patch("app.tasks.billing.SessionLocal", return_value=mock_session):
             with patch(
-                "app.tasks.billing.billing_automation_service.run_invoice_cycle",
-                side_effect=Exception("Billing error"),
+                "app.services.task_idempotency.SessionLocal",
+                return_value=mock_idempotency_session,
             ):
-                from app.tasks.billing import run_invoice_cycle
+                with patch(
+                    "app.tasks.billing.billing_automation_service.run_invoice_cycle",
+                    side_effect=Exception("Billing error"),
+                ):
+                    from app.tasks.billing import run_invoice_cycle
 
-                with pytest.raises(Exception, match="Billing error"):
-                    run_invoice_cycle()
+                    with pytest.raises(Exception, match="Billing error"):
+                        run_invoice_cycle()
 
-                mock_session.rollback.assert_called_once()
-                mock_session.close.assert_called_once()
+                    mock_session.rollback.assert_called_once()
+                    mock_session.close.assert_called_once()
 
 
 # =============================================================================
@@ -136,7 +149,11 @@ class TestGisTask:
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.gis._effective_bool",
-                side_effect=[True, True, False],  # sync_pops, sync_addresses, deactivate_missing
+                side_effect=[
+                    True,
+                    True,
+                    False,
+                ],  # sync_pops, sync_addresses, deactivate_missing
             ):
                 with patch(
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",
@@ -162,7 +179,11 @@ class TestGisTask:
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.gis._effective_bool",
-                side_effect=[True, False, False],  # sync_pops=True, sync_addresses=False
+                side_effect=[
+                    True,
+                    False,
+                    False,
+                ],  # sync_pops=True, sync_addresses=False
             ):
                 with patch(
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",
@@ -187,7 +208,11 @@ class TestGisTask:
         with patch("app.tasks.gis.SessionLocal", return_value=mock_session):
             with patch(
                 "app.tasks.gis._effective_bool",
-                side_effect=[False, True, False],  # sync_pops=False, sync_addresses=True
+                side_effect=[
+                    False,
+                    True,
+                    False,
+                ],  # sync_pops=False, sync_addresses=True
             ):
                 with patch(
                     "app.tasks.gis.gis_sync_service.geo_sync.sync_pop_sites",
