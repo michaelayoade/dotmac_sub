@@ -188,7 +188,9 @@ def sync_olt_autofind_entries(
         candidate for candidate in existing_candidates if candidate.is_active
     ]
     by_key: dict[tuple[str, str], OltAutofindCandidate] = {}
+    by_exact_key: dict[tuple[str, str], OltAutofindCandidate] = {}
     for item in existing_candidates:
+        by_exact_key.setdefault((item.fsp, item.serial_number), item)
         for serial in _candidate_serial_values(item):
             by_key.setdefault((item.fsp, serial), item)
     seen_keys: set[tuple[str, str]] = set()
@@ -213,16 +215,33 @@ def sync_olt_autofind_entries(
         entry_serials = [
             candidate for candidate in dict.fromkeys(entry_serials) if candidate
         ]
+        if not entry_serials:
+            logger.warning(
+                "Skipping autofind entry with unmatchable serial: olt_id=%s fsp=%s serial=%r serial_hex=%r",
+                olt_id,
+                fsp,
+                serial_number,
+                serial_hex,
+            )
+            continue
         key = (fsp, entry_serials[0])
         seen_keys.add(key)
-        candidate = next(
-            (
-                by_key.get((fsp, serial))
-                for serial in entry_serials
-                if by_key.get((fsp, serial))
-            ),
-            None,
-        )
+        candidate = by_exact_key.get((fsp, serial_number))
+        if candidate is None:
+            candidate = next(
+                (
+                    by_key.get((fsp, serial))
+                    for serial in entry_serials
+                    if by_key.get((fsp, serial))
+                ),
+                None,
+            )
+        collision = by_exact_key.get((fsp, serial_number))
+        if collision is not None and candidate is not None and collision.id != candidate.id:
+            candidate.is_active = False
+            candidate.resolution_reason = "duplicate"
+            candidate.resolved_at = now
+            candidate = collision
         matched_ont = _find_ont_by_serial(db, serial_number)
         if candidate is None:
             candidate = OltAutofindCandidate(

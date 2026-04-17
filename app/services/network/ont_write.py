@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
@@ -389,29 +390,43 @@ class OntWriteService:
         if not target_port:
             return ActionResult(success=False, message="Target PON port not found.")
 
-        # Deactivate current assignment
-        current = db.scalars(
-            select(OntAssignment).where(
-                OntAssignment.ont_unit_id == ont.id,
-                OntAssignment.active.is_(True),
-            )
-        ).first()
-        if current:
-            current.active = False
+        try:
+            with db.begin_nested():
+                current = db.scalars(
+                    select(OntAssignment)
+                    .where(
+                        OntAssignment.ont_unit_id == ont.id,
+                        OntAssignment.active.is_(True),
+                    )
+                    .with_for_update()
+                ).first()
+                if current:
+                    current.active = False
 
-        # Create new assignment
-        new_assignment = OntAssignment(
-            ont_unit_id=ont.id,
-            pon_port_id=target_port.id,
-            subscriber_id=current.subscriber_id if current else None,
-            active=True,
-            assigned_at=datetime.now(UTC),
-            notes="Moved from previous assignment",
-        )
-        db.add(new_assignment)
-        ont.olt_device_id = target_port.olt_id
-        _set_sync_meta(ont, "manual")
-        db.commit()
+                new_assignment = OntAssignment(
+                    ont_unit_id=ont.id,
+                    pon_port_id=target_port.id,
+                    subscriber_id=current.subscriber_id if current else None,
+                    active=True,
+                    assigned_at=datetime.now(UTC),
+                    notes="Moved from previous assignment",
+                )
+                db.add(new_assignment)
+                ont.olt_device_id = target_port.olt_id
+                _set_sync_meta(ont, "manual")
+                db.flush()
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            logger.warning("ONT move assignment conflict for ONT %s: %s", ont_id, exc)
+            return ActionResult(
+                success=False,
+                message="ONT already has an active assignment; reload and try again.",
+            )
+        except Exception as exc:
+            db.rollback()
+            logger.error("ONT move failed for ONT %s: %s", ont_id, exc)
+            return ActionResult(success=False, message=f"Move failed: {exc}")
         _emit_ont_event(
             db,
             "ont.moved",

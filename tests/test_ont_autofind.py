@@ -157,6 +157,100 @@ def test_sync_olt_autofind_candidates_uses_hex_when_display_serial_blank(
     assert item.ont_unit_id == ont.id
 
 
+def test_sync_olt_autofind_candidates_prefers_exact_serial_on_duplicate_variants(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="OLT-Duplicate-Serials", mgmt_ip="198.51.100.207", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    hyphenated = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/11",
+        serial_number="HWTC-0EB23F9B",
+        serial_hex="485754430EB23F9B",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    compact = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/11",
+        serial_number="HWTC0EB23F9B",
+        serial_hex="485754430EB23F9B",
+        is_active=False,
+        resolution_reason="disappeared",
+    )
+    db_session.add_all([hyphenated, compact])
+    db_session.commit()
+
+    entries = [
+        SimpleNamespace(
+            fsp="0/2/11",
+            serial_number="HWTC-0EB23F9B",
+            serial_hex="485754430EB23F9B",
+            vendor_id="HWTC",
+            model="HG8546M",
+            software_version="V1",
+            mac="-",
+            equipment_sn="-",
+            autofind_time="2026-04-17 11:27",
+        )
+    ]
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.get_autofind_onts",
+        lambda _olt: (True, "Found 1 unregistered ONT", entries),
+    )
+
+    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
+        db_session, str(olt.id)
+    )
+
+    assert ok is True
+    assert stats["created"] == 0
+    assert stats["updated"] == 1
+    db_session.refresh(hyphenated)
+    db_session.refresh(compact)
+    assert hyphenated.is_active is True
+    assert hyphenated.resolution_reason is None
+    assert compact.is_active is False
+    assert db_session.query(OltAutofindCandidate).count() == 2
+
+
+def test_sync_olt_autofind_candidates_skips_unmatchable_serial(
+    db_session, monkeypatch
+):
+    olt = OLTDevice(name="OLT-Malformed", mgmt_ip="198.51.100.206", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    entries = [
+        SimpleNamespace(
+            fsp="0/1/1",
+            serial_number="---",
+            serial_hex="",
+            vendor_id="",
+            model="",
+            software_version="",
+            mac="",
+            equipment_sn="",
+            autofind_time="",
+        )
+    ]
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.get_autofind_onts",
+        lambda _olt: (True, "Found 1 unregistered ONT", entries),
+    )
+
+    ok, _msg, stats = autofind_service.sync_olt_autofind_candidates(
+        db_session, str(olt.id)
+    )
+
+    assert ok is True
+    assert stats["discovered"] == 1
+    assert stats["created"] == 0
+    assert db_session.query(OltAutofindCandidate).count() == 0
+
+
 def test_resolve_candidate_authorized_marks_entry_inactive(db_session):
     olt = OLTDevice(name="OLT-Resolve", mgmt_ip="198.51.100.201", is_active=True)
     db_session.add(olt)

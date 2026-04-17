@@ -1005,7 +1005,11 @@ class OltSfpModule(Base):
 class OntUnit(Base):
     __tablename__ = "ont_units"
     __table_args__ = (
-        UniqueConstraint("serial_number", name="uq_ont_units_serial_number"),
+        UniqueConstraint(
+            "olt_device_id",
+            "serial_number",
+            name="uq_ont_units_olt_serial_number",
+        ),
         Index(
             "uq_ont_units_olt_external_id",
             "olt_device_id",

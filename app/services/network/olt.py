@@ -15,6 +15,7 @@ from collections.abc import Sequence
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models.network import (
@@ -100,7 +101,9 @@ def _validate_assignment_target(
     active: bool,
     current_assignment_id: object | None = None,
 ) -> tuple[OntUnit, PonPort | None]:
-    ont = db.get(OntUnit, ont_unit_id)
+    ont = db.scalar(
+        select(OntUnit).where(OntUnit.id == ont_unit_id).with_for_update()
+    )
     if not ont:
         raise HTTPException(status_code=404, detail="ONT unit not found")
 
@@ -120,6 +123,7 @@ def _validate_assignment_target(
             select(OntAssignment)
             .where(OntAssignment.ont_unit_id == ont.id)
             .where(OntAssignment.active.is_(True))
+            .with_for_update()
             .limit(1)
         )
         if current_assignment_id is not None:
@@ -132,6 +136,16 @@ def _validate_assignment_target(
             )
 
     return ont, pon_port
+
+
+def _raise_assignment_conflict(exc: IntegrityError) -> None:
+    message = str(getattr(exc, "orig", exc))
+    if "ix_ont_assignments_active_unit" in message or "ont_assignments" in message:
+        raise HTTPException(
+            status_code=409,
+            detail="ONT already has an active assignment",
+        ) from exc
+    raise exc
 
 
 def _validate_assignment_customer_links(
@@ -852,6 +866,9 @@ class OntAssignments(CRUDManager[OntAssignment]):
                 else:
                     _sync_ont_assignment_runtime(db, ont)
             db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            _raise_assignment_conflict(exc)
         except Exception:
             db.expire(ont)
             raise
@@ -946,6 +963,9 @@ class OntAssignments(CRUDManager[OntAssignment]):
 
                     ensure_cpe_for_ont(db, ont, assignment, commit=False)
             db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            _raise_assignment_conflict(exc)
         except Exception:
             if original_ont is not None:
                 db.expire(original_ont)
