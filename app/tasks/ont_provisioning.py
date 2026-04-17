@@ -47,31 +47,24 @@ def detect_profile_drift() -> dict[str, int]:
 def auto_link_profiles() -> dict[str, int]:
     """Auto-link provisioning profiles to ONTs without one.
 
-    For ONTs that have an active subscription but no provisioning_profile_id,
-    attempt to resolve a profile from the subscription's offer default or
-    organization default, and assign it.
+    Scans active ONTs that have no profile and attempts to resolve one via
+    ``resolve_profile_for_ont``. The resolver only returns a directly
+    assigned profile (no owner-based default lookup), so this task is
+    effectively a no-op unless an ONT already carries a profile reference.
     """
     logger.info("Starting auto-link of provisioning profiles to ONTs")
     db = SessionLocal()
     try:
         from sqlalchemy import select
 
-        from app.models.network import OntAssignment, OntUnit
-        from app.models.subscriber import Subscriber
+        from app.models.network import OntUnit
         from app.services.network.ont_profile_apply import resolve_profile_for_ont
 
-        # Find ONTs with active assignments (to subscribers) but no profile.
-        # We also select the assignment's subscriber_id so we can pass the
-        # business/subscriber context through to the network-layer resolver
-        # (which intentionally does not import from the subscriber domain).
         stmt = (
-            select(OntUnit.id, OntAssignment.subscriber_id)
-            .join(OntAssignment, OntAssignment.ont_unit_id == OntUnit.id)
+            select(OntUnit.id)
             .where(
                 OntUnit.provisioning_profile_id.is_(None),
                 OntUnit.is_active.is_(True),
-                OntAssignment.active.is_(True),
-                OntAssignment.subscriber_id.isnot(None),
             )
             .limit(500)
         )
@@ -79,20 +72,9 @@ def auto_link_profiles() -> dict[str, int]:
 
         linked = 0
         errors = 0
-        for ont_id, subscriber_id in ont_rows:
+        for (ont_id,) in ont_rows:
             try:
-                owner_is_business: bool | None = None
-                if subscriber_id is not None:
-                    subscriber = db.get(Subscriber, subscriber_id)
-                    owner_is_business = bool(
-                        subscriber and getattr(subscriber, "is_business", False)
-                    )
-                profile = resolve_profile_for_ont(
-                    db,
-                    str(ont_id),
-                    owner_subscriber_id=subscriber_id,
-                    owner_is_business=owner_is_business,
-                )
+                profile = resolve_profile_for_ont(db, str(ont_id))
                 if profile:
                     ont = db.get(OntUnit, ont_id)
                     if ont:

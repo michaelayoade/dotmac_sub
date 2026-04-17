@@ -508,7 +508,6 @@ def delete_parameter_map(
     dependencies=[Depends(require_permission("network:read"))],
 )
 def list_provisioning_profiles(
-    owner_subscriber_id: str | None = None,
     profile_type: str | None = None,
     config_method: str | None = None,
     olt_device_id: str | None = None,
@@ -524,7 +523,6 @@ def list_provisioning_profiles(
 
     items = ont_provisioning_profiles.list(
         db,
-        owner_subscriber_id=owner_subscriber_id,
         profile_type=profile_type,
         config_method=config_method,
         olt_device_id=olt_device_id,

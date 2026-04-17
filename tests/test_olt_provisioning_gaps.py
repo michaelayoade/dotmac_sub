@@ -22,8 +22,8 @@ from starlette.routing import Route
 
 from app.models.network import (
     OLTDevice,
-    OntAuthorizationStatus,
     OntAssignment,
+    OntAuthorizationStatus,
     OntProvisioningProfile,
     OntProvisioningStatus,
     OntStatusSource,
@@ -1995,14 +1995,11 @@ class TestGetProfileTemplates:
     def test_get_profile_templates_returns_active_only(self, db_session) -> None:
         from app.services.web_network_onts import get_profile_templates
 
-        org = _create_business_subscriber(db_session)
         active = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
             name="Active Profile Test",
             is_active=True,
         )
         inactive = OntProvisioningProfile(
-            owner_subscriber_id=org.id,
             name="Inactive Profile Test",
             is_active=False,
         )
@@ -2596,7 +2593,6 @@ class TestProfileWanServiceVlanScope:
         try:
             ont_provisioning_profiles.create(
                 db_session,
-                owner_subscriber_id=None,
                 name="Missing Mgmt VLAN Profile",
                 olt_device_id=str(olt.id),
                 mgmt_vlan_tag=201,
@@ -2614,7 +2610,6 @@ class TestProfileWanServiceVlanScope:
 
         profile = ont_provisioning_profiles.create(
             db_session,
-            owner_subscriber_id=None,
             name="Valid Mgmt VLAN Profile",
             olt_device_id=str(olt.id),
             mgmt_vlan_tag=201,

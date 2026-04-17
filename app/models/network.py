@@ -1864,17 +1864,9 @@ class OntProvisioningProfile(Base):
     """
 
     __tablename__ = "ont_provisioning_profiles"
-    __table_args__ = (
-        UniqueConstraint(
-            "owner_subscriber_id", "name", name="uq_ont_prov_profiles_owner_name"
-        ),
-    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
-    owner_subscriber_id: Mapped[uuid.UUID | None] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("subscribers.id")
     )
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     profile_type: Mapped[OntProfileType] = mapped_column(
@@ -1981,11 +1973,6 @@ class OntProvisioningProfile(Base):
     )
 
     # Relationships
-    owner_subscriber = relationship(
-        "Subscriber",
-        backref="ont_provisioning_profiles",
-        foreign_keys=[owner_subscriber_id],
-    )
     olt_device = relationship("OLTDevice")
     mgmt_ip_pool = relationship("IpPool", foreign_keys=[mgmt_ip_pool_id])
     download_speed_profile = relationship(

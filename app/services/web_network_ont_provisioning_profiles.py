@@ -52,14 +52,6 @@ def _form_bool(form: FormData, key: str) -> bool:
     return _form_str(form, key) == "true"
 
 
-def _get_owner_subscriber_id(request: Request) -> str:
-    """Extract the current business account subscriber id, if any."""
-    from app.web.admin import get_current_user
-
-    user = get_current_user(request)
-    return str(user.get("subscriber_id", ""))
-
-
 def _active_olts(db: Session) -> list[OLTDevice]:
     from sqlalchemy import select
 
@@ -117,10 +109,8 @@ def list_context(
     """Return context dict for the provisioning profile list page."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    owner_subscriber_id = _get_owner_subscriber_id(request)
     items = ont_provisioning_profiles.list(
         db,
-        owner_subscriber_id=owner_subscriber_id,
         search=search,
         profile_type=profile_type,
         config_method=config_method,
@@ -270,10 +260,8 @@ def handle_create(
     request: Request, db: Session, form_data: dict[str, object]
 ) -> OntProvisioningProfile:
     """Create a new provisioning profile from validated form values."""
-    owner_subscriber_id = _get_owner_subscriber_id(request)
     return ont_provisioning_profiles.create(
         db,
-        owner_subscriber_id=owner_subscriber_id,
         name=str(form_data["name"]),
         profile_type=OntProfileType(str(form_data["profile_type"])),
         description=str(form_data["description"])
