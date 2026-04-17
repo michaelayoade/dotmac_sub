@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
+from typing import Any
 
 from app.services.common import (
     apply_ordering as _apply_ordering,
@@ -24,10 +26,33 @@ __all__ = [
     "_apply_ordering",
     "_apply_pagination",
     "_validate_enum",
+    "NasTarget",
     "decode_huawei_hex_serial",
     "encode_to_hex_serial",
     "normalize_mac_address",
 ]
+
+
+@dataclass(frozen=True, kw_only=True)
+class NasTarget:
+    """Lightweight DTO describing a NAS device for provisioning operations.
+
+    Used by network-domain services to avoid importing ``app.models.catalog``.
+    Callers that hold a ``NasDevice`` ORM row should construct one of these
+    inline from the fields below.
+
+    Attributes match the fields read by the MikroTik VLAN/PPPoE provisioning
+    helpers (``app.services.nas._mikrotik_vlan``) so the DTO can be handed
+    straight through to those helpers without needing the ORM row itself.
+    """
+
+    name: str
+    vendor: Any
+    management_ip: str | None = None
+    ip_address: str | None = None
+    api_username: str | None = None
+    api_password: str | None = None
+    tags: Any = None
 
 
 def decode_huawei_hex_serial(value: str | None) -> str | None:
