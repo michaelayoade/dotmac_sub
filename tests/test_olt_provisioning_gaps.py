@@ -39,7 +39,6 @@ from app.models.network import (
     WanServiceType,
 )
 from app.models.ont_autofind import OltAutofindCandidate
-from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.network import olt_authorization_workflow
 from app.services.network.olt_command_gen import (
     HuaweiCommandGenerator,
@@ -60,21 +59,6 @@ from app.services.network.vlan_chain import (
     VlanChainWarning,
     validate_chain,
 )
-
-
-def _create_business_subscriber(db_session) -> Subscriber:
-    """Create a minimal business subscriber for ownership constraints."""
-    subscriber = Subscriber(
-        first_name="Test",
-        last_name="Business",
-        email=f"business-{uuid.uuid4().hex[:8]}@example.test",
-        company_name=f"Test Org {uuid.uuid4().hex[:8]}",
-    )
-    subscriber.category = SubscriberCategory.business
-    db_session.add(subscriber)
-    db_session.commit()
-    db_session.refresh(subscriber)
-    return subscriber
 
 
 def _add_olt_auth_profile(
