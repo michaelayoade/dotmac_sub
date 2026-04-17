@@ -6,6 +6,12 @@ re-runs the specific failed provisioning steps to close the gap.
 
 Designed to run both on-demand (operator clicks a button) and periodically
 (Celery beat task every 30 minutes).
+
+Credential lookup for PPPoE password resolution is injected via
+:class:`~app.services.network._credentials.PppoeCredentialProvider` so
+this module never imports from the subscription/catalog domain. Callers
+that have an ``AccessCredential``-backed store should wire up
+``app.services.network_credential_bridge.AccessCredentialAdapter``.
 """
 
 from __future__ import annotations
@@ -16,11 +22,11 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import and_, func, select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.network import OLTDevice, OntUnit
+from app.services.network._credentials import PppoeCredentialProvider
 from app.services.network.provisioning_settings import get_stale_runtime_hours
 
 logger = logging.getLogger(__name__)
@@ -331,8 +337,20 @@ class ProvisioningEnforcement:
     def enforce_pppoe_push(
         db: Session,
         ont_ids: list[str],
+        *,
+        credentials: PppoeCredentialProvider | None = None,
     ) -> dict[str, int]:
-        """Re-push PPPoE credentials to ONTs via TR-069."""
+        """Re-push PPPoE credentials to ONTs via TR-069.
+
+        Args:
+            db: Database session.
+            ont_ids: OntUnit IDs to re-push PPPoE credentials for.
+            credentials: Optional access-credential provider used as a
+                fallback when the ONT's own ``pppoe_password`` field is
+                empty or cannot be decrypted. When ``None`` (standalone
+                mode), the fallback lookup is skipped and ONTs without
+                a usable stored password are counted as skipped.
+        """
         from app.services.credential_crypto import decrypt_credential
         from app.services.network.ont_action_network import set_pppoe_credentials
 
@@ -359,8 +377,17 @@ class ProvisioningEnforcement:
                     continue
 
             if not password:
-                # Try to find password from AccessCredential
-                password = _resolve_access_credential_password(db, ont)
+                # Fall back to the access-credential provider when wired up.
+                if credentials is None:
+                    logger.warning(
+                        "No credential provider configured — skipping "
+                        "AccessCredential fallback for ONT %s",
+                        ont.serial_number,
+                    )
+                else:
+                    password = _resolve_access_credential_password(
+                        credentials, ont
+                    )
 
             if not password:
                 logger.warning(
@@ -789,31 +816,44 @@ class ProvisioningEnforcement:
         return stats
 
 
-def _resolve_access_credential_password(db: Session, ont: OntUnit) -> str:
-    """Try to find the PPPoE password from the subscriber's AccessCredential."""
-    from app.models.catalog import AccessCredential
+def _resolve_access_credential_password(
+    credentials: PppoeCredentialProvider,
+    ont: OntUnit,
+) -> str:
+    """Resolve the PPPoE password via the injected credential provider.
 
+    Looks up the active credential by the ONT's ``pppoe_username`` and
+    decrypts its stored ``secret_hash``. Returns an empty string if no
+    active credential is found or the secret cannot be decrypted.
+    """
     if not ont.pppoe_username:
         return ""
 
     try:
-        from sqlalchemy import select as sa_select
-
-        stmt = sa_select(AccessCredential).where(
-            AccessCredential.username == ont.pppoe_username,
-            AccessCredential.is_active.is_(True),
-        )
-        cred = db.scalars(stmt).first()
-        if cred and cred.secret_hash:
-            from app.services.credential_crypto import decrypt_credential
-
-            return decrypt_credential(cred.secret_hash) or ""
-    except (SQLAlchemyError, ValueError) as exc:
+        cred = credentials.get_by_username(ont.pppoe_username)
+    except Exception as exc:  # noqa: BLE001 - provider errors must not abort the run
         logger.warning(
-            "Could not resolve AccessCredential for ONT %s (username %s): %s",
+            "Credential provider lookup failed for ONT %s (username %s): %s",
             ont.serial_number,
             ont.pppoe_username,
             exc,
             exc_info=True,
         )
-    return ""
+        return ""
+
+    if cred is None or not cred.secret_hash:
+        return ""
+
+    try:
+        from app.services.credential_crypto import decrypt_credential
+
+        return decrypt_credential(cred.secret_hash) or ""
+    except ValueError as exc:
+        logger.warning(
+            "Could not decrypt access credential for ONT %s (username %s): %s",
+            ont.serial_number,
+            ont.pppoe_username,
+            exc,
+            exc_info=True,
+        )
+        return ""
