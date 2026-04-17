@@ -7,8 +7,9 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from app.services.common import (
     apply_ordering as _apply_ordering,
@@ -20,6 +21,10 @@ from app.services.common import (
     validate_enum as _validate_enum,
 )
 
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+    from sqlalchemy.sql import Select
+
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -27,10 +32,53 @@ __all__ = [
     "_apply_pagination",
     "_validate_enum",
     "NasTarget",
+    "SubscriberValidator",
     "decode_huawei_hex_serial",
     "encode_to_hex_serial",
     "normalize_mac_address",
 ]
+
+
+class SubscriberValidator(Protocol):
+    """Cross-domain bridge for OLT/ONT services that need subscriber info.
+
+    The network package must not import ``app.models.subscriber`` directly.
+    Callers inject an implementation of this protocol (typically
+    ``app.services.network_subscriber_bridge.DefaultSubscriberValidator``)
+    when subscriber integration is desired. A ``None`` validator means the
+    network service runs in standalone mode and skips subscriber checks.
+    """
+
+    def validate_assignment_customer_links(
+        self,
+        db: Session,
+        *,
+        subscriber_id: object | None,
+        service_address_id: object | None,
+    ) -> None:
+        """Validate that an ONT assignment's subscriber/service address pair is consistent.
+
+        Raises ``HTTPException`` on failure; returns ``None`` on success or when
+        there is nothing to validate (e.g. both identifiers are ``None``).
+        """
+        ...
+
+    def augment_ont_search(
+        self,
+        stmt: Select,
+        term: str,
+        *,
+        assignment_alias: Any,
+    ) -> tuple[Select, Sequence[Any]]:
+        """Augment an ONT search statement with subscriber joins and conditions.
+
+        Given the in-progress ``Select`` and the ILIKE-wrapped ``term``, this
+        returns the (possibly) augmented statement plus a list of extra SQL
+        clause elements that should be OR'd into the main search ``where``.
+        Implementations that don't support subscriber search may return the
+        statement unchanged and an empty sequence.
+        """
+        ...
 
 
 @dataclass(frozen=True, kw_only=True)
