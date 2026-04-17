@@ -36,6 +36,10 @@ from app.services.network.serial_utils import normalize as normalize_serial
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
 )
+from app.services.network.ont_status_transitions import (
+    set_authorization_status,
+    set_provisioning_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -71,9 +75,9 @@ def _set_ont_activation_status(
     ont = db.get(OntUnit, ont_unit_id)
     if ont is None:
         return
-    ont.authorization_status = OntAuthorizationStatus.authorized
+    set_authorization_status(ont, OntAuthorizationStatus.authorized, strict=False)
     if provisioning_status is not None:
-        ont.provisioning_status = provisioning_status
+        set_provisioning_status(ont, provisioning_status, strict=False)
     db.flush()
 
 
@@ -2272,7 +2276,9 @@ def create_or_find_ont_for_authorized_serial(
         try:
             existing.olt_device_id = uuid.UUID(olt_id)
             existing.is_active = True
-            existing.authorization_status = OntAuthorizationStatus.authorized
+            set_authorization_status(
+                existing, OntAuthorizationStatus.authorized, strict=False
+            )
             if ont_id_on_olt is not None:
                 existing.external_id = str(ont_id_on_olt)
             parts = fsp.split("/")

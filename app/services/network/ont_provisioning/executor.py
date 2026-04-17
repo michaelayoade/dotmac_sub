@@ -143,10 +143,15 @@ class ProvisioningExecutionResult:
                                 "Rollback: %s - %s", entry.step_name, entry.description
                             )
                         else:
-                            logger.warning(
+                            logger.error(
                                 "Rollback failed: %s - %s",
                                 entry.step_name,
                                 entry.description,
+                                extra={
+                                    "event": "provisioning_compensation_failed",
+                                    "step": entry.step_name,
+                                    "resource_id": entry.resource_id,
+                                },
                             )
                     except Exception as exc:
                         logger.error(
@@ -154,11 +159,20 @@ class ProvisioningExecutionResult:
                             entry.step_name,
                             entry.description,
                             exc,
+                            extra={
+                                "event": "provisioning_compensation_error",
+                                "step": entry.step_name,
+                                "resource_id": entry.resource_id,
+                            },
                         )
                         results.append((entry.step_name, False, str(exc)))
 
         except Exception as exc:
-            logger.error("Failed to establish rollback connection: %s", exc)
+            logger.error(
+                "Failed to establish rollback connection: %s",
+                exc,
+                extra={"event": "provisioning_compensation_connection_failed"},
+            )
             # Return error for all remaining entries
             for entry in self.compensation_log:
                 if not any(r[0] == entry.step_name for r in results):

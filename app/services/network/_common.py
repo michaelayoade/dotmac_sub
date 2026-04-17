@@ -42,13 +42,17 @@ def decode_huawei_hex_serial(value: str | None) -> str | None:
     """
     raw = str(value or "").strip().upper()
     if not re.fullmatch(r"[0-9A-F]{16}", raw):
+        if raw:
+            logger.debug("Invalid Huawei hex serial format: %r", value)
         return None
     try:
         vendor_ascii = bytes.fromhex(raw[:8]).decode("ascii")
     except (ValueError, UnicodeDecodeError):
+        logger.warning("Malformed Huawei hex serial vendor prefix: %r", value)
         return None
     if vendor_ascii.isalpha():
         return f"{vendor_ascii}{raw[8:]}"
+    logger.warning("Huawei hex serial vendor prefix is not alphabetic: %r", value)
     return None
 
 

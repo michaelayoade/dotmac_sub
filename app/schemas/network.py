@@ -424,6 +424,7 @@ class PonPortFields(BaseModel):
     olt_id: UUID
     olt_card_port_id: UUID | None = None
     port_number: int | None = None
+    max_ont_capacity: int | None = Field(default=None, ge=1, le=1024)
     notes: str | None = None
     is_active: bool = True
 
@@ -451,6 +452,7 @@ class PonPortUpdate(BaseModel):
     olt_card_port_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
     port_number: int | None = None
+    max_ont_capacity: int | None = Field(default=None, ge=1, le=1024)
     notes: str | None = None
     is_active: bool | None = None
 

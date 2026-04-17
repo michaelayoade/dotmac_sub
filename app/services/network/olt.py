@@ -12,10 +12,11 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Sequence
+from time import sleep
 
 from fastapi import HTTPException
 from sqlalchemy import and_, func, or_, select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session, aliased, joinedload
 
 from app.models.network import (
@@ -109,7 +110,9 @@ def _validate_assignment_target(
 
     pon_port: PonPort | None = None
     if pon_port_id is not None:
-        pon_port = db.get(PonPort, pon_port_id)
+        pon_port = db.scalar(
+            select(PonPort).where(PonPort.id == pon_port_id).with_for_update()
+        )
         if not pon_port or not bool(getattr(pon_port, "is_active", True)):
             raise HTTPException(status_code=404, detail="PON port not found")
         if ont.olt_device_id and pon_port.olt_id != ont.olt_device_id:
@@ -117,6 +120,17 @@ def _validate_assignment_target(
                 status_code=400,
                 detail="PON port does not belong to the ONT's OLT",
             )
+        if active and pon_port.max_ont_capacity is not None:
+            assigned_count = db.scalar(
+                select(func.count(OntAssignment.id))
+                .where(OntAssignment.pon_port_id == pon_port.id)
+                .where(OntAssignment.active.is_(True))
+            ) or 0
+            if assigned_count >= pon_port.max_ont_capacity:
+                raise HTTPException(
+                    status_code=409,
+                    detail="PON port ONT capacity has been reached",
+                )
 
     if active:
         stmt = (
@@ -146,6 +160,18 @@ def _raise_assignment_conflict(exc: IntegrityError) -> None:
             detail="ONT already has an active assignment",
         ) from exc
     raise exc
+
+
+def _is_retryable_assignment_error(exc: OperationalError) -> bool:
+    message = str(getattr(exc, "orig", exc)).lower()
+    return any(
+        token in message
+        for token in (
+            "deadlock detected",
+            "could not serialize access",
+            "lock timeout",
+        )
+    )
 
 
 def _validate_assignment_customer_links(
@@ -247,6 +273,25 @@ class OLTDevices(CRUDManager[OLTDevice]):
     @classmethod
     def delete(cls, db: Session, device_id: str) -> None:
         device = cls.get(db, device_id)
+        linked_onts = db.scalar(
+            select(func.count(OntUnit.id))
+            .where(OntUnit.olt_device_id == device.id)
+            .where(OntUnit.is_active.is_(True))
+        ) or 0
+        active_assignments = db.scalar(
+            select(func.count(OntAssignment.id))
+            .join(PonPort, OntAssignment.pon_port_id == PonPort.id)
+            .where(PonPort.olt_id == device.id)
+            .where(OntAssignment.active.is_(True))
+        ) or 0
+        if linked_onts or active_assignments:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Cannot delete OLT while active ONTs or assignments exist. "
+                    "Return ONTs to inventory or deactivate assignments first."
+                ),
+            )
         emit_event(
             db,
             EventType.olt_deleted,
@@ -429,6 +474,8 @@ class PonPorts(CRUDManager[PonPort]):
                 existing_port.port_number = parsed_port_number
                 if data.get("notes") is not None:
                     existing_port.notes = data["notes"]
+                if data.get("max_ont_capacity") is not None:
+                    existing_port.max_ont_capacity = data["max_ont_capacity"]
                 db.commit()
                 db.refresh(existing_port)
                 return existing_port
@@ -460,6 +507,8 @@ class PonPorts(CRUDManager[PonPort]):
                 existing_port.is_active = True
                 if data.get("notes") is not None:
                     existing_port.notes = data["notes"]
+                if data.get("max_ont_capacity") is not None:
+                    existing_port.max_ont_capacity = data["max_ont_capacity"]
                 db.commit()
                 db.refresh(existing_port)
                 return existing_port
@@ -856,22 +905,29 @@ class OntAssignments(CRUDManager[OntAssignment]):
         assignment = OntAssignment(**payload.model_dump())
         from app.services.network.cpe import ensure_cpe_for_ont
 
-        try:
-            with db.begin_nested():
-                db.add(assignment)
-                db.flush()
-                if assignment.active:
-                    ont.is_active = True
-                    ensure_cpe_for_ont(db, ont, assignment, commit=False)
-                else:
-                    _sync_ont_assignment_runtime(db, ont)
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            _raise_assignment_conflict(exc)
-        except Exception:
-            db.expire(ont)
-            raise
+        for attempt in range(3):
+            try:
+                with db.begin_nested():
+                    db.add(assignment)
+                    db.flush()
+                    if assignment.active:
+                        ont.is_active = True
+                        ensure_cpe_for_ont(db, ont, assignment, commit=False)
+                    else:
+                        _sync_ont_assignment_runtime(db, ont)
+                db.commit()
+                break
+            except IntegrityError as exc:
+                db.rollback()
+                _raise_assignment_conflict(exc)
+            except OperationalError as exc:
+                db.rollback()
+                if attempt >= 2 or not _is_retryable_assignment_error(exc):
+                    raise
+                sleep(0.05 * (2**attempt))
+            except Exception:
+                db.expire(ont)
+                raise
         db.refresh(assignment)
         return assignment
 
@@ -944,34 +1000,41 @@ class OntAssignments(CRUDManager[OntAssignment]):
             OntUnit, original_ont_unit_id
         )
 
-        try:
-            with db.begin_nested():
-                for key, value in data.items():
-                    setattr(assignment, key, value)
-                db.flush()
+        for attempt in range(3):
+            try:
+                with db.begin_nested():
+                    for key, value in data.items():
+                        setattr(assignment, key, value)
+                    db.flush()
 
-                if assignment.active:
-                    ont.is_active = True
-                else:
-                    _sync_ont_assignment_runtime(db, ont)
+                    if assignment.active:
+                        ont.is_active = True
+                    else:
+                        _sync_ont_assignment_runtime(db, ont)
 
-                if original_ont is not None and original_ont.id != ont.id:
-                    _sync_ont_assignment_runtime(db, original_ont)
+                    if original_ont is not None and original_ont.id != ont.id:
+                        _sync_ont_assignment_runtime(db, original_ont)
 
-                if assignment.active:
-                    from app.services.network.cpe import ensure_cpe_for_ont
+                    if assignment.active:
+                        from app.services.network.cpe import ensure_cpe_for_ont
 
-                    ensure_cpe_for_ont(db, ont, assignment, commit=False)
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            _raise_assignment_conflict(exc)
-        except Exception:
-            if original_ont is not None:
-                db.expire(original_ont)
-            if ont is not original_ont:
-                db.expire(ont)
-            raise
+                        ensure_cpe_for_ont(db, ont, assignment, commit=False)
+                db.commit()
+                break
+            except IntegrityError as exc:
+                db.rollback()
+                _raise_assignment_conflict(exc)
+            except OperationalError as exc:
+                db.rollback()
+                if attempt >= 2 or not _is_retryable_assignment_error(exc):
+                    raise
+                sleep(0.05 * (2**attempt))
+            except Exception:
+                if original_ont is not None:
+                    db.expire(original_ont)
+                if ont is not original_ont:
+                    db.expire(ont)
+                raise
         db.refresh(assignment)
         return assignment
 

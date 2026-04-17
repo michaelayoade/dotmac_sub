@@ -11,7 +11,7 @@ import re
 import shutil
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -511,6 +511,7 @@ def poll_olt_ont_signals(
     if not community:
         logger.warning("OLT %s has no SNMP community configured, skipping", olt.name)
         return {"polled": 0, "updated": 0, "errors": 0, "skipped": 1}
+    poll_started_at = datetime.now(UTC)
 
     # P0: Validate SNMP parameters early to fail fast on invalid input
     from app.services.network.olt_polling_parsers import (
@@ -856,9 +857,24 @@ def poll_olt_ont_signals(
             else:
                 continue
 
-            db.execute(
-                update(OntUnit).where(OntUnit.id == ont.id).values(**update_values)
+            update_result = db.execute(
+                update(OntUnit)
+                .where(OntUnit.id == ont.id)
+                .where(
+                    or_(
+                        OntUnit.signal_updated_at.is_(None),
+                        OntUnit.signal_updated_at <= poll_started_at,
+                    )
+                )
+                .values(**update_values)
             )
+            if update_result.rowcount == 0:
+                logger.info(
+                    "Skipping stale ONT signal update for %s from OLT %s",
+                    ont.id,
+                    olt.id,
+                )
+                continue
             updated += 1
 
             # Track status transitions and signal degradation for events
