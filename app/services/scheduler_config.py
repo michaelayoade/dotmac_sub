@@ -1071,7 +1071,7 @@ def build_beat_schedule() -> dict:
                 "kwargs": task.kwargs_json or {},
             }
             if task.task_name in TR069_TASK_QUEUE_NAMES:
-                schedule[f"scheduled_task_{task.id}"]["options"] = {"queue": "tr069"}
+                schedule[f"scheduled_task_{task.id}"]["options"] = {"queue": "acs"}
     except Exception:
         logger.exception("Failed to build Celery beat schedule.")
     finally:

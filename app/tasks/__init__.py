@@ -14,6 +14,11 @@ from app.tasks.bandwidth import (
 from app.tasks.billing import run_invoice_cycle
 from app.tasks.collections import run_dunning, run_prepaid_enforcement
 from app.tasks.exports import run_export_job, run_scheduled_export
+from app.tasks.events import (
+    cleanup_old_events,
+    mark_stale_processing_events,
+    retry_failed_events,
+)
 from app.tasks.gis import run_batch_geocode_job, sync_gis_sources
 from app.tasks.imports import run_import_job
 from app.tasks.integrations import run_integration_job
@@ -117,6 +122,9 @@ __all__ = [
     "run_prepaid_enforcement",
     "run_scheduled_export",
     "run_export_job",
+    "retry_failed_events",
+    "mark_stale_processing_events",
+    "cleanup_old_events",
     "run_usage_rating",
     "import_radius_accounting",
     "cleanup_nas_backups",
