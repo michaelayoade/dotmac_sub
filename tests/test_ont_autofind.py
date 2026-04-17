@@ -365,3 +365,36 @@ def test_build_unconfigured_onts_page_data_supports_history_filters(db_session):
     assert [entry["serial_number"] for entry in disappeared_data["entries"]] == [
         "DISC-ONT"
     ]
+
+
+def test_build_unconfigured_onts_page_data_searches_hex_serial_variants(db_session):
+    olt = OLTDevice(name="OLT-Hex-Search", mgmt_ip="198.51.100.208", is_active=True)
+    db_session.add(olt)
+    db_session.commit()
+
+    item = OltAutofindCandidate(
+        olt_id=olt.id,
+        fsp="0/2/15",
+        serial_number="HWTC-C044CD9A",
+        serial_hex="48575443C044CD9A",
+        is_active=True,
+    )
+    db_session.add(item)
+    db_session.commit()
+
+    hex_data = autofind_service.build_unconfigured_onts_page_data(
+        db_session,
+        search="48575443C044CD9A",
+    )
+    assert [entry["serial_number"] for entry in hex_data["entries"]] == [
+        "HWTC-C044CD9A"
+    ]
+    assert hex_data["entries"][0]["serial_hex"] == "48575443C044CD9A"
+
+    display_data = autofind_service.build_unconfigured_onts_page_data(
+        db_session,
+        search="HWTCC044CD9A",
+    )
+    assert [entry["serial_number"] for entry in display_data["entries"]] == [
+        "HWTC-C044CD9A"
+    ]

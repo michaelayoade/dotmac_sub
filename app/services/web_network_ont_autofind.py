@@ -415,17 +415,28 @@ def build_unconfigured_onts_page_data(
     if olt_id:
         query = query.filter(OltAutofindCandidate.olt_id == olt_id)
     if search:
-        term = f"%{search.strip()}%"
-        query = query.filter(
-            or_(
-                OltAutofindCandidate.serial_number.ilike(term),
-                OltAutofindCandidate.fsp.ilike(term),
-                OltAutofindCandidate.model.ilike(term),
-                OltAutofindCandidate.mac.ilike(term),
-                OLTDevice.name.ilike(term),
-                OltAutofindCandidate.resolution_reason.ilike(term),
+        terms = [
+            f"%{candidate}%"
+            for candidate in dict.fromkeys(
+                [search.strip(), *serial_search_candidates(search)]
             )
-        )
+            if candidate
+        ]
+        search_filters = []
+        for term in terms:
+            search_filters.extend(
+                [
+                    OltAutofindCandidate.serial_number.ilike(term),
+                    OltAutofindCandidate.serial_hex.ilike(term),
+                    OltAutofindCandidate.fsp.ilike(term),
+                    OltAutofindCandidate.model.ilike(term),
+                    OltAutofindCandidate.mac.ilike(term),
+                    OLTDevice.name.ilike(term),
+                    OltAutofindCandidate.resolution_reason.ilike(term),
+                ]
+            )
+        if search_filters:
+            query = query.filter(or_(*search_filters))
 
     rows = query.order_by(
         func.coalesce(
@@ -441,6 +452,7 @@ def build_unconfigured_onts_page_data(
             "olt_name": olt.name,
             "fsp": candidate.fsp,
             "serial_number": candidate.serial_number,
+            "serial_hex": candidate.serial_hex,
             "vendor_id": candidate.vendor_id,
             "model": candidate.model,
             "mac": candidate.mac,
