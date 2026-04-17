@@ -12,13 +12,28 @@ def test_set_wifi_password_falls_back_to_supported_path(monkeypatch) -> None:
     cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
             path = next(iter(params))
             attempts.append(path)
             if path.endswith("WLANConfiguration.1.KeyPassphrase"):
                 cache[path] = params[path]
                 return {"device_id": device_id, "path": path}
             raise GenieACSError("invalid parameter name")
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
 
         def get_device(self, _device_id: str):
             # Build a minimal nested dict from the simulated cache for the paths
@@ -76,9 +91,24 @@ def test_set_wifi_password_fails_when_device_cache_does_not_confirm(monkeypatch)
     """
 
     class FakeClient:
-        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+        def set_parameter_values(
+            self,
+            device_id: str,
+            _params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
             # Accept the task on every candidate but never update the cache.
             return {"device_id": device_id, "accepted": True}
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
 
         def get_device(self, _device_id: str):
             return {}
@@ -108,11 +138,38 @@ def test_set_wifi_password_fails_when_device_cache_does_not_confirm(monkeypatch)
 
 def test_set_wifi_config_pushes_radio_ssid_channel_and_security(monkeypatch) -> None:
     calls: list[tuple[str, dict[str, str]]] = []
+    cache: dict[str, str] = {}
 
     class FakeClient:
-        def set_parameter_values(self, device_id: str, params: dict[str, str]):
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
             calls.append((device_id, params))
+            cache.update(params)
             return {"queued": True}
+
+        def get_parameter_values(
+            self,
+            _device_id: str,
+            _paths: list[str],
+            *,
+            connection_request: bool = True,
+        ):
+            return {"queued": True}
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
 
         def refresh_object(self, *_args, **_kwargs):
             return {"refreshed": True}

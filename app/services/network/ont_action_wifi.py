@@ -100,6 +100,83 @@ def _read_param_from_cache(
     return node.get("_value"), node.get("_timestamp")
 
 
+def _set_and_verify(
+    client: Any,
+    device_id: str,
+    params: dict[str, str],
+    *,
+    expected: dict[str, str] | None = None,
+) -> dict[str, object]:
+    """Apply params via setParameterValues and verify against a live device read.
+
+    Chains two tasks in a single CWMP session:
+      1. setParameterValues with connection_request=False (queued, no CR yet).
+      2. getParameterValues with connection_request=True (fires one CR).
+
+    GenieACS processes tasks FIFO within the session, so the device applies
+    the writes and then returns live values in the same exchange. The second
+    task populates the GenieACS model cache from the live device read, so the
+    subsequent cache readback reflects what the device actually has — not
+    whatever the client optimistically pushed.
+
+    Raises GenieACSError when any target parameter's cached value after the
+    chained session does not match the requested value. Returns the SPV task
+    result on full verification.
+
+    ``expected`` defaults to ``params``; pass a subset when some written
+    parameters (e.g. booleans normalized to ``"true"``/``"false"``) need a
+    different cache comparison.
+    """
+    if not params:
+        raise GenieACSError("_set_and_verify called with no parameters")
+    full_paths = list(params.keys())
+    expected_values = expected if expected is not None else params
+
+    # Stage the write without triggering the connection request yet.
+    spv_result: dict[str, object] = client.set_parameter_values(
+        device_id, params, connection_request=False
+    )
+    # Chain a live read for the same paths; the CR fires here so both tasks
+    # ride a single CWMP session in FIFO order (SPV first, GPV second).
+    try:
+        client.get_parameter_values(
+            device_id, full_paths, connection_request=True
+        )
+    except GenieACSError as exc:
+        raise GenieACSError(
+            f"Readback getParameterValues failed after SPV: {exc}"
+        ) from exc
+
+    mismatches: list[str] = []
+    for path, want in expected_values.items():
+        got, _ = _read_param_from_cache(client, device_id, path)
+        if _values_equal(got, want):
+            continue
+        mismatches.append(f"{path}: expected={want!r} got={got!r}")
+
+    if mismatches:
+        raise GenieACSError(
+            "Device did not apply setParameterValues: " + "; ".join(mismatches)
+        )
+    return spv_result
+
+
+def _values_equal(cache_value: Any, requested: str) -> bool:
+    """Compare a cached TR-069 value to the requested string, tolerating bools.
+
+    GenieACS stores booleans as Python bool and integers as int in the cache,
+    but the client always writes string values. Normalize both sides so
+    ``"true"`` matches ``True``, ``"6"`` matches ``6``, etc.
+    """
+    if cache_value == requested:
+        return True
+    if isinstance(cache_value, bool):
+        return str(cache_value).lower() == str(requested).lower()
+    if isinstance(cache_value, (int, float)):
+        return str(cache_value) == str(requested)
+    return False
+
+
 def _set_first_supported_path(
     client: Any,
     device_id: str,
@@ -109,60 +186,29 @@ def _set_first_supported_path(
 ) -> dict[str, object]:
     """Try a list of candidate parameter paths until one is verified applied.
 
-    For each candidate:
-      1. Record the pre-SPV (value, timestamp) from the GenieACS cache.
-      2. Issue setParameterValues.
-      3. Read the post-SPV (value, timestamp) from the cache.
-      4. Accept the path when the post-SPV value matches the target.
-         If the timestamp did not advance, warn but still accept — the target
-         value is already live, so the user's intent is satisfied.
-      5. On value mismatch, try the next candidate. If all candidates end up
-         with a mismatched value, raise GenieACSError so the caller reports
-         failure instead of a misleading success.
+    For each candidate, call ``_set_and_verify`` which chains a live read in
+    the same CWMP session. On GenieACSError (the path is unsupported or the
+    live read shows the device did not apply the value), try the next
+    candidate. If none verify, re-raise the last error so the caller surfaces
+    an actionable failure instead of a misleading success.
     """
     last_error: Exception | None = None
     for candidate in candidate_paths:
         full_path = f"{root}.{candidate}"
-        before_value, before_ts = _read_param_from_cache(client, device_id, full_path)
         params = build_tr069_params(root, {candidate: value})
         try:
-            result = client.set_parameter_values(device_id, params)
+            result = _set_and_verify(client, device_id, params)
         except GenieACSError as exc:
             last_error = exc
             logger.debug(
-                "TR-069 path %s rejected for device %s: %s",
+                "TR-069 path %s rejected or not applied on device %s: %s",
                 full_path,
                 device_id,
                 exc,
             )
             continue
-        after_value, after_ts = _read_param_from_cache(client, device_id, full_path)
-        if after_value == value:
-            if before_ts is not None and after_ts == before_ts and before_value == value:
-                logger.info(
-                    "TR-069 param %s on %s already at target value; no device change",
-                    full_path,
-                    device_id,
-                )
-            elif before_ts is not None and after_ts == before_ts:
-                logger.warning(
-                    "TR-069 param %s on %s has target value in cache but timestamp did "
-                    "not advance after setParameterValues; device may not have applied",
-                    full_path,
-                    device_id,
-                )
-            _request_runtime_refresh(client, device_id, root)
-            return result
-        logger.warning(
-            "TR-069 param %s on %s not applied after setParameterValues: expected=%r got=%r",
-            full_path,
-            device_id,
-            value,
-            after_value,
-        )
-        last_error = GenieACSError(
-            f"Value not applied at {full_path} (expected {value!r}, cache has {after_value!r})"
-        )
+        _request_runtime_refresh(client, device_id, root)
+        return result
     if last_error is not None:
         raise last_error
     raise GenieACSError("No WiFi parameter paths configured.")
@@ -182,7 +228,7 @@ def set_wifi_ssid(db: Session, ont_id: str, ssid: str) -> ActionResult:
     root = detect_data_model_root(db, ont, client, device_id)
     params = build_tr069_params(root, {_WIFI_SSID_PATHS[root]: ssid})
     try:
-        result = client.set_parameter_values(device_id, params)
+        result = _set_and_verify(client, device_id, params)
         _request_runtime_refresh(client, device_id, root)
         logger.info("WiFi SSID set on ONT %s to '%s'", ont.serial_number, ssid)
         return ActionResult(
@@ -281,9 +327,8 @@ def set_wifi_config(
     try:
         result: dict[str, object] = {}
         if params:
-            result = client.set_parameter_values(
-                device_id, build_tr069_params(root, params)
-            )
+            full_params = build_tr069_params(root, params)
+            result = _set_and_verify(client, device_id, full_params)
             _request_runtime_refresh(client, device_id, root)
         if password is not None:
             result = _set_first_supported_path(
