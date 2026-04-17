@@ -266,6 +266,21 @@ def backup_running_config_ssh(db: Session, olt_id: str):
     )
 
 
+def fetch_running_config_ssh_preview(db: Session, olt_id: str):
+    return _call_operations_helper(
+        olt_operations_service.fetch_running_config_ssh_preview, db, olt_id
+    )
+
+
+def get_ont_status_by_serial(db: Session, olt_id: str, serial_number: str):
+    return _call_operations_helper(
+        olt_operations_service.get_ont_status_by_serial,
+        db,
+        olt_id,
+        serial_number,
+    )
+
+
 # Compatibility exports for bulk SNMP ONT discovery now owned by
 # network/olt_snmp_sync.py.
 _parse_walk_composite = olt_snmp_sync_service._parse_walk_composite

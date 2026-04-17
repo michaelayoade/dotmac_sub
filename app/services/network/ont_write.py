@@ -146,11 +146,22 @@ class OntWriteService:
                     db, ont_id, pppoe_username, pppoe_password
                 )
                 if not result.success:
-                    logger.warning(
-                        "TR-069 PPPoE set failed for ONT %s: %s", ont_id, result.message
+                    return ActionResult(
+                        success=False,
+                        message=(
+                            "WAN configuration was not saved because PPPoE push failed: "
+                            f"{result.message}"
+                        ),
                     )
             except Exception as exc:
                 logger.warning("TR-069 PPPoE set error for ONT %s: %s", ont_id, exc)
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "WAN configuration was not saved because PPPoE push errored: "
+                        f"{exc}"
+                    ),
+                )
 
         # Persist desired state
         from app.models.network import WanMode
@@ -299,6 +310,7 @@ class OntWriteService:
         try:
             from app.services.network.olt_ssh_service_ports import (
                 create_single_service_port,
+                get_service_ports_for_ont,
             )
 
             success, message = create_single_service_port(
@@ -312,6 +324,40 @@ class OntWriteService:
             )
             if not success:
                 return ActionResult(success=False, message=message)
+            verify_ok, verify_msg, service_ports = get_service_ports_for_ont(
+                ctx.olt,
+                ctx.fsp,
+                ctx.ont_id_on_olt,
+            )
+            if not verify_ok:
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "Service-port command was accepted, but OLT readback failed: "
+                        f"{verify_msg}"
+                    ),
+                )
+            matching_port = next(
+                (
+                    port
+                    for port in service_ports
+                    if port.vlan_id == vlan_id
+                    and port.gem_index == gem_index
+                    and (
+                        not getattr(port, "tag_transform", None)
+                        or getattr(port, "tag_transform", None) == tag_transform
+                    )
+                ),
+                None,
+            )
+            if matching_port is None:
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "Service-port command was accepted, but OLT readback did not "
+                        f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
+                    ),
+                )
         except Exception as exc:
             logger.error("Service port create failed for ONT %s: %s", ont_id, exc)
             return ActionResult(success=False, message=f"SSH error: {exc}")

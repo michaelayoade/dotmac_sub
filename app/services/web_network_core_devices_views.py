@@ -2102,10 +2102,22 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
 
     service_intent = build_service_intent(
         ont,
+        db=db,
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )
     last_config_summary = _ont_last_config_summary(ont)
+    connected_wifi_clients = _wifi_client_count(
+        getattr(ont, "tr069_last_snapshot", None),
+        fallback=getattr(ont, "observed_wifi_clients", None),
+    )
+    connected_fallback = getattr(ont, "observed_lan_hosts", None)
+    if connected_fallback is None:
+        connected_fallback = connected_wifi_clients
+    connected_customer_devices = _lan_host_connected_count(
+        getattr(ont, "tr069_last_snapshot", None),
+        fallback=connected_fallback,
+    )
 
     # Configure form context (VLANs for dropdowns)
     from app.services import web_network_onts as web_network_onts_service
@@ -2128,6 +2140,8 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         "ont_plan": ont_plan,
         "service_intent": service_intent,
         "last_config_summary": last_config_summary,
+        "connected_customer_devices": connected_customer_devices,
+        "connected_wifi_clients": connected_wifi_clients,
         "profile_state": profile_state,
         "capabilities": capabilities,
         "inventory_ready": (
@@ -2161,6 +2175,63 @@ def _snapshot_count(section: object, *keys: str) -> int | None:
         return None
     try:
         return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lan_host_connected_count(snapshot: object, fallback: object = None) -> int | None:
+    """Return the best known customer-device count behind an ONT."""
+    if isinstance(snapshot, dict):
+        lan_hosts = snapshot.get("lan_hosts")
+        if isinstance(lan_hosts, list):
+            connected = 0
+            for host in lan_hosts:
+                if not isinstance(host, dict):
+                    continue
+                active = host.get("active")
+                if active is None:
+                    active = host.get("Active")
+                if isinstance(active, dict) and "_value" in active:
+                    active = active.get("_value")
+                active_text = str(active).strip().lower()
+                if active_text in {"false", "0", "no", "inactive", "down"}:
+                    continue
+                if not any(
+                    str(host.get(key) or "").strip()
+                    for key in (
+                        "host_name",
+                        "HostName",
+                        "ip_address",
+                        "IPAddress",
+                        "mac_address",
+                        "MACAddress",
+                    )
+                ):
+                    continue
+                connected += 1
+            return connected
+
+        lan = snapshot.get("lan")
+        count = _snapshot_count(lan, "Connected Hosts")
+        if count is not None:
+            return count
+
+    try:
+        return int(fallback) if fallback is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _wifi_client_count(snapshot: object, fallback: object = None) -> int | None:
+    """Return the best known WiFi client count for an ONT."""
+    if isinstance(snapshot, dict):
+        wireless = snapshot.get("wireless")
+        count = _snapshot_count(wireless, "Connected Clients")
+        if count is not None:
+            return count
+
+    try:
+        return int(fallback) if fallback is not None else None
     except (TypeError, ValueError):
         return None
 
@@ -2200,7 +2271,7 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
         "active_ports": None,
         "metrics": [],
         "details": [],
-        "configure_url": f"/admin/network/onts/{ont_id}?tab=configuration",
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=configure",
         "query_url": f"/admin/network/onts/{ont_id}?tab=tr069",
     }
     snapshot = getattr(ont, "tr069_last_snapshot", None)
@@ -2320,7 +2391,7 @@ def _ont_last_config_summary(ont: object) -> dict[str, object]:
         "active_ports": active_ports,
         "metrics": metrics,
         "details": details,
-        "configure_url": f"/admin/network/onts/{ont_id}?tab=configuration",
+        "configure_url": f"/admin/network/onts/{ont_id}?tab=configure",
         "query_url": f"/admin/network/onts/{ont_id}?tab=tr069",
     }
 

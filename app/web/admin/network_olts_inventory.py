@@ -589,6 +589,64 @@ def olt_run_cli_command(
     )
 
 
+def _olt_status_by_serial_html(
+    *, ok: bool, message: str, status: dict[str, object]
+) -> HTMLResponse:
+    import html as html_mod
+
+    escaped_msg = html_mod.escape(message)
+    if not ok:
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 '
+            f'dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{escaped_msg}</div>'
+        )
+
+    rows = [
+        ("Requested Serial", status.get("requested_serial")),
+        ("Lookup Serial", status.get("lookup_serial")),
+        ("Registered Serial", status.get("registered_serial")),
+        ("Status Serial", status.get("status_serial")),
+        ("F/S/P", status.get("fsp")),
+        ("ONT-ID", status.get("ont_id")),
+        ("Run State", status.get("run_state")),
+        ("Config State", status.get("config_state")),
+        ("Match State", status.get("match_state")),
+    ]
+    row_html = "".join(
+        "<tr>"
+        f'<th class="px-3 py-2 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">{html_mod.escape(label)}</th>'
+        f'<td class="px-3 py-2 font-mono text-sm text-slate-900 dark:text-slate-100">{html_mod.escape(str(value or "-"))}</td>'
+        "</tr>"
+        for label, value in rows
+    )
+    return HTMLResponse(
+        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
+        f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">{escaped_msg}</div>'
+        f'<div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">'
+        f'<table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">'
+        f'<tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-800 dark:bg-slate-900">{row_html}</tbody>'
+        f"</table></div>"
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/ont-status-by-serial",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_ont_status_by_serial(
+    request: Request,
+    olt_id: str,
+    serial_number: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Lookup an ONT by serial on this OLT and return full OLT-side status."""
+    ok, message, status = olt_operations_service.get_ont_status_by_serial(
+        db, olt_id, serial_number, request=request
+    )
+    return _olt_status_by_serial_html(ok=ok, message=message, status=status)
+
+
 @router.post(
     "/olts/{olt_id}/test-ssh",
     dependencies=[Depends(require_permission("network:write"))],
@@ -694,6 +752,43 @@ def olt_netconf_get_config(
         f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">{escaped_msg}</div>'
         f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
         f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_xml}</pre>'
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/ssh-get-config",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_ssh_get_config(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Fetch OLT running config via SSH/CLI and return as formatted HTML."""
+    import html as html_mod
+
+    ok, message, config_text = olt_operations_service.fetch_running_config_ssh_preview(
+        db, olt_id, request=request
+    )
+    escaped_msg = html_mod.escape(message)
+    if not ok:
+        _log_olt_action_result(
+            request=request,
+            olt_id=olt_id,
+            action="Get SSH Running Config",
+            ok=ok,
+            message=message,
+        )
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
+            f'dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">{escaped_msg}</div>'
+        )
+
+    escaped_config = html_mod.escape(config_text)
+    return HTMLResponse(
+        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
+        f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">'
+        f'{escaped_msg}. Retrieved over SSH CLI.</div>'
+        f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
+        f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_config}</pre>'
     )
 
 

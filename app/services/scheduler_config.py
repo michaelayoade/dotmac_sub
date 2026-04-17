@@ -11,6 +11,18 @@ from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
 
+TR069_TASK_QUEUE_NAMES = {
+    "app.tasks.tr069.sync_all_acs_devices",
+    "app.tasks.tr069.execute_pending_jobs",
+    "app.tasks.tr069.check_device_health",
+    "app.tasks.tr069.refresh_ont_runtime_data",
+    "app.tasks.tr069.cleanup_tr069_records",
+    "app.tasks.tr069.cleanup_stale_genieacs_tasks",
+    "app.tasks.tr069.scrape_genieacs_metrics",
+    "app.tasks.tr069.execute_bulk_action",
+    "app.tasks.tr069.wait_for_ont_bootstrap",
+}
+
 
 def _env_value(name: str) -> str | None:
     value = os.getenv(name)
@@ -854,6 +866,30 @@ def build_beat_schedule() -> dict:
             interval_seconds=tr069_cleanup_interval,
         )
 
+        # TR-069 GenieACS stale task cleanup - deletes stuck tasks/faults older than threshold
+        # This prevents inform blocking loops from permanently failing tasks
+        tr069_genieacs_cleanup_enabled = _effective_bool(
+            session,
+            SettingDomain.network,
+            "tr069_genieacs_stale_cleanup_enabled",
+            "TR069_GENIEACS_STALE_CLEANUP_ENABLED",
+            True,
+        )
+        tr069_genieacs_cleanup_interval = _resolve_int(
+            session,
+            SettingDomain.network,
+            "tr069_genieacs_stale_cleanup_interval_seconds",
+            21600,  # 6 hours
+        )
+        tr069_genieacs_cleanup_interval = max(tr069_genieacs_cleanup_interval, 3600)  # Min: 1 hour
+        _sync_scheduled_task(
+            session,
+            name="tr069_genieacs_stale_cleanup",
+            task_name="app.tasks.tr069.cleanup_stale_genieacs_tasks",
+            enabled=tr069_genieacs_cleanup_enabled,
+            interval_seconds=tr069_genieacs_cleanup_interval,
+        )
+
         # TR-069 GenieACS metrics scrape - pushes pending/faults/inform-age to VictoriaMetrics
         tr069_metrics_enabled = _effective_bool(
             session,
@@ -1034,6 +1070,8 @@ def build_beat_schedule() -> dict:
                 "args": task.args_json or [],
                 "kwargs": task.kwargs_json or {},
             }
+            if task.task_name in TR069_TASK_QUEUE_NAMES:
+                schedule[f"scheduled_task_{task.id}"]["options"] = {"queue": "tr069"}
     except Exception:
         logger.exception("Failed to build Celery beat schedule.")
     finally:

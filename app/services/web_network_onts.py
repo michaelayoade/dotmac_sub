@@ -854,20 +854,49 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         if isinstance(ont_plan.get("configure_lan_tr069"), dict)
         else {}
     )
-    # Fall back to ONT model fields when no service order LAN intent exists
-    # (LAN config is now stored directly on ONT, independent of service orders)
-    lan_intent = lan_intent_from_order or {
-        "lan_ip": getattr(ont, "lan_gateway_ip", None),
-        "lan_subnet": getattr(ont, "lan_subnet_mask", None),
-        "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
-        "dhcp_start": getattr(ont, "lan_dhcp_start", None),
-        "dhcp_end": getattr(ont, "lan_dhcp_end", None),
+    # LAN config is stored directly on ONT; service-order context is fallback
+    # for legacy/in-flight orders only.
+    lan_intent = {
+        "lan_ip": getattr(ont, "lan_gateway_ip", None) or lan_intent_from_order.get("lan_ip"),
+        "lan_subnet": getattr(ont, "lan_subnet_mask", None) or lan_intent_from_order.get("lan_subnet"),
+        "dhcp_enabled": (
+            getattr(ont, "lan_dhcp_enabled", None)
+            if getattr(ont, "lan_dhcp_enabled", None) is not None
+            else lan_intent_from_order.get("dhcp_enabled")
+        ),
+        "dhcp_start": getattr(ont, "lan_dhcp_start", None) or lan_intent_from_order.get("dhcp_start"),
+        "dhcp_end": getattr(ont, "lan_dhcp_end", None) or lan_intent_from_order.get("dhcp_end"),
     }
-    wifi_intent = (
+    wifi_intent_from_order = (
         ont_plan.get("configure_wifi_tr069")
         if isinstance(ont_plan.get("configure_wifi_tr069"), dict)
         else {}
     )
+    wifi_intent = {
+        "enabled": (
+            getattr(ont, "wifi_enabled", None)
+            if getattr(ont, "wifi_enabled", None) is not None
+            else wifi_intent_from_order.get(
+                "enabled",
+                getattr(profile, "wifi_enabled", None) if profile else None,
+            )
+        ),
+        "ssid": (
+            getattr(ont, "wifi_ssid", None)
+            or wifi_intent_from_order.get("ssid")
+            or (getattr(profile, "wifi_ssid_template", None) if profile else None)
+        ),
+        "channel": (
+            getattr(ont, "wifi_channel", None)
+            or wifi_intent_from_order.get("channel")
+            or (getattr(profile, "wifi_channel", None) if profile else None)
+        ),
+        "security_mode": (
+            getattr(ont, "wifi_security_mode", None)
+            or wifi_intent_from_order.get("security_mode")
+            or (getattr(profile, "wifi_security_mode", None) if profile else None)
+        ),
+    }
     mgmt_mode = (
         ont.mgmt_ip_mode.value
         if getattr(ont, "mgmt_ip_mode", None) is not None
@@ -894,6 +923,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         wan_protocol=wan_protocol,
         wan_vlan_id=str(ont.wan_vlan_id) if ont.wan_vlan_id else None,
         pppoe_username=ont.pppoe_username,
+        pppoe_password="stored" if getattr(ont, "pppoe_password", None) else None,
         static_ip_pool_id=None,
         static_ip=None,
         static_subnet=None,

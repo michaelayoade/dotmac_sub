@@ -8,6 +8,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
 from app.services.response import ListResponseMixin
+from app.services.settings_specs.provisioning import build_provisioning_specs
 from app.services.settings_cache import SettingsCache
 from app.timezone import APP_TIMEZONE_NAME
 
@@ -2398,23 +2399,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default="wg0",
         label="VPN Default Interface Name",
     ),
-    # ============== Provisioning Domain: NAS/OAuth Tasks ==============
-    SettingSpec(
-        domain=SettingDomain.provisioning,
-        key="nas_backup_retention_interval_seconds",
-        env_var="NAS_BACKUP_RETENTION_INTERVAL",
-        value_type=SettingValueType.integer,
-        default=86400,
-        min_value=3600,
-    ),
-    SettingSpec(
-        domain=SettingDomain.provisioning,
-        key="oauth_token_refresh_interval_seconds",
-        env_var="OAUTH_TOKEN_REFRESH_INTERVAL",
-        value_type=SettingValueType.integer,
-        default=86400,
-        min_value=3600,
-    ),
+    # ============== Provisioning Domain ==============
+    *build_provisioning_specs(SettingSpec),
     SettingSpec(
         domain=SettingDomain.snmp,
         key="interface_walk_interval_seconds",

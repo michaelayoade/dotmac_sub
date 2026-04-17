@@ -39,6 +39,35 @@ class TestVerifyOntAuthorized:
         assert result.success is True
         assert "Verified ONT" in result.message
 
+    def test_accepts_huawei_combined_hex_and_vendor_serial_readback(
+        self, monkeypatch
+    ) -> None:
+        from app.services.network.olt_write_reconciliation import verify_ont_authorized
+
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_ont_status",
+            lambda *_args, **_kwargs: (
+                True,
+                "ok",
+                SimpleNamespace(
+                    serial_number="4857544328201B9A (HWTC-28201B9A)",
+                    run_state="online",
+                    config_state="normal",
+                    match_state="match",
+                ),
+            ),
+        )
+
+        result = verify_ont_authorized(
+            _olt(),
+            fsp="0/1/6",
+            ont_id=5,
+            serial_number="HWTC28201B9A",
+        )
+
+        assert result.success is True
+        assert result.details["serial_number"] == "4857544328201B9A (HWTC-28201B9A)"
+
     def test_falls_back_to_serial_lookup_when_direct_status_query_fails(
         self, monkeypatch
     ) -> None:
@@ -192,3 +221,54 @@ class TestVerifyIphostConfig:
 
         assert result.success is False
         assert "different VLAN" in result.message
+
+
+def test_get_ont_status_uses_space_separated_huawei_fsp(monkeypatch) -> None:
+    from app.services.network.olt_ssh_ont.status import get_ont_status
+
+    sent_commands: list[str] = []
+
+    class _Channel:
+        def send(self, _command: str) -> None:
+            pass
+
+    class _Transport:
+        def close(self) -> None:
+            pass
+
+    def _run_huawei_cmd(_channel, command: str, *_, **__) -> str:
+        sent_commands.append(command)
+        return """
+        Serial number : HWTC28201B9A
+        Run state    : online
+        Config state : normal
+        Match state  : match
+        """
+
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._validate_fsp",
+        lambda _fsp: (True, ""),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._open_shell",
+        lambda _olt: (_Transport(), _Channel(), None),
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._read_until_prompt",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh._run_huawei_cmd",
+        _run_huawei_cmd,
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh.is_error_output",
+        lambda _output: False,
+    )
+
+    ok, _message, entry = get_ont_status(_olt(), "0/1/6", 5)
+
+    assert ok is True
+    assert entry is not None
+    assert entry.serial_number == "HWTC28201B9A"
+    assert sent_commands == ["display ont info 0 1 6 5"]

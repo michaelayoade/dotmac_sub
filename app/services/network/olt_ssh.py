@@ -727,8 +727,12 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         channel.send("enable\n")
         _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
 
-        channel.send("display current-configuration\n")
-        output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=60)
+        output = _run_huawei_paged_cmd(
+            channel,
+            "display current-configuration",
+            prompt=policy.prompt_regex,
+            timeout_sec=60,
+        )
 
         # Strip echoed command and trailing prompt
         lines = output.splitlines()
@@ -1059,6 +1063,9 @@ from app.services.network.olt_ssh_profiles import (
 )
 from app.services.network.olt_ssh_profiles import (
     get_tr069_server_profiles as get_tr069_server_profiles,
+)
+from app.services.network.olt_ssh_profiles import (
+    ensure_wan_srvprofile as ensure_wan_srvprofile,
 )
 
 

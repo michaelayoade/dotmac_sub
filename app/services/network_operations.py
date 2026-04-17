@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
+STALE_WAITING_OPERATION_AGE = timedelta(hours=6)
 
 # Statuses that count as "active" for dedup purposes
 _ACTIVE_STATUSES = (
@@ -132,6 +133,30 @@ class NetworkOperations(ListResponseMixin):
             HTTPException: 409 if an active operation with the same
                 correlation_key already exists.
         """
+        existing = _get_active_operation_by_correlation(db, correlation_key)
+        if existing:
+            if (
+                existing.status == NetworkOperationStatus.waiting
+                and existing.created_at
+                and datetime.now(UTC) - existing.created_at > STALE_WAITING_OPERATION_AGE
+            ):
+                existing.status = NetworkOperationStatus.failed
+                existing.completed_at = datetime.now(UTC)
+                existing.error = (
+                    "Expired stale waiting operation before starting a new request."
+                )
+                existing.waiting_reason = None
+                db.flush()
+            else:
+                logger.warning(
+                    "Duplicate operation blocked: %s (existing=%s)",
+                    correlation_key,
+                    existing.id,
+                )
+                raise HTTPException(
+                    status_code=409,
+                    detail="Operation already in progress",
+                )
         existing = _get_active_operation_by_correlation(db, correlation_key)
         if existing:
             logger.warning(

@@ -11,6 +11,10 @@ from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 from app.services.network.olt_ssh import create_service_ports
+from app.services.network.olt_ssh_ont import (
+    ServicePortDiagnostics,
+    diagnose_service_ports,
+)
 from app.services.network.olt_ssh_service_ports import (
     create_single_service_port,
     delete_service_port,
@@ -285,3 +289,23 @@ def handle_clone(
 
     # Create on target using existing bulk function
     return create_service_ports(olt, fsp, olt_ont_id, ref_ports)
+
+
+def handle_diagnose(
+    db: Session,
+    ont_id: str,
+) -> tuple[bool, str, ServicePortDiagnostics | None]:
+    """Run diagnostics to troubleshoot service port state issues.
+
+    Args:
+        db: Database session.
+        ont_id: OntUnit ID.
+
+    Returns:
+        (success, message, diagnostics).
+    """
+    ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if not olt or not fsp or olt_ont_id is None:
+        return False, "Cannot resolve OLT context for this ONT", None
+
+    return diagnose_service_ports(olt, fsp, olt_ont_id)

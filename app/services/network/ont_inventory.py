@@ -7,13 +7,9 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.network import (
-    CPEDevice,
-    DeviceStatus,
-    OntAssignment,
-    OntProvisioningStatus,
-)
+from app.models.network import OntAssignment, OntProvisioningStatus
 from app.services import network as network_service
+from app.services.network.cpe import ensure_cpe_for_ont
 from app.services.network.ont_actions import ActionResult
 
 logger = logging.getLogger(__name__)
@@ -89,21 +85,25 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
     ont.mgmt_ip_address = None
     ont.mgmt_remote_access = False
     ont.voip_enabled = False
+    ont.lan_gateway_ip = None
+    ont.lan_subnet_mask = None
+    ont.lan_dhcp_enabled = None
+    ont.lan_dhcp_start = None
+    ont.lan_dhcp_end = None
+    ont.wifi_ssid = None
+    ont.wifi_password = None
+    if hasattr(ont, "wifi_enabled"):
+        ont.wifi_enabled = None
+    if hasattr(ont, "wifi_channel"):
+        ont.wifi_channel = None
+    if hasattr(ont, "wifi_security_mode"):
+        ont.wifi_security_mode = None
     ont.provisioning_steps_completed = None
 
-    cpe_deactivated = False
-    serial_number = str(getattr(ont, "serial_number", "") or "").strip()[:120]
-    if serial_number:
-        cpe = db.scalars(
-            select(CPEDevice)
-            .where(CPEDevice.serial_number == serial_number)
-            .order_by(CPEDevice.updated_at.desc())
-            .limit(1)
-        ).first()
-        if cpe and cpe.status != DeviceStatus.inactive:
-            cpe.status = DeviceStatus.inactive
-            cpe_deactivated = True
-            logger.info("Deactivated CPE %s for returned ONT %s", cpe.id, ont.id)
+    db.flush()
+    cpe = ensure_cpe_for_ont(db, ont, commit=False, strict_existing_match=False)
+    if cpe is not None:
+        logger.info("Moved CPE %s to inventory for returned ONT %s", cpe.id, ont.id)
 
     db.commit()
     db.refresh(ont)
@@ -118,8 +118,8 @@ def return_ont_to_inventory(db: Session, ont_id: str) -> ActionResult:
             if assignment_count == 1
             else f"{assignment_count} assignments closed"
         )
-    if cpe_deactivated:
-        parts.append("CPE deactivated")
+    if cpe is not None:
+        parts.append("CPE moved to inventory")
     parts.append("identity cleared for rediscovery")
     parts.append("service state cleared")
 

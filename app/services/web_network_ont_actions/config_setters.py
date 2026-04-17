@@ -7,16 +7,17 @@ import logging
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
+from app.models.network import OntUnit
 from app.models.network_operation import (
     NetworkOperationTargetType,
     NetworkOperationType,
 )
 from app.services import network as network_service
+from app.services.credential_crypto import encrypt_credential
 from app.services.network.ont_actions import ActionResult, OntActions
 from app.services.network_operations import run_tracked_action
 from app.services.web_network_ont_actions._common import (
     _intent_saved_result,
-    _is_input_error,
     _log_action_audit,
     _persist_ont_plan_step,
     _persist_wan_intent,
@@ -31,6 +32,11 @@ def set_wifi_ssid(
 ) -> ActionResult:
     """Set WiFi SSID and return result."""
     result = OntActions.set_wifi_ssid(db, ont_id, ssid)
+    if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont:
+            ont.wifi_ssid = ssid
+            db.flush()
     _log_action_audit(
         db,
         request=request,
@@ -46,6 +52,11 @@ def set_wifi_password(
 ) -> ActionResult:
     """Set WiFi password and return result."""
     result = OntActions.set_wifi_password(db, ont_id, password)
+    if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont:
+            ont.wifi_password = encrypt_credential(password)
+            db.flush()
     _log_action_audit(
         db,
         request=request,
@@ -77,7 +88,20 @@ def set_wifi_config(
         channel=channel,
         security_mode=security_mode,
     )
-    if result.success or not _is_input_error(result.message):
+    if result.success:
+        ont = db.get(OntUnit, ont_id)
+        if ont:
+            if ssid is not None:
+                ont.wifi_ssid = ssid
+            if password is not None:
+                ont.wifi_password = encrypt_credential(password)
+            if hasattr(ont, "wifi_enabled"):
+                ont.wifi_enabled = enabled
+            if channel is not None and hasattr(ont, "wifi_channel"):
+                ont.wifi_channel = str(channel)
+            if security_mode is not None and hasattr(ont, "wifi_security_mode"):
+                ont.wifi_security_mode = security_mode
+            db.flush()
         _persist_ont_plan_step(
             db,
             ont_id,
@@ -152,7 +176,7 @@ def set_lan_config(
         dhcp_start=dhcp_start,
         dhcp_end=dhcp_end,
     )
-    if result.success or not _is_input_error(result.message):
+    if result.success:
         _persist_ont_plan_step(
             db,
             ont_id,
@@ -208,7 +232,7 @@ def configure_wan_config(
         dns_servers=dns_servers,
         instance_index=instance_index,
     )
-    if result.success or not _is_input_error(result.message):
+    if result.success:
         _persist_wan_intent(
             db,
             ont_id,
@@ -242,21 +266,38 @@ def set_pppoe_credentials(
     username: str,
     password: str,
     *,
+    instance_index: int = 1,
+    wan_vlan: int | None = None,
     initiated_by: str | None = None,
     request: Request | None = None,
 ) -> ActionResult:
     """Push PPPoE credentials to ONT via TR-069 with operation tracking."""
     initiated_by = initiated_by or actor_name_from_request(request)
+    if wan_vlan is None:
+        try:
+            ont = network_service.ont_units.get_including_inactive(
+                db=db, entity_id=ont_id
+            )
+            wan_vlan = int(ont.wan_vlan.tag) if ont.wan_vlan and ont.wan_vlan.tag else None
+        except Exception:
+            logger.exception("Failed to resolve WAN VLAN for ONT %s", ont_id)
     result = run_tracked_action(
         db,
         NetworkOperationType.ont_set_pppoe,
         NetworkOperationTargetType.ont,
         ont_id,
-        lambda: OntActions.set_pppoe_credentials(db, ont_id, username, password),
+        lambda: OntActions.set_pppoe_credentials(
+            db,
+            ont_id,
+            username,
+            password,
+            instance_index=instance_index,
+            wan_vlan=wan_vlan,
+        ),
         correlation_key=f"ont_set_pppoe:{ont_id}",
         initiated_by=initiated_by,
     )
-    if result.success or not _is_input_error(result.message):
+    if result.success:
         try:
             ont = network_service.ont_units.get_including_inactive(
                 db=db, entity_id=ont_id
@@ -270,7 +311,12 @@ def set_pppoe_credentials(
             db,
             ont_id,
             "push_pppoe_tr069",
-            {"username": username, "password_set": bool(password)},
+            {
+                "username": username,
+                "password_set": bool(password),
+                "instance_index": instance_index,
+                "wan_vlan": wan_vlan,
+            },
         )
         result = _intent_saved_result(result)
     waiting = getattr(result, "waiting", False)

@@ -48,7 +48,7 @@ _JOB_ACTIONS: dict[str, JobAction] = {
     "refresh": JobAction(
         label="Refresh Parameters",
         command="refreshObject",
-        payload={"objectName": "Device."},
+        payload={"objectName": "InternetGatewayDevice."},
     ),
     "reboot": JobAction(label="Reboot Device", command="reboot"),
     "factory_reset": JobAction(label="Factory Reset", command="factoryReset"),

@@ -53,6 +53,7 @@ def run_post_authorization_follow_up_task(
                     message,
                     output_payload=payload,
                 )
+            db.commit()
             return {"success": success, "message": message, "steps": steps}
         except Exception as exc:
             logger.error(
@@ -62,6 +63,7 @@ def run_post_authorization_follow_up_task(
                 exc_info=True,
             )
             network_operations.mark_failed(db, operation_id, str(exc))
+            db.commit()
             raise
     except Exception:
         db.rollback()
@@ -97,6 +99,30 @@ def run_authorize_autofind_ont_task(
         olt = db.get(OLTDevice, olt_id)
         olt_name = olt.name if olt else None
 
+        from app.models.network_operation import NetworkOperation, NetworkOperationStatus
+
+        operation = db.get(NetworkOperation, operation_id)
+        if operation is None:
+            logger.warning(
+                "Skipping ONT authorization task for missing operation %s",
+                operation_id,
+            )
+            return {"success": False, "message": "Operation not found"}
+        if operation.status in (
+            NetworkOperationStatus.succeeded,
+            NetworkOperationStatus.failed,
+            NetworkOperationStatus.canceled,
+        ):
+            logger.info(
+                "Skipping ONT authorization task for terminal operation %s (%s)",
+                operation_id,
+                operation.status.value,
+            )
+            return {
+                "success": operation.status == NetworkOperationStatus.succeeded,
+                "message": f"Operation already {operation.status.value}",
+            }
+
         network_operations.mark_running(db, operation_id)
         db.commit()
 
@@ -121,7 +147,8 @@ def run_authorize_autofind_ont_task(
         payload = result.to_dict()
         duration_ms = int((time.time() - start_time) * 1000) if start_time else None
 
-        if result.success:
+        operation_succeeded = result.success and result.status != "warning"
+        if operation_succeeded:
             network_operations.mark_succeeded(
                 db,
                 operation_id,

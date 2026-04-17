@@ -249,6 +249,8 @@ def execute_delta(
             validation_errors.append(f"Optical: {delta.optical_budget_message}")
         if not delta.mgmt_vlan_trunked:
             validation_errors.append(f"VLAN: {delta.mgmt_vlan_message}")
+        if not delta.service_vlans_ok:
+            validation_errors.append(f"Service VLANs: {delta.service_vlans_message}")
         if not delta.ip_index_valid:
             validation_errors.append(f"IP Index: {delta.ip_index_message}")
 
@@ -555,6 +557,24 @@ def _execute_management_ip_config(
     if mgmt_config.ip_mode == "dhcp":
         cmd = f"ont iphost {olt_ont_id} ip-index 0 ip-address dhcp vlan {mgmt_config.vlan_tag}"
     else:
+        missing = [
+            name
+            for name, value in {
+                "ip_address": mgmt_config.ip_address,
+                "subnet": mgmt_config.subnet,
+                "gateway": mgmt_config.gateway,
+            }.items()
+            if not value
+        ]
+        if missing:
+            message = (
+                "Static management IP config is incomplete: "
+                + ", ".join(missing)
+            )
+            result.steps_failed.append("configure_management_ip")
+            result.errors.append(message)
+            logger.error(message)
+            return False
         cmd = f"ont iphost {olt_ont_id} ip-index 0 ip-address {mgmt_config.ip_address} mask {mgmt_config.subnet} gateway {mgmt_config.gateway} vlan {mgmt_config.vlan_tag}"
 
     # Enter interface mode

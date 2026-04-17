@@ -31,6 +31,39 @@ def _intent_step_present(ont_plan: dict[str, Any], step_name: str) -> bool:
     )
 
 
+def _has_profile_service_path_intent(ont: OntUnit) -> bool:
+    profile = getattr(ont, "provisioning_profile", None)
+    services = getattr(profile, "wan_services", None) or []
+    return any(
+        getattr(service, "is_active", False)
+        and (
+            getattr(service, "s_vlan", None)
+            or getattr(service, "c_vlan", None)
+            or getattr(service, "gem_port_id", None)
+        )
+        for service in services
+    )
+
+
+def _service_path_intent_present(service_intent: dict[str, object]) -> bool:
+    sections = service_intent.get("sections")
+    if not isinstance(sections, list):
+        return False
+    for section in sections:
+        if not isinstance(section, dict) or section.get("key") != "service_path":
+            continue
+        rows = section.get("rows")
+        if not isinstance(rows, list):
+            return False
+        return any(
+            isinstance(row, dict)
+            and row.get("label") != "Subscriber"
+            and row.get("value") not in (None, "", "Not set")
+            for row in rows
+        )
+    return False
+
+
 def _runbook_step(
     *,
     order: int,
@@ -84,7 +117,12 @@ def _build_ont_operations_runbook(
     has_cr_url = bool(linked_tr069 and linked_tr069.connection_request_url)
     intent_complete = bool(service_intent.get("is_complete"))
     missing_count = int(service_intent.get("missing_count") or 0)
-    has_service_path_intent = _intent_step_present(ont_plan, "create_service_port")
+    has_service_path_intent = bool(
+        _intent_step_present(ont_plan, "create_service_port")
+        or _service_path_intent_present(service_intent)
+        or _has_profile_service_path_intent(ont)
+        or getattr(ont, "wan_vlan_id", None)
+    )
     has_mgmt_intent = bool(
         getattr(ont, "mgmt_vlan_id", None)
         or getattr(ont, "mgmt_ip_mode", None)
@@ -95,17 +133,63 @@ def _build_ont_operations_runbook(
         or getattr(ont, "wan_mode", None)
         or _intent_step_present(ont_plan, "configure_wan_tr069")
     )
-    has_pppoe_intent = bool(
+    wan_plan = ont_plan.get("configure_wan_tr069")
+    wan_plan = wan_plan if isinstance(wan_plan, dict) else {}
+    raw_wan_mode = (
+        wan_plan.get("wan_mode")
+        or getattr(getattr(ont, "wan_mode", None), "value", None)
+        or ""
+    )
+    wan_mode = str(raw_wan_mode).strip().lower()
+    if wan_mode == "static_ip":
+        wan_mode = "static"
+    elif wan_mode == "setup_via_onu":
+        wan_mode = "bridge"
+    has_pppoe_credentials_intent = bool(
         getattr(ont, "pppoe_username", None)
         or _intent_step_present(ont_plan, "push_pppoe_tr069")
         or _intent_step_present(ont_plan, "push_pppoe_omci")
     )
+    has_static_addressing_intent = bool(
+        wan_plan.get("ip_address")
+        and wan_plan.get("gateway")
+        and wan_plan.get("dns_servers")
+    )
+    internet_credentials_required = wan_mode in {"pppoe", "static"}
+    if wan_mode == "pppoe":
+        has_internet_credentials_intent = has_pppoe_credentials_intent
+    elif wan_mode == "static":
+        has_internet_credentials_intent = has_static_addressing_intent
+    elif wan_mode in {"dhcp", "bridge"}:
+        has_internet_credentials_intent = True
+    else:
+        has_internet_credentials_intent = False
     has_lan_intent = bool(
         getattr(ont, "lan_gateway_ip", None)
         or getattr(ont, "lan_subnet_mask", None)
         or _intent_step_present(ont_plan, "configure_lan_tr069")
     )
-    has_wifi_intent = _intent_step_present(ont_plan, "configure_wifi_tr069")
+    has_wifi_intent = bool(
+        _intent_step_present(ont_plan, "configure_wifi_tr069")
+        or getattr(ont, "wifi_enabled", None)
+        or getattr(ont, "wifi_ssid", None)
+        or getattr(ont, "wifi_channel", None)
+        or getattr(ont, "wifi_security_mode", None)
+    )
+    if wan_mode == "pppoe":
+        internet_credentials_message = (
+            getattr(ont, "pppoe_username", None) or "No PPPoE username"
+        )
+    elif wan_mode == "static":
+        internet_credentials_message = (
+            "Static addressing intent present"
+            if has_static_addressing_intent
+            else "Internet credentials incomplete"
+        )
+    elif wan_mode in {"dhcp", "bridge"}:
+        internet_credentials_message = "No separate credentials required"
+    else:
+        internet_credentials_message = "Set WAN method first"
     has_running_snapshot = bool(snapshots)
 
     return [
@@ -220,14 +304,16 @@ def _build_ont_operations_runbook(
         ),
         _runbook_step(
             order=8,
-            title="PPPoE/static credentials",
+            title="Internet credentials",
             source="ACS",
-            status="ready" if has_acs_device and has_pppoe_intent else "blocked",
-            message=(
-                "Credentials or static addressing intent is ready to apply."
-                if has_acs_device and has_pppoe_intent
-                else "Set PPPoE/static addressing intent first."
+            status=(
+                "complete"
+                if has_acs_device and not internet_credentials_required
+                else "ready"
+                if has_acs_device and has_internet_credentials_intent
+                else "blocked"
             ),
+            message=internet_credentials_message,
             action_label="Internet credentials",
             action_url=f"/admin/network/onts/{ont_id}?tab=configure",
         ),
@@ -325,7 +411,7 @@ def operational_health_context(
         )
 
         ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-        service_intent = build_service_intent(ont, ont_plan=ont_plan) if ont else {}
+        service_intent = build_service_intent(ont, db=db, ont_plan=ont_plan) if ont else {}
     except Exception:
         logger.exception("Failed to build operations runbook intent for ONT %s", ont_id)
         ont_plan = {}
@@ -340,6 +426,48 @@ def operational_health_context(
         ont_plan=ont_plan,
         snapshots=snapshots,
     )
+
+    # Compute internet credentials status for health checks
+    wan_plan = ont_plan.get("configure_wan_tr069")
+    wan_plan = wan_plan if isinstance(wan_plan, dict) else {}
+    raw_wan_mode = (
+        wan_plan.get("wan_mode")
+        or getattr(getattr(ont, "wan_mode", None), "value", None)
+        or ""
+    )
+    wan_mode = str(raw_wan_mode).strip().lower()
+    if wan_mode == "static_ip":
+        wan_mode = "static"
+    elif wan_mode == "setup_via_onu":
+        wan_mode = "bridge"
+    has_pppoe_credentials_intent = bool(
+        getattr(ont, "pppoe_username", None)
+        or _intent_step_present(ont_plan, "push_pppoe_tr069")
+        or _intent_step_present(ont_plan, "push_pppoe_omci")
+    )
+    has_static_addressing_intent = bool(
+        wan_plan.get("ip_address")
+        and wan_plan.get("gateway")
+        and wan_plan.get("dns_servers")
+    )
+    if wan_mode == "pppoe":
+        has_internet_credentials_intent = has_pppoe_credentials_intent
+        internet_credentials_message = (
+            getattr(ont, "pppoe_username", None) or "No PPPoE username"
+        )
+    elif wan_mode == "static":
+        has_internet_credentials_intent = has_static_addressing_intent
+        internet_credentials_message = (
+            "Static addressing intent present"
+            if has_static_addressing_intent
+            else "Internet credentials incomplete"
+        )
+    elif wan_mode in {"dhcp", "bridge"}:
+        has_internet_credentials_intent = True
+        internet_credentials_message = "No separate credentials required"
+    else:
+        has_internet_credentials_intent = False
+        internet_credentials_message = "Set WAN method first"
 
     checks = [
         {
@@ -374,6 +502,11 @@ def operational_health_context(
             "message": "Ready"
             if linked_tr069 and linked_tr069.connection_request_url
             else "Not captured",
+        },
+        {
+            "label": "Internet credentials",
+            "ok": bool(has_internet_credentials_intent),
+            "message": internet_credentials_message,
         },
         {
             "label": "PPPoE stored",

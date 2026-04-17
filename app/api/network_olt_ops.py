@@ -13,6 +13,7 @@ from app.schemas.network_olt_ops import (
     OltAuthorizeOntRequest,
     OltCliCommandRequest,
     OltDiscoveredOntRead,
+    OltOntStatusBySerialRequest,
     OltOperationResponse,
     OltProfileRead,
     OltServicePortCreateRequest,
@@ -90,6 +91,27 @@ def authorize_ont(
         message=result.message,
         data=result.data,
     )
+
+
+@router.post(
+    "/olt-devices/{olt_id}/ont-status-by-serial",
+    response_model=OltOperationResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def get_ont_status_by_serial(
+    request: Request,
+    olt_id: str,
+    payload: OltOntStatusBySerialRequest,
+    db: Session = Depends(get_db),
+) -> OltOperationResponse:
+    from app.services.network.olt_operations import get_ont_status_by_serial
+
+    success, message, status = get_ont_status_by_serial(
+        db, olt_id, payload.serial_number, request=request
+    )
+    if not success:
+        raise HTTPException(status_code=422, detail=message)
+    return OltOperationResponse(success=True, message=message, data=status)
 
 
 # ── Service Ports ──────────────────────────────────────────────────────

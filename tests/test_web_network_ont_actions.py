@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-import pytest
+import os
 from ipaddress import IPv4Network
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
+
+# SQLite doesn't support PostgreSQL partial unique indexes, so tests that
+# create multiple OntAssignments per ONT will fail on SQLite.
+# Tests use TEST_DATABASE_URL; if not set, conftest falls back to SQLite.
+_uses_sqlite = "sqlite" in os.environ.get("TEST_DATABASE_URL", "sqlite")
 
 from app.models.event_store import EventStore
 from app.models.network import (
@@ -27,6 +33,7 @@ from app.models.network import (
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
 from app.schemas.network import OntAssignmentCreate
 from app.services import network as network_service
+from app.services import web_network_onts as web_network_onts_service
 from app.services.network.ont_action_common import get_ont_client_or_error
 from app.services.network.ont_action_device import get_running_config
 from app.services.network.ont_inventory import return_ont_to_inventory
@@ -34,8 +41,8 @@ from app.services.web_network_ont_actions import (
     configure_form_context,
     operational_health_context,
     return_to_inventory,
+    return_to_inventory_for_web,
 )
-from app.services import web_network_onts as web_network_onts_service
 
 
 def test_return_to_inventory_releases_ont_on_olt_and_keeps_inventory_active(
@@ -319,11 +326,13 @@ def test_configure_form_context_uses_pon_assignment_olt_when_ont_fk_missing(
     db_session.add_all([olt_vlan, other_vlan, pool, other_pool, ont])
     db_session.commit()
 
+    # Assignment must be active for OLT resolution to use it (inactive
+    # assignments are treated as stale and ignored for UI scoping).
     assignment = OntAssignment(
         ont_unit_id=ont.id,
         pon_port_id=pon_port.id,
         subscriber_id=subscriber.id,
-        active=False,
+        active=True,
     )
     db_session.add(assignment)
     db_session.commit()
@@ -561,6 +570,10 @@ def test_management_ip_choices_prefers_direct_olt_link_over_inactive_assignments
     assert choices["mgmt_ip_pool"].id == expected_pool.id
 
 
+@pytest.mark.skipif(
+    _uses_sqlite,
+    reason="SQLite does not support PostgreSQL partial unique indexes (allows only one assignment per ONT)",
+)
 def test_management_ip_choices_prefers_active_assignment_over_inactive(
     db_session,
 ):
@@ -1009,6 +1022,13 @@ def test_new_inventory_return_refreshes_autofind_and_returns_unconfigured_url(
         port="2",
         external_id="18",
         provisioning_status=OntProvisioningStatus.provisioned,
+        lan_gateway_ip="192.168.88.1",
+        lan_subnet_mask="255.255.255.0",
+        lan_dhcp_enabled=True,
+        lan_dhcp_start="192.168.88.10",
+        lan_dhcp_end="192.168.88.200",
+        wifi_ssid="OldCustomerWifi",
+        wifi_password="encrypted-old-password",
     )
     db_session.add(ont)
     db_session.commit()
@@ -1020,6 +1040,14 @@ def test_new_inventory_return_refreshes_autofind_and_returns_unconfigured_url(
         active=True,
     )
     db_session.add(active)
+    db_session.commit()
+
+    cpe = CPEDevice(
+        subscriber_id=subscriber.id,
+        serial_number=ont.serial_number,
+        status=DeviceStatus.active,
+    )
+    db_session.add(cpe)
     db_session.commit()
 
     cleanup_calls: list[str] = []
@@ -1048,5 +1076,52 @@ def test_new_inventory_return_refreshes_autofind_and_returns_unconfigured_url(
     )
     db_session.refresh(active)
     db_session.refresh(ont)
+    db_session.refresh(cpe)
     assert active.active is False
     assert ont.olt_device_id is None
+    assert ont.lan_gateway_ip is None
+    assert ont.lan_subnet_mask is None
+    assert ont.lan_dhcp_enabled is None
+    assert ont.lan_dhcp_start is None
+    assert ont.lan_dhcp_end is None
+    assert ont.wifi_ssid is None
+    assert ont.wifi_password is None
+    assert cpe.status == DeviceStatus.active
+    assert cpe.subscriber_id != subscriber.id
+    assert cpe.service_address_id is None
+
+
+def test_return_to_inventory_for_web_clears_local_state_without_olt_context(
+    db_session, subscriber
+):
+    ont = OntUnit(
+        serial_number="RETURN-ONT-WEB-LOCAL-001",
+        is_active=True,
+        provisioning_status=OntProvisioningStatus.provisioned,
+        pppoe_username="old-user",
+        lan_gateway_ip="192.168.55.1",
+        wifi_ssid="OldWifi",
+        wifi_password="old-secret",
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    active = OntAssignment(
+        ont_unit_id=ont.id,
+        subscriber_id=subscriber.id,
+        active=True,
+    )
+    db_session.add(active)
+    db_session.commit()
+
+    result = return_to_inventory_for_web(db_session, str(ont.id))
+
+    assert result.success is True
+    db_session.refresh(active)
+    db_session.refresh(ont)
+    assert active.active is False
+    assert ont.provisioning_status == OntProvisioningStatus.unprovisioned
+    assert ont.pppoe_username is None
+    assert ont.lan_gateway_ip is None
+    assert ont.wifi_ssid is None
+    assert ont.wifi_password is None

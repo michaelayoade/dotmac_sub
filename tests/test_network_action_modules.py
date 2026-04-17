@@ -254,6 +254,195 @@ def test_configure_wan_config_pushes_static_igd_paths(monkeypatch) -> None:
     ]
 
 
+def test_configure_wan_config_refuses_pppoe_add_object_on_management_wan(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+    add_object_calls: list[tuple[str, str]] = []
+    cache: dict[str, str | int] = {
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+            "WANIPConnectionNumberOfEntries"
+        ): 1,
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+            "WANPPPConnectionNumberOfEntries"
+        ): 0,
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+            "WANIPConnection.1.Name"
+        ): "OLT_C_TR069_Static_WAN",
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+            "WANIPConnection.1.X_HW_SERVICELIST"
+        ): "TR069",
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.1."
+            "WANIPConnection.1.X_HW_VLAN"
+        ): 201,
+    }
+
+    class FakeClient:
+        def extract_parameter_value(self, device: dict, parameter_path: str):
+            current = device
+            for part in parameter_path.split("."):
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(part)
+                if current is None:
+                    return None
+            if isinstance(current, dict) and "_value" in current:
+                return current["_value"]
+            return None if isinstance(current, dict) else current
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
+
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            **_kwargs,
+        ):
+            calls.append((device_id, params))
+            cache.update(params)
+            return {"queued": True}
+
+        def get_parameter_values(self, *_args, **_kwargs):
+            return {"queued": True}
+
+        def add_object(self, device_id: str, object_path: str, **_kwargs):
+            add_object_calls.append((device_id, object_path))
+            raise AssertionError("management WAN must not be mutated")
+
+    monkeypatch.setattr(
+        ont_action_network,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_network,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_network, "persist_data_model_root", lambda *_: None)
+
+    result = ont_action_network.configure_wan_config(
+        None,
+        "ont-1",
+        wan_mode="pppoe",
+        wan_vlan=203,
+        instance_index=1,
+    )
+
+    assert result.success is False
+    assert "Refusing to create one" in result.message
+    assert calls == []
+    assert add_object_calls == []
+
+
+def test_set_pppoe_credentials_accepts_precreated_ppp_wan_with_ppp_vlan(
+    monkeypatch,
+) -> None:
+    calls: list[tuple[str, dict[str, str]]] = []
+    cache: dict[str, str | int] = {
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+            "WANIPConnectionNumberOfEntries"
+        ): 0,
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+            "WANPPPConnectionNumberOfEntries"
+        ): 1,
+        (
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2."
+            "WANPPPConnection.1.X_HW_VLAN"
+        ): 203,
+    }
+
+    class FakeClient:
+        def extract_parameter_value(self, device: dict, parameter_path: str):
+            current = device
+            for part in parameter_path.split("."):
+                if not isinstance(current, dict):
+                    return None
+                current = current.get(part)
+                if current is None:
+                    return None
+            if isinstance(current, dict) and "_value" in current:
+                return current["_value"]
+            return None if isinstance(current, dict) else current
+
+        def get_device(self, _device_id: str):
+            doc: dict = {}
+            for path, value in cache.items():
+                node = doc
+                parts = path.split(".")
+                for part in parts[:-1]:
+                    node = node.setdefault(part, {})
+                node[parts[-1]] = {"_value": value, "_timestamp": "now"}
+            return doc
+
+        def set_parameter_values(
+            self,
+            device_id: str,
+            params: dict[str, str],
+            *,
+            connection_request: bool = True,
+        ):
+            calls.append((device_id, params))
+            cache.update(params)
+            return {"queued": True}
+
+        def get_parameter_values(self, *_args, **_kwargs):
+            return {"queued": True}
+
+    monkeypatch.setattr(
+        ont_action_network,
+        "get_ont_client_or_error",
+        lambda _db, _ont_id: (
+            (SimpleNamespace(serial_number="ONT-1"), FakeClient(), "device-1"),
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        ont_action_network,
+        "detect_data_model_root",
+        lambda _db, _ont, _client, _device_id: "InternetGatewayDevice",
+    )
+    monkeypatch.setattr(ont_action_network, "persist_data_model_root", lambda *_: None)
+
+    result = ont_action_network.set_pppoe_credentials(
+        None,
+        "ont-1",
+        "100008817",
+        "secret",
+        wan_vlan=203,
+        instance_index=2,
+    )
+
+    assert result.success is True
+    assert calls == [
+        (
+            "device-1",
+            {
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username": "100008817",
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Password": "secret",
+            },
+        )
+    ]
+
+
 def test_set_lan_config_validates_input_before_resolving(monkeypatch) -> None:
     def _should_not_resolve(*_args, **_kwargs):
         raise AssertionError("resolver should not be called for invalid input")

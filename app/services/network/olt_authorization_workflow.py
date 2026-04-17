@@ -1621,12 +1621,115 @@ def authorize_autofind_ont_and_provision_network(
             provisioning_status=OntProvisioningStatus.failed,
         )
 
+    def _needs_deferred_service_config() -> bool:
+        ont = db.get(OntUnit, result.ont_unit_id)
+        olt = get_olt_or_none(db, olt_id)
+        profile = getattr(ont, "provisioning_profile", None) if ont else None
+        if profile is None and ont and getattr(ont, "provisioning_profile_id", None):
+            from app.models.network import OntProvisioningProfile
+
+            profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+
+        if olt is not None and getattr(olt, "tr069_acs_server_id", None):
+            return True
+        if profile is not None and (
+            getattr(profile, "cr_username", None) or getattr(profile, "cr_password", None)
+        ):
+            return True
+        if ont is not None and any(
+            getattr(ont, field, None)
+            for field in (
+                "wan_mode",
+                "pppoe_username",
+                "lan_gateway_ip",
+                "lan_subnet_mask",
+                "lan_dhcp_start",
+                "lan_dhcp_end",
+                "wifi_ssid",
+                "wifi_password",
+                "wifi_security_mode",
+                "wifi_channel",
+            )
+        ):
+            return True
+        if ont is not None and getattr(ont, "lan_dhcp_enabled", None) is not None:
+            return True
+        if ont is not None and getattr(ont, "wifi_enabled", None) is not None:
+            return True
+
+        try:
+            from app.services.network.ont_service_intent import load_ont_plan_for_ont
+
+            plan = load_ont_plan_for_ont(db, ont_id=result.ont_unit_id)
+        except Exception as exc:
+            logger.warning(
+                "Could not inspect saved ONT service plan for %s: %s",
+                result.ont_unit_id,
+                exc,
+            )
+            return False
+        return any(
+            isinstance(plan.get(key), dict) and bool(plan.get(key))
+            for key in (
+                "bind_tr069",
+                "configure_wan_tr069",
+                "push_pppoe_tr069",
+                "configure_lan_tr069",
+                "configure_wifi_tr069",
+            )
+        )
+
+    if _needs_deferred_service_config():
+        wait_started_at = monotonic()
+        try:
+            from app.services.network.ont_provision_steps import (
+                queue_wait_tr069_bootstrap,
+            )
+
+            wait_result = queue_wait_tr069_bootstrap(db, result.ont_unit_id)
+            _append_step(
+                "Queue ACS bootstrap and service config",
+                wait_result.success or wait_result.waiting,
+                wait_result.message,
+                step_started_at=wait_started_at,
+            )
+            if not wait_result.success and not wait_result.waiting:
+                return _finish(
+                    success=True,
+                    status="warning",
+                    message=(
+                        "ONT authorization and OLT network provisioning completed, "
+                        f"but ACS service config could not be queued: {wait_result.message}"
+                    ),
+                    provisioning_status=OntProvisioningStatus.provisioned,
+                )
+        except Exception as exc:
+            logger.warning(
+                "Failed to queue ACS service config after authorization for ONT %s: %s",
+                result.ont_unit_id,
+                exc,
+            )
+            _append_step(
+                "Queue ACS bootstrap and service config",
+                False,
+                f"Failed to queue ACS service config: {exc}",
+                step_started_at=wait_started_at,
+            )
+            return _finish(
+                success=True,
+                status="warning",
+                message=(
+                    "ONT authorization and OLT network provisioning completed, "
+                    f"but ACS service config could not be queued: {exc}"
+                ),
+                provisioning_status=OntProvisioningStatus.provisioned,
+            )
+
     return _finish(
         success=True,
         status="success",
         message=(
-            "ONT authorization and OLT network provisioning completed. "
-            "Next action: configure ONT."
+            "ONT authorization and OLT network provisioning completed."
         ),
         provisioning_status=OntProvisioningStatus.provisioned,
     )
@@ -1754,6 +1857,41 @@ def run_post_authorization_follow_up(
     _add_step("Resolve autofind candidate", resolve_ok, resolve_msg)
     if not resolve_ok:
         return False, resolve_msg, steps
+
+    profile_apply_ok = True
+    profile_apply_msg = "Skipped: ONT already has a provisioning profile."
+    ont = db.get(OntUnit, ont_unit_id)
+    if ont is not None and not getattr(ont, "provisioning_profile_id", None):
+        from sqlalchemy import desc
+
+        from app.models.network import OntProvisioningProfile
+        from app.services.network.ont_profile_apply import apply_profile_to_ont
+
+        profile = db.scalars(
+            select(OntProvisioningProfile)
+            .where(
+                OntProvisioningProfile.olt_device_id == olt_id,
+                OntProvisioningProfile.is_active.is_(True),
+            )
+            .order_by(
+                desc(OntProvisioningProfile.is_default),
+                desc(OntProvisioningProfile.updated_at),
+                desc(OntProvisioningProfile.created_at),
+            )
+        ).first()
+        if profile is None:
+            profile_apply_msg = "Skipped: no active provisioning profile is scoped to this OLT."
+        else:
+            apply_result = apply_profile_to_ont(db, ont_unit_id, str(profile.id))
+            profile_apply_ok = apply_result.success
+            profile_apply_msg = apply_result.message
+            if profile_apply_ok:
+                db.commit()
+            else:
+                db.rollback()
+    _add_step("Apply provisioning profile", profile_apply_ok, profile_apply_msg)
+    if not profile_apply_ok:
+        return False, profile_apply_msg, steps
 
     # Configure management IP so ONT can reach ACS (must happen before TR-069 bind)
     olt = get_olt_or_none(db, olt_id)

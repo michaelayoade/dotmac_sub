@@ -175,6 +175,8 @@ class ProvisioningDelta:
     optical_budget_message: str = ""
     mgmt_vlan_trunked: bool = True
     mgmt_vlan_message: str = ""
+    service_vlans_ok: bool = True
+    service_vlans_message: str = ""
     ip_index_valid: bool = True
     ip_index_message: str = ""
 
@@ -195,7 +197,12 @@ class ProvisioningDelta:
     @property
     def is_valid(self) -> bool:
         """Return True if all validations passed."""
-        return self.optical_budget_ok and self.mgmt_vlan_trunked and self.ip_index_valid
+        return (
+            self.optical_budget_ok
+            and self.mgmt_vlan_trunked
+            and self.service_vlans_ok
+            and self.ip_index_valid
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -248,11 +255,33 @@ def build_desired_state_from_profile(
     # Build management config
     management = None
     if resolved_profile.mgmt_vlan_tag:
+        mgmt_ip_mode = (
+            resolved_profile.mgmt_ip_mode.value
+            if resolved_profile.mgmt_ip_mode
+            else "dhcp"
+        )
+        subnet = None
+        gateway = None
+        if mgmt_ip_mode == "static_ip" and resolved_profile.mgmt_ip_pool_id:
+            import ipaddress
+
+            pool = getattr(resolved_profile, "mgmt_ip_pool", None)
+            if pool is None:
+                from app.models.network import IpPool
+
+                pool = db.get(IpPool, resolved_profile.mgmt_ip_pool_id)
+            if pool is not None:
+                gateway = getattr(pool, "gateway", None)
+                try:
+                    subnet = str(ipaddress.ip_network(str(pool.cidr), strict=False).netmask)
+                except ValueError:
+                    subnet = None
         management = DesiredManagementConfig(
             vlan_tag=resolved_profile.mgmt_vlan_tag,
-            ip_mode=resolved_profile.mgmt_ip_mode.value
-            if resolved_profile.mgmt_ip_mode
-            else "dhcp",
+            ip_mode=mgmt_ip_mode,
+            ip_address=getattr(ont, "mgmt_ip_address", None),
+            subnet=subnet,
+            gateway=gateway,
         )
 
     # Build TR-069 config if OLT has ACS
@@ -419,7 +448,7 @@ def read_actual_state(
         if len(parts) == 3:
             status_output = _run_huawei_cmd(
                 channel,
-                f"display ont info {parts[0]}/{parts[1]} {parts[2]} {olt_ont_id}",
+                f"display ont info {parts[0]} {parts[1]} {parts[2]} {olt_ont_id}",
             )
             is_authorized = not is_error_output(status_output)
         if not is_authorized:

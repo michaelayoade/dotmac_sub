@@ -1142,6 +1142,32 @@
             </div>
 
             <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">ONT Status by Serial</p>
+                <form hx-post="/admin/network/olts/{{ olt.id }}/ont-status-by-serial"
+                      hx-target="#cli-output"
+                      hx-swap="innerHTML"
+                      hx-indicator="#cli-spinner"
+                      class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div class="flex-1">
+                        <label for="ont-status-serial" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-400">ONT Serial</label>
+                        <input type="text"
+                               name="serial_number"
+                               id="ont-status-serial"
+                               autocomplete="off"
+                               spellcheck="false"
+                               placeholder="4857544328201B9A"
+                               class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 font-mono text-sm text-slate-900 placeholder-slate-400 focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100">
+                    </div>
+                    <button type="submit"
+                            class="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-emerald-700">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6M7 4h10a2 2 0 012 2v12a2 2 0 01-2 2H7a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>
+                        Get ONT Status
+                    </button>
+                </form>
+            </div>
+
+            <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Quick Commands</p>
                 <div class="flex flex-wrap gap-2">
                     {% for qc in [
@@ -1160,6 +1186,31 @@
                         {{ qc }}
                     </button>
                     {% endfor %}
+                </div>
+            </div>
+
+            <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
+                <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Running Configuration</p>
+                <div class="flex flex-wrap gap-2">
+                    <form hx-post="/admin/network/olts/{{ olt.id }}/ssh-get-config"
+                          hx-target="#cli-output"
+                          hx-swap="innerHTML"
+                          hx-indicator="#cli-spinner">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-700 hover:bg-emerald-100 dark:border-emerald-700 dark:bg-emerald-900/20 dark:text-emerald-300 transition-colors">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
+                            SSH CLI: Get Running Config
+                        </button>
+                    </form>
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/backups/ssh-backup">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit"
+                            class="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300 transition-colors">
+                            <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v12m0 0l-4-4m4 4l4-4M4 17v2a2 2 0 002 2h12a2 2 0 002-2v-2"/></svg>
+                            Save SSH Backup
+                        </button>
+                    </form>
                 </div>
             </div>
 

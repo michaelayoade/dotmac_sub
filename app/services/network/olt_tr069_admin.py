@@ -286,12 +286,18 @@ def queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
             acs_params["Device.ManagementServer.Password"] = password
             acs_params["InternetGatewayDevice.ManagementServer.Password"] = password
 
+    # Send both TR-098 (InternetGatewayDevice) and TR-181 (Device) parameters.
+    # Devices will ignore unsupported paths, so sending both is safe and avoids
+    # needing to detect the data model before propagation.
+
     for ont in onts:
         stats["attempted"] += 1
         try:
             resolved, reason = resolve_genieacs_with_reason(db, ont)
             if resolved:
                 client, device_id = resolved
+                # Fire and forget: send params without strict verification since
+                # only one data model will apply (device ignores unsupported paths).
                 client.set_parameter_values(device_id, acs_params)
                 logger.info("Propagated ACS config to ONT %s", ont.serial_number)
                 stats["propagated"] += 1

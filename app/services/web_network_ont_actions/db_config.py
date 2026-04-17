@@ -9,7 +9,10 @@ from starlette.requests import Request
 from app.models.network import Vlan
 from app.services import network as network_service
 from app.services.network.ont_actions import ActionResult
-from app.services.web_network_ont_actions._common import _log_action_audit
+from app.services.web_network_ont_actions._common import (
+    _log_action_audit,
+    _persist_ont_plan_step,
+)
 from app.services.web_network_ont_actions.config_setters import (
     configure_wan_config,
     set_lan_config,
@@ -48,13 +51,13 @@ def update_ont_config(
 ) -> ActionResult:
     """Update ONT configuration fields in the database, optionally push to device."""
     from app.models.network import ConfigMethod, IpProtocol, MgmtIpMode, WanMode
-    from app.services.credential_crypto import encrypt_credential
+    from app.services.credential_crypto import decrypt_credential, encrypt_credential
+    from app.services.network import ont_provision_steps
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     if not ont:
         return ActionResult(success=False, message="ONT not found")
 
-    # Map string values to enums
     if wan_mode:
         try:
             ont.wan_mode = WanMode(wan_mode)
@@ -87,7 +90,6 @@ def update_ont_config(
     elif mgmt_ip_mode == "":
         ont.mgmt_ip_mode = None
 
-    # UUID fields - validate VLAN belongs to ONT's OLT
     if wan_vlan_id:
         vlan = db.scalars(select(Vlan).where(Vlan.id == wan_vlan_id).limit(1)).first()
         if vlan and vlan.olt_device_id and ont.olt_device_id:
@@ -112,7 +114,6 @@ def update_ont_config(
     elif mgmt_vlan_id == "":
         ont.mgmt_vlan_id = None
 
-    # String and boolean fields
     if pppoe_username is not None:
         ont.pppoe_username = pppoe_username.strip() or None
     if pppoe_password is not None and pppoe_password.strip():
@@ -131,13 +132,13 @@ def update_ont_config(
         ont.lan_dhcp_end = lan_dhcp_end.strip() or None
     ont.voip_enabled = voip_enabled
 
-    # WiFi fields
-    ont.wifi_enabled = wifi_enabled
     if wifi_ssid is not None:
-        ont.wifi_ssid_template = wifi_ssid.strip() or None
-    if wifi_channel is not None:
+        ont.wifi_ssid = wifi_ssid.strip() or None
+    if hasattr(ont, "wifi_enabled"):
+        ont.wifi_enabled = wifi_enabled
+    if wifi_channel is not None and hasattr(ont, "wifi_channel"):
         ont.wifi_channel = wifi_channel.strip() or None
-    if wifi_security_mode is not None:
+    if wifi_security_mode is not None and hasattr(ont, "wifi_security_mode"):
         ont.wifi_security_mode = wifi_security_mode.strip() or None
 
     db.add(ont)
@@ -147,20 +148,85 @@ def update_ont_config(
     push_success = True
 
     if push_to_device:
-        # Push PPPoE credentials if set
-        if ont.pppoe_username and pppoe_password and pppoe_password.strip():
-            result = set_pppoe_credentials(
+        config_method_value = getattr(getattr(ont, "config_method", None), "value", None)
+        wan_mode_value = getattr(getattr(ont, "wan_mode", None), "value", None)
+
+        if config_method_value == "omci" and wan_mode_value == "pppoe":
+            wan_vlan_tag = None
+            if ont.wan_vlan_id:
+                vlan = db.get(Vlan, ont.wan_vlan_id)
+                wan_vlan_tag = int(vlan.tag) if vlan and vlan.tag is not None else None
+
+            password_for_push = (
+                pppoe_password.strip()
+                if pppoe_password and pppoe_password.strip()
+                else decrypt_credential(ont.pppoe_password)
+                if getattr(ont, "pppoe_password", None)
+                else ""
+            )
+
+            _persist_ont_plan_step(
                 db,
                 ont_id,
-                ont.pppoe_username,
-                pppoe_password.strip(),
-                request=request,
+                "configure_wan_tr069",
+                {
+                    "wan_mode": "pppoe",
+                    "wan_vlan_id": str(ont.wan_vlan_id) if ont.wan_vlan_id else None,
+                    "wan_vlan": wan_vlan_tag,
+                },
             )
-            push_messages.append(f"PPPoE: {result.message}")
-            if not result.success:
+            _persist_ont_plan_step(
+                db,
+                ont_id,
+                "push_pppoe_omci",
+                {
+                    "vlan_id": wan_vlan_tag,
+                    "username": ont.pppoe_username,
+                    "password_set": bool(password_for_push),
+                    "ip_index": 1,
+                    "priority": 0,
+                },
+            )
+
+            if not ont.pppoe_username:
+                push_messages.append("PPPoE OMCI: username is required.")
+                push_success = False
+            if not password_for_push:
+                push_messages.append("PPPoE OMCI: password is required.")
+                push_success = False
+            if wan_vlan_tag is None:
+                push_messages.append("PPPoE OMCI: internet VLAN is required.")
                 push_success = False
 
-        # Push LAN config if set
+            if push_success:
+                step_result = ont_provision_steps.push_pppoe_omci(
+                    db,
+                    ont_id,
+                    vlan_id=wan_vlan_tag,
+                    username=ont.pppoe_username,
+                    password=password_for_push,
+                )
+                push_messages.append(f"PPPoE OMCI: {step_result.message}")
+                if not step_result.success:
+                    push_success = False
+
+            _log_action_audit(
+                db,
+                request=request,
+                action="update_ont_config",
+                ont_id=ont_id,
+                metadata={
+                    "wan_mode": wan_mode,
+                    "pppoe_username": pppoe_username,
+                    "wifi_ssid": wifi_ssid,
+                    "push_to_device": push_to_device,
+                    "push_success": push_success,
+                    "config_method": config_method_value,
+                },
+            )
+            message = "Configuration saved. " + "; ".join(push_messages)
+            return ActionResult(success=push_success, message=message)
+
         if any([lan_gateway_ip, lan_subnet_mask, lan_dhcp_enabled is not None]):
             result = set_lan_config(
                 db,
@@ -176,24 +242,63 @@ def update_ont_config(
             if not result.success:
                 push_success = False
 
-        # Push WAN config if mode is set
+        wan_vlan_tag = None
+        if ont.wan_vlan_id:
+            vlan = db.get(Vlan, ont.wan_vlan_id)
+            wan_vlan_tag = vlan.tag if vlan else None
         if ont.wan_mode:
-            wan_vlan_tag = None
-            if ont.wan_vlan_id:
-                vlan = db.get(Vlan, ont.wan_vlan_id)
-                wan_vlan_tag = vlan.tag if vlan else None
-            result = configure_wan_config(
+            wan_mode_for_push = ont.wan_mode.value if ont.wan_mode else "dhcp"
+            if wan_mode_for_push == "static_ip":
+                wan_mode_for_push = "static"
+            elif wan_mode_for_push == "setup_via_onu":
+                wan_mode_for_push = "bridge"
+            if wan_mode_for_push == "static":
+                push_messages.append(
+                    "WAN: static mode requires IP, subnet, gateway, and DNS. "
+                    "Use the WAN / PPPoE unified form to push static WAN settings."
+                )
+                push_success = False
+            else:
+                result = configure_wan_config(
+                    db,
+                    ont_id,
+                    wan_mode=wan_mode_for_push,
+                    wan_vlan=wan_vlan_tag,
+                    request=request,
+                )
+                push_messages.append(f"WAN: {result.message}")
+                if not result.success:
+                    push_success = False
+
+        password_for_push = (
+            pppoe_password.strip()
+            if pppoe_password and pppoe_password.strip()
+            else decrypt_credential(ont.pppoe_password)
+            if getattr(ont, "pppoe_password", None)
+            else ""
+        )
+        if (
+            push_success
+            and ont.wan_mode
+            and ont.wan_mode.value == "pppoe"
+            and ont.pppoe_username
+            and password_for_push
+        ):
+            result = set_pppoe_credentials(
                 db,
                 ont_id,
-                wan_mode=ont.wan_mode.value if ont.wan_mode else "dhcp",
-                wan_vlan=wan_vlan_tag,
+                ont.pppoe_username,
+                password_for_push,
+                wan_vlan=int(wan_vlan_tag) if wan_vlan_tag is not None else None,
                 request=request,
             )
-            push_messages.append(f"WAN: {result.message}")
+            push_messages.append(f"PPPoE: {result.message}")
             if not result.success:
                 push_success = False
+        elif push_success and ont.wan_mode and ont.wan_mode.value == "pppoe":
+            push_messages.append("PPPoE: password is required to push credentials.")
+            push_success = False
 
-        # Push WiFi config if any WiFi fields are set
         if any([wifi_ssid, wifi_password, wifi_security_mode, wifi_channel]):
             channel_int: int | None = None
             if wifi_channel:

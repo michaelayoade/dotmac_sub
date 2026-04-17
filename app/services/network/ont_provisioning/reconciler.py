@@ -249,6 +249,8 @@ def validate_delta(
         if vlan_ids:
             vlan_result = validate_service_port_vlans(db, vlan_ids, olt)
             if not vlan_result.is_valid:
+                delta.service_vlans_ok = False
+                delta.service_vlans_message = vlan_result.message
                 logger.warning(
                     "Service port VLAN validation failed for ONT %s: %s",
                     ont.serial_number,
@@ -258,6 +260,9 @@ def validate_delta(
                 for d in create_deltas:
                     if d.desired and d.desired.vlan_id in vlan_result.invalid_vlans:
                         d.message = f"VLAN {d.desired.vlan_id} not configured on OLT"
+            else:
+                delta.service_vlans_ok = True
+                delta.service_vlans_message = vlan_result.message
 
     # 4. internet_config_ip_index bounds validation
     if desired.internet_config_ip_index is not None:
@@ -422,6 +427,8 @@ def get_delta_summary(delta: ProvisioningDelta) -> dict:
             "optical_budget_message": delta.optical_budget_message,
             "mgmt_vlan_trunked": delta.mgmt_vlan_trunked,
             "mgmt_vlan_message": delta.mgmt_vlan_message,
+            "service_vlans_ok": delta.service_vlans_ok,
+            "service_vlans_message": delta.service_vlans_message,
             "ip_index_valid": delta.ip_index_valid,
             "ip_index_message": delta.ip_index_message,
         },

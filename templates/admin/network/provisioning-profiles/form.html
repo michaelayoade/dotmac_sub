@@ -348,9 +348,10 @@
                         <select name="wifi_security_mode" id="wifi_security_mode"
                             class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Not Set</option>
-                            <option value="WPA2-PSK" {% if item and item.wifi_security_mode == 'WPA2-PSK' %}selected{% endif %}>WPA2-PSK</option>
-                            <option value="WPA3-SAE" {% if item and item.wifi_security_mode == 'WPA3-SAE' %}selected{% endif %}>WPA3-SAE</option>
-                            <option value="WPA2/WPA3" {% if item and item.wifi_security_mode == 'WPA2/WPA3' %}selected{% endif %}>WPA2/WPA3 Mixed</option>
+                            <option value="WPA2-Personal" {% if item and item.wifi_security_mode in ['WPA2-Personal', 'WPA2-PSK'] %}selected{% endif %}>WPA2-Personal</option>
+                            <option value="WPA-WPA2-Personal" {% if item and item.wifi_security_mode == 'WPA-WPA2-Personal' %}selected{% endif %}>WPA/WPA2 Mixed</option>
+                            <option value="WPA3-Personal" {% if item and item.wifi_security_mode in ['WPA3-Personal', 'WPA3-SAE'] %}selected{% endif %}>WPA3-Personal</option>
+                            <option value="None" {% if item and item.wifi_security_mode == 'None' %}selected{% endif %}>None (Open)</option>
                         </select>
                     </div>
                     <div>

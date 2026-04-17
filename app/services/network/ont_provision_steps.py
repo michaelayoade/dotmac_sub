@@ -23,6 +23,7 @@ import logging
 import time
 
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
 from app.services.network.ont_provisioning.context import (
@@ -56,6 +57,7 @@ from app.services.network.provisioning_settings import (
 from app.services.network.provisioning_settings import (
     get_pppoe_push_max_attempts,
     get_pppoe_push_retry_delay,
+    get_olt_write_mode_enabled,
     get_tr069_bootstrap_poll_interval,
     get_tr069_bootstrap_timeout,
 )
@@ -698,6 +700,661 @@ def queue_wait_tr069_bootstrap(
 
 
 # ---------------------------------------------------------------------------
+# SERVICE: Provision from WAN Service Instances
+# ---------------------------------------------------------------------------
+
+
+def _provision_wan_service_instances(
+    db: Session,
+    ont_id: str,
+) -> tuple[list[dict[str, object]], list[str], list[str]]:
+    """Provision TR-069 config from OntWanServiceInstance records.
+
+    Returns:
+        A tuple of (steps, needs_input, hard_failures) where:
+        - steps: List of step results
+        - needs_input: List of missing inputs
+        - hard_failures: List of hard failure messages
+    """
+    from sqlalchemy import select
+
+    from app.models.network import (
+        OntProvisioningProfile,
+        OntUnit,
+        OntWanServiceInstance,
+        WanConnectionType,
+        WanServiceProvisioningStatus,
+    )
+    from app.services.credential_crypto import decrypt_credential
+    from app.services.network.ont_action_network import (
+        configure_wan_config,
+        set_pppoe_credentials,
+    )
+    from app.services.network.olt_ssh_ont import (
+        configure_ont_internet_config,
+        configure_ont_pppoe_omci,
+        configure_ont_wan_config,
+    )
+
+    ont = db.get(OntUnit, ont_id)
+    if not ont:
+        return [], [], ["ONT not found"]
+
+    # Query WAN service instances for this ONT
+    instances = list(
+        db.scalars(
+            select(OntWanServiceInstance)
+            .where(OntWanServiceInstance.ont_id == ont.id)
+            .where(OntWanServiceInstance.is_active.is_(True))
+            .order_by(OntWanServiceInstance.priority)
+        ).all()
+    )
+
+    if not instances:
+        return [], [], []
+
+    profile = getattr(ont, "provisioning_profile", None)
+    if profile is None and getattr(ont, "provisioning_profile_id", None):
+        profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+
+    steps: list[dict[str, object]] = []
+    needs_input: list[str] = []
+    hard_failures: list[str] = []
+    olt_context = None
+
+    def _resolve_olt_context_once():
+        nonlocal olt_context
+        if olt_context is not None:
+            return olt_context, None
+        ctx, err = resolve_olt_context(db, ont_id)
+        if ctx is None:
+            return None, err
+        olt_context = ctx
+        return ctx, None
+
+    def _append(name: str, result) -> None:
+        success = bool(getattr(result, "success", False))
+        message = str(getattr(result, "message", ""))
+        steps.append(
+            {
+                "step": name,
+                "success": success,
+                "waiting": bool(getattr(result, "waiting", False)),
+                "message": message,
+            }
+        )
+        if not success and not getattr(result, "waiting", False):
+            hard_failures.append(f"{name}: {message}")
+
+    def _append_step(name: str, success: bool, message: str) -> None:
+        steps.append(
+            {
+                "step": name,
+                "success": success,
+                "waiting": False,
+                "message": message,
+            }
+        )
+        if not success:
+            hard_failures.append(f"{name}: {message}")
+
+    def _provision_pppoe_omci(
+        instance,
+        service_label: str,
+        wan_vlan: int | None,
+    ) -> bool:
+        wan_profile_id = int(getattr(profile, "wan_config_profile_id", None) or 0)
+        omci_vlan = getattr(profile, "pppoe_omci_vlan", None)
+        if omci_vlan is None:
+            omci_vlan = wan_vlan
+        if omci_vlan is None:
+            return False
+        if not get_olt_write_mode_enabled(db):
+            message = (
+                "OLT write mode is disabled. Ask a system admin to enable "
+                "provisioning.olt_write_mode_enabled before running OMCI "
+                "WAN configuration."
+            )
+            _append_step(
+                f"configure_pppoe_omci:{service_label}",
+                False,
+                message,
+            )
+            instance.provisioning_status = WanServiceProvisioningStatus.failed
+            instance.last_error = message[:500]
+            return True
+
+        pppoe_username = instance.pppoe_username
+        pppoe_password = None
+        if instance.pppoe_password:
+            try:
+                pppoe_password = decrypt_credential(instance.pppoe_password)
+            except Exception:
+                pppoe_password = None
+        if not pppoe_username or not pppoe_password:
+            needs_input.append(
+                f"PPPoE credentials missing for WAN service '{service_label}'."
+            )
+            return True
+
+        ctx, err = _resolve_olt_context_once()
+        if ctx is None:
+            message = err or "OLT context not found"
+            _append_step(
+                f"configure_pppoe_omci:{service_label}",
+                False,
+                message,
+            )
+            instance.provisioning_status = WanServiceProvisioningStatus.failed
+            instance.last_error = message[:500]
+            return True
+
+        profile_ip_index = getattr(profile, "internet_config_ip_index", None)
+        ip_index = (
+            int(profile_ip_index)
+            if profile_ip_index is not None
+            else int(instance.priority or 1)
+        )
+
+        # Step 1: Activate TCP stack on ONT via internet-config
+        inet_ok, inet_msg = configure_ont_internet_config(
+            ctx.olt,
+            ctx.fsp,
+            ctx.olt_ont_id,
+            ip_index=ip_index,
+        )
+        _append_step(f"internet_config_olt:{service_label}", inet_ok, inet_msg)
+        if not inet_ok:
+            # internet-config failure is non-fatal; some ONTs don't need it
+            logger.warning(
+                "internet-config failed for ONT %s ip-index %d: %s",
+                ont_id,
+                ip_index,
+                inet_msg,
+            )
+
+        # Step 2: Set route+NAT mode via wan-config when this OLT supports
+        # ONT WAN profiles. Some MA56xx builds support PPPoE ipconfig but not
+        # `ont wan-profile`; those profiles keep wan_config_profile_id empty.
+        if wan_profile_id:
+            wan_ok, wan_msg = configure_ont_wan_config(
+                ctx.olt,
+                ctx.fsp,
+                ctx.olt_ont_id,
+                ip_index=ip_index,
+                profile_id=wan_profile_id,
+            )
+            _append_step(f"configure_wan_olt:{service_label}", wan_ok, wan_msg)
+            if not wan_ok:
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = wan_msg[:500]
+                return True
+
+        pppoe_ok, pppoe_msg = configure_ont_pppoe_omci(
+            ctx.olt,
+            ctx.fsp,
+            ctx.olt_ont_id,
+            ip_index=ip_index,
+            vlan_id=int(omci_vlan),
+            priority=int(instance.cos_priority or 0),
+            username=str(pppoe_username),
+            password=str(pppoe_password),
+        )
+        _append_step(f"configure_pppoe_omci:{service_label}", pppoe_ok, pppoe_msg)
+        if pppoe_ok:
+            from datetime import UTC, datetime
+
+            instance.provisioning_status = WanServiceProvisioningStatus.provisioned
+            instance.last_provisioned_at = datetime.now(UTC)
+            instance.last_error = None
+        else:
+            instance.provisioning_status = WanServiceProvisioningStatus.failed
+            instance.last_error = pppoe_msg[:500]
+        return True
+
+    def _igd_wan_instance_for_vlan(wan_vlan: int | None) -> int | None:
+        capabilities = getattr(ont, "tr069_last_snapshot", None)
+        if not isinstance(capabilities, dict):
+            return None
+        capabilities = capabilities.get("capabilities")
+        if not isinstance(capabilities, dict):
+            return None
+        wan_caps = capabilities.get("wan")
+        if not isinstance(wan_caps, dict):
+            return None
+        if wan_caps.get("data_model") != "InternetGatewayDevice":
+            return None
+        connections = wan_caps.get("connections")
+        if not isinstance(connections, list):
+            return None
+        requested_vlan = str(wan_vlan or "").strip()
+        for item in connections:
+            if not isinstance(item, dict):
+                continue
+            service = str(item.get("detected_wan_service") or "").upper()
+            vlan = str(item.get("detected_wan_vlan") or "").strip()
+            if service == "TR069":
+                continue
+            if requested_vlan and vlan == requested_vlan:
+                return int(item.get("index") or 0) or None
+        for item in connections:
+            if not isinstance(item, dict):
+                continue
+            service = str(item.get("detected_wan_service") or "").upper()
+            vlan = str(item.get("detected_wan_vlan") or "").strip()
+            ppp_entries = int(item.get("ppp_entries") or 0)
+            if service == "TR069" or (
+                requested_vlan and vlan and vlan != requested_vlan
+            ):
+                continue
+            if ppp_entries > 0:
+                return int(item.get("index") or 0) or None
+        for item in connections:
+            if not isinstance(item, dict):
+                continue
+            service = str(item.get("detected_wan_service") or "").upper()
+            vlan = str(item.get("detected_wan_vlan") or "").strip()
+            ip_entries = int(item.get("ip_entries") or 0)
+            ppp_entries = int(item.get("ppp_entries") or 0)
+            if service == "TR069" or (
+                requested_vlan and vlan and vlan != requested_vlan
+            ):
+                continue
+            if ip_entries == 0 and ppp_entries == 0:
+                return int(item.get("index") or 0) or None
+        return None
+
+    def _mark_ppp_wan_requires_precreated() -> None:
+        snapshot = getattr(ont, "tr069_last_snapshot", None)
+        if not isinstance(snapshot, dict):
+            return
+        snapshot = dict(snapshot)
+        capabilities = snapshot.get("capabilities")
+        if not isinstance(capabilities, dict):
+            return
+        capabilities = dict(capabilities)
+        pending = capabilities.get("pending_actions")
+        if isinstance(pending, dict):
+            pending = dict(pending)
+            pending.pop("add_ppp_wan", None)
+            if pending:
+                capabilities["pending_actions"] = pending
+            else:
+                capabilities.pop("pending_actions", None)
+        wan_caps = capabilities.get("wan")
+        if isinstance(wan_caps, dict):
+            wan_caps = dict(wan_caps)
+            wan_caps["supports_tr069_add_ppp_wan"] = False
+            wan_caps["supports_tr069_set_ppp_credentials"] = False
+            wan_caps["requires_precreated_ppp_wan"] = True
+            capabilities["wan"] = wan_caps
+        snapshot["capabilities"] = capabilities
+        ont.tr069_last_snapshot = snapshot
+        flag_modified(ont, "tr069_last_snapshot")
+
+    for idx, instance in enumerate(instances, start=1):
+        service_label = instance.name or instance.service_type.value
+        if str(instance.service_type.value) == "management":
+            steps.append(
+                {
+                    "step": f"configure_wan_tr069:{service_label}",
+                    "success": True,
+                    "waiting": False,
+                    "message": "Skipped: management WAN is configured on the OLT.",
+                }
+            )
+            continue
+        logger.info(
+            "Provisioning WAN service instance %d/%d (%s) for ONT %s",
+            idx,
+            len(instances),
+            service_label,
+            ont.serial_number,
+        )
+
+        # Determine WAN mode from connection_type
+        wan_mode_map = {
+            WanConnectionType.pppoe: "pppoe",
+            WanConnectionType.dhcp: "dhcp",
+            WanConnectionType.static: "static",
+            WanConnectionType.bridged: "bridge",
+        }
+        wan_mode = wan_mode_map.get(instance.connection_type, "pppoe")
+
+        # Get VLAN tag
+        wan_vlan = instance.s_vlan
+        if wan_vlan is None and instance.vlan:
+            wan_vlan = instance.vlan.tag
+
+        if wan_mode == "pppoe" and _provision_pppoe_omci(
+            instance,
+            service_label,
+            wan_vlan,
+        ):
+            continue
+
+        acs_instance_index = idx
+        if (
+            wan_mode == "pppoe"
+            and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice"
+        ):
+            detected_index = _igd_wan_instance_for_vlan(wan_vlan)
+            if detected_index is None:
+                message = (
+                    f"No safe WANConnectionDevice exists for PPPoE VLAN {wan_vlan}. "
+                    "The ONT must expose or precreate an internet PPP WAN container "
+                    "before TR-069 can push credentials."
+                )
+                steps.append(
+                    {
+                        "step": f"configure_wan_tr069:{service_label}",
+                        "success": False,
+                        "waiting": False,
+                        "message": message,
+                    }
+                )
+                hard_failures.append(f"configure_wan_tr069:{service_label}: {message}")
+                from app.models.network import WanServiceProvisioningStatus
+
+                instance.provisioning_status = WanServiceProvisioningStatus.failed
+                instance.last_error = message[:500]
+                _mark_ppp_wan_requires_precreated()
+                continue
+            acs_instance_index = detected_index
+
+        # Configure WAN mode (creates WAN service if needed)
+        if wan_mode:
+            wan_result = configure_wan_config(
+                db,
+                ont_id,
+                wan_mode=wan_mode,
+                wan_vlan=wan_vlan,
+                instance_index=acs_instance_index,
+            )
+            _append(f"configure_wan_tr069:{service_label}", wan_result)
+
+        # Push PPPoE credentials if applicable
+        if instance.connection_type == WanConnectionType.pppoe:
+            pppoe_username = instance.pppoe_username
+            pppoe_password = None
+            if instance.pppoe_password:
+                try:
+                    pppoe_password = decrypt_credential(instance.pppoe_password)
+                except Exception:
+                    pppoe_password = None
+
+            if pppoe_username and pppoe_password:
+                pppoe_result = set_pppoe_credentials(
+                    db,
+                    ont_id,
+                    pppoe_username,
+                    pppoe_password,
+                    wan_vlan=wan_vlan,
+                    instance_index=acs_instance_index,
+                )
+                _append(f"push_pppoe_tr069:{service_label}", pppoe_result)
+
+                # Update instance status on success
+                if pppoe_result.success:
+                    from datetime import UTC, datetime
+
+                    from app.models.network import WanServiceProvisioningStatus
+
+                    instance.provisioning_status = (
+                        WanServiceProvisioningStatus.provisioned
+                    )
+                    instance.last_provisioned_at = datetime.now(UTC)
+                    instance.last_error = None
+                elif getattr(pppoe_result, "waiting", False):
+                    from app.models.network import WanServiceProvisioningStatus
+
+                    instance.provisioning_status = WanServiceProvisioningStatus.pending
+                    instance.last_error = pppoe_result.message[:500] if pppoe_result.message else None
+                else:
+                    from app.models.network import WanServiceProvisioningStatus
+
+                    instance.provisioning_status = WanServiceProvisioningStatus.failed
+                    instance.last_error = pppoe_result.message[:500] if pppoe_result.message else None
+            else:
+                needs_input.append(
+                    f"PPPoE credentials missing for WAN service '{service_label}'."
+                )
+
+    return steps, needs_input, hard_failures
+
+
+def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
+    """Apply saved TR-069 service intent once the ONT is visible in ACS.
+
+    This function first checks for OntWanServiceInstance records (Phase 2+3
+    architecture). If found, it provisions from those instances which provide
+    grouped L2/L3 configuration with resolved credentials.
+
+    If no WAN service instances exist, falls back to the legacy flat-field
+    approach using ont_plan and OntUnit fields for backward compatibility.
+
+    Missing operator inputs are reported in ``data["needs_input"]`` and do not
+    fail the bootstrap operation; they can be supplied later and retried.
+    """
+    from app.services.credential_crypto import decrypt_credential
+    from app.services.network.ont_action_network import (
+        configure_wan_config,
+        probe_wan_capabilities,
+        set_lan_config,
+        set_pppoe_credentials,
+    )
+    from app.services.network.ont_action_network import (
+        set_connection_request_credentials as set_cr_credentials,
+    )
+    from app.services.network.ont_action_wifi import set_wifi_config
+    from app.services.network.ont_service_intent import load_ont_plan_for_ont
+
+    t0 = time.monotonic()
+    ont = db.get(OntUnit, ont_id)
+    if ont is None:
+        return StepResult("apply_saved_service_config", False, "ONT not found")
+
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
+    steps: list[dict[str, object]] = []
+    needs_input: list[str] = []
+    hard_failures: list[str] = []
+    waiting = False
+
+    def _section(name: str) -> dict:
+        value = ont_plan.get(name)
+        return value if isinstance(value, dict) else {}
+
+    def _append(name: str, result) -> None:
+        nonlocal waiting
+        waiting = waiting or bool(getattr(result, "waiting", False))
+        success = bool(getattr(result, "success", False))
+        message = str(getattr(result, "message", ""))
+        steps.append(
+            {
+                "step": name,
+                "success": success,
+                "waiting": bool(getattr(result, "waiting", False)),
+                "message": message,
+            }
+        )
+        if not success and not getattr(result, "waiting", False):
+            hard_failures.append(f"{name}: {message}")
+
+    bind_plan = _section("bind_tr069")
+    profile = getattr(ont, "provisioning_profile", None)
+    if profile is None and getattr(ont, "provisioning_profile_id", None):
+        from app.models.network import OntProvisioningProfile
+
+        profile = db.get(OntProvisioningProfile, ont.provisioning_profile_id)
+    cr_username = getattr(profile, "cr_username", None) if profile else None
+    cr_password = getattr(profile, "cr_password", None) if profile else None
+    if cr_password:
+        cr_password = decrypt_credential(cr_password) or str(cr_password)
+    if cr_username and cr_password:
+        _append(
+            "set_connection_request_credentials",
+            set_cr_credentials(db, ont_id, str(cr_username), str(cr_password)),
+        )
+    elif bind_plan:
+        needs_input.append("Connection request credentials are incomplete.")
+
+    probe_result = probe_wan_capabilities(db, ont_id)
+    _append("probe_wan_capabilities", probe_result)
+
+    # Phase 2+3: Check for WAN service instances first
+    # If instances exist, use them for WAN/PPPoE provisioning (grouped L2/L3)
+    wan_instance_steps, wan_instance_needs, wan_instance_failures = (
+        _provision_wan_service_instances(db, ont_id)
+    )
+    use_wan_instances = bool(wan_instance_steps or wan_instance_needs)
+
+    if use_wan_instances:
+        # Use WAN service instances (Phase 2+3 architecture)
+        for step in wan_instance_steps:
+            steps.append(step)
+            if step.get("waiting"):
+                waiting = True
+        needs_input.extend(wan_instance_needs)
+        hard_failures.extend(wan_instance_failures)
+        logger.info(
+            "ONT %s: Provisioned %d WAN service instance steps",
+            ont.serial_number,
+            len(wan_instance_steps),
+        )
+    else:
+        # Legacy fallback: use flat fields and ont_plan
+        wan_plan = _section("configure_wan_tr069")
+        wan_mode = (
+            wan_plan.get("wan_mode")
+            or (ont.wan_mode.value if getattr(ont, "wan_mode", None) else None)
+        )
+        if wan_mode == "static_ip":
+            wan_mode = "static"
+        if wan_mode:
+            wan_vlan = wan_plan.get("wan_vlan")
+            if wan_vlan is None and getattr(ont, "wan_vlan", None) is not None:
+                wan_vlan = getattr(ont.wan_vlan, "tag", None)
+            _append(
+                "configure_wan_tr069",
+                configure_wan_config(
+                    db,
+                    ont_id,
+                    wan_mode=str(wan_mode),
+                    wan_vlan=int(wan_vlan) if str(wan_vlan or "").isdigit() else None,
+                    ip_address=wan_plan.get("ip_address"),
+                    subnet_mask=wan_plan.get("subnet_mask"),
+                    gateway=wan_plan.get("gateway"),
+                    dns_servers=wan_plan.get("dns_servers"),
+                ),
+            )
+
+        pppoe_plan = _section("push_pppoe_tr069")
+        pppoe_username = (
+            pppoe_plan.get("username")
+            or pppoe_plan.get("pppoe_username")
+            or getattr(ont, "pppoe_username", None)
+        )
+        pppoe_password = (
+            decrypt_credential(ont.pppoe_password)
+            if getattr(ont, "pppoe_password", None)
+            else None
+        )
+        if pppoe_username and pppoe_password:
+            # Pass wan_vlan so PPP WAN service can be auto-created if missing
+            pppoe_wan_vlan = (
+                int(wan_vlan) if str(wan_vlan or "").isdigit() else None
+            )
+            _append(
+                "push_pppoe_tr069",
+                set_pppoe_credentials(
+                    db,
+                    ont_id,
+                    str(pppoe_username),
+                    str(pppoe_password),
+                    wan_vlan=pppoe_wan_vlan,
+                ),
+            )
+        elif pppoe_plan or wan_mode == "pppoe":
+            needs_input.append("PPPoE username and password are required.")
+
+    lan_plan = _section("configure_lan_tr069")
+    lan_values = {
+        "lan_ip": getattr(ont, "lan_gateway_ip", None) or lan_plan.get("lan_ip"),
+        "lan_subnet": getattr(ont, "lan_subnet_mask", None)
+        or lan_plan.get("lan_subnet"),
+        "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None)
+        if getattr(ont, "lan_dhcp_enabled", None) is not None
+        else lan_plan.get("dhcp_enabled"),
+        "dhcp_start": getattr(ont, "lan_dhcp_start", None)
+        or lan_plan.get("dhcp_start"),
+        "dhcp_end": getattr(ont, "lan_dhcp_end", None) or lan_plan.get("dhcp_end"),
+    }
+    if any(value not in (None, "", []) for value in lan_values.values()):
+        _append("configure_lan_tr069", set_lan_config(db, ont_id, **lan_values))
+
+    wifi_plan = _section("configure_wifi_tr069")
+    wifi_password = (
+        decrypt_credential(ont.wifi_password)
+        if getattr(ont, "wifi_password", None)
+        else None
+    )
+    channel = getattr(ont, "wifi_channel", None) or wifi_plan.get("channel")
+    try:
+        channel_int = int(channel) if channel not in (None, "") else None
+    except (TypeError, ValueError):
+        channel_int = None
+        needs_input.append("WiFi channel must be numeric.")
+    wifi_values = {
+        "enabled": getattr(ont, "wifi_enabled", None)
+        if getattr(ont, "wifi_enabled", None) is not None
+        else wifi_plan.get("enabled"),
+        "ssid": getattr(ont, "wifi_ssid", None) or wifi_plan.get("ssid"),
+        "password": wifi_password,
+        "channel": channel_int,
+        "security_mode": getattr(ont, "wifi_security_mode", None)
+        or wifi_plan.get("security_mode"),
+    }
+    if any(value not in (None, "", []) for value in wifi_values.values()):
+        _append("configure_wifi_tr069", set_wifi_config(db, ont_id, **wifi_values))
+    elif wifi_plan.get("password_set"):
+        needs_input.append("WiFi password was requested but no saved password is available.")
+
+    ms = int((time.monotonic() - t0) * 1000)
+    if hard_failures:
+        return StepResult(
+            "apply_saved_service_config",
+            False,
+            "; ".join(hard_failures),
+            ms,
+            critical=False,
+            waiting=waiting,
+            data={"steps": steps, "needs_input": needs_input},
+        )
+    if not steps and not needs_input:
+        return StepResult(
+            "apply_saved_service_config",
+            True,
+            "No saved ONT service config to apply.",
+            ms,
+            critical=False,
+            skipped=True,
+            data={"steps": steps},
+        )
+    message = "Saved ONT service config applied."
+    if needs_input:
+        message += " Some inputs are still required."
+    return StepResult(
+        "apply_saved_service_config",
+        True,
+        message,
+        ms,
+        critical=False,
+        waiting=waiting,
+        data={"steps": steps, "needs_input": needs_input},
+    )
+
+
+# ---------------------------------------------------------------------------
 # SERVICE: Set TR-069 connection request credentials
 # ---------------------------------------------------------------------------
 
@@ -1132,6 +1789,111 @@ def rollback_service_ports(
 # app.services.network.ont_provisioning.* and are imported above for compatibility.
 
 
+def _ensure_static_management_ip_from_profile(
+    db: Session,
+    ont: OntUnit,
+    profile: object | None,
+) -> tuple[bool, str]:
+    """Reserve a management IP before building static IPHOST desired state."""
+    if profile is None:
+        return True, "No provisioning profile selected."
+    mode = getattr(profile, "mgmt_ip_mode", None)
+    mode_value = getattr(mode, "value", mode)
+    if mode_value != "static_ip":
+        return True, "Management IP mode is not static."
+    if getattr(ont, "mgmt_ip_address", None):
+        return True, "Static management IP already assigned."
+
+    pool_id = getattr(profile, "mgmt_ip_pool_id", None)
+    if not pool_id:
+        return False, "Static management IP mode requires a management IP pool."
+
+    import ipaddress
+
+    from sqlalchemy import select as sa_select
+
+    from app.models.network import IpBlock, IpPool, IPv4Address, IPVersion
+
+    pool = db.get(IpPool, pool_id)
+    if pool is None:
+        return False, f"Management IP pool {pool_id} not found."
+    if not getattr(pool, "is_active", True):
+        return False, f"Management IP pool '{pool.name}' is inactive."
+    if getattr(pool, "ip_version", None) not in (None, IPVersion.ipv4):
+        return False, f"Management IP pool '{pool.name}' is not IPv4."
+
+    blocks = list(
+        db.scalars(
+            sa_select(IpBlock)
+            .where(IpBlock.pool_id == pool.id)
+            .where(IpBlock.is_active.is_(True))
+        ).all()
+    )
+    cidrs = [block.cidr for block in blocks] or [pool.cidr]
+    used = {
+        str(address)
+        for address in db.scalars(
+            sa_select(IPv4Address.address).where(IPv4Address.pool_id == pool.id)
+        ).all()
+    }
+    gateway = str(pool.gateway or "").strip()
+    if gateway:
+        used.add(gateway)
+
+    selected_ip = None
+    for cidr in cidrs:
+        try:
+            network = ipaddress.ip_network(str(cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        for ip in network.hosts():
+            candidate = str(ip)
+            if candidate not in used:
+                selected_ip = candidate
+                break
+        if selected_ip:
+            break
+
+    if selected_ip is None:
+        pool.next_available_ip = None
+        pool.available_count = 0
+        db.flush()
+        return False, f"No available IPs in management pool '{pool.name}'."
+
+    db.add(
+        IPv4Address(
+            address=selected_ip,
+            pool_id=pool.id,
+            is_reserved=True,
+            notes=f"Management IP for ONT {ont.serial_number}",
+        )
+    )
+    ont.mgmt_ip_address = selected_ip
+
+    remaining = 0
+    next_available = None
+    used.add(selected_ip)
+    for cidr in cidrs:
+        try:
+            network = ipaddress.ip_network(str(cidr), strict=False)
+        except ValueError:
+            continue
+        if network.version != 4:
+            continue
+        for ip in network.hosts():
+            candidate = str(ip)
+            if candidate not in used:
+                remaining += 1
+                if next_available is None:
+                    next_available = candidate
+    pool.next_available_ip = next_available
+    pool.available_count = remaining
+    db.flush()
+    return True, f"Reserved static management IP {selected_ip} from '{pool.name}'."
+
+
 # ---------------------------------------------------------------------------
 # STATE RECONCILIATION-BASED PROVISIONING
 # ---------------------------------------------------------------------------
@@ -1189,6 +1951,14 @@ def provision_with_reconciliation(
         ctx.olt.name,
         ctx.fsp,
     )
+
+    profile = resolve_profile(db, ctx.ont, profile_id)
+    static_ip_ok, static_ip_msg = _ensure_static_management_ip_from_profile(
+        db, ctx.ont, profile
+    )
+    if not static_ip_ok:
+        ms = int((time.monotonic() - t0) * 1000)
+        return StepResult("provision_reconciled", False, static_ip_msg, ms)
 
     # Reconcile state
     delta, err = reconcile_ont_state(

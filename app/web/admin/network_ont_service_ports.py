@@ -152,3 +152,30 @@ def ont_service_port_clone(
         toast_message=msg,
         toast_type="success" if ok else "error",
     )
+
+
+@router.get(
+    "/onts/{ont_id}/service-ports/diagnose",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def ont_service_port_diagnose(
+    request: Request,
+    ont_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Run diagnostics for service port state issues."""
+    ok, msg, diagnostics = web_network_service_ports_service.handle_diagnose(
+        db, ont_id
+    )
+
+    # Get base context for template
+    data = web_network_service_ports_service.list_context(db, ont_id)
+    context = _base_context(request, db, active_page="onts")
+    context.update(data)
+    context["diagnostics"] = diagnostics
+    context["diagnostics_error"] = None if ok else msg
+
+    return templates.TemplateResponse(
+        "admin/network/onts/_service_ports_diagnostics.html", context
+    )

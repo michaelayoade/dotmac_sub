@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.models.network import OLTDevice
+from app.services.network.serial_utils import normalize as normalize_serial
+from app.services.network.serial_utils import search_candidates as serial_search_candidates
 
 
 @dataclass(frozen=True)
@@ -21,7 +23,24 @@ class OltWriteVerification:
 
 
 def _normalize_serial(value: str | None) -> str:
-    return str(value or "").replace("-", "").strip().upper()
+    return normalize_serial(value)
+
+
+def _serial_matches(observed: str | None, expected: str | None) -> bool:
+    """Match serials across Huawei vendor and hex display variants."""
+    observed_normalized = normalize_serial(observed)
+    expected_candidates = {
+        normalize_serial(candidate) for candidate in serial_search_candidates(expected)
+    }
+    expected_candidates.discard("")
+    if not observed_normalized or not expected_candidates:
+        return False
+    if observed_normalized in expected_candidates:
+        return True
+    return any(
+        len(candidate) >= 8 and candidate in observed_normalized
+        for candidate in expected_candidates
+    )
 
 
 def verify_ont_authorized(
@@ -37,8 +56,6 @@ def verify_ont_authorized(
     then direct serial lookup and registered serial scan as fallbacks.
     """
     from app.services.network import olt_ssh_ont
-
-    normalized_serial = _normalize_serial(serial_number)
 
     def _registered_scan_verification(
         reason: str, serial_lookup_failure: str | None = None
@@ -57,7 +74,7 @@ def verify_ont_authorized(
             )
 
         for registered_entry in entries:
-            if _normalize_serial(registered_entry.real_serial) != normalized_serial:
+            if not _serial_matches(registered_entry.real_serial, serial_number):
                 continue
             if registered_entry.fsp != fsp:
                 return OltWriteVerification(
@@ -126,7 +143,7 @@ def verify_ont_authorized(
             )
         if (
             status_entry is None
-            or _normalize_serial(status_entry.serial_number) != normalized_serial
+            or not _serial_matches(status_entry.serial_number, serial_number)
         ):
             serial_verification = _verify_by_serial("ONT-ID readback mismatch")
             if serial_verification is not None:
@@ -172,7 +189,6 @@ def verify_ont_absent(
     from app.services.network import olt_ssh_ont
 
     if serial_number:
-        normalized_serial = _normalize_serial(serial_number)
         ok, msg, entries = olt_ssh_ont.get_registered_ont_serials(olt)
         if not ok:
             return OltWriteVerification(
@@ -181,7 +197,7 @@ def verify_ont_absent(
             )
 
         for entry in entries:
-            if _normalize_serial(entry.real_serial) == normalized_serial:
+            if _serial_matches(entry.real_serial, serial_number):
                 return OltWriteVerification(
                     False,
                     "ONT still appears on the OLT after the delete write.",
