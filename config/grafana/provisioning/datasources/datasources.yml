@@ -24,6 +24,7 @@ datasources:
   # VictoriaMetrics for metrics
   - name: VictoriaMetrics
     type: prometheus
+    uid: victoriametrics
     access: proxy
     url: http://victoriametrics:8428
     isDefault: false

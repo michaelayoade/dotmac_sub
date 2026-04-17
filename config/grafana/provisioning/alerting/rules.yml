@@ -1,0 +1,198 @@
+apiVersion: 1
+
+# TR-069 / ACS alert rules
+# Fires on metrics emitted by app.tasks.tr069.scrape_genieacs_metrics (5-min cadence).
+# Contact point wiring is in contact_points.yml — update the webhook URL or replace
+# with email/slack before production use.
+
+groups:
+  - orgId: 1
+    name: tr069
+    folder: dotmac
+    interval: 1m
+    rules:
+
+      - uid: tr069_stuck_tasks
+        title: TR-069 tasks stuck > 6h
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: ACS pending tasks have been queued for over 6 hours
+          description: |
+            tr069_pending_tasks{age_bucket="gt_6h"} = {{ $values.B.Value }}.
+            Something is blocking operator/customer changes from reaching CPEs.
+            Inspect via: curl http://genieacs:7557/tasks/?query=%7B%7D
+        labels:
+          severity: critical
+          service: tr069
+        data:
+          - refId: A
+            datasourceUid: victoriametrics
+            relativeTimeRange: {from: 600, to: 0}
+            model:
+              refId: A
+              expr: tr069_pending_tasks{age_bucket="gt_6h"}
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 600, to: 0}
+            model:
+              refId: B
+              type: reduce
+              reducer: last
+              expression: A
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 600, to: 0}
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+
+      - uid: tr069_tasks_piling
+        title: TR-069 tasks piling up (<6h bucket)
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: Many ACS tasks queued 1-6 hours — CPEs may be struggling to apply
+          description: |
+            tr069_pending_tasks{age_bucket="le_6h"} = {{ $values.B.Value }}.
+            If this holds >15min, task processing is likely faulting repeatedly.
+        labels:
+          severity: warning
+          service: tr069
+        data:
+          - refId: A
+            datasourceUid: victoriametrics
+            relativeTimeRange: {from: 900, to: 0}
+            model:
+              refId: A
+              expr: tr069_pending_tasks{age_bucket="le_6h"}
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 900, to: 0}
+            model: {refId: B, type: reduce, reducer: last, expression: A}
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 900, to: 0}
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [5]}
+
+      - uid: tr069_active_faults
+        title: TR-069 active ACS faults
+        condition: C
+        for: 10m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: GenieACS has active task faults (CPEs rejecting ACS commands)
+          description: |
+            sum(tr069_faults) = {{ $values.B.Value }}. Dominant code usually means a
+            provision/preset is emitting paths the CPE does not support. Inspect:
+            curl http://genieacs:7557/faults/?query=%7B%7D
+        labels:
+          severity: warning
+          service: tr069
+        data:
+          - refId: A
+            datasourceUid: victoriametrics
+            relativeTimeRange: {from: 600, to: 0}
+            model:
+              refId: A
+              expr: sum(tr069_faults)
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 600, to: 0}
+            model: {refId: B, type: reduce, reducer: last, expression: A}
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 600, to: 0}
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+
+      - uid: tr069_online_silent
+        title: ONTs online on OLT but silent in ACS
+        condition: C
+        for: 15m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: ONT is online on OLT but has not informed ACS in >15m
+          description: |
+            tr069_online_silent_total = {{ $values.B.Value }}. These CPEs have a
+            wedged CWMP client or an ACS-URL misconfig. Often fixable with reboot
+            or task-queue purge for the affected device.
+        labels:
+          severity: warning
+          service: tr069
+        data:
+          - refId: A
+            datasourceUid: victoriametrics
+            relativeTimeRange: {from: 900, to: 0}
+            model: {refId: A, expr: tr069_online_silent_total, instant: true}
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 900, to: 0}
+            model: {refId: B, type: reduce, reducer: last, expression: A}
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 900, to: 0}
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+
+      - uid: tr069_many_cpes_offline
+        title: Many CPEs offline to ACS >24h
+        condition: C
+        for: 30m
+        noDataState: OK
+        execErrState: Error
+        annotations:
+          summary: High count of CPEs not informing for more than 24 hours
+          description: |
+            tr069_cpe_inform_age{bucket="offline_gt_24h"} = {{ $values.B.Value }}.
+            Fleet baseline is ~0. A jump means an OLT/uplink outage or a fleet-wide
+            ACS misconfig.
+        labels:
+          severity: warning
+          service: tr069
+        data:
+          - refId: A
+            datasourceUid: victoriametrics
+            relativeTimeRange: {from: 1800, to: 0}
+            model:
+              refId: A
+              expr: tr069_cpe_inform_age{bucket="offline_gt_24h"}
+              instant: true
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 1800, to: 0}
+            model: {refId: B, type: reduce, reducer: last, expression: A}
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange: {from: 1800, to: 0}
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [20]}
