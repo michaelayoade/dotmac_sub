@@ -86,9 +86,13 @@ def lookup_nin(nin: str) -> dict[str, Any]:
     try:
         payload = response.json()
     except ValueError as exc:
-        raise MonoNINError("Mono NIN lookup returned invalid JSON", retryable=True) from exc
+        raise MonoNINError(
+            "Mono NIN lookup returned invalid JSON", retryable=True
+        ) from exc
 
     if not isinstance(payload, dict):
-        raise MonoNINError("Mono NIN lookup returned an unexpected payload", retryable=True)
+        raise MonoNINError(
+            "Mono NIN lookup returned an unexpected payload", retryable=True
+        )
 
     return _normalized_lookup_response(payload)

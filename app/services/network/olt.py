@@ -669,9 +669,7 @@ class OntUnits(CRUDManager[OntUnit]):
     soft_delete_field = "is_active"
     soft_delete_value = False
 
-    def __init__(
-        self, subscriber_validator: SubscriberValidator | None = None
-    ) -> None:
+    def __init__(self, subscriber_validator: SubscriberValidator | None = None) -> None:
         self._subscriber_validator = subscriber_validator
 
     @staticmethod
@@ -900,9 +898,7 @@ class OntAssignments(CRUDManager[OntAssignment]):
     model = OntAssignment
     not_found_detail = "ONT assignment not found"
 
-    def __init__(
-        self, subscriber_validator: SubscriberValidator | None = None
-    ) -> None:
+    def __init__(self, subscriber_validator: SubscriberValidator | None = None) -> None:
         self._subscriber_validator = subscriber_validator
 
     def create(self, db: Session, payload: OntAssignmentCreate) -> OntAssignment:

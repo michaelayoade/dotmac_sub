@@ -858,11 +858,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     ont_plan: dict[str, Any] = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
     lan_plan_value = ont_plan.get("configure_lan_tr069")
     wifi_plan_value = ont_plan.get("configure_wifi_tr069")
-    lan_intent_from_order = (
-        lan_plan_value
-        if isinstance(lan_plan_value, dict)
-        else {}
-    )
+    lan_intent_from_order = lan_plan_value if isinstance(lan_plan_value, dict) else {}
     # LAN config is stored directly on ONT; service-order context is fallback
     # for legacy/in-flight orders only.
     lan_intent = {
@@ -881,9 +877,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         or lan_intent_from_order.get("dhcp_end"),
     }
     wifi_intent_from_order = (
-        wifi_plan_value
-        if isinstance(wifi_plan_value, dict)
-        else {}
+        wifi_plan_value if isinstance(wifi_plan_value, dict) else {}
     )
     wifi_intent = {
         "enabled": (

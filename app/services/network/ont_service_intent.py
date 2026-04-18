@@ -441,9 +441,7 @@ def build_service_intent(
         if not isinstance(rows, list):
             continue
         missing += sum(
-            1
-            for row in rows
-            if isinstance(row, dict) and row.get("value") == "Not set"
+            1 for row in rows if isinstance(row, dict) and row.get("value") == "Not set"
         )
 
     # Include WAN service instances if available (Phase 2+3 architecture)

@@ -91,7 +91,9 @@ class ServicePortDiagnostics:
     warnings: list[str]
 
 
-def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY) -> None:
+def _send_slow(
+    channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY
+) -> None:
     """Send command with delays to avoid terminal corruption.
 
     Some OLT terminals (particularly certain Huawei MA5608T units) have terminal
@@ -104,12 +106,12 @@ def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY)
         char_delay: Delay in seconds between each word.
     """
     # Split by spaces and send each part with space, adding delay after spaces
-    parts = command.split(' ')
+    parts = command.split(" ")
     for i, part in enumerate(parts):
         channel.send(part)
         if i < len(parts) - 1:
             # Send space and wait for terminal to process
-            channel.send(' ')
+            channel.send(" ")
             time.sleep(char_delay)
     # Small delay before newline
     time.sleep(char_delay)

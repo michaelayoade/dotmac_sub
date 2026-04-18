@@ -13,9 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.ont_authorization.run_post_authorization_follow_up")
-@idempotent_task(
-    key_func=lambda operation_id, ont_unit_id, **kw: f"{ont_unit_id}"
-)
+@idempotent_task(key_func=lambda operation_id, ont_unit_id, **kw: f"{ont_unit_id}")
 def run_post_authorization_follow_up_task(
     operation_id: str,
     ont_unit_id: str,

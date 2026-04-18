@@ -161,7 +161,9 @@ def verify_nin_task(self, subscriber_id: str, nin: str) -> dict[str, Any]:
         verification.is_match = is_match
         verification.match_score = int(match_result["match_score"])
         verification.mono_response = lookup["raw"]
-        verification.failure_reason = None if is_match else "Subscriber identity mismatch"
+        verification.failure_reason = (
+            None if is_match else "Subscriber identity mismatch"
+        )
         verification.verified_at = checked_at
         _update_subscriber_metadata(
             subscriber,
@@ -181,14 +183,20 @@ def verify_nin_task(self, subscriber_id: str, nin: str) -> dict[str, Any]:
         db.rollback()
         logger.exception(
             "nin_verification_retry_exhausted",
-            extra={"subscriber_id": str(subscriber_id), "nin": mask_nin(normalized_nin)},
+            extra={
+                "subscriber_id": str(subscriber_id),
+                "nin": mask_nin(normalized_nin),
+            },
         )
         raise exc
     except Exception:
         db.rollback()
         logger.exception(
             "nin_verification_unhandled_error",
-            extra={"subscriber_id": str(subscriber_id), "nin": mask_nin(normalized_nin)},
+            extra={
+                "subscriber_id": str(subscriber_id),
+                "nin": mask_nin(normalized_nin),
+            },
         )
         raise
     finally:

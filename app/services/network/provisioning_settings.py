@@ -222,7 +222,9 @@ def get_pppoe_provisioning_method(db: Session | None = None) -> str:
     - "omci": Only use OLT OMCI commands
     - "tr069": Only use TR-069/GenieACS, skip OMCI entirely
     """
-    value = get_setting(db, "pppoe_provisioning_method", DEFAULTS.pppoe_provisioning_method)
+    value = get_setting(
+        db, "pppoe_provisioning_method", DEFAULTS.pppoe_provisioning_method
+    )
     normalized = str(value).strip().lower()
     if normalized in {"omci", "tr069"}:
         return normalized

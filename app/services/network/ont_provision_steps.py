@@ -68,7 +68,9 @@ from app.services.network.provisioning_settings import (
 _BOOTSTRAP_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_bootstrap_timeout_sec
 _BOOTSTRAP_POLL_INTERVAL_SEC = _PROVISIONING_DEFAULTS.tr069_bootstrap_poll_interval_sec
 _TR069_TASK_READY_TIMEOUT_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_timeout_sec
-_TR069_TASK_READY_POLL_INTERVAL_SEC = _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
+_TR069_TASK_READY_POLL_INTERVAL_SEC = (
+    _PROVISIONING_DEFAULTS.tr069_task_ready_poll_interval_sec
+)
 _PPPOE_PUSH_MAX_ATTEMPTS = _PROVISIONING_DEFAULTS.pppoe_push_max_attempts
 _PPPOE_PUSH_RETRY_DELAY_SEC = _PROVISIONING_DEFAULTS.pppoe_push_retry_delay_sec
 
@@ -184,7 +186,10 @@ def create_service_port(
                 True,
                 f"Service-port VLAN {vlan_id} GEM {gem_index} already exists (idempotent NOOP)",
                 ms,
-                data={"idempotent_noop": True, "existing_index": existing_check.get("index")},
+                data={
+                    "idempotent_noop": True,
+                    "existing_index": existing_check.get("index"),
+                },
             )
             _record_step(db, ctx.ont, "create_service_port", result)
             return result
@@ -1195,12 +1200,16 @@ def _provision_wan_service_instances(
                     from app.models.network import WanServiceProvisioningStatus
 
                     instance.provisioning_status = WanServiceProvisioningStatus.pending
-                    instance.last_error = pppoe_result.message[:500] if pppoe_result.message else None
+                    instance.last_error = (
+                        pppoe_result.message[:500] if pppoe_result.message else None
+                    )
                 else:
                     from app.models.network import WanServiceProvisioningStatus
 
                     instance.provisioning_status = WanServiceProvisioningStatus.failed
-                    instance.last_error = pppoe_result.message[:500] if pppoe_result.message else None
+                    instance.last_error = (
+                        pppoe_result.message[:500] if pppoe_result.message else None
+                    )
             else:
                 needs_input.append(
                     f"PPPoE credentials missing for WAN service '{service_label}'."
@@ -1351,9 +1360,7 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
         )
         if pppoe_username and pppoe_password:
             # Pass wan_vlan so PPP WAN service can be auto-created if missing
-            pppoe_wan_vlan = (
-                _optional_int(wan_vlan)
-            )
+            pppoe_wan_vlan = _optional_int(wan_vlan)
             _append(
                 "push_pppoe_tr069",
                 set_pppoe_credentials(
@@ -1435,7 +1442,9 @@ def apply_saved_service_config(db: Session, ont_id: str) -> StepResult:
             ),
         )
     elif wifi_plan.get("password_set"):
-        needs_input.append("WiFi password was requested but no saved password is available.")
+        needs_input.append(
+            "WiFi password was requested but no saved password is available."
+        )
 
     ms = int((time.monotonic() - t0) * 1000)
     if hard_failures:
@@ -2093,7 +2102,9 @@ def provision_with_reconciliation(
     )
     if not delta:
         ms = int((time.monotonic() - t0) * 1000)
-        return StepResult("provision_reconciled", False, f"Reconciliation failed: {err}", ms)
+        return StepResult(
+            "provision_reconciled", False, f"Reconciliation failed: {err}", ms
+        )
 
     # Check validations
     if not delta.is_valid:
@@ -2142,7 +2153,9 @@ def provision_with_reconciliation(
     )
     if not desired:
         ms = int((time.monotonic() - t0) * 1000)
-        return StepResult("provision_reconciled", False, f"Failed to build desired state: {err}", ms)
+        return StepResult(
+            "provision_reconciled", False, f"Failed to build desired state: {err}", ms
+        )
 
     if dry_run:
         ms = int((time.monotonic() - t0) * 1000)

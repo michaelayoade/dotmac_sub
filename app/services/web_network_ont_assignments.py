@@ -224,9 +224,7 @@ def create_assignment(db: Session, ont, values: dict[str, object]) -> None:
     pon_port_id_str = resolve_pon_port_id_for_assignment(db, ont, values)
     pon_port_id = coerce_uuid(pon_port_id_str) if pon_port_id_str else None
 
-    subscriber_id_str = (
-        str(values["account_id"]) if values.get("account_id") else None
-    )
+    subscriber_id_str = str(values["account_id"]) if values.get("account_id") else None
 
     service_address_id_str: str | None
     if values.get("service_address_id"):
@@ -412,9 +410,7 @@ def update_assignment_from_form(
     payload = OntAssignmentUpdate(
         pon_port_id=resolved_pon_port_id,
         subscriber_id=(
-            coerce_uuid(str(values["account_id"]))
-            if values.get("account_id")
-            else None
+            coerce_uuid(str(values["account_id"])) if values.get("account_id") else None
         ),
         subscription_id=(
             coerce_uuid(str(values["subscription_id"]))

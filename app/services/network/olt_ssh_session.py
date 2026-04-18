@@ -197,7 +197,9 @@ class CliMode(Enum):
 # ---------------------------------------------------------------------------
 
 
-def _send_slow(channel: Channel, command: str, char_delay: float = SLOW_SEND_CHAR_DELAY) -> None:
+def _send_slow(
+    channel: Channel, command: str, char_delay: float = SLOW_SEND_CHAR_DELAY
+) -> None:
     """Send command character-by-character with delay.
 
     Some OLT terminals (particularly Huawei MA5608T) have terminal processing

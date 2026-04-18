@@ -190,7 +190,9 @@ class ProvisioningExecutionResult:
             # Return error for all remaining entries
             for entry in self.compensation_log:
                 if not any(r[0] == entry.step_name for r in results):
-                    results.append((entry.step_name, False, f"Connection failed: {exc}"))
+                    results.append(
+                        (entry.step_name, False, f"Connection failed: {exc}")
+                    )
                     failed_entries.append((entry, f"Connection failed: {exc}"))
 
         # Persist failed compensation entries and emit alert
@@ -359,9 +361,7 @@ def execute_delta(
                         result,
                     )
                     if not step_result:
-                        result.message = (
-                            f"Failed to create service-port VLAN {sp_delta.desired.vlan_id}"
-                        )
+                        result.message = f"Failed to create service-port VLAN {sp_delta.desired.vlan_id}"
                         return result
 
             # Execute management IP configuration if needed
@@ -378,7 +378,10 @@ def execute_delta(
                     return result
 
             # Execute internet-config if needed
-            if delta.needs_internet_config and desired.internet_config_ip_index is not None:
+            if (
+                delta.needs_internet_config
+                and desired.internet_config_ip_index is not None
+            ):
                 step_result = _execute_internet_config(
                     session,
                     interface_path,
@@ -424,7 +427,9 @@ def execute_delta(
         return result
 
     result.success = True
-    result.message = f"Provisioning complete: {len(result.steps_completed)} step(s) executed"
+    result.message = (
+        f"Provisioning complete: {len(result.steps_completed)} step(s) executed"
+    )
     return result
 
 
@@ -541,7 +546,11 @@ def _execute_create_service_port(
         else:
             # Fallback: query and delete by matching criteria
             # This is less reliable but works when index isn't returned
-            undo_cmd = f"undo service-port {sp_index}" if sp_index else f"undo service-port port {fsp} ont {olt_ont_id}"
+            undo_cmd = (
+                f"undo service-port {sp_index}"
+                if sp_index
+                else f"undo service-port port {fsp} ont {olt_ont_id}"
+            )
             resource_id = f"vlan_{desired_port.vlan_id}_gem_{desired_port.gem_index}"
             logger.debug(
                 "Could not parse service-port index from output, using fallback deletion"
@@ -625,10 +634,7 @@ def _execute_management_ip_config(
             if not value
         ]
         if missing:
-            message = (
-                "Static management IP config is incomplete: "
-                + ", ".join(missing)
-            )
+            message = "Static management IP config is incomplete: " + ", ".join(missing)
             result.steps_failed.append("configure_management_ip")
             result.errors.append(message)
             logger.error(message)
@@ -682,12 +688,16 @@ def _execute_internet_config(
         result.compensation_log.append(
             CompensationEntry(
                 step_name="activate_internet_config",
-                undo_commands=[f"undo ont internet-config {olt_ont_id} ip-index {ip_index}"],
+                undo_commands=[
+                    f"undo ont internet-config {olt_ont_id} ip-index {ip_index}"
+                ],
                 description="Deactivate internet-config",
                 interface_path=interface_path,
             )
         )
-        logger.info("Activated internet-config for ONT %d ip-index %d", olt_ont_id, ip_index)
+        logger.info(
+            "Activated internet-config for ONT %d ip-index %d", olt_ont_id, ip_index
+        )
         return True
 
     result.steps_failed.append("activate_internet_config")

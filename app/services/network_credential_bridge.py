@@ -53,9 +53,7 @@ class AccessCredentialAdapter(PppoeCredentialProvider):
         row = self._db.scalars(stmt).first()
         return _to_dto(row) if row is not None else None
 
-    def get_by_subscriber_id(
-        self, subscriber_id: UUID
-    ) -> PppoeCredential | None:
+    def get_by_subscriber_id(self, subscriber_id: UUID) -> PppoeCredential | None:
         stmt = select(AccessCredential).where(
             AccessCredential.subscriber_id == subscriber_id,
             AccessCredential.is_active.is_(True),

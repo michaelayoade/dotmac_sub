@@ -224,18 +224,14 @@ class PppoeHealthClassifier:
     def __init__(self, credentials: PppoeCredentialProvider | None = None):
         self._credentials = credentials
 
-    def _load_credentials(
-        self, rows: list[Any]
-    ) -> dict[Any, PppoeCredential]:
+    def _load_credentials(self, rows: list[Any]) -> dict[Any, PppoeCredential]:
         """Bulk-load credentials for every subscriber in ``rows``."""
         if self._credentials is None:
             return {}
         subscriber_ids = _collect_subscriber_ids(rows)
         if not subscriber_ids:
             return {}
-        return dict(
-            self._credentials.get_active_by_subscriber_ids(subscriber_ids)
-        )
+        return dict(self._credentials.get_active_by_subscriber_ids(subscriber_ids))
 
     def classify_fleet(
         self,
@@ -294,9 +290,7 @@ class PppoeHealthClassifier:
         This powers the stat card number. Only counts ONTs that are online
         and assigned to a subscriber — unassigned ONTs are not issues.
         """
-        issue_ids = self.list_ont_ids_by_health(
-            db, "issues", olt_id=olt_id
-        )
+        issue_ids = self.list_ont_ids_by_health(db, "issues", olt_id=olt_id)
         return len(issue_ids)
 
     def list_ont_ids_by_health(

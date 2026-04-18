@@ -388,9 +388,7 @@ class ProvisioningEnforcement:
                         ont.serial_number,
                     )
                 else:
-                    password = _resolve_access_credential_password(
-                        credentials, ont
-                    )
+                    password = _resolve_access_credential_password(credentials, ont)
 
             if not password:
                 logger.warning(

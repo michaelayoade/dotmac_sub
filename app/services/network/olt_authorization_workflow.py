@@ -54,9 +54,15 @@ from app.services.network.provisioning_settings import (
     get_force_reauthorize_retry_delay,
 )
 
-FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS = _PROVISIONING_DEFAULTS.force_reauthorize_autofind_attempts
-FORCE_REAUTHORIZE_AUTOFIND_RETRY_DELAY_SECONDS = _PROVISIONING_DEFAULTS.force_reauthorize_retry_delay_sec
-AUTOFIND_CANDIDATE_FRESHNESS_SECONDS = _PROVISIONING_DEFAULTS.autofind_candidate_freshness_sec
+FORCE_REAUTHORIZE_AUTOFIND_ATTEMPTS = (
+    _PROVISIONING_DEFAULTS.force_reauthorize_autofind_attempts
+)
+FORCE_REAUTHORIZE_AUTOFIND_RETRY_DELAY_SECONDS = (
+    _PROVISIONING_DEFAULTS.force_reauthorize_retry_delay_sec
+)
+AUTOFIND_CANDIDATE_FRESHNESS_SECONDS = (
+    _PROVISIONING_DEFAULTS.autofind_candidate_freshness_sec
+)
 
 
 def _set_ont_activation_status(
@@ -92,7 +98,9 @@ class AutofindValidationResult:
 
     success: bool
     candidate: object | None
-    steps_added: list[tuple[str, bool, str, float]]  # (name, success, message, started_at)
+    steps_added: list[
+        tuple[str, bool, str, float]
+    ]  # (name, success, message, started_at)
     error_message: str | None = None
 
 
@@ -224,7 +232,9 @@ def _compute_pool_availability(
     return next_available, available_count
 
 
-def refresh_pool_availability(db: Session, pool_id: uuid.UUID) -> tuple[str | None, int]:
+def refresh_pool_availability(
+    db: Session, pool_id: uuid.UUID
+) -> tuple[str | None, int]:
     """Refresh and save the next_available_ip and available_count for a pool.
 
     Args:
@@ -281,7 +291,13 @@ def _allocate_mgmt_ip_from_pool(
     # Get gateway from pool
     gateway = pool.gateway
     if not gateway:
-        return False, None, None, None, f"IP pool '{pool.name}' has no gateway configured"
+        return (
+            False,
+            None,
+            None,
+            None,
+            f"IP pool '{pool.name}' has no gateway configured",
+        )
 
     # Calculate subnet mask from pool CIDR
     try:
@@ -308,7 +324,9 @@ def _allocate_mgmt_ip_from_pool(
         next_ip, count = _compute_pool_availability(db, pool, gateway)
         available_ip = next_ip
         if available_ip:
-            logger.debug("Computed next available IP: %s (available: %d)", available_ip, count)
+            logger.debug(
+                "Computed next available IP: %s (available: %d)", available_ip, count
+            )
 
     if not available_ip:
         pool.next_available_ip = None
@@ -345,7 +363,13 @@ def _allocate_mgmt_ip_from_pool(
         new_count,
     )
 
-    return True, available_ip, subnet_mask, gateway, f"Allocated {available_ip} from pool '{pool.name}'"
+    return (
+        True,
+        available_ip,
+        subnet_mask,
+        gateway,
+        f"Allocated {available_ip} from pool '{pool.name}'",
+    )
 
 
 def _configure_management_ip_for_authorization(
@@ -416,7 +440,10 @@ def _configure_management_ip_for_authorization(
             fsp,
             profile.name,
         )
-        return True, f"Skipped: profile '{profile.name}' has no management VLAN configured."
+        return (
+            True,
+            f"Skipped: profile '{profile.name}' has no management VLAN configured.",
+        )
 
     # Determine IP mode (default to DHCP)
     mgmt_ip_mode_raw = getattr(profile, "mgmt_ip_mode", None)
@@ -435,7 +462,10 @@ def _configure_management_ip_for_authorization(
             fsp,
             profile.name,
         )
-        return True, f"Skipped: management IP mode is inactive (profile '{profile.name}')"
+        return (
+            True,
+            f"Skipped: management IP mode is inactive (profile '{profile.name}')",
+        )
 
     logger.info(
         "Configuring management IP for ONT on %s %s: VLAN %d, mode %s (profile '%s')",
@@ -458,10 +488,13 @@ def _configure_management_ip_for_authorization(
                 "Static IP mode requested but no mgmt_ip_pool_id configured in profile '%s'",
                 profile.name,
             )
-            return False, f"Static IP mode requires mgmt_ip_pool_id in profile '{profile.name}'"
+            return (
+                False,
+                f"Static IP mode requires mgmt_ip_pool_id in profile '{profile.name}'",
+            )
 
-        alloc_ok, allocated_ip, subnet_mask, gateway, alloc_msg = _allocate_mgmt_ip_from_pool(
-            db, mgmt_ip_pool_id, ont_serial=serial_number
+        alloc_ok, allocated_ip, subnet_mask, gateway, alloc_msg = (
+            _allocate_mgmt_ip_from_pool(db, mgmt_ip_pool_id, ont_serial=serial_number)
         )
         if not alloc_ok:
             logger.warning(
@@ -497,7 +530,11 @@ def _configure_management_ip_for_authorization(
         # Check if it's an idempotent case (port already exists)
         # Huawei returns "Service virtual port has existed already" or similar
         sp_msg_lower = sp_msg.lower()
-        if "already exist" in sp_msg_lower or "existed already" in sp_msg_lower or "bindindex" in sp_msg_lower:
+        if (
+            "already exist" in sp_msg_lower
+            or "existed already" in sp_msg_lower
+            or "bindindex" in sp_msg_lower
+        ):
             logger.info(
                 "Management service-port VLAN %d already exists for ONT %d on %s %s (idempotent)",
                 mgmt_vlan_tag,
@@ -667,7 +704,14 @@ def _validate_autofind_candidate(
     refresh_started_at = monotonic()
     sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(db, olt_id)
     if not sync_ok:
-        steps.append(("Refresh autofind cache", False, f"Autofind refresh failed: {sync_message}", refresh_started_at))
+        steps.append(
+            (
+                "Refresh autofind cache",
+                False,
+                f"Autofind refresh failed: {sync_message}",
+                refresh_started_at,
+            )
+        )
         return AutofindValidationResult(
             success=False,
             candidate=None,
@@ -695,26 +739,32 @@ def _validate_autofind_candidate(
         for attempt in range(2, reauthorize_attempts + 1):
             sleep(reauthorize_retry_delay)
             retry_started_at = monotonic()
-            sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(db, olt_id)
+            sync_ok, sync_message, _sync_stats = sync_olt_autofind_candidates(
+                db, olt_id
+            )
             if not sync_ok:
-                steps.append((
-                    "Refresh autofind cache",
-                    False,
-                    f"Autofind refresh failed while waiting for force rediscovery: {sync_message}",
-                    retry_started_at,
-                ))
+                steps.append(
+                    (
+                        "Refresh autofind cache",
+                        False,
+                        f"Autofind refresh failed while waiting for force rediscovery: {sync_message}",
+                        retry_started_at,
+                    )
+                )
                 return AutofindValidationResult(
                     success=False,
                     candidate=None,
                     steps_added=steps,
                     error_message=f"Autofind refresh failed while waiting for force rediscovery: {sync_message}",
                 )
-            steps.append((
-                "Refresh autofind cache",
-                True,
-                f"Retry {attempt}/{reauthorize_attempts}: {sync_message}",
-                retry_started_at,
-            ))
+            steps.append(
+                (
+                    "Refresh autofind cache",
+                    True,
+                    f"Retry {attempt}/{reauthorize_attempts}: {sync_message}",
+                    retry_started_at,
+                )
+            )
             matched_candidate = get_autofind_candidate_by_serial(
                 db, olt_id, serial_number, fsp=fsp
             )
@@ -1070,7 +1120,9 @@ def authorize_autofind_ont(
 
     # Apply steps from validation (refresh cache retries, etc.)
     for step_name, step_success, step_message, step_started in validation.steps_added:
-        _append_step(step_name, step_success, step_message, step_started_at=step_started)
+        _append_step(
+            step_name, step_success, step_message, step_started_at=step_started
+        )
         if not step_success:
             return _finalize(
                 AuthorizationWorkflowResult(
@@ -1392,13 +1444,15 @@ def authorize_autofind_ont(
                 status="warning",
                 completed_authorization=True,
             )
-        queue_ok, queue_msg, follow_up_operation_id = queue_post_authorization_follow_up(
-            db,
-            ont_unit_id=ont_unit_id,
-            olt_id=olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
-            ont_id_on_olt=ont_id,
+        queue_ok, queue_msg, follow_up_operation_id = (
+            queue_post_authorization_follow_up(
+                db,
+                ont_unit_id=ont_unit_id,
+                olt_id=olt_id,
+                fsp=fsp,
+                serial_number=serial_number,
+                ont_id_on_olt=ont_id,
+            )
         )
         if not queue_ok:
             return _fail(
@@ -1654,7 +1708,8 @@ def authorize_autofind_ont_and_provision_network(
         if olt is not None and getattr(olt, "tr069_acs_server_id", None):
             return True
         if profile is not None and (
-            getattr(profile, "cr_username", None) or getattr(profile, "cr_password", None)
+            getattr(profile, "cr_username", None)
+            or getattr(profile, "cr_password", None)
         ):
             return True
         if ont is not None and any(
@@ -1902,7 +1957,9 @@ def run_post_authorization_follow_up(
             )
         ).first()
         if profile is None:
-            profile_apply_msg = "Skipped: no active provisioning profile is scoped to this OLT."
+            profile_apply_msg = (
+                "Skipped: no active provisioning profile is scoped to this OLT."
+            )
         else:
             apply_result = apply_profile_to_ont(db, ont_unit_id, str(profile.id))
             profile_apply_ok = apply_result.success
@@ -2277,7 +2334,9 @@ def create_or_find_ont_for_authorized_serial(
         normalize_serial(candidate)
         for candidate in serial_search_candidates(serial_number)
     ]
-    clean_serials = [candidate for candidate in dict.fromkeys(clean_serials) if candidate]
+    clean_serials = [
+        candidate for candidate in dict.fromkeys(clean_serials) if candidate
+    ]
     olt = get_olt_or_none(db, olt_id)
     observed_online_status = (
         OnuOnlineStatus.online

@@ -51,9 +51,7 @@ class PppoeCredentialProvider(Protocol):
         """Return the active credential with ``username``, or ``None``."""
         ...
 
-    def get_by_subscriber_id(
-        self, subscriber_id: UUID
-    ) -> PppoeCredential | None:
+    def get_by_subscriber_id(self, subscriber_id: UUID) -> PppoeCredential | None:
         """Return the active credential for ``subscriber_id``, or ``None``."""
         ...
 
