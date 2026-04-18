@@ -173,14 +173,38 @@
                     <p class="text-center text-xs text-slate-500 dark:text-slate-400">Use after OLT authorization and provisioning are complete.</p>
                 </div>
                 {% elif not authorized_for_configuration %}
-                <div class="flex flex-col justify-center gap-2 border-t border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-700/80 dark:bg-slate-900/30 lg:w-56 lg:border-l lg:border-t-0 lg:p-5">
+                <div class="flex flex-col justify-center gap-2 border-t border-slate-200/80 bg-slate-50/50 p-4 dark:border-slate-700/80 dark:bg-slate-900/30 lg:w-56 lg:border-l lg:border-t-0 lg:p-5"
+                     x-data="{ authorizing: false }">
                     {% if network_path.get('olt_id') %}
+                    {# Construct FSP from assignment pon_port or ont.board/port #}
+                    {% set fsp = assignment.pon_port.name if assignment and assignment.pon_port else ('0/' ~ (ont.board or '0') ~ '/' ~ (ont.port or '0') if ont.board or ont.port else '') %}
+                    {% if fsp %}
+                    <form method="POST" action="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
+                          hx-post="/admin/network/olts/{{ network_path.olt_id }}/authorize-ont"
+                          hx-swap="none"
+                          @htmx:before-request="authorizing = true"
+                          @htmx:after-request="authorizing = false">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="fsp" value="{{ fsp }}">
+                        <input type="hidden" name="serial_number" value="{{ ont.serial_number }}">
+                        <button type="submit"
+                                :disabled="authorizing"
+                                :class="authorizing ? 'opacity-75 cursor-wait' : 'hover:bg-amber-700'"
+                                class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                            <svg x-show="!authorizing" class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+                            <svg x-show="authorizing" x-cloak class="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg>
+                            <span x-text="authorizing ? 'Authorizing...' : 'Authorize on OLT'">Authorize on OLT</span>
+                        </button>
+                    </form>
+                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">FSP: {{ fsp }}</p>
+                    {% else %}
                     <a href="/admin/network/olts/{{ network_path.olt_id }}?tab=autofind&search={{ ont.serial_number }}"
                        class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
-                        Authorize on OLT
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
+                        Find &amp; Authorize
                     </a>
-                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Authorize this ONT on the OLT before configuring.</p>
+                    <p class="text-center text-xs text-slate-500 dark:text-slate-400">Run autofind to discover this ONT's port.</p>
+                    {% endif %}
                     {% else %}
                     <div class="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-300 px-4 py-2.5 text-sm font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"/></svg>
