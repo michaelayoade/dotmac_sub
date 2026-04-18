@@ -43,7 +43,9 @@ def _is_transient_error(exc: Exception) -> bool:
         if isinstance(current, socket.gaierror):
             return True
         # Connection timeouts and refused connections
-        if isinstance(current, (socket.timeout, ConnectionRefusedError, ConnectionResetError)):
+        if isinstance(
+            current, (socket.timeout, ConnectionRefusedError, ConnectionResetError)
+        ):
             return True
         # OSError with network-related errno
         if isinstance(current, OSError) and current.errno in (

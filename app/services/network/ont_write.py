@@ -436,8 +436,7 @@ class OntWriteService:
 
         # Get current assignment for subscriber info
         current_assignment = db.scalars(
-            select(OntAssignment)
-            .where(
+            select(OntAssignment).where(
                 OntAssignment.ont_unit_id == ont.id,
                 OntAssignment.active.is_(True),
             )
@@ -498,12 +497,14 @@ class OntWriteService:
             # For now, trust the deauthorize succeeded if no error
             return True, "ONT deauthorized from old port"
 
-        op.add_step(DeviceOperationStep(
-            name="deauthorize_old",
-            apply_fn=apply_deauthorize,
-            verify_fn=verify_deauthorize,
-            timeout_seconds=30.0,
-        ))
+        op.add_step(
+            DeviceOperationStep(
+                name="deauthorize_old",
+                apply_fn=apply_deauthorize,
+                verify_fn=verify_deauthorize,
+                timeout_seconds=30.0,
+            )
+        )
 
         # Step 2: Authorize on new port
         def apply_authorize() -> tuple[bool, str]:
@@ -534,16 +535,19 @@ class OntWriteService:
                 except Exception as exc:
                     logger.warning("Rollback deauthorize failed: %s", exc)
 
-        op.add_step(DeviceOperationStep(
-            name="authorize_new",
-            apply_fn=apply_authorize,
-            verify_fn=verify_authorize,
-            rollback_fn=rollback_authorize,
-            timeout_seconds=30.0,
-        ))
+        op.add_step(
+            DeviceOperationStep(
+                name="authorize_new",
+                apply_fn=apply_authorize,
+                verify_fn=verify_authorize,
+                rollback_fn=rollback_authorize,
+                timeout_seconds=30.0,
+            )
+        )
 
         # Step 3: Recreate service ports on new location (if we had any)
         if current_ports:
+
             def apply_service_ports() -> tuple[bool, str]:
                 if new_ont_id_on_olt is None:
                     return False, "No ONT-ID for service port creation"
@@ -563,15 +567,20 @@ class OntWriteService:
                 if not ok:
                     return False, f"Failed to verify service ports: {msg}"
                 if len(new_ports) < len(current_ports):
-                    return False, f"Only {len(new_ports)}/{len(current_ports)} service ports created"
+                    return (
+                        False,
+                        f"Only {len(new_ports)}/{len(current_ports)} service ports created",
+                    )
                 return True, f"Created {len(new_ports)} service ports"
 
-            op.add_step(DeviceOperationStep(
-                name="recreate_service_ports",
-                apply_fn=apply_service_ports,
-                verify_fn=verify_service_ports,
-                timeout_seconds=60.0,
-            ))
+            op.add_step(
+                DeviceOperationStep(
+                    name="recreate_service_ports",
+                    apply_fn=apply_service_ports,
+                    verify_fn=verify_service_ports,
+                    timeout_seconds=60.0,
+                )
+            )
 
         # Execute device operations
         result = op.execute()
@@ -591,7 +600,9 @@ class OntWriteService:
                 new_assignment = OntAssignment(
                     ont_unit_id=ont.id,
                     pon_port_id=target_port.id,
-                    subscriber_id=current_assignment.subscriber_id if current_assignment else None,
+                    subscriber_id=current_assignment.subscriber_id
+                    if current_assignment
+                    else None,
                     active=True,
                     assigned_at=datetime.now(UTC),
                     notes=f"Moved from {ctx.fsp} to {target_fsp}",
@@ -662,7 +673,9 @@ def _move_ont_db_only(
             new_assignment = OntAssignment(
                 ont_unit_id=ont.id,
                 pon_port_id=target_port.id,
-                subscriber_id=current_assignment.subscriber_id if current_assignment else None,
+                subscriber_id=current_assignment.subscriber_id
+                if current_assignment
+                else None,
                 active=True,
                 assigned_at=datetime.now(UTC),
                 notes="Moved from previous assignment (DB-only)",
@@ -710,5 +723,6 @@ def update_external_id(
     db.commit()
     db.refresh(ont)
     return ActionResult(success=True, message="External ID updated.")
+
 
 ont_write = OntWriteService()

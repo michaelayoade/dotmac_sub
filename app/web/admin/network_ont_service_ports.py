@@ -165,9 +165,7 @@ def ont_service_port_diagnose(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """Run diagnostics for service port state issues."""
-    ok, msg, diagnostics = web_network_service_ports_service.handle_diagnose(
-        db, ont_id
-    )
+    ok, msg, diagnostics = web_network_service_ports_service.handle_diagnose(db, ont_id)
 
     # Get base context for template
     data = web_network_service_ports_service.list_context(db, ont_id)

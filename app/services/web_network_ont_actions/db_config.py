@@ -148,7 +148,9 @@ def update_ont_config(
     push_success = True
 
     if push_to_device:
-        config_method_value = getattr(getattr(ont, "config_method", None), "value", None)
+        config_method_value = getattr(
+            getattr(ont, "config_method", None), "value", None
+        )
         wan_mode_value = getattr(getattr(ont, "wan_mode", None), "value", None)
 
         if config_method_value == "omci" and wan_mode_value == "pppoe":
@@ -313,7 +315,9 @@ def update_ont_config(
                 ssid=wifi_ssid.strip() if wifi_ssid else None,
                 password=wifi_password.strip() if wifi_password else None,
                 channel=channel_int,
-                security_mode=wifi_security_mode.strip() if wifi_security_mode else None,
+                security_mode=wifi_security_mode.strip()
+                if wifi_security_mode
+                else None,
                 request=request,
             )
             push_messages.append(f"WiFi: {result.message}")

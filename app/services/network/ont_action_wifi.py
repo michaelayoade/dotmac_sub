@@ -129,6 +129,7 @@ def _normalize_security_mode(mode: str, root: str) -> str:
     mapping = _SECURITY_MODE_ALIASES.get(root, {})
     return mapping.get(key, (mode or "").strip())
 
+
 _WIFI_PSK_PATHS = {
     "Device": [
         "WiFi.AccessPoint.1.Security.KeyPassphrase",

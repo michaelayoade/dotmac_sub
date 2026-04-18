@@ -27,7 +27,9 @@ def _validate_coordinates(latitude: float, longitude: float) -> tuple[float, flo
     lat = float(latitude)
     lon = float(longitude)
     if not (-90.0 <= lat <= 90.0):
-        raise HTTPException(status_code=400, detail="Latitude must be between -90 and 90")
+        raise HTTPException(
+            status_code=400, detail="Latitude must be between -90 and 90"
+        )
     if not (-180.0 <= lon <= 180.0):
         raise HTTPException(
             status_code=400, detail="Longitude must be between -180 and 180"
@@ -35,12 +37,16 @@ def _validate_coordinates(latitude: float, longitude: float) -> tuple[float, flo
     return lat, lon
 
 
-def _address_summary(address: Address | None, subscriber: Subscriber | None) -> dict[str, Any]:
+def _address_summary(
+    address: Address | None, subscriber: Subscriber | None
+) -> dict[str, Any]:
     if address:
         return {
             "address_id": str(address.id),
             "label": address.label,
-            "address_type": address.address_type.value if address.address_type else None,
+            "address_type": address.address_type.value
+            if address.address_type
+            else None,
             "address_line1": address.address_line1,
             "address_line2": address.address_line2,
             "city": address.city,
@@ -253,8 +259,12 @@ def get_customer_location_page_context(db: Session, customer: dict) -> dict[str,
         None,
     )
 
-    current_latitude = float(address.latitude) if address and address.latitude is not None else None
-    current_longitude = float(address.longitude) if address and address.longitude is not None else None
+    current_latitude = (
+        float(address.latitude) if address and address.latitude is not None else None
+    )
+    current_longitude = (
+        float(address.longitude) if address and address.longitude is not None else None
+    )
     draft_latitude = (
         float(pending_request.requested_latitude)
         if pending_request
@@ -270,9 +280,7 @@ def get_customer_location_page_context(db: Session, customer: dict) -> dict[str,
         if draft_latitude is not None and draft_longitude is not None
         else DEFAULT_MAP_CENTER
     )
-    has_address_anchor = bool(
-        address or (subscriber.address_line1 or "").strip()
-    )
+    has_address_anchor = bool(address or (subscriber.address_line1 or "").strip())
 
     return {
         "location_address": _address_summary(address, subscriber),
@@ -328,8 +336,12 @@ def submit_request(
             detail="You already have a pending location correction awaiting review",
         )
 
-    current_latitude = float(address.latitude) if address and address.latitude is not None else None
-    current_longitude = float(address.longitude) if address and address.longitude is not None else None
+    current_latitude = (
+        float(address.latitude) if address and address.latitude is not None else None
+    )
+    current_longitude = (
+        float(address.longitude) if address and address.longitude is not None else None
+    )
     if (
         current_latitude is not None
         and current_longitude is not None
@@ -385,10 +397,16 @@ def cancel_request(
     actor_id: str | None,
 ) -> CustomerLocationChangeRequest:
     location_request = db.get(CustomerLocationChangeRequest, request_id)
-    if not location_request or str(location_request.subscriber_id) != str(subscriber_id):
-        raise HTTPException(status_code=404, detail="Location correction request not found")
+    if not location_request or str(location_request.subscriber_id) != str(
+        subscriber_id
+    ):
+        raise HTTPException(
+            status_code=404, detail="Location correction request not found"
+        )
     if location_request.status != CustomerLocationChangeRequestStatus.pending:
-        raise HTTPException(status_code=400, detail="Only pending requests can be canceled")
+        raise HTTPException(
+            status_code=400, detail="Only pending requests can be canceled"
+        )
 
     location_request.status = CustomerLocationChangeRequestStatus.cancelled
     location_request.reviewed_at = datetime.now(UTC)
@@ -471,9 +489,13 @@ def approve_request(
 ) -> CustomerLocationChangeRequest:
     location_request = db.get(CustomerLocationChangeRequest, request_id)
     if not location_request:
-        raise HTTPException(status_code=404, detail="Location correction request not found")
+        raise HTTPException(
+            status_code=404, detail="Location correction request not found"
+        )
     if location_request.status != CustomerLocationChangeRequestStatus.pending:
-        raise HTTPException(status_code=400, detail="Location correction request already processed")
+        raise HTTPException(
+            status_code=400, detail="Location correction request already processed"
+        )
 
     subscriber = db.get(Subscriber, location_request.subscriber_id)
     if not subscriber:
@@ -523,9 +545,13 @@ def reject_request(
 ) -> CustomerLocationChangeRequest:
     location_request = db.get(CustomerLocationChangeRequest, request_id)
     if not location_request:
-        raise HTTPException(status_code=404, detail="Location correction request not found")
+        raise HTTPException(
+            status_code=404, detail="Location correction request not found"
+        )
     if location_request.status != CustomerLocationChangeRequestStatus.pending:
-        raise HTTPException(status_code=400, detail="Location correction request already processed")
+        raise HTTPException(
+            status_code=400, detail="Location correction request already processed"
+        )
 
     location_request.status = CustomerLocationChangeRequestStatus.rejected
     location_request.review_note = (review_note or "").strip() or None

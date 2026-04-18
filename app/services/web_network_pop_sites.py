@@ -70,9 +70,13 @@ def _actor_id_from_request(request: Request | None) -> str | None:
     return web_admin_service.get_actor_id(request)
 
 
-def _actor_owner_subscriber_id(db: Session, request: Request | None) -> uuid.UUID | None:
+def _actor_owner_subscriber_id(
+    db: Session, request: Request | None
+) -> uuid.UUID | None:
     actor_id = _actor_id_from_request(request)
-    return file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
+    return (
+        file_uploads.resolve_user_owner_subscriber(db, actor_id) if actor_id else None
+    )
 
 
 def _log_pop_site_audit(
@@ -581,7 +585,9 @@ def update_site_from_form(
     commit_site_update(db, pop_site, normalized)
     after_snapshot = model_to_dict(pop_site)
     changes = diff_dicts(before_snapshot, after_snapshot)
-    metadata_payload: dict[str, object] | None = {"changes": changes} if changes else None
+    metadata_payload: dict[str, object] | None = (
+        {"changes": changes} if changes else None
+    )
     _log_pop_site_audit(
         db,
         request=request,
@@ -892,7 +898,9 @@ def stream_site_file(
     if not record or record.entity_id != str(pop_site_id):
         return PopSiteStreamResult(not_found=True)
     try:
-        file_uploads.assert_owner_access(record, _actor_owner_subscriber_id(db, request))
+        file_uploads.assert_owner_access(
+            record, _actor_owner_subscriber_id(db, request)
+        )
         stream = file_uploads.stream_file(record)
     except (HTTPException, ObjectNotFoundError):
         return PopSiteStreamResult(not_found=True)
@@ -922,7 +930,9 @@ def delete_site_file(
     if not record or record.entity_id != str(pop_site_id):
         return False
     try:
-        file_uploads.assert_owner_access(record, _actor_owner_subscriber_id(db, request))
+        file_uploads.assert_owner_access(
+            record, _actor_owner_subscriber_id(db, request)
+        )
     except HTTPException:
         return False
     file_uploads.soft_delete(db=db, file=record, hard_delete_object=True)

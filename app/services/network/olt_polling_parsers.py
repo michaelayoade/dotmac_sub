@@ -268,7 +268,7 @@ def _run_olt_snmpwalk(
         "-t",
         "30",  # 30 second timeout per request (some OLTs are slow)
         "-r",
-        "1",   # 1 retry (total 60s max per OID)
+        "1",  # 1 retry (total 60s max per OID)
         "-m",
         "",
         "-v2c",
@@ -291,7 +291,9 @@ def _run_olt_snmpwalk(
             )
 
             if result.returncode == 0:
-                return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+                return [
+                    line.strip() for line in result.stdout.splitlines() if line.strip()
+                ]
 
             stderr = result.stderr.strip()
             if "No Such Object" in stderr or "No Such Instance" in stderr:
@@ -304,10 +306,14 @@ def _run_olt_snmpwalk(
                 break
 
             if attempt < max_retries:
-                sleep_time = 2 ** attempt  # 1s, 2s, 4s...
+                sleep_time = 2**attempt  # 1s, 2s, 4s...
                 logger.debug(
                     "SNMP walk retry %d/%d for %s OID %s after %ds",
-                    attempt + 1, max_retries, host, oid, sleep_time
+                    attempt + 1,
+                    max_retries,
+                    host,
+                    oid,
+                    sleep_time,
                 )
                 time.sleep(sleep_time)
 
@@ -316,7 +322,10 @@ def _run_olt_snmpwalk(
             if attempt < max_retries:
                 logger.debug(
                     "SNMP walk timeout retry %d/%d for %s OID %s",
-                    attempt + 1, max_retries, host, oid
+                    attempt + 1,
+                    max_retries,
+                    host,
+                    oid,
                 )
                 continue
             break
@@ -430,7 +439,10 @@ def _parse_signal_value(
             stats["out_of_range"] = stats.get("out_of_range", 0) + 1
         logger.debug(
             "Signal value out of range: raw=%d, computed=%.2f dBm (valid: %.1f to %.1f)",
-            raw_int, dbm, _SIGNAL_MIN_DBM, _SIGNAL_MAX_DBM
+            raw_int,
+            dbm,
+            _SIGNAL_MIN_DBM,
+            _SIGNAL_MAX_DBM,
         )
         return None
     if stats is not None:
@@ -502,12 +514,18 @@ def _parse_ddm_value(
     # P1: Bounds checking for DDM values
     if min_value is not None and value < min_value:
         logger.debug(
-            "DDM %s value below minimum: %.4f < %.4f", metric or "value", value, min_value
+            "DDM %s value below minimum: %.4f < %.4f",
+            metric or "value",
+            value,
+            min_value,
         )
         return None
     if max_value is not None and value > max_value:
         logger.debug(
-            "DDM %s value above maximum: %.4f > %.4f", metric or "value", value, max_value
+            "DDM %s value above maximum: %.4f > %.4f",
+            metric or "value",
+            value,
+            max_value,
         )
         return None
 

@@ -90,9 +90,7 @@ class OntConfigSnapshots:
                 status_code=500,
                 detail="Config was retrieved but could not be saved to database.",
             )
-        logger.info(
-            "Config snapshot captured for ONT %s (source=%s)", ont_id, source
-        )
+        logger.info("Config snapshot captured for ONT %s (source=%s)", ont_id, source)
         return snapshot
 
     @staticmethod
@@ -119,20 +117,22 @@ class OntConfigSnapshots:
         if not snapshot:
             raise HTTPException(status_code=404, detail="Snapshot not found")
         if ont_id and str(snapshot.ont_unit_id) != str(_safe_uuid(ont_id, "ONT ID")):
-            raise HTTPException(status_code=404, detail="Snapshot not found for this ONT")
+            raise HTTPException(
+                status_code=404, detail="Snapshot not found for this ONT"
+            )
         return snapshot
 
     @staticmethod
-    def delete(
-        db: Session, snapshot_id: str, *, ont_id: str | None = None
-    ) -> bool:
+    def delete(db: Session, snapshot_id: str, *, ont_id: str | None = None) -> bool:
         """Delete a snapshot, optionally verifying ONT ownership."""
         snap_uuid = _safe_uuid(snapshot_id, "Snapshot ID")
         snapshot = db.get(OntConfigSnapshot, snap_uuid)
         if not snapshot:
             raise HTTPException(status_code=404, detail="Snapshot not found")
         if ont_id and str(snapshot.ont_unit_id) != str(_safe_uuid(ont_id, "ONT ID")):
-            raise HTTPException(status_code=404, detail="Snapshot not found for this ONT")
+            raise HTTPException(
+                status_code=404, detail="Snapshot not found for this ONT"
+            )
         db.delete(snapshot)
         try:
             db.commit()

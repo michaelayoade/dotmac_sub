@@ -58,4 +58,6 @@ def resolve_olt_context(db: Session, ont_id: str) -> tuple[OltContext | None, st
     if olt_ont_id is None:
         return None, f"No usable ONT-ID in external_id ({ont.external_id!r})"
 
-    return OltContext(ont=ont, olt=olt, fsp=fsp, olt_ont_id=olt_ont_id, assignment=assignment), ""
+    return OltContext(
+        ont=ont, olt=olt, fsp=fsp, olt_ont_id=olt_ont_id, assignment=assignment
+    ), ""

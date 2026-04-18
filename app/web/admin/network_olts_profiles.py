@@ -148,10 +148,8 @@ def olt_init_tr069(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     """Create or verify the linked ACS TR-069 profile on the OLT."""
-    ok, msg, _profile_id = (
-        olt_tr069_admin_service.ensure_tr069_profile_for_olt_audited(
-            db, olt_id, request=request
-        )
+    ok, msg, _profile_id = olt_tr069_admin_service.ensure_tr069_profile_for_olt_audited(
+        db, olt_id, request=request
     )
 
     status = "notice" if ok else "error"

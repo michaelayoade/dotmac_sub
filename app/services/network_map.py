@@ -244,7 +244,8 @@ def build_network_map_context(db: Session) -> dict:
     for ont in ont_units:
         status = (
             ont.effective_status.value
-            if getattr(getattr(ont, "effective_status", None), "value", None) is not None
+            if getattr(getattr(ont, "effective_status", None), "value", None)
+            is not None
             else str(getattr(ont, "effective_status", None) or "unknown")
         )
         if status == "online":

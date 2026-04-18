@@ -881,7 +881,9 @@ def build_beat_schedule() -> dict:
             "tr069_genieacs_stale_cleanup_interval_seconds",
             21600,  # 6 hours
         )
-        tr069_genieacs_cleanup_interval = max(tr069_genieacs_cleanup_interval, 3600)  # Min: 1 hour
+        tr069_genieacs_cleanup_interval = max(
+            tr069_genieacs_cleanup_interval, 3600
+        )  # Min: 1 hour
         _sync_scheduled_task(
             session,
             name="tr069_genieacs_stale_cleanup",

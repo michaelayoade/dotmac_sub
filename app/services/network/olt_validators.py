@@ -128,7 +128,9 @@ def validate_subnet_mask(mask: str, field: str = "subnet_mask") -> str:
     try:
         ipaddress.ip_address(mask)
     except ValueError as e:
-        raise ValidationError(f"{field} is not a valid subnet mask: {mask}", field) from e
+        raise ValidationError(
+            f"{field} is not a valid subnet mask: {mask}", field
+        ) from e
 
     # Verify it's a valid subnet mask (contiguous 1s followed by 0s)
     parts = mask.split(".")
@@ -141,7 +143,9 @@ def validate_subnet_mask(mask: str, field: str = "subnet_mask") -> str:
         if "01" in binary:
             raise ValidationError(f"{field} is not a valid subnet mask: {mask}", field)
     except ValueError as e:
-        raise ValidationError(f"{field} is not a valid subnet mask: {mask}", field) from e
+        raise ValidationError(
+            f"{field} is not a valid subnet mask: {mask}", field
+        ) from e
 
     return mask
 

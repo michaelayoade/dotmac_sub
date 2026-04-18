@@ -63,7 +63,9 @@ def _get_owner_subscriber_id(request: Request) -> str:
 def _active_olts(db: Session) -> list[OLTDevice]:
     from sqlalchemy import select
 
-    stmt = select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
+    stmt = (
+        select(OLTDevice).where(OLTDevice.is_active.is_(True)).order_by(OLTDevice.name)
+    )
     return list(db.scalars(stmt).all())
 
 

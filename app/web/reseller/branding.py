@@ -23,7 +23,12 @@ class _BrandingCache(TypedDict):
     favicon: str
 
 
-_branding_cache: _BrandingCache = {"ts": 0.0, "stats": {}, "portal_name": "", "favicon": ""}
+_branding_cache: _BrandingCache = {
+    "ts": 0.0,
+    "stats": {},
+    "portal_name": "",
+    "favicon": "",
+}
 _branding_cache_lock = Lock()
 
 
@@ -31,7 +36,11 @@ def _get_cached_branding() -> tuple[dict, str, str] | None:
     """Return cached branding (stats, portal_name, favicon) if valid, else None."""
     with _branding_cache_lock:
         if monotonic() - _branding_cache["ts"] < _BRANDING_CACHE_TTL:
-            return (_branding_cache["stats"], _branding_cache["portal_name"], _branding_cache["favicon"])
+            return (
+                _branding_cache["stats"],
+                _branding_cache["portal_name"],
+                _branding_cache["favicon"],
+            )
     return None
 
 

@@ -22,7 +22,6 @@ from app.services.network.ont_provisioning.profiles import (
 )
 from app.services.network.serial_utils import parse_ont_id_on_olt
 
-
 _AUTHORIZED_SYNC_SOURCES = {
     "olt_ssh_authorize",
     "olt_ssh_readback",
@@ -365,9 +364,7 @@ def validate_prerequisites(
         check["blocks_authorization"] = check["name"] in _AUTHORIZATION_BLOCKER_NAMES
 
     ready_to_authorize = all(
-        check["status"] != "fail"
-        for check in checks
-        if check["blocks_authorization"]
+        check["status"] != "fail" for check in checks if check["blocks_authorization"]
     )
     ready_to_provision = authorization_ready and all(
         check["status"] != "fail" for check in checks

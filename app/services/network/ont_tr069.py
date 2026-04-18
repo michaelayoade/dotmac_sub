@@ -364,7 +364,9 @@ def _extract_numbered_objects(parent: dict[str, Any] | None) -> list[dict[str, A
     if not isinstance(parent, dict):
         return []
     rows: list[dict[str, Any]] = []
-    for key in sorted((k for k in parent if str(k).isdigit()), key=lambda item: int(str(item))):
+    for key in sorted(
+        (k for k in parent if str(k).isdigit()), key=lambda item: int(str(item))
+    ):
         value = parent.get(key)
         if isinstance(value, dict):
             row = dict(value)
@@ -373,13 +375,15 @@ def _extract_numbered_objects(parent: dict[str, Any] | None) -> list[dict[str, A
     return rows
 
 
-def _extract_connection_row(obj: dict[str, Any], *, kind: str, wcd_index: str) -> dict[str, Any]:
+def _extract_connection_row(
+    obj: dict[str, Any], *, kind: str, wcd_index: str
+) -> dict[str, Any]:
     row = {
         "kind": kind,
         "wcd_index": wcd_index,
         "instance": str(obj.get("_instance") or "1"),
     }
-    for field in (
+    for tr069_field in (
         "Name",
         "ConnectionType",
         "ConnectionStatus",
@@ -391,7 +395,7 @@ def _extract_connection_row(obj: dict[str, Any], *, kind: str, wcd_index: str) -
         "X_HW_SERVICELIST",
         "X_HW_VLAN",
     ):
-        row[field] = _unwrap_tr069_value(obj.get(field))
+        row[tr069_field] = _unwrap_tr069_value(obj.get(tr069_field))
     return row
 
 
@@ -406,9 +410,13 @@ def _extract_igd_wan_group(device: dict[str, Any]) -> dict[str, Any] | None:
     for wcd in _extract_numbered_objects(wcd_parent):
         wcd_index = str(wcd.get("_instance") or "")
         for ppp in _extract_numbered_objects(wcd.get("WANPPPConnection")):
-            connections.append(_extract_connection_row(ppp, kind="ppp", wcd_index=wcd_index))
+            connections.append(
+                _extract_connection_row(ppp, kind="ppp", wcd_index=wcd_index)
+            )
         for ip_conn in _extract_numbered_objects(wcd.get("WANIPConnection")):
-            connections.append(_extract_connection_row(ip_conn, kind="ip", wcd_index=wcd_index))
+            connections.append(
+                _extract_connection_row(ip_conn, kind="ip", wcd_index=wcd_index)
+            )
 
     ppp_connections = [item for item in connections if item.get("kind") == "ppp"]
     if ppp_connections:
@@ -461,7 +469,9 @@ def _extract_igd_wan_group(device: dict[str, Any]) -> dict[str, Any] | None:
         }
 
     management_connections = [
-        item for item in connections if item.get("kind") == "ip" and _is_management_wan_service(item)
+        item
+        for item in connections
+        if item.get("kind") == "ip" and _is_management_wan_service(item)
     ]
     if management_connections:
         selected = management_connections[0]

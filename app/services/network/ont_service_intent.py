@@ -37,7 +37,9 @@ def _plan_section(ont_plan: dict[str, Any], step: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def _active_profile_wan_services(ont: object, db: Session | None = None) -> list[object]:
+def _active_profile_wan_services(
+    ont: object, db: Session | None = None
+) -> list[object]:
     profile_id = getattr(ont, "provisioning_profile_id", None)
     if db is not None and profile_id:
         from app.models.network import OntProfileWanService
@@ -56,7 +58,9 @@ def _active_profile_wan_services(ont: object, db: Session | None = None) -> list
     return [service for service in services if getattr(service, "is_active", False)]
 
 
-def _active_wan_service_instances(ont: object, db: Session | None = None) -> list[object]:
+def _active_wan_service_instances(
+    ont: object, db: Session | None = None
+) -> list[object]:
     """Get active WAN service instances for an ONT (Phase 2+3 architecture)."""
     ont_id = getattr(ont, "id", None)
     if db is not None and ont_id:
@@ -83,7 +87,9 @@ def _format_wan_service_instances(instances: list[object]) -> list[dict[str, Any
         service_type = _enum_value(getattr(inst, "service_type", None)) or "unknown"
         name = getattr(inst, "name", None) or service_type.title()
         connection_type = _enum_value(getattr(inst, "connection_type", None)) or "pppoe"
-        provisioning_status = _enum_value(getattr(inst, "provisioning_status", None)) or "pending"
+        provisioning_status = (
+            _enum_value(getattr(inst, "provisioning_status", None)) or "pending"
+        )
 
         # Build VLAN display
         s_vlan = getattr(inst, "s_vlan", None)
@@ -101,24 +107,27 @@ def _format_wan_service_instances(instances: list[object]) -> list[dict[str, Any
         pppoe_username = getattr(inst, "pppoe_username", None)
         credentials_display = pppoe_username if pppoe_username else "Not set"
 
-        result.append({
-            "id": str(getattr(inst, "id", "")),
-            "name": name,
-            "service_type": service_type,
-            "connection_type": connection_type.replace("_", " ").title(),
-            "vlan": vlan_display,
-            "pppoe_username": credentials_display,
-            "nat_enabled": getattr(inst, "nat_enabled", True),
-            "provisioning_status": provisioning_status,
-            "last_provisioned_at": getattr(inst, "last_provisioned_at", None),
-            "last_error": getattr(inst, "last_error", None),
-        })
+        result.append(
+            {
+                "id": str(getattr(inst, "id", "")),
+                "name": name,
+                "service_type": service_type,
+                "connection_type": connection_type.replace("_", " ").title(),
+                "vlan": vlan_display,
+                "pppoe_username": credentials_display,
+                "nat_enabled": getattr(inst, "nat_enabled", True),
+                "provisioning_status": provisioning_status,
+                "last_provisioned_at": getattr(inst, "last_provisioned_at", None),
+                "last_error": getattr(inst, "last_error", None),
+            }
+        )
     return result
 
 
 def _service_label(service: object) -> str:
     return _value(
-        getattr(service, "name", None) or _enum_value(getattr(service, "service_type", None)),
+        getattr(service, "name", None)
+        or _enum_value(getattr(service, "service_type", None)),
         "Service",
     )
 
@@ -286,7 +295,9 @@ def build_service_intent(
     static_gateway = wan_plan.get("gateway")
     static_dns = wan_plan.get("dns_servers")
 
-    internet_method = "Bridge" if onu_mode == "bridging" else _value(wan_mode, "Not set")
+    internet_method = (
+        "Bridge" if onu_mode == "bridging" else _value(wan_mode, "Not set")
+    )
     normalized_wan_mode = str(wan_mode or "").strip().lower()
     internet_rows = [
         {
@@ -315,8 +326,14 @@ def build_service_intent(
             "title": "Management Plane",
             "description": "How operators and ACS reach the ONT.",
             "rows": [
-                {"label": "Management VLAN", "value": _vlan_label(getattr(ont, "mgmt_vlan", None))},
-                {"label": "Management IP Method", "value": _value(mgmt_ip_mode).replace("_", " ").title()},
+                {
+                    "label": "Management VLAN",
+                    "value": _vlan_label(getattr(ont, "mgmt_vlan", None)),
+                },
+                {
+                    "label": "Management IP Method",
+                    "value": _value(mgmt_ip_mode).replace("_", " ").title(),
+                },
                 {
                     "label": "Management IP",
                     "value": _value(
@@ -351,7 +368,12 @@ def build_service_intent(
                 {
                     "label": "DHCP Range",
                     "value": " - ".join(
-                        v for v in [_value(lan_plan.get("dhcp_start"), ""), _value(lan_plan.get("dhcp_end"), "")] if v
+                        v
+                        for v in [
+                            _value(lan_plan.get("dhcp_start"), ""),
+                            _value(lan_plan.get("dhcp_end"), ""),
+                        ]
+                        if v
                     )
                     or "Not set",
                 },
@@ -433,7 +455,9 @@ def build_service_intent(
     }
 
 
-def load_latest_ont_plan(db: Session, *, subscription_id: object | None = None) -> dict[str, Any]:
+def load_latest_ont_plan(
+    db: Session, *, subscription_id: object | None = None
+) -> dict[str, Any]:
     """Load the latest service-order ONT plan for a subscription."""
     if subscription_id is None:
         return {}
@@ -457,8 +481,10 @@ def load_ont_plan_for_ont(db: Session, *, ont_id: str) -> dict[str, Any]:
     """Load the latest stored ONT plan for an ONT assignment/provisioning flow."""
     from app.services import web_network_onts_provisioning as provisioning_web_service
 
-    service_order_id = provisioning_web_service.provisioning_service.resolve_service_order_id_for_ont(
-        db, ont_id
+    service_order_id = (
+        provisioning_web_service.provisioning_service.resolve_service_order_id_for_ont(
+            db, ont_id
+        )
     )
     if not service_order_id:
         return {}

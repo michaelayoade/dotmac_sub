@@ -19,4 +19,3 @@ def mask_credentials(cmd: str) -> str:
         else:
             cmd = prefix + "********" + rest[next_space:]
     return cmd
-

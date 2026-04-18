@@ -62,4 +62,3 @@ class StepResult:
             self.data = (
                 normalized if isinstance(normalized, dict) else {"value": normalized}
             )
-

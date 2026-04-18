@@ -58,7 +58,9 @@ class ConnectionManager:
             await self._pubsub.psubscribe(f"{CHANNEL_PREFIX}*")
             self._running = True
             self._listener_task = asyncio.create_task(self._redis_listener())
-            logger.info("websocket_manager_connected redis=%s", _mask_redis_url(REDIS_URL))
+            logger.info(
+                "websocket_manager_connected redis=%s", _mask_redis_url(REDIS_URL)
+            )
         except Exception as exc:
             logger.warning("websocket_manager_redis_failed error=%s", exc)
 

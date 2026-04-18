@@ -971,7 +971,9 @@ def create_nat_port_forward_job(
 
     # Build port mapping parameters using TR-181 paths
     # GenieACS uses addObject to create new instances
-    rule_description = description or f"Port {external_port} to {internal_ip}:{internal_port}"
+    rule_description = (
+        description or f"Port {external_port} to {internal_ip}:{internal_port}"
+    )
 
     # First, we need to add an object, then set its values
     # This is a two-step process in TR-069, but GenieACS can handle it with

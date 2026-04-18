@@ -138,7 +138,8 @@ class NetworkOperations(ListResponseMixin):
             if (
                 existing.status == NetworkOperationStatus.waiting
                 and existing.created_at
-                and datetime.now(UTC) - existing.created_at > STALE_WAITING_OPERATION_AGE
+                and datetime.now(UTC) - existing.created_at
+                > STALE_WAITING_OPERATION_AGE
             ):
                 existing.status = NetworkOperationStatus.failed
                 existing.completed_at = datetime.now(UTC)
@@ -555,9 +556,9 @@ def run_tracked_action(
         result = action_fn()
         try:
             if getattr(result, "waiting", False):
-                waiting_reason = (
-                    getattr(result, "data", None) or {}
-                ).get("waiting_reason") or "next_inform"
+                waiting_reason = (getattr(result, "data", None) or {}).get(
+                    "waiting_reason"
+                ) or "next_inform"
                 network_operations.mark_waiting(db, str(op.id), str(waiting_reason))
             elif getattr(result, "success", False):
                 network_operations.mark_succeeded(

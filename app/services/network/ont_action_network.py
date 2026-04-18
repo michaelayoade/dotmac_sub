@@ -227,7 +227,9 @@ def _mark_ppp_add_object_pending(
     _persist_runtime_capabilities(ont, capabilities)
 
 
-def _pending_ppp_add_object(ont: Any, instance_index: int, wan_vlan: int | None) -> bool:
+def _pending_ppp_add_object(
+    ont: Any, instance_index: int, wan_vlan: int | None
+) -> bool:
     capabilities = _runtime_capabilities(ont)
     pending = capabilities.get("pending_actions")
     if not isinstance(pending, dict):
@@ -286,10 +288,14 @@ def probe_wan_capabilities(
         for idx in indexes:
             base = f"{root}.WANDevice.1.WANConnectionDevice.{idx}"
             ip_count = _int_value(
-                _snapshot_value(client, device, f"{base}.WANIPConnectionNumberOfEntries")
+                _snapshot_value(
+                    client, device, f"{base}.WANIPConnectionNumberOfEntries"
+                )
             )
             ppp_count = _int_value(
-                _snapshot_value(client, device, f"{base}.WANPPPConnectionNumberOfEntries")
+                _snapshot_value(
+                    client, device, f"{base}.WANPPPConnectionNumberOfEntries"
+                )
             )
             details = _igd_wan_details(client, device, root, idx)
             declared = idx <= count
@@ -321,9 +327,15 @@ def probe_wan_capabilities(
         ip_indexes: list[int] = []
         vlan_indexes: list[int] = []
         for idx in range(1, 9):
-            if _snapshot_value(client, device, f"Device.PPP.Interface.{idx}.Enable") is not None:
+            if (
+                _snapshot_value(client, device, f"Device.PPP.Interface.{idx}.Enable")
+                is not None
+            ):
                 ppp_indexes.append(idx)
-            if _snapshot_value(client, device, f"Device.IP.Interface.{idx}.Enable") is not None:
+            if (
+                _snapshot_value(client, device, f"Device.IP.Interface.{idx}.Enable")
+                is not None
+            ):
                 ip_indexes.append(idx)
             if (
                 _snapshot_value(
@@ -488,8 +500,7 @@ def _ensure_igd_ppp_wan_service(
                 instance_index=instance_index,
                 wan_vlan=wan_vlan,
                 message_prefix=(
-                    "Refusing to push PPPoE credentials because "
-                    f"{conflict}."
+                    f"Refusing to push PPPoE credentials because {conflict}."
                 ),
             )
         return None
@@ -616,7 +627,9 @@ def _normalize_serial(value: str | None) -> str:
     return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
 
 
-def _resolve_wan_vlan_tag(db: Session, ont: Any, explicit_vlan: int | None) -> int | None:
+def _resolve_wan_vlan_tag(
+    db: Session, ont: Any, explicit_vlan: int | None
+) -> int | None:
     if explicit_vlan is not None:
         return explicit_vlan
     wan_vlan = getattr(ont, "wan_vlan", None)
@@ -1392,7 +1405,9 @@ def set_pppoe_credentials(
         }
     try:
         expected = {
-            path: value for path, value in params.items() if not path.endswith(".Password")
+            path: value
+            for path, value in params.items()
+            if not path.endswith(".Password")
         }
         result = set_and_verify(client, device_id, params, expected=expected)
         logger.info(

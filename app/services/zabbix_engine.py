@@ -149,10 +149,14 @@ class ZabbixMetricsEngine:
     ) -> list[dict[str, Any]]:
         end = self._as_utc(time_till) or datetime.now(UTC)
         start = self._as_utc(time_from) or (end - timedelta(hours=1))
-        selected_host_ids = sorted({str(host_id) for host_id in (host_ids or []) if host_id})
+        selected_host_ids = sorted(
+            {str(host_id) for host_id in (host_ids or []) if host_id}
+        )
         if not selected_host_ids:
             hosts, _index = self.load_hosts()
-            selected_host_ids = [str(host.get("hostid")) for host in hosts if host.get("hostid")]
+            selected_host_ids = [
+                str(host.get("hostid")) for host in hosts if host.get("hostid")
+            ]
         item_map = self.load_items(selected_host_ids)
         items = [
             item
@@ -184,9 +188,7 @@ class ZabbixMetricsEngine:
         per_page: int,
     ) -> dict[str, Any]:
         identifiers = self._subscription_identifiers(db, subscription)
-        cache_key = (
-            f"usage_{subscription.id}_{int(start_at.timestamp())}_{int(end_at.timestamp())}"
-        )
+        cache_key = f"usage_{subscription.id}_{int(start_at.timestamp())}_{int(end_at.timestamp())}"
         cached = self._cache.get(cache_key)
         if cached is not None:
             return self._paginate_usage(cached, page, per_page)
@@ -477,7 +479,9 @@ class ZabbixMetricsEngine:
     ) -> list[RatePoint]:
         item_ids = [str(item.get("itemid")) for item in items if item.get("itemid")]
         item_by_id = {str(item.get("itemid")): item for item in items}
-        rows = self.client.get_trends(item_ids=item_ids, time_from=start_ts, time_till=end_ts)
+        rows = self.client.get_trends(
+            item_ids=item_ids, time_from=start_ts, time_till=end_ts
+        )
         return self._rates_from_rows(rows, item_by_id, "value_avg")
 
     def _rates_from_rows(
@@ -497,7 +501,9 @@ class ZabbixMetricsEngine:
             except (TypeError, ValueError):
                 continue
             if clock > 0:
-                grouped[item_id].append(CounterSample(item_id=item_id, clock=clock, value=value))
+                grouped[item_id].append(
+                    CounterSample(item_id=item_id, clock=clock, value=value)
+                )
 
         points: list[RatePoint] = []
         for item_id, samples in grouped.items():
@@ -586,7 +592,9 @@ class ZabbixMetricsEngine:
             "period_end": end_at,
         }
 
-    def _paginate_usage(self, usage: dict[str, Any], page: int, per_page: int) -> dict[str, Any]:
+    def _paginate_usage(
+        self, usage: dict[str, Any], page: int, per_page: int
+    ) -> dict[str, Any]:
         by_day: dict[datetime, float] = defaultdict(float)
         for point in usage["graph"]:
             day = datetime.fromtimestamp(point["timestamp"], tz=UTC).replace(
@@ -614,18 +622,21 @@ class ZabbixMetricsEngine:
         end = start + per_page
         total_days = max(1, total)
         avg_download = (
-            sum(float(point["download_bps"]) for point in usage["graph"]) / len(usage["graph"])
+            sum(float(point["download_bps"]) for point in usage["graph"])
+            / len(usage["graph"])
             if usage["graph"]
             else 0.0
         )
         avg_upload = (
-            sum(float(point["upload_bps"]) for point in usage["graph"]) / len(usage["graph"])
+            sum(float(point["upload_bps"]) for point in usage["graph"])
+            / len(usage["graph"])
             if usage["graph"]
             else 0.0
         )
         usage_summary = {
             "average_daily_usage_gb": (
-                (float(usage["totalDownloadGB"]) + float(usage["totalUploadGB"])) / total_days
+                (float(usage["totalDownloadGB"]) + float(usage["totalUploadGB"]))
+                / total_days
             ),
             "average_speed_mbps": (avg_download + avg_upload) / 1_000_000,
             "average_download_mbps": avg_download / 1_000_000,
@@ -685,9 +696,9 @@ class ZabbixMetricsEngine:
         if not metric:
             return True
         needle = self._normalize_key(metric)
-        return needle in self._normalize_key(item.get("name")) or needle in self._normalize_key(
-            item.get("key_")
-        )
+        return needle in self._normalize_key(
+            item.get("name")
+        ) or needle in self._normalize_key(item.get("key_"))
 
     @staticmethod
     def _direction(item: dict[str, Any]) -> str:

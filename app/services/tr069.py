@@ -68,7 +68,9 @@ def _job_extra(
     }
     if device is not None:
         extra["serial_number"] = device.serial_number
-        extra["acs_server_id"] = str(device.acs_server_id) if device.acs_server_id else None
+        extra["acs_server_id"] = (
+            str(device.acs_server_id) if device.acs_server_id else None
+        )
         extra["genieacs_device_id"] = device.genieacs_device_id
     if server is not None:
         extra["acs_server_name"] = server.name
@@ -154,13 +156,16 @@ def _normalize_event_value(event: Any) -> tuple[str, Any]:
                     labels.append(text)
         event_text = " ".join(labels) if labels else "periodic"
     elif isinstance(event, dict):
-        event_text = _first_text(
-            event.get("EventCode"),
-            event.get("event_code"),
-            event.get("code"),
-            event.get("_value"),
-            event,
-        ) or "periodic"
+        event_text = (
+            _first_text(
+                event.get("EventCode"),
+                event.get("event_code"),
+                event.get("code"),
+                event.get("_value"),
+                event,
+            )
+            or "periodic"
+        )
     else:
         event_text = _first_text(event) or "periodic"
 
@@ -177,10 +182,7 @@ def _normalize_event_value(event: Any) -> tuple[str, Any]:
         return "connection_request", raw_event
     if "7 transfer complete" in normalized or "transfer_complete" in normalized:
         return "transfer_complete", raw_event
-    if (
-        "8 diagnostics complete" in normalized
-        or "diagnostics_complete" in normalized
-    ):
+    if "8 diagnostics complete" in normalized or "diagnostics_complete" in normalized:
         return "diagnostics_complete", raw_event
     return normalized or "periodic", raw_event
 
@@ -217,7 +219,9 @@ def _collect_parameters_from_mapping(
         output[key[:255]] = _parameter_value(value)
 
 
-def _extract_inform_parameters(raw_payload: dict[str, Any] | None) -> dict[str, str | None]:
+def _extract_inform_parameters(
+    raw_payload: dict[str, Any] | None,
+) -> dict[str, str | None]:
     """Extract reported parameter values from common inform webhook formats."""
     if not isinstance(raw_payload, dict):
         return {}
@@ -312,13 +316,17 @@ def _find_matching_ont_for_serial(db: Session, serial: str | None):
     normalized_candidates = [
         normalize_tr069_serial(candidate) for candidate in search_candidates(serial)
     ]
-    normalized_candidates = [candidate for candidate in normalized_candidates if candidate]
+    normalized_candidates = [
+        candidate for candidate in normalized_candidates if candidate
+    ]
     if not normalized_candidates:
         return None
     return (
         db.query(OntUnit)
         .filter(OntUnit.is_active.is_(True))
-        .filter(_normalized_serial_expr(OntUnit.serial_number).in_(normalized_candidates))
+        .filter(
+            _normalized_serial_expr(OntUnit.serial_number).in_(normalized_candidates)
+        )
         .first()
     )
 
@@ -336,7 +344,9 @@ def _resolve_device_for_inform(
     normalized_candidates = [
         normalize_tr069_serial(candidate) for candidate in search_candidates(serial)
     ]
-    normalized_candidates = [candidate for candidate in normalized_candidates if candidate]
+    normalized_candidates = [
+        candidate for candidate in normalized_candidates if candidate
+    ]
 
     query = db.query(Tr069CpeDevice).filter(Tr069CpeDevice.is_active.is_(True))
     if acs_server_id:
@@ -655,7 +665,9 @@ class CpeDevices(ListResponseMixin):
                     ),
                 )
             )
-            .order_by(Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc())
+            .order_by(
+                Tr069CpeDevice.updated_at.desc(), Tr069CpeDevice.created_at.desc()
+            )
         )
         return query.first()
 
@@ -713,9 +725,9 @@ class CpeDevices(ListResponseMixin):
             )
             if device:
                 device.is_active = True
-                device.serial_number = str(ont.serial_number or device.serial_number or "")[
-                    :120
-                ]
+                device.serial_number = str(
+                    ont.serial_number or device.serial_number or ""
+                )[:120]
                 reactivated += 1
             else:
                 device = Tr069CpeDevice(
@@ -1061,7 +1073,12 @@ class CpeDevices(ListResponseMixin):
                     )
                     status_snapshot_updated += 1
 
-            if auto_linked or explicit_links or serial_updated or status_snapshot_updated:
+            if (
+                auto_linked
+                or explicit_links
+                or serial_updated
+                or status_snapshot_updated
+            ):
                 db.commit()
                 logger.info(
                     "Auto-link: %d ONTs linked to ACS %s, %d explicit TR-069 links, %d serials updated, %d status snapshots refreshed",
@@ -1511,10 +1528,13 @@ def receive_inform(
     )
     device_id_str = (device_id_raw or "").strip()
     if not device_id_str:
-        device_id_str = _first_text(
-            _payload_lookup(payload, "device_id", "deviceId", "_id"),
-            max_len=255,
-        ) or ""
+        device_id_str = (
+            _first_text(
+                _payload_lookup(payload, "device_id", "deviceId", "_id"),
+                max_len=255,
+            )
+            or ""
+        )
     if not serial and device_id_str:
         serial = _extract_serial_from_device_id(device_id_str)
 
@@ -1658,6 +1678,7 @@ def _build_acs_provision_script(
     Returns:
         JavaScript provision script
     """
+
     # Escape strings for JavaScript
     def js_string(s: str | None) -> str:
         if s is None:
@@ -1673,9 +1694,9 @@ def _build_acs_provision_script(
         "",
         "// Detect data model by checking which root exists",
         'let root = "Device";',
-        'try {',
+        "try {",
         '  const dm = declare("Device.DeviceInfo.Manufacturer", {value: 1});',
-        '  if (!dm.value || dm.value[0] === undefined) {',
+        "  if (!dm.value || dm.value[0] === undefined) {",
         '    root = "InternetGatewayDevice";',
         "  }",
         "} catch (e) {",
@@ -1710,7 +1731,7 @@ def _build_acs_provision_script(
             "    return null;",
             "  }",
             "}",
-            'try {',
+            "try {",
             '  const serial = dotmacRead(root + ".DeviceInfo.SerialNumber");',
             '  const oui = dotmacRead(root + ".DeviceInfo.ManufacturerOUI");',
             '  const productClass = dotmacRead(root + ".DeviceInfo.ProductClass");',
@@ -2006,7 +2027,7 @@ def _build_runtime_collection_provision() -> str:
     Returns:
         JavaScript provision script
     """
-    return '''// DotMac Runtime Data Collection Provision
+    return """// DotMac Runtime Data Collection Provision
 // Collects operational parameters for dashboard display
 
 function read(path) {
@@ -2120,7 +2141,7 @@ for (let i = 1; i <= 4; i++) {
 for (const path of paths) {
   read(path);
 }
-'''
+"""
 
 
 def _build_runtime_preset(
@@ -2205,9 +2226,7 @@ def push_runtime_collection_preset(
         client.create_provision(RUNTIME_PROVISION_NAME, provision_script)
         logger.info("Created runtime collection provision: %s", RUNTIME_PROVISION_NAME)
     except GenieACSError as exc:
-        logger.error(
-            "Failed to create provision %s: %s", RUNTIME_PROVISION_NAME, exc
-        )
+        logger.error("Failed to create provision %s: %s", RUNTIME_PROVISION_NAME, exc)
         raise HTTPException(
             status_code=500, detail=f"Failed to create provision: {exc}"
         ) from exc

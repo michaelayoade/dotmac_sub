@@ -57,7 +57,6 @@ _OLT_MANAGEMENT_NETWORKS_BY_NAME: dict[str, list[str]] = {
     "karsana huawei olt": ["172.16.203.0/24"],
     "karsana huawei olt 1": ["172.16.203.0/24"],
     "karsana olt": ["172.16.203.0/24"],
-    "karsana olt 1": ["172.16.203.0/24"],
     "jabi": ["172.16.204.0/24"],
     "jabi huawei olt": ["172.16.204.0/24"],
     "jabi olt-1": ["172.16.204.0/24"],
@@ -118,9 +117,7 @@ def resolve_ont_connected_olt(
         pon_port_id = getattr(assignment, "pon_port_id", None)
         if not pon_port_id:
             continue
-        pon_port = getattr(assignment, "pon_port", None) or db.get(
-            PonPort, pon_port_id
-        )
+        pon_port = getattr(assignment, "pon_port", None) or db.get(PonPort, pon_port_id)
         olt_id = getattr(pon_port, "olt_id", None) if pon_port else None
         if not olt_id:
             continue
@@ -180,7 +177,7 @@ def _extract_mgmt_address_from_identity(value: Any) -> str:
 
 
 def _expected_management_networks_for_olt(
-    olt: OLTDevice | Any | None
+    olt: OLTDevice | Any | None,
 ) -> set[IPv4Network]:
     if olt is None:
         return set()
@@ -221,9 +218,8 @@ def _expected_management_networks_for_olt(
                     candidates.add(ip_network(cidr, strict=False))
                 except ValueError:
                     continue
-            if (
-                declared_network is not None
-                and declared_network.overlaps(known_network)
+            if declared_network is not None and declared_network.overlaps(
+                known_network
             ):
                 try:
                     candidates.add(ip_network(cidr, strict=False))
@@ -265,9 +261,7 @@ def _expected_management_networks_for_olt(
     return candidates
 
 
-def _pool_in_management_networks(
-    pool: IpPool, networks: set[IPv4Network]
-) -> bool:
+def _pool_in_management_networks(pool: IpPool, networks: set[IPv4Network]) -> bool:
     if not networks:
         return False
     try:
@@ -443,12 +437,15 @@ def management_ip_choices_for_ont(
                 ).all()
             )
             scoped_pools = [
-                candidate for candidate in all_pools if _pool_in_management_networks(candidate, managed_networks)
+                candidate
+                for candidate in all_pools
+                if _pool_in_management_networks(candidate, managed_networks)
             ]
     else:
         scoped_pools = []
 
     if not pools:
+
         def looks_like_management_pool(candidate: IpPool) -> bool:
             vlan = getattr(candidate, "vlan", None)
             vlan_purpose = getattr(getattr(vlan, "purpose", None), "value", None)
@@ -857,15 +854,19 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
     # LAN config is stored directly on ONT; service-order context is fallback
     # for legacy/in-flight orders only.
     lan_intent = {
-        "lan_ip": getattr(ont, "lan_gateway_ip", None) or lan_intent_from_order.get("lan_ip"),
-        "lan_subnet": getattr(ont, "lan_subnet_mask", None) or lan_intent_from_order.get("lan_subnet"),
+        "lan_ip": getattr(ont, "lan_gateway_ip", None)
+        or lan_intent_from_order.get("lan_ip"),
+        "lan_subnet": getattr(ont, "lan_subnet_mask", None)
+        or lan_intent_from_order.get("lan_subnet"),
         "dhcp_enabled": (
             getattr(ont, "lan_dhcp_enabled", None)
             if getattr(ont, "lan_dhcp_enabled", None) is not None
             else lan_intent_from_order.get("dhcp_enabled")
         ),
-        "dhcp_start": getattr(ont, "lan_dhcp_start", None) or lan_intent_from_order.get("dhcp_start"),
-        "dhcp_end": getattr(ont, "lan_dhcp_end", None) or lan_intent_from_order.get("dhcp_end"),
+        "dhcp_start": getattr(ont, "lan_dhcp_start", None)
+        or lan_intent_from_order.get("dhcp_start"),
+        "dhcp_end": getattr(ont, "lan_dhcp_end", None)
+        or lan_intent_from_order.get("dhcp_end"),
     }
     wifi_intent_from_order = (
         ont_plan.get("configure_wifi_tr069")
@@ -903,9 +904,7 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         else "dhcp"
     )
     wan_protocol = (
-        ont.wan_mode.value
-        if getattr(ont, "wan_mode", None) is not None
-        else "pppoe"
+        ont.wan_mode.value if getattr(ont, "wan_mode", None) is not None else "pppoe"
     )
     if wan_protocol == "static_ip":
         wan_protocol = "static"
@@ -1046,9 +1045,13 @@ def resolve_effective_tr069_profile_for_ont(
     planned_profile_id: Any = getattr(ont, "tr069_olt_profile_id", None)
     if planned_profile_id is None:
         try:
+            from app.services.network.ont_service_intent import load_ont_plan_for_ont
+
             ont_id = str(getattr(ont, "id", ""))
             ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
-            bind_tr069 = ont_plan.get("bind_tr069") if isinstance(ont_plan, dict) else None
+            bind_tr069 = (
+                ont_plan.get("bind_tr069") if isinstance(ont_plan, dict) else None
+            )
             if isinstance(bind_tr069, dict):
                 planned_profile_id = bind_tr069.get("tr069_olt_profile_id")
         except Exception:

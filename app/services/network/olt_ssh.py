@@ -857,7 +857,9 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
 
         if is_error_output(output):
             logger.warning(
-                "Firmware rollback failed on OLT %s: %s", olt.name, output.strip()[-200:]
+                "Firmware rollback failed on OLT %s: %s",
+                olt.name,
+                output.strip()[-200:],
             )
             return False, f"Rollback command failed: {output.strip()[-200:]}"
 
@@ -990,14 +992,20 @@ def _validate_readonly_command(command: str) -> tuple[bool, str]:
     # Check for dangerous commands first
     for prefix in _DANGEROUS_COMMAND_PREFIXES:
         if normalized.startswith(prefix):
-            return False, f"Command '{prefix}' is not allowed — only read-only commands permitted"
+            return (
+                False,
+                f"Command '{prefix}' is not allowed — only read-only commands permitted",
+            )
 
     # Check for allowed read-only prefixes
     for prefix in _READONLY_COMMAND_PREFIXES:
         if normalized.startswith(prefix):
             return True, ""
 
-    return False, f"Command not recognized as read-only — must start with: {', '.join(_READONLY_COMMAND_PREFIXES)}"
+    return (
+        False,
+        f"Command not recognized as read-only — must start with: {', '.join(_READONLY_COMMAND_PREFIXES)}",
+    )
 
 
 def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:

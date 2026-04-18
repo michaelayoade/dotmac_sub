@@ -96,14 +96,14 @@ def _is_input_error(message: str | None) -> bool:
             "required",
             "invalid",
             "must be",
-	            "out of range",
-	            "at least one",
-	            "no wan parameters",
-	            "no ppp wan service",
-	            "ppp wan service exists",
-	            "missing_ppp_wan_service",
-	        ]
-	    )
+            "out of range",
+            "at least one",
+            "no wan parameters",
+            "no ppp wan service",
+            "ppp wan service exists",
+            "missing_ppp_wan_service",
+        ]
+    )
 
 
 def _intent_saved_result(result: ActionResult) -> ActionResult:

@@ -577,7 +577,7 @@ def olt_ssh_get_config(
     return HTMLResponse(
         f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
         f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">'
-        f'{escaped_msg}. Retrieved over SSH CLI.</div>'
+        f"{escaped_msg}. Retrieved over SSH CLI.</div>"
         f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
         f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_config}</pre>'
     )
@@ -1340,8 +1340,8 @@ def olt_firmware_upgrade_preview(
         f'<div class="text-emerald-700 dark:text-emerald-400">'
         f'<span class="font-medium">Current:</span> {escaped_current}<br>'
         f'<span class="font-medium">Target:</span> {escaped_target}'
-        f'</div>'
-        f'</div>'
+        f"</div>"
+        f"</div>"
     )
 
 

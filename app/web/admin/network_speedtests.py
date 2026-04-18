@@ -68,9 +68,7 @@ def speedtests_list(
     )
     if load_error:
         error_message = (
-            f"{error_message} | {load_error}"
-            if error_message
-            else load_error
+            f"{error_message} | {load_error}" if error_message else load_error
         )
     context = _base_context(request, db, active_page="speedtests")
     context.update(data)
@@ -141,11 +139,13 @@ def speedtests_create(request: Request, db: Session = Depends(get_db)):
 def speedtests_clear_history(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     confirm_text = str(form.get("confirm_text") or "")
-    deleted, error, _parsed_days = web_network_speedtests_service.clear_history_from_form(
-        db,
-        confirm_text=confirm_text,
-        older_than_days_raw=form.get("older_than_days"),
-        request=request,
+    deleted, error, _parsed_days = (
+        web_network_speedtests_service.clear_history_from_form(
+            db,
+            confirm_text=confirm_text,
+            older_than_days_raw=form.get("older_than_days"),
+            request=request,
+        )
     )
     if error:
         return RedirectResponse(

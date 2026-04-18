@@ -13,7 +13,13 @@ from app.models.network import OLTDevice
 logger = logging.getLogger(__name__)
 
 # Specific SSH-related exceptions that can occur during OLT operations
-_SSH_CONNECTION_ERRORS = (SSHException, OSError, socket.timeout, TimeoutError, ConnectionError)
+_SSH_CONNECTION_ERRORS = (
+    SSHException,
+    OSError,
+    socket.timeout,
+    TimeoutError,
+    ConnectionError,
+)
 
 
 def upgrade_firmware(
@@ -79,7 +85,9 @@ def upgrade_firmware(
         )
         return True, "Firmware upgrade command sent"
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error during firmware upgrade on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error during firmware upgrade on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}"
     finally:
         transport.close()
@@ -125,7 +133,9 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
             )
         return True, "Configuration retrieved", config_text
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error fetching config from OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", ""
     finally:
         transport.close()
@@ -156,9 +166,7 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
         channel.send("enable\n")
         _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
 
-        output = _run_huawei_paged_cmd(
-            channel, command, prompt=policy.prompt_regex
-        )
+        output = _run_huawei_paged_cmd(channel, command, prompt=policy.prompt_regex)
 
         # Strip the echoed command and trailing prompt from the output
         lines = output.splitlines()
@@ -170,7 +178,9 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
         clean_output = "\n".join(lines).strip()
         return True, "Command executed", clean_output
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
-        logger.error("Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True)
+        logger.error(
+            "Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True
+        )
         return False, f"Error: {exc}", ""
     finally:
         transport.close()

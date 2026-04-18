@@ -419,27 +419,27 @@ def _sync_onts_from_olt_snmp_impl(
             )
             normalized_serial = normalize_ont_serial(serial_val)
             if normalized_serial:
-                by_normalized_serial[normalized_serial] = (
-                    prefer_ont_candidate(
-                        by_normalized_serial.get(normalized_serial),
-                        ont,
-                        active_assignment_ont_ids=active_assignment_ont_ids,
-                    )
+                by_normalized_serial[normalized_serial] = prefer_ont_candidate(
+                    by_normalized_serial.get(normalized_serial),
+                    ont,
+                    active_assignment_ont_ids=active_assignment_ont_ids,
                 )
         vendor_serial_val = normalize_ont_serial(
             str(getattr(ont, "vendor_serial_number", "") or "").strip()
         )
         if vendor_serial_val:
-            by_vendor_serial[vendor_serial_val] = (
-                prefer_ont_candidate(
-                    by_vendor_serial.get(vendor_serial_val),
-                    ont,
-                    active_assignment_ont_ids=active_assignment_ont_ids,
-                )
+            by_vendor_serial[vendor_serial_val] = prefer_ont_candidate(
+                by_vendor_serial.get(vendor_serial_val),
+                ont,
+                active_assignment_ont_ids=active_assignment_ont_ids,
             )
         fsp_hint = None
-        board_parts = [p for p in str(getattr(ont, "board", "")).split("/") if p.isdigit()]
-        port_parts = [p for p in str(getattr(ont, "port", "")).split("/") if p.isdigit()]
+        board_parts = [
+            p for p in str(getattr(ont, "board", "")).split("/") if p.isdigit()
+        ]
+        port_parts = [
+            p for p in str(getattr(ont, "port", "")).split("/") if p.isdigit()
+        ]
         if len(port_parts) >= 3:
             fsp_hint = f"{port_parts[-3]}/{port_parts[-2]}/{port_parts[-1]}"
         elif len(board_parts) >= 2 and len(port_parts) >= 1:
@@ -517,14 +517,9 @@ def _sync_onts_from_olt_snmp_impl(
         serial_frame = frame if frame is not None else "U"
         serial_slot = slot if slot is not None else "U"
         serial_port = port if port is not None else "U"
-        synthetic_serial = (
-            f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
-        )
+        synthetic_serial = f"{vendor_serial_prefix}-{olt_tag}-{serial_frame}{serial_slot}{serial_port}{onu}"
         vendor_serial = (
-            normalize_ont_serial(
-                str(serial_rows.get(idx) or "").strip()
-            )
-            or None
+            normalize_ont_serial(str(serial_rows.get(idx) or "").strip()) or None
         )
 
         olt_rx = _parse_signal_dbm(olt_rx_rows.get(idx))
@@ -594,9 +589,8 @@ def _sync_onts_from_olt_snmp_impl(
             and is_plausible_vendor_serial(vendor_serial)
         ):
             ont.vendor_serial_number = vendor_serial
-            if (
-                not getattr(ont, "serial_number", None)
-                or looks_synthetic_ont_serial(ont.serial_number)
+            if not getattr(ont, "serial_number", None) or looks_synthetic_ont_serial(
+                ont.serial_number
             ):
                 ont.serial_number = vendor_serial
         elif not getattr(ont, "vendor_serial_number", None):
@@ -646,8 +640,7 @@ def _sync_onts_from_olt_snmp_impl(
     try:
         active_onts = list(
             db.scalars(
-                select(OntUnit)
-                .where(
+                select(OntUnit).where(
                     OntUnit.olt_device_id == olt.id,
                     OntUnit.is_active.is_(True),
                 )

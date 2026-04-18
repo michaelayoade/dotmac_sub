@@ -64,9 +64,7 @@ def resolve_service_order_id_for_ont(db: Session, ont_id: str) -> str | None:
     # the most recent related order in any status so intent can still be restored
     # from recently completed/archived workflows.
     fallback_stmt = (
-        select(ServiceOrder.id)
-        .order_by(ServiceOrder.created_at.desc())
-        .limit(50)
+        select(ServiceOrder.id).order_by(ServiceOrder.created_at.desc()).limit(50)
     )
     for order_id in db.scalars(fallback_stmt).all():
         order = db.get(ServiceOrder, order_id)

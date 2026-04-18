@@ -2198,7 +2198,9 @@ class OntWanServiceInstance(Base):
         nullable=False,
         default=WanServiceProvisioningStatus.pending,
     )
-    last_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_provisioned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     last_error: Mapped[str | None] = mapped_column(String(500))
 
     created_at: Mapped[datetime] = mapped_column(

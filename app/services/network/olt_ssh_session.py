@@ -247,9 +247,7 @@ class OltSession:
             return parse_command_result(output)
 
         except Exception as exc:
-            logger.error(
-                "Error executing command on OLT %s: %s", self.olt.name, exc
-            )
+            logger.error("Error executing command on OLT %s: %s", self.olt.name, exc)
             return CommandResult(
                 success=False,
                 output="",
@@ -264,7 +262,9 @@ class OltSession:
         timeout_sec: float = 12.0,
     ) -> CommandResult:
         """Execute a command in config mode."""
-        return self.run_command(command, timeout_sec=timeout_sec, require_mode=CliMode.CONFIG)
+        return self.run_command(
+            command, timeout_sec=timeout_sec, require_mode=CliMode.CONFIG
+        )
 
     def run_commands(
         self,
@@ -293,7 +293,11 @@ class OltSession:
             )
             results.append(result)
 
-            if stop_on_error and not result.success and not result.is_idempotent_success:
+            if (
+                stop_on_error
+                and not result.success
+                and not result.is_idempotent_success
+            ):
                 break
 
         return results

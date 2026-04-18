@@ -212,7 +212,9 @@ def olt_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
             "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                 db
             ),
-            "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(db),
+            "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                db
+            ),
         }
     )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -223,9 +225,7 @@ def olt_new(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:write"))],
 )
-def olt_create(
-    request: Request, db: Session = Depends(get_db)
-):
+def olt_create(request: Request, db: Session = Depends(get_db)):
     values = olt_web_forms_service.parse_form_values(parse_form_data_sync(request))
     error = olt_web_forms_service.validate_values(db, values)
     if error:
@@ -239,7 +239,9 @@ def olt_create(
                 "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                     db
                 ),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(db),
+                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -255,7 +257,9 @@ def olt_create(
                 "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                     db
                 ),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(db),
+                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -269,7 +273,9 @@ def olt_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:read"))],
 )
-def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)) -> HTMLResponse:
+def olt_edit(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return templates.TemplateResponse(
@@ -286,7 +292,9 @@ def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)) -> HT
             "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                 db, olt=olt
             ),
-            "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(db),
+            "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                db
+            ),
         }
     )
     return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -297,9 +305,7 @@ def olt_edit(request: Request, olt_id: str, db: Session = Depends(get_db)) -> HT
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:write"))],
 )
-def olt_update(
-    request: Request, olt_id: str, db: Session = Depends(get_db)
-):
+def olt_update(request: Request, olt_id: str, db: Session = Depends(get_db)):
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return templates.TemplateResponse(
@@ -320,7 +326,9 @@ def olt_update(
                 "operational_acs_server": olt_tr069_admin_service.resolve_operational_acs_server(
                     db, olt=olt
                 ),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(db),
+                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -335,7 +343,9 @@ def olt_update(
                 "action_url": f"/admin/network/olts/{olt_id}",
                 "error": error,
                 "tr069_servers": web_network_onts_service.get_tr069_servers(db),
-                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(db),
+                "provisioning_profiles": web_network_onts_service.get_provisioning_profiles(
+                    db
+                ),
             }
         )
         return templates.TemplateResponse("admin/network/olts/form.html", context)
@@ -378,9 +388,7 @@ def olt_detail(
             "Failed to load operation history for OLT %s", olt_id, exc_info=True
         )
         operations = []
-    available_olt_firmware = olt_operations_service.get_olt_firmware_images(
-        db, olt_id
-    )
+    available_olt_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
 
     olt_obj = cast(OLTDevice | None, page_data.get("olt"))
 
@@ -443,9 +451,7 @@ def olt_detail_preview(
             exc_info=True,
         )
         operations = []
-    available_olt_firmware = olt_operations_service.get_olt_firmware_images(
-        db, olt_id
-    )
+    available_olt_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
 
     olt_obj = cast(OLTDevice | None, page_data.get("olt"))
 
@@ -729,9 +735,7 @@ def olt_netconf_get_config(
     """Fetch OLT running config via NETCONF and return as formatted HTML."""
     import html as html_mod
 
-    ok, message, config_xml = olt_operations_service.get_olt_netconf_config(
-        db, olt_id
-    )
+    ok, message, config_xml = olt_operations_service.get_olt_netconf_config(db, olt_id)
     escaped_msg = html_mod.escape(message)
     if not ok:
         _log_olt_action_result(
@@ -786,7 +790,7 @@ def olt_ssh_get_config(
     return HTMLResponse(
         f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
         f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">'
-        f'{escaped_msg}. Retrieved over SSH CLI.</div>'
+        f"{escaped_msg}. Retrieved over SSH CLI.</div>"
         f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
         f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_config}</pre>'
     )
@@ -860,7 +864,9 @@ def olt_repair_pon_ports(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
-    message = quote_plus("Repair PON ports uses POST. Please click Repair PON Ports again.")
+    message = quote_plus(
+        "Repair PON ports uses POST. Please click Repair PON Ports again."
+    )
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?sync_status=info&sync_message={message}",
         status_code=303,

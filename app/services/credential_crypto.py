@@ -18,7 +18,9 @@ from cryptography.fernet import Fernet, InvalidToken
 _ENCRYPTION_KEY_ENV = "CREDENTIAL_ENCRYPTION_KEY"
 _logger = logging.getLogger(__name__)
 _encryption_warning_logged = False
-_encryption_key_required = False  # Set to True in production via require_encryption_key()
+_encryption_key_required = (
+    False  # Set to True in production via require_encryption_key()
+)
 
 ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
     "NasDevice": (

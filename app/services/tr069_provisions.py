@@ -57,7 +57,9 @@ class Tr069ProvisionManager:
         try:
             return client.get_provision(provision_id)
         except GenieACSError as e:
-            logger.error("Failed to get provision %s from GenieACS: %s", provision_id, e)
+            logger.error(
+                "Failed to get provision %s from GenieACS: %s", provision_id, e
+            )
             raise
 
     def create(
@@ -129,7 +131,9 @@ class Tr069ProvisionManager:
                 metadata={"acs_server_id": acs_server_id},
             )
         except GenieACSError as e:
-            logger.error("Failed to update provision %s in GenieACS: %s", provision_id, e)
+            logger.error(
+                "Failed to update provision %s in GenieACS: %s", provision_id, e
+            )
             raise
 
     def delete(
@@ -163,7 +167,9 @@ class Tr069ProvisionManager:
             )
             return True
         except GenieACSError as e:
-            logger.error("Failed to delete provision %s from GenieACS: %s", provision_id, e)
+            logger.error(
+                "Failed to delete provision %s from GenieACS: %s", provision_id, e
+            )
             raise
 
 

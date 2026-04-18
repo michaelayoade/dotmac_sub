@@ -54,4 +54,3 @@ def log_cpe_audit_event(
         metadata=metadata,
         is_success=is_success,
     )
-

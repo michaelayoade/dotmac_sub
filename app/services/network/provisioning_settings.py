@@ -138,7 +138,9 @@ def get_int_setting(db: Session | None, key: str, default: int | None = None) ->
         return default if default is not None else int(SETTING_KEYS.get(key, 0))
 
 
-def get_float_setting(db: Session | None, key: str, default: float | None = None) -> float:
+def get_float_setting(
+    db: Session | None, key: str, default: float | None = None
+) -> float:
     """Get a float provisioning setting."""
     value = get_setting(db, key, default)
     try:

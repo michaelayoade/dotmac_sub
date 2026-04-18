@@ -90,7 +90,9 @@ class ServicePortDiagnostics:
     warnings: list[str]
 
 
-def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY) -> None:
+def _send_slow(
+    channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY
+) -> None:
     """Send command character-by-character with delay.
 
     Some OLT terminals (particularly certain Huawei MA5608T units) have terminal

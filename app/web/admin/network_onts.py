@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.network import OntAuthorizationStatus
 from app.services import network as network_service
 from app.services import web_network_core_devices as web_network_core_devices_service
 from app.services import web_network_ont_actions as web_network_ont_actions_service
@@ -24,7 +25,6 @@ from app.services import web_network_operations as web_network_operations_servic
 from app.services import web_network_service_ports as web_network_service_ports_service
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
-from app.models.network import OntAuthorizationStatus
 from app.services.network import ont_web_forms as ont_web_forms_service
 from app.services.network.action_logging import log_network_action_result
 from app.web.request_parsing import parse_form_data_sync

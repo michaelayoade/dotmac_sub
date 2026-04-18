@@ -2636,7 +2636,9 @@ def _smtp_page_context(
     settings_context = web_system_settings_views_service.build_settings_context(
         db, "notification"
     )
-    selected_sender_key = str(request.query_params.get("edit_sender") or "").strip().lower()
+    selected_sender_key = (
+        str(request.query_params.get("edit_sender") or "").strip().lower()
+    )
     smtp_sender_form = {
         "sender_key": "",
         "host": "",
@@ -2655,7 +2657,8 @@ def _smtp_page_context(
             (
                 sender
                 for sender in settings_context.get("smtp_sender_profiles", [])
-                if str(sender.get("sender_key", "")).strip().lower() == selected_sender_key
+                if str(sender.get("sender_key", "")).strip().lower()
+                == selected_sender_key
             ),
             None,
         )
@@ -2667,13 +2670,19 @@ def _smtp_page_context(
                     "port": int(selected_sender.get("port") or 587),
                     "username": str(selected_sender.get("username", "")),
                     "from_email": str(selected_sender.get("from_email", "")),
-                    "from_name": str(selected_sender.get("from_name", "") or "DotMac SM"),
+                    "from_name": str(
+                        selected_sender.get("from_name", "") or "DotMac SM"
+                    ),
                     "use_tls": bool(selected_sender.get("use_tls", True)),
                     "use_ssl": bool(selected_sender.get("use_ssl", False)),
                     "is_active": bool(selected_sender.get("is_active", True)),
                     "is_default": (
                         str(selected_sender.get("sender_key", "")).strip().lower()
-                        == str(settings_context.get("smtp_sender_default_key", "default")).strip().lower()
+                        == str(
+                            settings_context.get("smtp_sender_default_key", "default")
+                        )
+                        .strip()
+                        .lower()
                     ),
                     "is_editing": True,
                 }

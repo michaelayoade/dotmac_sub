@@ -83,8 +83,8 @@ def _build_enqueue_headers(
 ) -> dict[str, object]:
     merged = dict(headers or {})
     task_request = getattr(current_task, "request", None)
-    inherited_correlation_id = (
-        getattr(task_request, "correlation_id", None) or getattr(task_request, "id", None)
+    inherited_correlation_id = getattr(task_request, "correlation_id", None) or getattr(
+        task_request, "id", None
     )
     inherited_request_id = getattr(task_request, "request_id", None)
     inherited_actor_id = getattr(task_request, "actor_id", None)

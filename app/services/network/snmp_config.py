@@ -98,7 +98,8 @@ def resolve_snmp_config(
             "timeout": config.walk_timeout_seconds or _DEFAULT_WALK_TIMEOUT,
             "max_repetitions": config.walk_max_repetitions or _DEFAULT_MAX_REPETITIONS,
             "oids": _merge_oid_overrides(vendor_lower, config.oid_overrides),
-            "signal_scale": config.signal_scale or _get_default_signal_scale(vendor_lower),
+            "signal_scale": config.signal_scale
+            or _get_default_signal_scale(vendor_lower),
         }
 
     return _get_default_config(vendor_lower)
