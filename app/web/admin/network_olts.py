@@ -886,8 +886,10 @@ def olt_tr069_profile_create(
     acs_password: str = Form(""),
     inform_interval: int = Form(300),
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> Response:
     """Create a TR-069 server profile on the OLT via SSH."""
+    from app.services.network.result_adapter import OperationResult
+
     ok, message = olt_tr069_admin_service.handle_create_tr069_profile_audited(
         db,
         olt_id,
@@ -898,10 +900,10 @@ def olt_tr069_profile_create(
         inform_interval=inform_interval,
         request=request,
     )
-    return JSONResponse(
-        {"ok": ok, "message": message},
-        status_code=200 if ok else 400,
-    )
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    result.redirect_tab = "tr069"
+    return result.to_response(request)
 
 
 @router.post(
@@ -1115,31 +1117,32 @@ def olt_backup_test_connection(
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_backup_test_backup(
-    olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> Response:
+    from app.services.network.result_adapter import OperationResult
+
     backup, message = olt_operations_service.run_test_backup(db, olt_id)
-    if backup is not None:
-        status = "success"
-    else:
-        status = "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
-        status_code=303,
-    )
+    ok = backup is not None
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}/backups"
+    return result.to_response(request)
 
 
 @router.post(
     "/olts/{olt_id}/backups/ssh-backup",
     dependencies=[Depends(require_permission("network:write"))],
 )
-def olt_backup_ssh(olt_id: str, db: Session = Depends(get_db)) -> RedirectResponse:
+def olt_backup_ssh(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> Response:
     """Fetch full running config via SSH and save as backup."""
+    from app.services.network.result_adapter import OperationResult
+
     backup, message = olt_operations_service.backup_running_config_ssh(db, olt_id)
-    status = "success" if backup is not None else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
-        status_code=303,
-    )
+    ok = backup is not None
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}/backups"
+    return result.to_response(request)
 
 
 @router.get(
