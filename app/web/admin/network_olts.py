@@ -1,6 +1,5 @@
 """Admin network OLT web routes."""
 
-import json
 import logging
 from datetime import datetime
 from urllib.parse import quote_plus
@@ -11,7 +10,6 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request, Response
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
-    JSONResponse,
     RedirectResponse,
 )
 from fastapi.templating import Jinja2Templates
@@ -22,20 +20,18 @@ from app.services import web_network_core_devices as web_network_core_devices_se
 from app.services import web_network_olt_profiles as web_network_olt_profiles_service
 from app.services import web_network_ont_autofind as web_network_ont_autofind_service
 from app.services import web_network_onts as web_network_onts_service
-from app.services import web_network_operations as web_network_operations_service
 from app.services import (
     web_network_pon_interfaces as web_network_pon_interfaces_service,
 )
-from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import require_permission
-from app.services.network import olt_api_operations as olt_api_operations_service
-from app.services.network import olt_operations as olt_operations_service
+from app.services.ipam_adapter import ipam_adapter
 from app.services.network import olt_snmp_sync as olt_snmp_sync_service
 from app.services.network import olt_tr069_admin as olt_tr069_admin_service
 from app.services.network import olt_web_forms as olt_web_forms_service
-from app.services.network import olt_web_resources as olt_web_resources_service
 from app.services.network import olt_web_topology as olt_web_topology_service
 from app.services.network.olt_inventory import get_olt_or_none
+from app.services.olt_action_adapter import olt_action_adapter as olt_operations_service
+from app.services.olt_detail_adapter import olt_detail_adapter
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -273,7 +269,7 @@ def olt_detail(
     sync_message: str | None = None,
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    page_data = web_network_core_devices_service.olt_detail_page_data(db, olt_id)
+    page_data = olt_detail_adapter.page_data(db, olt_id=olt_id)
     if not page_data:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -281,36 +277,10 @@ def olt_detail(
             status_code=404,
         )
 
-    activities = build_audit_activities(db, "olt", str(olt_id))
-    try:
-        operations = web_network_operations_service.build_operation_history(
-            db, "olt", str(olt_id)
-        )
-    except Exception:
-        logger.error(
-            "Failed to load operation history for OLT %s", olt_id, exc_info=True
-        )
-        operations = []
-    available_olt_firmware = olt_operations_service.get_olt_firmware_images(db, olt_id)
-
-    # ACS prefill for the TR-069 create modal
-    olt_obj = page_data.get("olt")
-    acs_prefill: dict[str, str] = {}
-    acs = getattr(olt_obj, "tr069_acs_server", None) if olt_obj else None
-    if acs is not None:
-        acs_prefill = {
-            "cwmp_url": getattr(acs, "cwmp_url", "") or "",
-            "cwmp_username": getattr(acs, "cwmp_username", "") or "",
-        }
-
     context = _base_context(request, db, active_page="olts")
     context.update(
         {
             **page_data,
-            "activities": activities,
-            "operations": operations,
-            "available_olt_firmware": available_olt_firmware,
-            "acs_prefill": acs_prefill,
             "ssh_test_status": ssh_test_status,
             "ssh_test_message": ssh_test_message,
             "snmp_test_status": snmp_test_status,
@@ -332,7 +302,7 @@ def olt_assign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    success, message = olt_web_resources_service.assign_vlan_to_olt(db, olt_id, vlan_id)
+    success, message = ipam_adapter.assign_vlan_to_olt(db, olt_id, vlan_id)
     return _olt_config_redirect(olt_id, success, message)
 
 
@@ -346,9 +316,7 @@ def olt_unassign_vlan(
     vlan_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    success, message = olt_web_resources_service.unassign_vlan_from_olt(
-        db, olt_id, vlan_id
-    )
+    success, message = ipam_adapter.unassign_vlan_from_olt(db, olt_id, vlan_id)
     return _olt_config_redirect(olt_id, success, message)
 
 
@@ -363,9 +331,7 @@ def olt_assign_ip_pool(
     vlan_id: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    success, message = olt_web_resources_service.assign_ip_pool_to_olt(
-        db, olt_id, pool_id, vlan_id
-    )
+    success, message = ipam_adapter.assign_ip_pool_to_olt(db, olt_id, pool_id, vlan_id)
     return _olt_config_redirect(olt_id, success, message)
 
 
@@ -379,9 +345,7 @@ def olt_unassign_ip_pool(
     pool_id: str = Form(...),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
-    success, message = olt_web_resources_service.unassign_ip_pool_from_olt(
-        db, olt_id, pool_id
-    )
+    success, message = ipam_adapter.unassign_ip_pool_from_olt(db, olt_id, pool_id)
     return _olt_config_redirect(olt_id, success, message)
 
 
@@ -757,8 +721,6 @@ def olt_authorize_ont(
         force_reauthorize: If "true" or "1", delete any existing registration
             of this serial on the OLT before authorizing on the specified port.
     """
-    from app.services.network.authorization_executor import execute_authorization
-
     if not fsp or not serial_number:
         from app.services.network.result_adapter import OperationResult
 
@@ -777,7 +739,7 @@ def olt_authorize_ont(
     )
 
     try:
-        exec_result = execute_authorization(
+        exec_result = olt_operations_service.execute_authorization(
             db,
             olt_id,
             fsp,
@@ -985,17 +947,24 @@ async def olt_tr069_rebind(
     request: Request,
     olt_id: str,
     db: Session = Depends(get_db),
-) -> JSONResponse:
+) -> Response:
     """Rebind selected ONTs to a TR-069 server profile."""
+    from app.services.network.result_adapter import OperationResult
+
     form = await request.form()
     raw_profile_id = form.get("target_profile_id")
-    target_profile_id = int(raw_profile_id) if isinstance(raw_profile_id, str) else 0
+    try:
+        target_profile_id = (
+            int(raw_profile_id) if isinstance(raw_profile_id, str) else 0
+        )
+    except (TypeError, ValueError):
+        target_profile_id = 0
     ont_ids = [v for v in form.getlist("ont_ids") if isinstance(v, str)]
     if not ont_ids or not target_profile_id:
-        return JSONResponse(
-            {"ok": False, "message": "Missing ONT selection or target profile"},
-            status_code=400,
-        )
+        result = OperationResult.error("Missing ONT selection or target profile")
+        result.redirect_url = f"/admin/network/olts/{olt_id}"
+        result.redirect_tab = "tr069"
+        return result.to_response(request)
 
     stats = olt_tr069_admin_service.handle_rebind_tr069_profiles_audited(
         db, olt_id, ont_ids, target_profile_id, request=request
@@ -1012,16 +981,15 @@ async def olt_tr069_rebind(
 
     ok = rebound > 0
 
-    return JSONResponse(
-        {
-            "ok": ok,
-            "message": message,
-            "rebound": rebound,
-            "failed": failed,
-            "errors": errors,
-        },
-        status_code=200 if ok else 400,
+    result_data = {"rebound": rebound, "failed": failed, "errors": errors}
+    result = (
+        OperationResult.ok(message, data=result_data)
+        if ok
+        else OperationResult.error(message, data=result_data)
     )
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    result.redirect_tab = "tr069"
+    return result.to_response(request)
 
 
 @router.post(
@@ -1266,7 +1234,7 @@ def olt_device_events(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     """HTMX partial: ONT physical-link events (PON online/offline/signal)."""
-    data = olt_web_resources_service.olt_device_events_context(db, olt_id)
+    data = olt_detail_adapter.events_context(db, olt_id=olt_id)
     context = _base_context(request, db, active_page="olts")
     context.update(data)
     return templates.TemplateResponse(

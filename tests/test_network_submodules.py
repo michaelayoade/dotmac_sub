@@ -1106,6 +1106,26 @@ class TestOntAssignmentsCRUD:
         assert asg.pon_port_id == pon.id
         assert asg.active is True
 
+    def test_alignment_sets_missing_direct_olt(self, db_session):
+        """Authoritative F/S/P alignment should restore the ONT direct OLT link."""
+        from app.services.network.ont_assignment_alignment import (
+            align_ont_assignment_to_authoritative_fsp,
+        )
+
+        ont, pon = self._make_ont_and_pon(db_session)
+        ont.olt_device_id = None
+        db_session.commit()
+
+        result = align_ont_assignment_to_authoritative_fsp(
+            db_session,
+            ont=ont,
+            olt_id=pon.olt_id,
+            fsp="0/1/1",
+        )
+
+        assert result is not None
+        assert ont.olt_device_id == pon.olt_id
+
     def test_create_ont_assignment_auto_creates_matching_cpe(
         self, db_session, subscriber
     ):

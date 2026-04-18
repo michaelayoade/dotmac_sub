@@ -65,7 +65,7 @@
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/></svg>
             Run Autofind
         </button>
-        <form method="POST" action="/admin/network/olts/{{ olt.id }}/init-tr069" class="inline">
+        <form method="POST" action="{{ detail_actions.header.init_tr069.url }}" class="inline">
             {% include "components/forms/csrf_input.html" %}
             <button type="submit" class="inline-flex items-center gap-2 rounded-xl border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300"
                     title="Create or verify DotMac-ACS TR-069 profile on this OLT">
@@ -73,7 +73,7 @@
                 Init TR-069
             </button>
         </form>
-        {{ action_button("Edit", "/admin/network/olts/" ~ olt.id ~ "/edit", icon_edit(), "secondary", "blue", "indigo") }}
+        {{ action_button("Edit", detail_actions.header.edit.url, icon_edit(), "secondary", "blue", "indigo") }}
     {% endcall %}
 
     {# ONT Summary KPI Cards with progress bars #}
@@ -436,21 +436,21 @@
                 <div class="space-y-4">
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SSH Username</p>
-                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.ssh_username or 'Not configured' }}</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ access_info.ssh.username }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SSH Port</p>
-                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ olt.ssh_port or 22 }}</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ access_info.ssh.port }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SSH Password</p>
-                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Saved' if olt.ssh_password else 'Not configured' }}</p>
+                        <p class="mt-1 text-sm text-slate-900 dark:text-white">{{ access_info.ssh.password_status }}</p>
                     </div>
                     <div>
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">NETCONF</p>
                         <p class="mt-1 text-sm text-slate-900 dark:text-white">
-                            {% if olt.netconf_enabled %}
-                            Enabled{% if olt.netconf_port %} on port <span class="font-mono">{{ olt.netconf_port }}</span>{% endif %}
+                            {% if access_info.netconf.enabled %}
+                            Enabled{% if access_info.netconf.port %} on port <span class="font-mono">{{ access_info.netconf.port }}</span>{% endif %}
                             {% else %}
                             Disabled
                             {% endif %}
@@ -458,21 +458,17 @@
                     </div>
                     <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                         <p class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">SNMP</p>
-                        {% if monitoring_device %}
+                        {% if access_info.snmp.linked %}
                         <p class="mt-1 text-sm text-slate-900 dark:text-white">
-                            {% if monitoring_device.snmp_enabled %}Enabled{% else %}Disabled{% endif %}
-                            {% if monitoring_device.snmp_enabled and monitoring_device.snmp_port %}
-                            on port <span class="font-mono">{{ monitoring_device.snmp_port }}</span>
+                            {% if access_info.snmp.enabled %}Enabled{% else %}Disabled{% endif %}
+                            {% if access_info.snmp.enabled and access_info.snmp.port %}
+                            on port <span class="font-mono">{{ access_info.snmp.port }}</span>
                             {% endif %}
                         </p>
-                        {% if monitoring_device.snmp_enabled %}
+                        {% if access_info.snmp.enabled %}
                         <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">
-                            Version: <span class="font-mono">{{ monitoring_device.snmp_version or '-' }}</span>
-                            {% if monitoring_device.snmp_version == 'v2c' %}
-                            • Community: <span class="font-mono">{{ monitoring_device.snmp_community or '-' }}</span>
-                            {% elif monitoring_device.snmp_version == 'v3' %}
-                            • User: <span class="font-mono">{{ monitoring_device.snmp_username or '-' }}</span>
-                            {% endif %}
+                            Version: <span class="font-mono">{{ access_info.snmp.version or '-' }}</span>
+                            &middot; {{ access_info.snmp.credential_label }}: {{ access_info.snmp.credential_status }}
                         </p>
                         {% endif %}
                         {% else %}
@@ -531,30 +527,30 @@
                 {# Actions #}
                 {% call card("Actions", color="slate") %}
                 <div class="space-y-3">
-                    <a href="/admin/network/olts/{{ olt.id }}/edit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <a href="{{ detail_actions.sidebar.edit.url }}" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>
                         Edit Device
                     </a>
-                    <a href="/admin/network/onts?olt_id={{ olt.id }}" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                    <a href="{{ detail_actions.sidebar.onts.url }}" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
                         View All ONTs
                     </a>
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-ssh">
+                    <form method="POST" action="{{ detail_actions.sidebar.test_ssh.url }}">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l4-4 4 4m0 6l-4 4-4-4"/></svg>
                             Test SSH Connection
                         </button>
                     </form>
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-snmp">
+                    <form method="POST" action="{{ detail_actions.sidebar.test_snmp.url }}">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m2-4h.01M4 7h16M4 12h16M4 17h16"/></svg>
                             Test SNMP Connection
                         </button>
                     </form>
-                    {% if olt.netconf_enabled %}
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/test-netconf">
+                    {% if detail_actions.sidebar.test_netconf.visible %}
+                    <form method="POST" action="{{ detail_actions.sidebar.test_netconf.url }}">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2z"/></svg>
@@ -562,14 +558,14 @@
                         </button>
                     </form>
                     {% endif %}
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/sync-onts">
+                    <form method="POST" action="{{ detail_actions.sidebar.sync_onts.url }}">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-blue-300 bg-blue-50 px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h11M9 21V3m7 10h5m-2-2l2 2-2 2"/></svg>
                             Sync ONU Telemetry (SNMP)
                         </button>
                     </form>
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/repair-pon-ports">
+                    <form method="POST" action="{{ detail_actions.sidebar.repair_pon_ports.url }}">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m14.836 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 015.164 15m14.255 0H15"/></svg>
@@ -578,14 +574,14 @@
                     </form>
                     <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                         <p class="mb-2 text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Backups</p>
-                        <form method="POST" action="/admin/network/olts/{{ olt.id }}/backups/ssh-backup">
+                        <form method="POST" action="{{ detail_actions.sidebar.backup_create.url }}">
                             {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="w-full inline-flex items-center justify-center gap-2 rounded-lg border border-indigo-300 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300">
                                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4"/></svg>
                                 Create Config Backup
                             </button>
                         </form>
-                        <a href="/admin/network/olts/{{ olt.id }}/backups" class="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+                        <a href="{{ detail_actions.sidebar.backup_history.url }}" class="mt-2 w-full inline-flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8m-9 4h4"/></svg>
                             View Backup History
                         </a>
@@ -599,26 +595,26 @@
                     <div class="flex items-center justify-between">
                         <div>
                             <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Current Version</p>
-                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ olt.firmware_version or 'Unknown' }}</p>
+                            <p class="text-sm font-mono text-slate-900 dark:text-white">{{ firmware_context.current_version }}</p>
                         </div>
-                        {% if olt.vendor %}
-                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ olt.vendor }}</span>
+                        {% if firmware_context.vendor %}
+                        <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">{{ firmware_context.vendor }}</span>
                         {% endif %}
                     </div>
-                    {% if olt.software_version %}
+                    {% if firmware_context.software_version %}
                     <div>
                         <p class="text-xs font-medium text-slate-500 dark:text-slate-400">Software Version</p>
-                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ olt.software_version }}</p>
+                        <p class="text-sm font-mono text-slate-900 dark:text-white">{{ firmware_context.software_version }}</p>
                     </div>
                     {% endif %}
-                    {% if available_olt_firmware %}
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/firmware-upgrade"
+                    {% if firmware_context.images %}
+                    <form method="POST" action="{{ detail_actions.sidebar.firmware_upgrade.url }}"
                           class="flex items-center gap-2 pt-2 border-t border-slate-200 dark:border-slate-700">
                         {% include "components/forms/csrf_input.html" %}
                         <select name="firmware_image_id" required
                             class="flex-1 rounded-lg border border-slate-300 px-2 py-1.5 text-xs shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="">Select firmware...</option>
-                            {% for fw in available_olt_firmware %}
+                            {% for fw in firmware_context.images %}
                             <option value="{{ fw.id }}">{{ fw.vendor }} {{ fw.model or '' }} v{{ fw.version }}{% if fw.file_size_bytes %} ({{ (fw.file_size_bytes / 1048576) | round(1) }} MB){% endif %}</option>
                             {% endfor %}
                         </select>
@@ -629,7 +625,7 @@
                         </button>
                     </form>
                     {% else %}
-                    <p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No firmware images available{% if olt.vendor %} for {{ olt.vendor }}{% endif %}.</p>
+                    <p class="text-xs text-slate-500 dark:text-slate-400 pt-2 border-t border-slate-200 dark:border-slate-700">No firmware images available{% if firmware_context.vendor %} for {{ firmware_context.vendor }}{% endif %}.</p>
                     {% endif %}
                 </div>
                 {% endcall %}
@@ -751,7 +747,7 @@
     {# ===================== ONTs TAB ===================== #}
     <div x-show="activeTab === 'onts'" x-transition x-cloak>
         {% call card("Connected ONTs", color="blue") %}
-        {% if onts_on_olt %}
+        {% if ont_relationship_context.rows %}
         <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div class="w-full sm:max-w-md">
                 <label for="olt-ont-search" class="mb-1.5 block text-xs font-semibold uppercase tracking-[0.18em] text-slate-500 dark:text-slate-400">
@@ -771,41 +767,33 @@
                 </div>
             </div>
             <p class="text-xs text-slate-500 dark:text-slate-400">
-                Filters the connected ONTs table using the MAC/ID value shown in the first column.
+                {{ ont_relationship_context.summary.total }} linked ONTs.
+                {% if ont_relationship_context.summary.mismatches %}
+                {{ ont_relationship_context.summary.mismatches }} relationship mismatch{{ '' if ont_relationship_context.summary.mismatches == 1 else 'es' }} found.
+                {% else %}
+                Direct and port assignment links are aligned.
+                {% endif %}
             </p>
         </div>
         {% call data_table() %}
-            {{ table_head(["MAC Address", "PON Port", "Online", "OLT Rx (dBm)", "ONU Rx (dBm)", "Signal", "Distance"]) }}
+            {{ table_head(["MAC Address", "PON Port", "Relationship", "Online", "OLT Rx (dBm)", "ONU Rx (dBm)", "Signal", "Distance"]) }}
             <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                {% for ont in onts_on_olt %}
-                {% set assignment = assignment_by_ont_id.get(ont.id | string) %}
-                {% set sd = signal_data.get(ont.id | string, {}) if ont else {} %}
-                {% set mac_display = ont_mac_by_ont_id.get(ont.id | string) if ont and ont_mac_by_ont_id else '' %}
-                {% if ont and not mac_display and ont.serial_number %}
-                {% set mac_display = ont.serial_number %}
-                {% endif %}
-                {% set ont_search_text = ((mac_display or '') ~ ' ' ~ (ont.id|string if ont and ont.id else '')) | lower %}
+                {% for row in ont_relationship_context.rows %}
+                {% set sd = row.signal %}
                 <tr
                     class="hover:bg-slate-50 dark:hover:bg-slate-700/50"
-                    x-show='!ontSearch || {{ ont_search_text | tojson }}.includes(ontSearch.toLowerCase())'
+                    x-show='!ontSearch || {{ row.search_text | tojson }}.includes(ontSearch.toLowerCase())'
                 >
                     <td class="px-6 py-3 whitespace-nowrap">
-                        {% if ont %}
-                        <a href="/admin/network/onts/{{ ont.id }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono">{{ mac_display or '&mdash;' }}</a>
-                        {% else %}
-                        <span class="text-sm text-slate-400">&mdash;</span>
-                        {% endif %}
+                        <a href="{{ row.url }}" class="text-sm font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300 font-mono">{{ row.identity or '&mdash;' }}</a>
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap text-sm text-slate-600 dark:text-slate-300">
-                        {% if pon_port_display_by_ont_id and pon_port_display_by_ont_id.get(ont.id | string) %}
-                        {{ pon_port_display_by_ont_id.get(ont.id | string) }}
-                        {% elif assignment and assignment.pon_port %}
-                        {{ assignment.pon_port.notes or assignment.pon_port.name }}
-                        {% elif ont.board and ont.port %}
-                        {{ ont.board }}/{{ ont.port }}
-                        {% else %}
-                        &mdash;
-                        {% endif %}
+                        {{ row.port_display or '&mdash;' }}
+                    </td>
+                    <td class="px-6 py-3 whitespace-nowrap">
+                        <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {% if row.relationship_mismatch %}bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300{% elif row.relationship_source == 'direct+assignment' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300{% elif row.relationship_source == 'assignment' %}bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300{% else %}bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300{% endif %}">
+                            {{ 'Mismatch' if row.relationship_mismatch else row.relationship_label }}
+                        </span>
                     </td>
                     <td class="px-6 py-3 whitespace-nowrap">
                         {% if sd.get('status') == 'online' %}
@@ -934,10 +922,11 @@
                     createLoading = true;
                     fetch('/admin/network/olts/{{ olt.id }}/tr069-profiles/create', {
                         method: 'POST',
+                        headers: { 'Accept': 'application/json' },
                         body: new FormData($el),
                     }).then(r => r.json()).then(data => {
                         createLoading = false;
-                        if (data.ok) {
+                        if (data.success) {
                             showCreateModal = false;
                             document.dispatchEvent(new CustomEvent('show-toast', {detail: {message: data.message, type: 'success'}}));
                         } else {
@@ -1176,13 +1165,13 @@
         {% call card("CLI Terminal", color="blue") %}
         <div class="space-y-4">
             <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
-                <strong>Read-only mode.</strong> Only diagnostic commands are allowed: <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">display</code>,
-                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">show</code>,
-                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">ping</code>,
-                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">traceroute</code>.
+                <strong>Read-only mode.</strong> Only diagnostic commands are allowed:
+                {% for prefix in terminal_context.allowed_prefixes %}
+                <code class="font-mono text-xs bg-amber-100 dark:bg-amber-900/40 px-1 py-0.5 rounded">{{ prefix }}</code>{% if not loop.last %},{% endif %}
+                {% endfor %}.
             </div>
 
-            <form hx-post="/admin/network/olts/{{ olt.id }}/cli"
+            <form hx-post="{{ terminal_context.actions.cli }}"
                   hx-target="#cli-output"
                   hx-swap="innerHTML"
                   hx-indicator="#cli-spinner"
@@ -1209,7 +1198,7 @@
 
             <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">ONT Status by Serial</p>
-                <form hx-post="/admin/network/olts/{{ olt.id }}/ont-status-by-serial"
+                <form hx-post="{{ terminal_context.actions.ont_status_by_serial }}"
                       hx-target="#cli-output"
                       hx-swap="innerHTML"
                       hx-indicator="#cli-spinner"
@@ -1236,16 +1225,7 @@
             <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Quick Commands</p>
                 <div class="flex flex-wrap gap-2">
-                    {% for qc in [
-                        'display version',
-                        'display ont info 0 all',
-                        'display interface brief',
-                        'display board 0',
-                        'display cpu',
-                        'display memory',
-                        'display alarm active all',
-                        'display ont optical-info 0 all',
-                    ] %}
+                    {% for qc in terminal_context.quick_commands %}
                     <button type="button"
                         onclick="document.getElementById('cli-command').value = '{{ qc }}'; document.getElementById('cli-command').closest('form').dispatchEvent(new Event('submit', {bubbles: true}))"
                         class="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs font-mono text-slate-600 hover:border-blue-300 hover:bg-blue-50 hover:text-blue-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-400 dark:hover:border-blue-600 dark:hover:text-blue-400 transition-colors">
@@ -1258,7 +1238,7 @@
             <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">Running Configuration</p>
                 <div class="flex flex-wrap gap-2">
-                    <form hx-post="/admin/network/olts/{{ olt.id }}/ssh-get-config"
+                    <form hx-post="{{ terminal_context.actions.ssh_get_config }}"
                           hx-target="#cli-output"
                           hx-swap="innerHTML"
                           hx-indicator="#cli-spinner">
@@ -1269,7 +1249,7 @@
                             SSH CLI: Get Running Config
                         </button>
                     </form>
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/backups/ssh-backup">
+                    <form method="POST" action="{{ terminal_context.actions.ssh_backup }}">
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit"
                             class="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-700 dark:bg-blue-900/20 dark:text-blue-300 transition-colors">
@@ -1280,11 +1260,11 @@
                 </div>
             </div>
 
-            {% if olt.netconf_enabled %}
+            {% if access_info.netconf.enabled %}
             <div class="border-t border-slate-200 pt-3 dark:border-slate-700">
                 <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-2">NETCONF</p>
                 <div class="space-y-2">
-                    <form hx-post="/admin/network/olts/{{ olt.id }}/netconf-get-config"
+                    <form hx-post="{{ terminal_context.actions.netconf_get_config }}"
                           hx-target="#cli-output"
                           hx-swap="innerHTML"
                           hx-indicator="#cli-spinner">
@@ -1334,7 +1314,7 @@
         {% call card("Config Backup History", color="slate") %}
         {% if config_backups %}
         <div class="mb-3 flex justify-end">
-            <a href="/admin/network/olts/{{ olt.id }}/backups" class="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
+            <a href="{{ detail_actions.sidebar.backup_history.url }}" class="text-xs font-medium text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300">
                 View all backups
             </a>
         </div>

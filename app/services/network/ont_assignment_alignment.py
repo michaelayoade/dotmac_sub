@@ -59,6 +59,8 @@ def align_ont_assignment_to_authoritative_fsp(
         board=board,
         port=port,
     )
+    if getattr(ont, "olt_device_id", None) is None:
+        ont.olt_device_id = pon_port.olt_id
 
     active_assignment = db.scalars(
         select(OntAssignment)
