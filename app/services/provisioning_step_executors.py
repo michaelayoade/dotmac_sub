@@ -70,9 +70,7 @@ def execute_create_olt_service_port(
         )
 
     try:
-        from app.services.network.olt_ssh_service_ports import (
-            create_single_service_port,
-        )
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.web_network_service_ports import _resolve_ont_olt_context
 
         ont_ctx = _resolve_ont_olt_context(db, ont_unit_id)
@@ -91,13 +89,15 @@ def execute_create_olt_service_port(
                 detail="Could not resolve ONT/OLT context for service-port creation.",
             )
 
-        success, message, _port_index = create_single_service_port(
-            olt=olt,
-            fsp=fsp,
-            ont_id=olt_ont_id,
+        adapter = get_protocol_adapter(olt)
+        result = adapter.create_service_port(
+            fsp,
+            olt_ont_id,
             gem_index=gem_index,
             vlan_id=int(vlan_id),
         )
+        success = result.success
+        message = result.message
 
         if success:
             logger.info(

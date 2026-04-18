@@ -19,7 +19,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.services.network.olt_ssh import ServicePortEntry
 
 from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session, joinedload
@@ -516,7 +519,7 @@ class ProvisioningEnforcement:
         import time
 
         from app.models.network import Vlan
-        from app.services.network.olt_ssh_ont import configure_ont_iphost
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.network.serial_utils import parse_ont_id_on_olt
 
         pushed = 0
@@ -580,16 +583,18 @@ class ProvisioningEnforcement:
                     # Configure IPHOST (management IP on ONT)
                     # Service-port creation skipped - management uses existing
                     # service-ports created during internet provisioning
-                    iphost_ok, iphost_msg = configure_ont_iphost(
-                        olt,
+                    adapter = get_protocol_adapter(olt)
+                    iphost_result = adapter.configure_iphost(
                         fsp,
                         ont_id_on_olt,
-                        vlan_id=mgmt_vlan_tag,
-                        ip_mode="static",
+                        vlan=mgmt_vlan_tag,
+                        mode="static",
                         ip_address=ip_addr,
-                        subnet=subnet_mask,
+                        subnet_mask=subnet_mask,
                         gateway=gateway,
                     )
+                    iphost_ok = iphost_result.success
+                    iphost_msg = iphost_result.message
 
                     if iphost_ok:
                         pushed += 1
@@ -671,8 +676,8 @@ class ProvisioningEnforcement:
         Returns:
             List of VlanDriftEntry describing each detected mismatch.
         """
-        from app.services.network import olt_ssh
         from app.services.network.olt_inventory import get_olt_or_none
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.network.serial_utils import parse_ont_id_on_olt
 
         olt = get_olt_or_none(db, olt_id)
@@ -713,17 +718,22 @@ class ProvisioningEnforcement:
 
         drift_entries: list[VlanDriftEntry] = []
 
+        adapter = get_protocol_adapter(olt)
+
         for fsp, fsp_onts in onts_by_fsp.items():
             # Query service-ports for this FSP from OLT
-            ok, msg, service_ports = olt_ssh.get_service_ports(olt, fsp)
-            if not ok:
+            result = adapter.get_service_ports(fsp)
+            if not result.success:
                 logger.warning(
                     "Cannot read service-ports for OLT %s FSP %s: %s",
                     olt.name,
                     fsp,
-                    msg,
+                    result.message,
                 )
                 continue
+
+            sp_data = result.data.get("service_ports", [])
+            service_ports: list[ServicePortEntry] = sp_data if isinstance(sp_data, list) else []
 
             # Build lookup: olt_ont_id -> list of observed VLANs
             observed_vlans_by_ont: dict[int, list[int]] = {}

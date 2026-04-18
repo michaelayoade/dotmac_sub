@@ -330,7 +330,7 @@ def _make_mgmt_ip_step(
 
     def apply_mgmt_ip() -> tuple[bool, str]:
         """Apply management IP configuration via OLT SSH."""
-        from app.services.network.olt_ssh_ont import configure_ont_iphost
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
         from app.services.network.ont_olt_context import resolve_ont_olt_write_context
 
         ctx, error = resolve_ont_olt_write_context(db, str(ont.id))
@@ -343,14 +343,14 @@ def _make_mgmt_ip_step(
         if vlan_tag is None:
             return False, "Management VLAN not configured in profile"
 
-        success, message = configure_ont_iphost(
-            ctx.olt,
+        adapter = get_protocol_adapter(ctx.olt)
+        result = adapter.configure_iphost(
             ctx.fsp,
             ctx.ont_id_on_olt,
-            vlan_id=vlan_tag,
-            ip_mode=mgmt_ip_mode.value,
+            vlan=vlan_tag,
+            mode=mgmt_ip_mode.value,
         )
-        return success, message
+        return result.success, result.message
 
     def verify_mgmt_ip() -> tuple[bool, str]:
         """Verify management IP configuration."""

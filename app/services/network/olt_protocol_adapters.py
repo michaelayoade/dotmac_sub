@@ -81,6 +81,18 @@ class ProtocolCapabilities:
     can_reboot_ont: bool = False
     can_factory_reset: bool = False
 
+    # Extended configuration operations
+    can_configure_internet_config: bool = False
+    can_configure_wan_config: bool = False
+    can_configure_pppoe: bool = False
+    can_configure_port_native_vlan: bool = False
+    can_clear_configs: bool = False
+
+    # Read operations
+    can_get_service_ports: bool = False
+    can_get_autofind_onts: bool = False
+    can_diagnose_service_ports: bool = False
+
 
 # ============================================================================
 # Protocol Definition
@@ -100,7 +112,7 @@ class OltProtocolAdapter(Protocol):
         ...
 
     @property
-    def olt(self) -> "OLTDevice":
+    def olt(self) -> OLTDevice:
         """The OLT device this adapter operates on."""
         ...
 
@@ -195,6 +207,139 @@ class OltProtocolAdapter(Protocol):
         """Factory reset an ONT via OMCI."""
         ...
 
+    # ========== Extended Configuration Operations ==========
+
+    def configure_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Activate TCP stack on ONT management WAN via internet-config."""
+        ...
+
+    def configure_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        profile_id: int = 0,
+    ) -> OltOperationResult:
+        """Set route+NAT mode on ONT management WAN via wan-config."""
+        ...
+
+    def configure_pppoe(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int,
+        vlan_id: int,
+        username: str,
+        password: str,
+    ) -> OltOperationResult:
+        """Configure PPPoE WAN via OMCI (OLT-side, not TR-069)."""
+        ...
+
+    def configure_port_native_vlan(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        eth_port: int,
+        vlan_id: int,
+        priority: int = 0,
+    ) -> OltOperationResult:
+        """Set native VLAN on ONT Ethernet port for bridging mode."""
+        ...
+
+    # ========== Cleanup Operations ==========
+
+    def clear_iphost_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear ONT IP configuration for a given IP index."""
+        ...
+
+    def clear_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear ONT internet-config state."""
+        ...
+
+    def clear_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear ONT wan-config state."""
+        ...
+
+    def unbind_tr069_profile(
+        self,
+        fsp: str,
+        ont_id: int,
+    ) -> OltOperationResult:
+        """Remove TR-069 server profile binding from ONT."""
+        ...
+
+    # ========== Read Operations ==========
+
+    def get_service_ports(
+        self,
+        fsp: str,
+    ) -> OltOperationResult:
+        """Get all service-ports on a PON port.
+
+        Returns:
+            OltOperationResult with data["service_ports"] containing list of entries.
+        """
+        ...
+
+    def get_service_ports_for_ont(
+        self,
+        fsp: str,
+        ont_id: int,
+    ) -> OltOperationResult:
+        """Get service-ports for a specific ONT.
+
+        Returns:
+            OltOperationResult with data["service_ports"] containing list of entries.
+        """
+        ...
+
+    def get_autofind_onts(self) -> OltOperationResult:
+        """Get unregistered ONTs from autofind table.
+
+        Returns:
+            OltOperationResult with data["autofind_entries"] containing list of entries.
+        """
+        ...
+
+    def diagnose_service_ports(
+        self,
+        fsp: str,
+        ont_id: int,
+    ) -> OltOperationResult:
+        """Run diagnostics to troubleshoot service port state issues.
+
+        Returns:
+            OltOperationResult with data["diagnostics"] containing diagnostic info.
+        """
+        ...
+
 
 # ============================================================================
 # Base Implementation
@@ -204,11 +349,17 @@ class OltProtocolAdapter(Protocol):
 class BaseProtocolAdapter(ABC):
     """Base class with common functionality for protocol adapters."""
 
-    def __init__(self, olt: "OLTDevice"):
+    def __init__(self, olt: OLTDevice):
         self._olt = olt
 
     @property
-    def olt(self) -> "OLTDevice":
+    @abstractmethod
+    def protocol(self) -> OltProtocol:
+        """The protocol this adapter uses."""
+        ...
+
+    @property
+    def olt(self) -> OLTDevice:
         return self._olt
 
     def _not_supported(self, operation: str) -> OltOperationResult:
@@ -270,6 +421,100 @@ class BaseProtocolAdapter(ABC):
     def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._not_supported("factory_reset_ont")
 
+    # Extended configuration operations
+
+    def configure_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._not_supported("configure_internet_config")
+
+    def configure_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        profile_id: int = 0,
+    ) -> OltOperationResult:
+        return self._not_supported("configure_wan_config")
+
+    def configure_pppoe(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int,
+        vlan_id: int,
+        username: str,
+        password: str,
+    ) -> OltOperationResult:
+        return self._not_supported("configure_pppoe")
+
+    def configure_port_native_vlan(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        eth_port: int,
+        vlan_id: int,
+        priority: int = 0,
+    ) -> OltOperationResult:
+        return self._not_supported("configure_port_native_vlan")
+
+    # Cleanup operations
+
+    def clear_iphost_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._not_supported("clear_iphost_config")
+
+    def clear_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._not_supported("clear_internet_config")
+
+    def clear_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._not_supported("clear_wan_config")
+
+    def unbind_tr069_profile(
+        self,
+        fsp: str,
+        ont_id: int,
+    ) -> OltOperationResult:
+        return self._not_supported("unbind_tr069_profile")
+
+    # Read operations
+
+    def get_service_ports(self, fsp: str) -> OltOperationResult:
+        return self._not_supported("get_service_ports")
+
+    def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        return self._not_supported("get_service_ports_for_ont")
+
+    def get_autofind_onts(self) -> OltOperationResult:
+        return self._not_supported("get_autofind_onts")
+
+    def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
+        return self._not_supported("diagnose_service_ports")
+
 
 # ============================================================================
 # SSH Protocol Adapter
@@ -301,6 +546,16 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             can_create_service_port=ssh_available,
             can_reboot_ont=ssh_available,
             can_factory_reset=ssh_available,
+            # Extended configuration operations
+            can_configure_internet_config=ssh_available,
+            can_configure_wan_config=ssh_available,
+            can_configure_pppoe=ssh_available,
+            can_configure_port_native_vlan=ssh_available,
+            can_clear_configs=ssh_available,
+            # Read operations
+            can_get_service_ports=ssh_available,
+            can_get_autofind_onts=ssh_available,
+            can_diagnose_service_ports=ssh_available,
         )
 
     def authorize_ont(
@@ -375,16 +630,16 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         from app.services.network.olt_ssh_ont.iphost import configure_ont_iphost
 
         try:
+            # Map adapter params to underlying SSH function params
             ok, message = configure_ont_iphost(
                 self._olt,
                 fsp,
                 ont_id,
-                ip_index=ip_index,
-                mode=mode,
-                vlan=vlan,
+                vlan_id=vlan,
+                ip_mode=mode,
                 priority=priority,
                 ip_address=ip_address,
-                subnet_mask=subnet_mask,
+                subnet=subnet_mask,
                 gateway=gateway,
             )
             return OltOperationResult(
@@ -439,7 +694,9 @@ class SshProtocolAdapter(BaseProtocolAdapter):
         port_index: int | None = None,
     ) -> OltOperationResult:
         """Create service port via SSH CLI."""
-        from app.services.network.olt_ssh_service_ports import create_single_service_port
+        from app.services.network.olt_ssh_service_ports import (
+            create_single_service_port,
+        )
 
         try:
             ok, message, created_index = create_single_service_port(
@@ -521,6 +778,335 @@ class SshProtocolAdapter(BaseProtocolAdapter):
             return OltOperationResult(
                 success=False,
                 message=f"SSH ONT factory reset failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    # ========== Extended Configuration Operations ==========
+
+    def configure_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Activate TCP stack on ONT management WAN via internet-config."""
+        from app.services.network.olt_ssh_ont.omci_config import (
+            configure_ont_internet_config,
+        )
+
+        try:
+            ok, message = configure_ont_internet_config(
+                self._olt, fsp, ont_id, ip_index=ip_index
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH configure_internet_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH internet-config failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def configure_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        profile_id: int = 0,
+    ) -> OltOperationResult:
+        """Set route+NAT mode on ONT management WAN via wan-config."""
+        from app.services.network.olt_ssh_ont.omci_config import (
+            configure_ont_wan_config,
+        )
+
+        try:
+            ok, message = configure_ont_wan_config(
+                self._olt, fsp, ont_id, ip_index=ip_index, profile_id=profile_id
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH configure_wan_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH wan-config failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def configure_pppoe(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int,
+        vlan_id: int,
+        username: str,
+        password: str,
+    ) -> OltOperationResult:
+        """Configure PPPoE WAN via OMCI (OLT-side, not TR-069)."""
+        from app.services.network.olt_ssh_ont.omci_config import (
+            configure_ont_pppoe_omci,
+        )
+
+        try:
+            ok, message = configure_ont_pppoe_omci(
+                self._olt,
+                fsp,
+                ont_id,
+                ip_index=ip_index,
+                vlan_id=vlan_id,
+                username=username,
+                password=password,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH configure_pppoe failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH PPPoE configuration failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def configure_port_native_vlan(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        eth_port: int,
+        vlan_id: int,
+        priority: int = 0,
+    ) -> OltOperationResult:
+        """Set native VLAN on ONT Ethernet port for bridging mode."""
+        from app.services.network.olt_ssh_ont.omci_config import (
+            configure_ont_port_native_vlan,
+        )
+
+        try:
+            ok, message = configure_ont_port_native_vlan(
+                self._olt,
+                fsp,
+                ont_id,
+                eth_port=eth_port,
+                vlan_id=vlan_id,
+                priority=priority,
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH configure_port_native_vlan failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH port native VLAN configuration failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    # ========== Cleanup Operations ==========
+
+    def clear_iphost_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear ONT IP configuration for a given IP index."""
+        from app.services.network.olt_ssh_ont.iphost import clear_ont_ipconfig
+
+        try:
+            ok, message = clear_ont_ipconfig(self._olt, fsp, ont_id, ip_index=ip_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH clear_iphost_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH clear iphost config failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def clear_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear ONT internet-config state."""
+        from app.services.network.olt_ssh_ont.omci_config import (
+            clear_ont_internet_config,
+        )
+
+        try:
+            ok, message = clear_ont_internet_config(
+                self._olt, fsp, ont_id, ip_index=ip_index
+            )
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH clear_internet_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH clear internet config failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def clear_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        """Clear ONT wan-config state."""
+        from app.services.network.olt_ssh_ont.omci_config import (
+            clear_ont_wan_config as ssh_clear,
+        )
+
+        try:
+            ok, message = ssh_clear(self._olt, fsp, ont_id, ip_index=ip_index)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH clear_wan_config failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH clear WAN config failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def unbind_tr069_profile(
+        self,
+        fsp: str,
+        ont_id: int,
+    ) -> OltOperationResult:
+        """Remove TR-069 server profile binding from ONT."""
+        from app.services.network.olt_ssh_ont.tr069 import unbind_tr069_server_profile
+
+        try:
+            ok, message = unbind_tr069_server_profile(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH unbind_tr069_profile failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH unbind TR-069 profile failed: {exc}",
+                protocol_used=OltProtocol.SSH,
+            )
+
+    # ========== Read Operations ==========
+
+    def get_service_ports(self, fsp: str) -> OltOperationResult:
+        """Get all service-ports on a PON port."""
+        from app.services.network import olt_ssh as core
+
+        try:
+            ok, message, entries = core.get_service_ports(self._olt, fsp)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"service_ports": entries},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH get_service_ports failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get service ports failed: {exc}",
+                data={"service_ports": []},
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Get service-ports for a specific ONT."""
+        from app.services.network.olt_ssh_service_ports import get_service_ports_for_ont
+
+        try:
+            ok, message, entries = get_service_ports_for_ont(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"service_ports": entries},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH get_service_ports_for_ont failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get service ports for ONT failed: {exc}",
+                data={"service_ports": []},
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def get_autofind_onts(self) -> OltOperationResult:
+        """Get unregistered ONTs from autofind table."""
+        from app.services.network import olt_ssh as core
+
+        try:
+            ok, message, entries = core.get_autofind_onts(self._olt)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"autofind_entries": entries},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH get_autofind_onts failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH get autofind ONTs failed: {exc}",
+                data={"autofind_entries": []},
+                protocol_used=OltProtocol.SSH,
+            )
+
+    def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
+        """Run diagnostics to troubleshoot service port state issues."""
+        from app.services.network.olt_ssh_ont.diagnostics import (
+            diagnose_service_ports as ssh_diagnose,
+        )
+
+        try:
+            ok, message, diagnostics = ssh_diagnose(self._olt, fsp, ont_id)
+            return OltOperationResult(
+                success=ok,
+                message=message,
+                data={"diagnostics": diagnostics},
+                protocol_used=OltProtocol.SSH,
+            )
+        except Exception as exc:
+            logger.exception("SSH diagnose_service_ports failed")
+            return OltOperationResult(
+                success=False,
+                message=f"SSH diagnose service ports failed: {exc}",
+                data={"diagnostics": None},
                 protocol_used=OltProtocol.SSH,
             )
 
@@ -619,7 +1205,7 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
 
     def __init__(
         self,
-        olt: "OLTDevice",
+        olt: OLTDevice,
         *,
         prefer_netconf: bool = True,
     ):
@@ -648,6 +1234,28 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
             can_create_service_port=nc_caps.can_create_service_port or ssh_caps.can_create_service_port,
             can_reboot_ont=nc_caps.can_reboot_ont or ssh_caps.can_reboot_ont,
             can_factory_reset=nc_caps.can_factory_reset or ssh_caps.can_factory_reset,
+            # Extended configuration operations
+            can_configure_internet_config=(
+                nc_caps.can_configure_internet_config or ssh_caps.can_configure_internet_config
+            ),
+            can_configure_wan_config=(
+                nc_caps.can_configure_wan_config or ssh_caps.can_configure_wan_config
+            ),
+            can_configure_pppoe=nc_caps.can_configure_pppoe or ssh_caps.can_configure_pppoe,
+            can_configure_port_native_vlan=(
+                nc_caps.can_configure_port_native_vlan or ssh_caps.can_configure_port_native_vlan
+            ),
+            can_clear_configs=nc_caps.can_clear_configs or ssh_caps.can_clear_configs,
+            # Read operations
+            can_get_service_ports=(
+                nc_caps.can_get_service_ports or ssh_caps.can_get_service_ports
+            ),
+            can_get_autofind_onts=(
+                nc_caps.can_get_autofind_onts or ssh_caps.can_get_autofind_onts
+            ),
+            can_diagnose_service_ports=(
+                nc_caps.can_diagnose_service_ports or ssh_caps.can_diagnose_service_ports
+            ),
         )
 
     def authorize_ont(
@@ -775,6 +1383,111 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
     def factory_reset_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
         return self._ssh.factory_reset_ont(fsp, ont_id)
 
+    # Extended configuration operations - delegate to SSH
+
+    def configure_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._ssh.configure_internet_config(fsp, ont_id, ip_index=ip_index)
+
+    def configure_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+        profile_id: int = 0,
+    ) -> OltOperationResult:
+        return self._ssh.configure_wan_config(
+            fsp, ont_id, ip_index=ip_index, profile_id=profile_id
+        )
+
+    def configure_pppoe(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int,
+        vlan_id: int,
+        username: str,
+        password: str,
+    ) -> OltOperationResult:
+        return self._ssh.configure_pppoe(
+            fsp,
+            ont_id,
+            ip_index=ip_index,
+            vlan_id=vlan_id,
+            username=username,
+            password=password,
+        )
+
+    def configure_port_native_vlan(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        eth_port: int,
+        vlan_id: int,
+        priority: int = 0,
+    ) -> OltOperationResult:
+        return self._ssh.configure_port_native_vlan(
+            fsp, ont_id, eth_port=eth_port, vlan_id=vlan_id, priority=priority
+        )
+
+    # Cleanup operations - delegate to SSH
+
+    def clear_iphost_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._ssh.clear_iphost_config(fsp, ont_id, ip_index=ip_index)
+
+    def clear_internet_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._ssh.clear_internet_config(fsp, ont_id, ip_index=ip_index)
+
+    def clear_wan_config(
+        self,
+        fsp: str,
+        ont_id: int,
+        *,
+        ip_index: int = 0,
+    ) -> OltOperationResult:
+        return self._ssh.clear_wan_config(fsp, ont_id, ip_index=ip_index)
+
+    def unbind_tr069_profile(
+        self,
+        fsp: str,
+        ont_id: int,
+    ) -> OltOperationResult:
+        return self._ssh.unbind_tr069_profile(fsp, ont_id)
+
+    # Read operations - delegate to SSH
+
+    def get_service_ports(self, fsp: str) -> OltOperationResult:
+        return self._ssh.get_service_ports(fsp)
+
+    def get_service_ports_for_ont(self, fsp: str, ont_id: int) -> OltOperationResult:
+        return self._ssh.get_service_ports_for_ont(fsp, ont_id)
+
+    def get_autofind_onts(self) -> OltOperationResult:
+        return self._ssh.get_autofind_onts()
+
+    def diagnose_service_ports(self, fsp: str, ont_id: int) -> OltOperationResult:
+        return self._ssh.diagnose_service_ports(fsp, ont_id)
+
 
 # ============================================================================
 # Factory
@@ -782,7 +1495,7 @@ class CompositeProtocolAdapter(BaseProtocolAdapter):
 
 
 def get_protocol_adapter(
-    olt: "OLTDevice",
+    olt: OLTDevice,
     *,
     protocol: OltProtocol | str = OltProtocol.AUTO,
 ) -> OltProtocolAdapter:
@@ -818,11 +1531,11 @@ def get_protocol_adapter(
         raise ValueError(f"Unknown protocol: {protocol}")
 
 
-def get_ssh_adapter(olt: "OLTDevice") -> SshProtocolAdapter:
+def get_ssh_adapter(olt: OLTDevice) -> SshProtocolAdapter:
     """Get SSH adapter directly (convenience function)."""
     return SshProtocolAdapter(olt)
 
 
-def get_netconf_adapter(olt: "OLTDevice") -> NetconfProtocolAdapter:
+def get_netconf_adapter(olt: OLTDevice) -> NetconfProtocolAdapter:
     """Get NETCONF adapter directly (convenience function)."""
     return NetconfProtocolAdapter(olt)

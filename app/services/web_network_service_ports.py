@@ -4,23 +4,19 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
-from app.services.network.olt_ssh import create_service_ports
-from app.services.network.olt_ssh_ont import (
-    ServicePortDiagnostics,
-    diagnose_service_ports,
-)
-from app.services.network.olt_ssh_service_ports import (
-    create_single_service_port,
-    delete_service_port,
-    get_service_ports_for_ont,
-)
+from app.services.network.olt_protocol_adapters import get_protocol_adapter
+from app.services.network.olt_ssh import ServicePortEntry, create_service_ports
+from app.services.network.olt_ssh_ont import ServicePortDiagnostics
 from app.services.network.ont_olt_context import resolve_ont_olt_write_context
+
+if TYPE_CHECKING:
+    pass  # ServicePortEntry already imported above
 from app.services.network.service_port_allocator import (
     AllocationError,
     allocate_service_port,
@@ -158,11 +154,14 @@ def list_context(db: Session, ont_id: str) -> dict[str, Any]:
         return context
 
     # Query OLT for service-ports on this ONT
-    ok, msg, ports = get_service_ports_for_ont(olt, fsp, olt_ont_id)
-    if not ok:
-        context["error"] = msg
+    adapter = get_protocol_adapter(olt)
+    result = adapter.get_service_ports_for_ont(fsp, olt_ont_id)
+    if not result.success:
+        context["error"] = result.message
         return context
 
+    ports_data = result.data.get("service_ports", [])
+    ports: list[ServicePortEntry] = ports_data if isinstance(ports_data, list) else []
     context["service_ports"] = ports
     context["reference_onts"] = _reference_ont_options(
         db,
@@ -253,16 +252,18 @@ def handle_create(
         return False, f"Allocation failed: {exc}"
 
     # Create on OLT with pre-allocated index
-    ok, msg, _assigned_idx = create_single_service_port(
-        olt,
+    adapter = get_protocol_adapter(olt)
+    result = adapter.create_service_port(
         fsp,
         olt_ont_id,
-        gem_index,
-        vlan_id,
+        gem_index=gem_index,
+        vlan_id=vlan_id,
         user_vlan=user_vlan,
         tag_transform=tag_transform,
         port_index=port_index,
     )
+    ok = result.success
+    msg = result.message
 
     if ok:
         # Mark allocation as provisioned
@@ -298,7 +299,10 @@ def handle_delete(
         return False, "Cannot resolve OLT for this ONT"
 
     # Delete from OLT
-    ok, msg = delete_service_port(olt, index)
+    adapter = get_protocol_adapter(olt)
+    result = adapter.delete_service_port(index)
+    ok = result.success
+    msg = result.message
 
     if ok:
         # Release DB allocation if exists
@@ -345,9 +349,17 @@ def handle_clone(
         return False, "Target and reference ONTs must be on the same OLT"
 
     # Get reference service-ports
-    ok, msg, ref_ports = get_service_ports_for_ont(ref_olt, ref_fsp, ref_olt_ont_id)
-    if not ok or not ref_ports:
-        return False, f"Could not get reference ports: {msg}"
+    adapter = get_protocol_adapter(ref_olt)
+    result = adapter.get_service_ports_for_ont(ref_fsp, ref_olt_ont_id)
+    if not result.success:
+        return False, f"Could not get reference ports: {result.message}"
+
+    ref_ports_data = result.data.get("service_ports", [])
+    ref_ports: list[ServicePortEntry] = (
+        ref_ports_data if isinstance(ref_ports_data, list) else []
+    )
+    if not ref_ports:
+        return False, f"Could not get reference ports: {result.message}"
 
     # Create on target using existing bulk function
     return create_service_ports(olt, fsp, olt_ont_id, ref_ports)
@@ -370,4 +382,11 @@ def handle_diagnose(
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT", None
 
-    return diagnose_service_ports(olt, fsp, olt_ont_id)
+    adapter = get_protocol_adapter(olt)
+    result = adapter.diagnose_service_ports(fsp, olt_ont_id)
+    diagnostics_data = result.data.get("diagnostics")
+    # Cast to expected type - adapter returns ServicePortDiagnostics or None
+    diagnostics: ServicePortDiagnostics | None = (
+        diagnostics_data if isinstance(diagnostics_data, ServicePortDiagnostics) else None
+    )
+    return result.success, result.message, diagnostics

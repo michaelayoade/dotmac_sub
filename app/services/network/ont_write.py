@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from unittest.mock import Mock
+
+if TYPE_CHECKING:
+    from app.services.network.olt_ssh import ServicePortEntry
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -251,21 +255,21 @@ class OntWriteService:
             )
 
         try:
-            from app.services.network.olt_ssh_ont import configure_ont_iphost
+            from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-            success, message = configure_ont_iphost(
-                ctx.olt,
+            adapter = get_protocol_adapter(ctx.olt)
+            result = adapter.configure_iphost(
                 ctx.fsp,
                 ctx.ont_id_on_olt,
-                vlan_id=vlan_int,
-                ip_mode=mgmt_ip_mode,
+                vlan=vlan_int,
+                mode=mgmt_ip_mode,
                 priority=mgmt_priority,
                 ip_address=mgmt_ip_address,
-                subnet=mgmt_subnet,
+                subnet_mask=mgmt_subnet,
                 gateway=mgmt_gateway,
             )
-            if not success:
-                return ActionResult(success=False, message=message)
+            if not result.success:
+                return ActionResult(success=False, message=result.message)
         except Exception as exc:
             logger.error("IPHOST config failed for ONT %s: %s", ont_id, exc)
             return ActionResult(success=False, message=f"SSH error: {exc}")
@@ -314,36 +318,36 @@ class OntWriteService:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
         try:
-            from app.services.network.olt_ssh_service_ports import (
-                create_single_service_port,
-                get_service_ports_for_ont,
-            )
+            from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-            success, message, _port_index = create_single_service_port(
-                ctx.olt,
+            adapter = get_protocol_adapter(ctx.olt)
+            create_result = adapter.create_service_port(
                 ctx.fsp,
                 ctx.ont_id_on_olt,
-                gem_index,
-                vlan_id,
+                gem_index=gem_index,
+                vlan_id=vlan_id,
                 user_vlan=user_vlan,
                 tag_transform=tag_transform,
             )
-            if not success:
-                return ActionResult(success=False, message=message)
+            if not create_result.success:
+                return ActionResult(success=False, message=create_result.message)
             if not _is_test_mock(ctx.olt):
-                verify_ok, verify_msg, service_ports = get_service_ports_for_ont(
-                    ctx.olt,
+                verify_result = adapter.get_service_ports_for_ont(
                     ctx.fsp,
                     ctx.ont_id_on_olt,
                 )
-                if not verify_ok:
+                if not verify_result.success:
                     return ActionResult(
                         success=False,
                         message=(
                             "Service-port command was accepted, but OLT readback failed: "
-                            f"{verify_msg}"
+                            f"{verify_result.message}"
                         ),
                     )
+                service_ports_data = verify_result.data.get("service_ports", [])
+                service_ports: list[ServicePortEntry] = (
+                    service_ports_data if isinstance(service_ports_data, list) else []
+                )
                 matching_port = next(
                     (
                         port
@@ -405,13 +409,7 @@ class OntWriteService:
             DeviceOperationContext,
             DeviceOperationStep,
         )
-        from app.services.network.olt_ssh_ont.lifecycle import (
-            authorize_ont,
-            deauthorize_ont,
-        )
-        from app.services.network.olt_ssh_service_ports import (
-            get_service_ports_for_ont,
-        )
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
         ont, err = get_ont_or_error(db, ont_id)
         if err:
@@ -467,10 +465,13 @@ class OntWriteService:
         if ctx is None:
             return ActionResult(success=False, message="ONT OLT context is incomplete.")
 
+        # Get adapter once outside closures
+        adapter = get_protocol_adapter(ctx.olt)
+
         # Capture current service ports for replay
-        _, _, current_ports = get_service_ports_for_ont(
-            ctx.olt, ctx.fsp, ctx.ont_id_on_olt
-        )
+        sp_result = adapter.get_service_ports_for_ont(ctx.fsp, ctx.ont_id_on_olt)
+        sp_data = sp_result.data.get("service_ports", []) if sp_result.success else []
+        current_ports: list[ServicePortEntry] = sp_data if isinstance(sp_data, list) else []
 
         # Resolve authorization profiles from current assignment
         line_profile_id = getattr(ctx, "line_profile_id", None)
@@ -506,7 +507,8 @@ class OntWriteService:
 
         # Step 1: Deauthorize from old port
         def apply_deauthorize() -> tuple[bool, str]:
-            return deauthorize_ont(ctx.olt, ctx.fsp, ctx.ont_id_on_olt)
+            result = adapter.deauthorize_ont(ctx.fsp, ctx.ont_id_on_olt)
+            return result.success, result.message
 
         def verify_deauthorize() -> tuple[bool, str]:
             # Verify ONT is no longer on the old port by checking autofind
@@ -527,16 +529,15 @@ class OntWriteService:
             nonlocal new_ont_id_on_olt
             if not ont.serial_number:
                 return False, "ONT has no serial number"
-            success, message, assigned_id = authorize_ont(
-                ctx.olt,
+            result = adapter.authorize_ont(
                 target_fsp,
                 ont.serial_number,
                 line_profile_id=line_profile_id,
                 service_profile_id=service_profile_id,
             )
-            if success and assigned_id is not None:
-                new_ont_id_on_olt = assigned_id
-            return success, message
+            if result.success and result.ont_id is not None:
+                new_ont_id_on_olt = result.ont_id
+            return result.success, result.message
 
         def verify_authorize() -> tuple[bool, str]:
             if new_ont_id_on_olt is None:
@@ -547,7 +548,7 @@ class OntWriteService:
             if new_ont_id_on_olt is not None:
                 # Try to deauthorize from new port
                 try:
-                    deauthorize_ont(ctx.olt, target_fsp, new_ont_id_on_olt)
+                    adapter.deauthorize_ont(target_fsp, new_ont_id_on_olt)
                 except Exception as exc:
                     logger.warning("Rollback deauthorize failed: %s", exc)
 
@@ -577,11 +578,15 @@ class OntWriteService:
             def verify_service_ports() -> tuple[bool, str]:
                 if new_ont_id_on_olt is None:
                     return False, "No ONT-ID for service port verification"
-                ok, msg, new_ports = get_service_ports_for_ont(
-                    ctx.olt, target_fsp, new_ont_id_on_olt
+                verify_result = adapter.get_service_ports_for_ont(
+                    target_fsp, new_ont_id_on_olt
                 )
-                if not ok:
-                    return False, f"Failed to verify service ports: {msg}"
+                if not verify_result.success:
+                    return False, f"Failed to verify service ports: {verify_result.message}"
+                new_ports_data = verify_result.data.get("service_ports", [])
+                new_ports: list[ServicePortEntry] = (
+                    new_ports_data if isinstance(new_ports_data, list) else []
+                )
                 if len(new_ports) < len(current_ports):
                     return (
                         False,
