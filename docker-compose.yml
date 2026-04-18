@@ -494,6 +494,7 @@ services:
       S3_REGION: ${S3_REGION:-us-east-1}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      WIREGUARD_USE_NSENTER: '1'
     env_file:
     - .env
     depends_on:
@@ -507,8 +508,13 @@ services:
         condition: service_started
       openbao:
         condition: service_healthy
+    cap_add:
+    - NET_ADMIN
+    privileged: true
+    pid: host
     volumes:
     - ./app:/app/app
+    - /etc/wireguard:/etc/wireguard
     command:
     - python
     - -m
