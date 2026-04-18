@@ -498,15 +498,15 @@ def olt_ont_status_by_serial(
 )
 def olt_test_ssh_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
+) -> Response:
+    from app.services.network.result_adapter import OperationResult
+
     ok, message, _policy_key = olt_operations_service.test_olt_ssh_connection(
         db, olt_id, request=request
     )
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
-        status_code=303,
-    )
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    return result.to_response(request)
 
 
 @router.post(
@@ -515,15 +515,15 @@ def olt_test_ssh_connection(
 )
 def olt_test_snmp_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
+) -> Response:
+    from app.services.network.result_adapter import OperationResult
+
     ok, message = olt_operations_service.test_olt_snmp_connection(
         db, olt_id, request=request
     )
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?snmp_test_status={status}&snmp_test_message={quote_plus(message)}",
-        status_code=303,
-    )
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    return result.to_response(request)
 
 
 @router.post(
@@ -532,15 +532,15 @@ def olt_test_snmp_connection(
 )
 def olt_test_netconf_connection(
     request: Request, olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
+) -> Response:
+    from app.services.network.result_adapter import OperationResult
+
     ok, message, _capabilities = olt_operations_service.test_olt_netconf_connection(
         db, olt_id, request=request
     )
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
-        status_code=303,
-    )
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    return result.to_response(request)
 
 
 @router.post(
@@ -770,25 +770,19 @@ def olt_authorize_ont(
         force_reauthorize: If "true" or "1", delete any existing registration
             of this serial on the OLT before authorizing on the specified port.
     """
-    is_htmx = request.headers.get("HX-Request") == "true"
+    from app.services.network.result_adapter import AuthorizationResult
 
     if not fsp or not serial_number:
-        msg = "Missing port or serial number"
-        if is_htmx:
-            return _htmx_toast_response(False, "Authorization Failed", msg)
-        msg_encoded = quote_plus(msg)
-        if return_to in (
-            "/admin/network/unconfigured-onts",
-            "/admin/network/onts?view=unconfigured",
-        ):
-            return RedirectResponse(
-                f"/admin/network/onts?view=unconfigured&status=error&message={msg_encoded}",
-                status_code=303,
-            )
-        return RedirectResponse(
-            f"/admin/network/olts/{olt_id}?tab=autofind&sync_status=error&sync_message={msg_encoded}",
-            status_code=303,
+        result = AuthorizationResult(
+            success=False,
+            message="Missing port or serial number",
+            fsp=fsp,
+            serial_number=serial_number,
         )
+        op_result = result.to_operation_result()
+        op_result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
+        op_result.redirect_tab = "autofind"
+        return op_result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
 
     # Parse force_reauthorize checkbox value
     force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
@@ -800,7 +794,7 @@ def olt_authorize_ont(
     )
 
     try:
-        auth_result = olt_api_operations_service.queue_authorize_ont(
+        api_result = olt_api_operations_service.queue_authorize_ont(
             db,
             olt_id,
             fsp=fsp,
@@ -808,42 +802,45 @@ def olt_authorize_ont(
             force_reauthorize=force,
             request=request,
         )
+        result = AuthorizationResult(
+            success=api_result.success,
+            message=api_result.message,
+            operation_id=api_result.data.get("operation_id") if api_result.data else None,
+            serial_number=serial_number,
+            fsp=fsp,
+            queued=api_result.success,
+        )
     except Exception as exc:
         db.rollback()
         logger.error(
-            "Failed to queue ONT authorization from OLT detail route olt_id=%s fsp=%s serial=%s: %s",
+            "Failed to queue ONT authorization olt_id=%s fsp=%s serial=%s: %s",
             olt_id,
             fsp,
             serial_number,
             exc,
             exc_info=True,
         )
-        auth_result = olt_api_operations_service.OltApiWriteResult(
-            False,
-            f"Failed to queue authorization: {exc}",
-            None,
+        result = AuthorizationResult(
+            success=False,
+            message=f"Failed to queue authorization: {exc}",
+            serial_number=serial_number,
+            fsp=fsp,
         )
-    status = "success" if auth_result.success else "error"
-    message = auth_result.message
 
-    # For HTMX requests, return toast trigger instead of redirect
-    if is_htmx:
-        title = "Authorization Queued" if auth_result.success else "Authorization Failed"
-        return _htmx_toast_response(auth_result.success, title, message)
+    op_result = result.to_operation_result()
+    op_result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
+    op_result.redirect_tab = "autofind"
+    return op_result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
 
+
+def _get_authorize_redirect_url(olt_id: str, return_to: str) -> str:
+    """Get redirect URL for authorization result."""
     if return_to in (
         "/admin/network/unconfigured-onts",
         "/admin/network/onts?view=unconfigured",
     ):
-        return RedirectResponse(
-            f"/admin/network/onts?view=unconfigured&status={status}&message={quote_plus(message)}",
-            status_code=303,
-        )
-
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?tab=autofind&sync_status={status}&sync_message={quote_plus(message)}",
-        status_code=303,
-    )
+        return "/admin/network/onts?view=unconfigured"
+    return f"/admin/network/olts/{olt_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -1103,14 +1100,14 @@ def olt_backup_download(backup_id: str, db: Session = Depends(get_db)) -> FileRe
     dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_backup_test_connection(
-    olt_id: str, db: Session = Depends(get_db)
-) -> RedirectResponse:
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> Response:
+    from app.services.network.result_adapter import OperationResult
+
     ok, message = olt_operations_service.test_olt_connection(db, olt_id)
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}/backups?test_status={status}&test_message={quote_plus(message)}",
-        status_code=303,
-    )
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}/backups"
+    return result.to_response(request)
 
 
 @router.post(
