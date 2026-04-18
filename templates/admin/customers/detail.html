@@ -226,6 +226,15 @@
                 <span class="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ relationship_summary.open_tickets | default(0) }}/{{ relationship_summary.recent_communications | default(0) }}</span>
                 {% endif %}
             </button>
+            <button @click="activeTab = 'network'"
+                    :class="activeTab === 'network' ? 'border-amber-500 text-amber-600 dark:text-amber-400' : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300 dark:text-slate-400 dark:hover:text-slate-300'"
+                    class="flex items-center gap-2 border-b-2 px-1 py-3 text-sm font-medium transition">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                Network Devices
+                {% if ont_assignments %}
+                <span class="ml-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">{{ ont_assignments | length }}</span>
+                {% endif %}
+            </button>
         </nav>
     </div>
 
@@ -1571,6 +1580,194 @@
                     </div>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Tab Content: Network Devices -->
+    <div x-show="activeTab === 'network'" x-cloak class="space-y-6">
+        <!-- Quick Stats -->
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-emerald-600 dark:text-emerald-400">Active ONTs</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ ont_assignments | selectattr('active') | list | length }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-blue-400">CPE Devices</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ cpe_devices | length }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-indigo-600 dark:text-indigo-400">IP Assignments</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ ip_assignments | selectattr('is_active') | list | length }}</p>
+            </div>
+            <div class="rounded-2xl border border-slate-200/60 bg-white p-5 shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <p class="text-xs font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">Credentials</p>
+                <p class="mt-2 text-3xl font-bold tabular-nums text-slate-900 dark:text-white">{{ access_credentials | selectattr('is_active') | list | length }}</p>
+            </div>
+        </div>
+
+        <!-- ONT Assignments -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">ONT Assignments</h3>
+                <a href="/admin/network/onts?assign_subscriber={{ customer.id }}"
+                   class="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm transition hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                    <svg class="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                    Assign ONT
+                </a>
+            </div>
+            {% if ont_assignments %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for assignment in ont_assignments %}
+                <div class="p-5 transition hover:bg-slate-50/50 dark:hover:bg-slate-700/20">
+                    <div class="flex items-start justify-between gap-4">
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center gap-3">
+                                <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl {% if assignment.active %}bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-400 dark:bg-slate-700 dark:text-slate-500{% endif %}">
+                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/></svg>
+                                </div>
+                                <div class="min-w-0">
+                                    <a href="/admin/network/onts/{{ assignment.ont_unit.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">
+                                        {{ assignment.ont_unit.serial_number if assignment.ont_unit else 'Unknown ONT' }}
+                                    </a>
+                                    <div class="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 dark:text-slate-400">
+                                        {% if assignment.ont_unit and assignment.ont_unit.olt_device %}
+                                        <span class="flex items-center gap-1">
+                                            <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 12h14M5 12a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v4a2 2 0 01-2 2M5 12a2 2 0 00-2 2v4a2 2 0 002 2h14a2 2 0 002-2v-4a2 2 0 00-2-2m-2-4h.01M17 16h.01"/></svg>
+                                            {{ assignment.ont_unit.olt_device.name }}
+                                        </span>
+                                        {% endif %}
+                                        {% if assignment.pon_port %}
+                                        <span>FSP: {{ assignment.pon_port.name or assignment.pon_port.fsp }}</span>
+                                        {% endif %}
+                                        {% if assignment.ont_unit and assignment.ont_unit.ont_index is not none %}
+                                        <span>ONT-ID: {{ assignment.ont_unit.ont_index }}</span>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                            </div>
+                            {% if assignment.notes %}
+                            <p class="mt-2 ml-13 text-sm text-slate-600 dark:text-slate-300">{{ assignment.notes }}</p>
+                            {% endif %}
+                        </div>
+                        <div class="flex shrink-0 items-center gap-2">
+                            <span class="rounded-full px-2.5 py-1 text-xs font-medium {% if assignment.active %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                                {{ 'Active' if assignment.active else 'Inactive' }}
+                            </span>
+                            <a href="/admin/network/onts/{{ assignment.ont_unit.id }}"
+                               class="rounded-lg p-2 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600 dark:hover:bg-slate-700 dark:hover:text-slate-300"
+                               title="View ONT Details">
+                                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+                            </a>
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-12 text-center">
+                <svg class="mx-auto h-12 w-12 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z"/>
+                </svg>
+                <h3 class="mt-3 text-sm font-medium text-slate-900 dark:text-white">No ONT assignments</h3>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Get started by assigning an ONT to this customer.</p>
+                <div class="mt-4">
+                    <a href="/admin/network/onts?assign_subscriber={{ customer.id }}"
+                       class="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700 focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
+                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Assign ONT
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- CPE Devices & IP Assignments Grid -->
+        <div class="grid gap-6 xl:grid-cols-2">
+            <!-- CPE Devices -->
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">CPE Devices</h3>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ cpe_devices | length }}</span>
+                </div>
+                {% if cpe_devices %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for cpe in cpe_devices %}
+                    <a href="/admin/network/cpes/{{ cpe.id }}" class="block px-5 py-4 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <div class="flex items-center justify-between">
+                            <div class="min-w-0">
+                                <p class="truncate text-sm font-medium text-slate-900 dark:text-white">{{ cpe.serial_number or cpe.mac_address or 'Unknown CPE' }}</p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ [cpe.vendor, cpe.model]|select|join(' / ') or 'Unknown device' }}</p>
+                            </div>
+                            <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if cpe.status and cpe.status.value == 'active' %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                                {{ cpe.status.value | title if cpe.status else 'Unknown' }}
+                            </span>
+                        </div>
+                    </a>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No CPE devices linked.</div>
+                {% endif %}
+            </div>
+
+            <!-- IP Assignments -->
+            <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+                <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">IP Assignments</h3>
+                    <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ ip_assignments | length }}</span>
+                </div>
+                {% if ip_assignments %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for assignment in ip_assignments %}
+                    <div class="px-5 py-4">
+                        <div class="flex items-center justify-between">
+                            <div class="min-w-0">
+                                <p class="font-mono text-sm font-medium text-slate-900 dark:text-white">
+                                    {% if assignment.ipv4_address %}{{ assignment.ipv4_address.address }}{% elif assignment.ipv6_address %}{{ assignment.ipv6_address.address }}{% else %}N/A{% endif %}
+                                </p>
+                                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ assignment.ip_version.value | upper if assignment.ip_version else 'Unknown' }} · {{ assignment.assignment_type.value | title if assignment.assignment_type else 'N/A' }}</p>
+                            </div>
+                            <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if assignment.is_active %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                                {{ 'Active' if assignment.is_active else 'Inactive' }}
+                            </span>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No IP addresses assigned.</div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Access Credentials -->
+        <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+                <h3 class="font-semibold text-slate-900 dark:text-white">Access Credentials</h3>
+                <span class="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-400">{{ access_credentials | length }}</span>
+            </div>
+            {% if access_credentials %}
+            <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for credential in access_credentials %}
+                <div class="px-5 py-4">
+                    <div class="flex items-center justify-between">
+                        <div class="min-w-0">
+                            <p class="font-mono text-sm font-medium text-slate-900 dark:text-white">{{ credential.username }}</p>
+                            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+                                {% if credential.connection_type %}{{ credential.connection_type.value | upper }}{% endif %}
+                                {% if credential.nas_device %} · {{ credential.nas_device.name }}{% endif %}
+                            </p>
+                        </div>
+                        <span class="rounded-full px-2 py-0.5 text-xs font-medium {% if credential.is_active %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">
+                            {{ 'Active' if credential.is_active else 'Inactive' }}
+                        </span>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No access credentials configured.</div>
+            {% endif %}
         </div>
     </div>
 
