@@ -124,7 +124,9 @@ def main():
                 first_row.click()
                 page.wait_for_timeout(1500)
                 # Look for impersonate form/button
-                impersonate_btn = page.locator('button:has-text("View as Customer"), form[action*="impersonate"] button')
+                impersonate_btn = page.locator(
+                    'button:has-text("View as Customer"), form[action*="impersonate"] button'
+                )
                 if impersonate_btn.count():
                     impersonate_btn.first.click()
                     page.wait_for_timeout(2000)

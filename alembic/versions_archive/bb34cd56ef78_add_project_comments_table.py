@@ -5,10 +5,10 @@ Revises: ab12cd34ef56
 Create Date: 2026-01-14 00:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "bb34cd56ef78"
@@ -25,7 +25,9 @@ def upgrade() -> None:
     if "project_comments" not in existing_tables:
         op.create_table(
             "project_comments",
-            sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False),
+            sa.Column(
+                "id", postgresql.UUID(as_uuid=True), primary_key=True, nullable=False
+            ),
             sa.Column("project_id", postgresql.UUID(as_uuid=True), nullable=False),
             sa.Column("author_person_id", postgresql.UUID(as_uuid=True), nullable=True),
             sa.Column("body", sa.Text(), nullable=False),

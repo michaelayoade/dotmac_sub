@@ -46,7 +46,11 @@ def main():
             if env_raw is None:
                 skipped += 1
                 continue
-            if spec.is_secret and not is_openbao_ref(env_raw) and not args.allow_plaintext:
+            if (
+                spec.is_secret
+                and not is_openbao_ref(env_raw)
+                and not args.allow_plaintext
+            ):
                 errors.append(
                     f"{spec.domain.value}.{spec.key}: secret must be an OpenBao reference (or use --allow-plaintext)"
                 )

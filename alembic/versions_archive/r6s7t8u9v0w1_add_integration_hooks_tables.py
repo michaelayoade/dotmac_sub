@@ -5,10 +5,10 @@ Revises: n4p5q6r7s8t9
 Create Date: 2026-02-25 11:10:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "r6s7t8u9v0w1"
@@ -64,8 +64,12 @@ def upgrade() -> None:
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_integration_hooks_hook_type", "integration_hooks", ["hook_type"])
-    op.create_index("ix_integration_hooks_is_enabled", "integration_hooks", ["is_enabled"])
+    op.create_index(
+        "ix_integration_hooks_hook_type", "integration_hooks", ["hook_type"]
+    )
+    op.create_index(
+        "ix_integration_hooks_is_enabled", "integration_hooks", ["is_enabled"]
+    )
 
     op.create_table(
         "integration_hook_executions",
@@ -78,7 +82,9 @@ def upgrade() -> None:
         sa.Column("payload", sa.JSON(), nullable=True),
         sa.Column("response_body", sa.Text(), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
-        sa.ForeignKeyConstraint(["hook_id"], ["integration_hooks.id"], ondelete="CASCADE"),
+        sa.ForeignKeyConstraint(
+            ["hook_id"], ["integration_hooks.id"], ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
@@ -94,8 +100,14 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_integration_hook_executions_created_at", table_name="integration_hook_executions")
-    op.drop_index("ix_integration_hook_executions_hook_id", table_name="integration_hook_executions")
+    op.drop_index(
+        "ix_integration_hook_executions_created_at",
+        table_name="integration_hook_executions",
+    )
+    op.drop_index(
+        "ix_integration_hook_executions_hook_id",
+        table_name="integration_hook_executions",
+    )
     op.drop_table("integration_hook_executions")
     op.drop_index("ix_integration_hooks_is_enabled", table_name="integration_hooks")
     op.drop_index("ix_integration_hooks_hook_type", table_name="integration_hooks")

@@ -37,7 +37,9 @@ def test_apply_proforma_form_values_marks_and_cleans():
     assert clean_memo == "Initial note"
 
 
-def test_convert_proforma_to_final_updates_status_and_clears_marker(db_session, subscriber):
+def test_convert_proforma_to_final_updates_status_and_clears_marker(
+    db_session, subscriber
+):
     invoice = Invoice(
         account_id=subscriber.id,
         invoice_number="PF-INV-200",

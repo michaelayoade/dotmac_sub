@@ -169,7 +169,9 @@ class TestEncryptDecryptPrivateKey:
     def test_roundtrip_without_encryption_key(self):
         """Without WIREGUARD_KEY_ENCRYPTION_KEY, stores as plain:..."""
         priv, _ = generate_keypair()
-        with patch("app.services.wireguard_crypto.get_encryption_key", return_value=None):
+        with patch(
+            "app.services.wireguard_crypto.get_encryption_key", return_value=None
+        ):
             encrypted = encrypt_private_key(priv)
             assert encrypted.startswith("plain:")
             decrypted = decrypt_private_key(encrypted)
@@ -197,7 +199,9 @@ class TestEncryptDecryptPrivateKey:
         assert decrypt_private_key(priv) == priv
 
     def test_decrypt_enc_without_key_raises(self):
-        with patch("app.services.wireguard_crypto.get_encryption_key", return_value=None):
+        with patch(
+            "app.services.wireguard_crypto.get_encryption_key", return_value=None
+        ):
             with pytest.raises(ValueError, match="not set"):
                 decrypt_private_key("enc:bogusdata")
 
@@ -363,13 +367,9 @@ class TestWireGuardServerService:
         from app.services.wireguard import WireGuardServerService
 
         name = f"dup-{uuid.uuid4().hex[:8]}"
-        WireGuardServerService.create(
-            db_session, WireGuardServerCreate(name=name)
-        )
+        WireGuardServerService.create(db_session, WireGuardServerCreate(name=name))
         with pytest.raises(HTTPException) as exc_info:
-            WireGuardServerService.create(
-                db_session, WireGuardServerCreate(name=name)
-            )
+            WireGuardServerService.create(db_session, WireGuardServerCreate(name=name))
         assert exc_info.value.status_code == 400
 
     @patch("app.services.wireguard.WireGuardPeerService._auto_deploy")
@@ -418,7 +418,9 @@ class TestWireGuardServerService:
         from app.services.wireguard import WireGuardServerService
 
         _make_server(db_session, name=f"active-{uuid.uuid4().hex[:8]}", is_active=True)
-        _make_server(db_session, name=f"inactive-{uuid.uuid4().hex[:8]}", is_active=False)
+        _make_server(
+            db_session, name=f"inactive-{uuid.uuid4().hex[:8]}", is_active=False
+        )
         active = WireGuardServerService.list(db_session, is_active=True)
         assert all(s.is_active for s in active)
 
@@ -592,8 +594,18 @@ class TestWireGuardPeerService:
         from app.services.wireguard import WireGuardPeerService
 
         server = _make_server(db_session, name=f"lp-{uuid.uuid4().hex[:8]}")
-        _make_peer(db_session, server, name=f"lp1-{uuid.uuid4().hex[:8]}", peer_address="10.10.0.2/32")
-        _make_peer(db_session, server, name=f"lp2-{uuid.uuid4().hex[:8]}", peer_address="10.10.0.3/32")
+        _make_peer(
+            db_session,
+            server,
+            name=f"lp1-{uuid.uuid4().hex[:8]}",
+            peer_address="10.10.0.2/32",
+        )
+        _make_peer(
+            db_session,
+            server,
+            name=f"lp2-{uuid.uuid4().hex[:8]}",
+            peer_address="10.10.0.3/32",
+        )
         peers = WireGuardPeerService.list(db_session, server_id=server.id)
         assert len(peers) >= 2
 
@@ -650,9 +662,7 @@ class TestWireGuardPeerService:
 
         server = _make_server(db_session, name=f"vpt-{uuid.uuid4().hex[:8]}")
         peer = _make_peer(db_session, server, name=f"vpt-{uuid.uuid4().hex[:8]}")
-        token, _ = WireGuardPeerService.regenerate_provision_token(
-            db_session, peer.id
-        )
+        token, _ = WireGuardPeerService.regenerate_provision_token(db_session, peer.id)
         verified = WireGuardPeerService.verify_provision_token(db_session, token)
         assert verified is not None
         assert verified.id == peer.id
@@ -1086,7 +1096,10 @@ class TestVpnRouting:
         with pytest.raises(VpnRoutingError, match="inactive"):
             ensure_vpn_ready(db_session, server.id)
 
-    @patch("app.services.vpn_routing.WireGuardSystemService.is_interface_up", return_value=True)
+    @patch(
+        "app.services.vpn_routing.WireGuardSystemService.is_interface_up",
+        return_value=True,
+    )
     def test_ensure_vpn_ready_active_and_up(self, mock_up, db_session):
         from app.services.vpn_routing import ensure_vpn_ready
 
@@ -1170,9 +1183,7 @@ class TestVpnRouting:
         server = MagicMock()
         server.metadata_ = {"routes": ["10.0.0.0/24"]}
 
-        changed = sync_lan_subnets(
-            peer, server, previous_subnets=["10.0.0.0/24"]
-        )
+        changed = sync_lan_subnets(peer, server, previous_subnets=["10.0.0.0/24"])
         assert changed is True
         # Old subnet removed, new one added
         assert "10.0.1.0/24" in peer.allowed_ips

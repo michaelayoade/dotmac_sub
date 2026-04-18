@@ -27,14 +27,41 @@ def upgrade() -> None:
         op.create_table(
             "network_device_bandwidth_graphs",
             sa.Column("id", UUID(as_uuid=True), primary_key=True),
-            sa.Column("device_id", UUID(as_uuid=True), sa.ForeignKey("network_devices.id"), nullable=False),
+            sa.Column(
+                "device_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("network_devices.id"),
+                nullable=False,
+            ),
             sa.Column("title", sa.String(length=200), nullable=False),
-            sa.Column("vertical_axis_title", sa.String(length=80), nullable=False, server_default="Bandwidth"),
-            sa.Column("height_px", sa.Integer(), nullable=False, server_default=sa.text("150")),
-            sa.Column("is_public", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column(
+                "vertical_axis_title",
+                sa.String(length=80),
+                nullable=False,
+                server_default="Bandwidth",
+            ),
+            sa.Column(
+                "height_px", sa.Integer(), nullable=False, server_default=sa.text("150")
+            ),
+            sa.Column(
+                "is_public",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
             sa.Column("public_token", sa.String(length=64), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
         )
         op.create_index(
             "ix_network_device_bandwidth_graphs_device_id",
@@ -60,16 +87,57 @@ def upgrade() -> None:
                 sa.ForeignKey("network_device_bandwidth_graphs.id", ondelete="CASCADE"),
                 nullable=False,
             ),
-            sa.Column("source_device_id", UUID(as_uuid=True), sa.ForeignKey("network_devices.id"), nullable=False),
-            sa.Column("snmp_oid_id", UUID(as_uuid=True), sa.ForeignKey("network_device_snmp_oids.id"), nullable=False),
-            sa.Column("factor", sa.Float(), nullable=False, server_default=sa.text("1.0")),
-            sa.Column("color_hex", sa.String(length=7), nullable=False, server_default="#22c55e"),
-            sa.Column("draw_type", sa.String(length=16), nullable=False, server_default="LINE1"),
-            sa.Column("stack_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
-            sa.Column("value_unit", sa.String(length=12), nullable=False, server_default="Bps"),
-            sa.Column("sort_order", sa.Integer(), nullable=False, server_default=sa.text("0")),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("now()")),
+            sa.Column(
+                "source_device_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("network_devices.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "snmp_oid_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("network_device_snmp_oids.id"),
+                nullable=False,
+            ),
+            sa.Column(
+                "factor", sa.Float(), nullable=False, server_default=sa.text("1.0")
+            ),
+            sa.Column(
+                "color_hex",
+                sa.String(length=7),
+                nullable=False,
+                server_default="#22c55e",
+            ),
+            sa.Column(
+                "draw_type",
+                sa.String(length=16),
+                nullable=False,
+                server_default="LINE1",
+            ),
+            sa.Column(
+                "stack_enabled",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
+            sa.Column(
+                "value_unit", sa.String(length=12), nullable=False, server_default="Bps"
+            ),
+            sa.Column(
+                "sort_order", sa.Integer(), nullable=False, server_default=sa.text("0")
+            ),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.text("now()"),
+            ),
         )
         op.create_index(
             "ix_network_device_bandwidth_graph_sources_graph_id",

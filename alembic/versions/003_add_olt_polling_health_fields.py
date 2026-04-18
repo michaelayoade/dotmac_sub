@@ -44,7 +44,13 @@ def upgrade() -> None:
         "olt_devices",
         sa.Column(
             "last_poll_status",
-            sa.Enum("success", "failed", "timeout", name="pollstatus", create_constraint=False),
+            sa.Enum(
+                "success",
+                "failed",
+                "timeout",
+                name="pollstatus",
+                create_constraint=False,
+            ),
             nullable=True,
         ),
     )
@@ -54,11 +60,15 @@ def upgrade() -> None:
     )
     op.add_column(
         "olt_devices",
-        sa.Column("consecutive_poll_failures", sa.Integer(), nullable=True, server_default="0"),
+        sa.Column(
+            "consecutive_poll_failures", sa.Integer(), nullable=True, server_default="0"
+        ),
     )
 
     # Set default for existing rows
-    op.execute("UPDATE olt_devices SET consecutive_poll_failures = 0 WHERE consecutive_poll_failures IS NULL")
+    op.execute(
+        "UPDATE olt_devices SET consecutive_poll_failures = 0 WHERE consecutive_poll_failures IS NULL"
+    )
 
 
 def downgrade() -> None:

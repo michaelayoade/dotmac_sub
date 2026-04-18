@@ -853,14 +853,11 @@ class TestDeviceResolution:
             call.kwargs["query"] for call in instance.list_devices.call_args_list
         ]
         assert any(
-            {"_deviceId._SerialNumber": "485754437D4733C3"}
-            in query.get("$or", [])
+            {"_deviceId._SerialNumber": "485754437D4733C3"} in query.get("$or", [])
             for query in issued_queries
         )
 
-    def test_resolve_matches_device_by_tr098_serial_parameter(
-        self, db_session
-    ) -> None:
+    def test_resolve_matches_device_by_tr098_serial_parameter(self, db_session) -> None:
         from app.models.network import OntUnit
         from app.services.network._resolve import resolve_genieacs_with_reason
 
@@ -883,9 +880,7 @@ class TestDeviceResolution:
         mock_device = {
             "_id": "00259E-EG8145V5-ALTID",
             "InternetGatewayDevice": {
-                "DeviceInfo": {
-                    "SerialNumber": {"_value": "485754437D4733C3"}
-                }
+                "DeviceInfo": {"SerialNumber": {"_value": "485754437D4733C3"}}
             },
         }
 
@@ -901,9 +896,7 @@ class TestDeviceResolution:
         assert reason == "resolved_via_ont_acs"
         issued_query = instance.list_devices.call_args.kwargs["query"]
         assert {
-            "InternetGatewayDevice.DeviceInfo.SerialNumber._value": (
-                "485754437D4733C3"
-            )
+            "InternetGatewayDevice.DeviceInfo.SerialNumber._value": ("485754437D4733C3")
         } in issued_query["$or"]
 
     def test_resolve_does_not_build_synthetic_id_for_placeholder_ont(
@@ -1027,10 +1020,10 @@ class TestAcsPropagation:
         monkeypatch.setattr(
             olt_ssh,
             "bind_tr069_server_profile",
-            lambda _olt, fsp, ont_id, profile_id: bound.update(
-                {"profile_id": profile_id, "ont_id": ont_id}
-            )
-            or (True, "bound"),
+            lambda _olt, fsp, ont_id, profile_id: (
+                bound.update({"profile_id": profile_id, "ont_id": ont_id})
+                or (True, "bound")
+            ),
         )
 
         olt_ssh._auto_bind_tr069_after_authorize(olt, "0/2/1", 6)
@@ -1070,17 +1063,15 @@ class TestAcsPropagation:
         monkeypatch.setattr(
             olt_ssh,
             "create_tr069_server_profile",
-            lambda *_args, **_kwargs: pytest.fail(
-                "matching profile should be reused"
-            ),
+            lambda *_args, **_kwargs: pytest.fail("matching profile should be reused"),
         )
         monkeypatch.setattr(
             olt_ssh,
             "bind_tr069_server_profile",
-            lambda _olt, fsp, ont_id, profile_id: bound.update(
-                {"profile_id": profile_id, "ont_id": ont_id}
-            )
-            or (True, "bound"),
+            lambda _olt, fsp, ont_id, profile_id: (
+                bound.update({"profile_id": profile_id, "ont_id": ont_id})
+                or (True, "bound")
+            ),
         )
 
         olt_ssh._auto_bind_tr069_after_authorize(olt, "0/2/1", 6)
@@ -1110,14 +1101,18 @@ class TestAcsPropagation:
             calls["list"] += 1
             if calls["list"] == 1:
                 return True, "ok", []
-            return True, "ok", [
-                olt_ssh.Tr069ServerProfile(
-                    profile_id=23,
-                    name="ACS Primary ACS",
-                    acs_url="http://acs.example.com/cwmp",
-                    acs_username="cwmp-user",
-                )
-            ]
+            return (
+                True,
+                "ok",
+                [
+                    olt_ssh.Tr069ServerProfile(
+                        profile_id=23,
+                        name="ACS Primary ACS",
+                        acs_url="http://acs.example.com/cwmp",
+                        acs_username="cwmp-user",
+                    )
+                ],
+            )
 
         def fake_create(_olt, **kwargs):
             created.update(kwargs)
@@ -1128,10 +1123,10 @@ class TestAcsPropagation:
         monkeypatch.setattr(
             olt_ssh,
             "bind_tr069_server_profile",
-            lambda _olt, fsp, ont_id, profile_id: bound.update(
-                {"profile_id": profile_id, "ont_id": ont_id}
-            )
-            or (True, "bound"),
+            lambda _olt, fsp, ont_id, profile_id: (
+                bound.update({"profile_id": profile_id, "ont_id": ont_id})
+                or (True, "bound")
+            ),
         )
 
         olt_ssh._auto_bind_tr069_after_authorize(olt, "0/2/1", 6)

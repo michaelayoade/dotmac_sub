@@ -18,7 +18,9 @@ def test_create_reseller_with_user_links_subscriber_without_reseller_users_table
 ):
     reseller = _create_reseller(db_session, "Fallback Reseller")
     monkeypatch.setattr(
-        web_admin_resellers_service, "_reseller_users_table_available", lambda _db: False
+        web_admin_resellers_service,
+        "_reseller_users_table_available",
+        lambda _db: False,
     )
     monkeypatch.setattr(
         web_admin_resellers_service,
@@ -39,9 +41,7 @@ def test_create_reseller_with_user_links_subscriber_without_reseller_users_table
     )
 
     subscriber = (
-        db_session.query(Subscriber)
-        .filter(Subscriber.email == payload["email"])
-        .one()
+        db_session.query(Subscriber).filter(Subscriber.email == payload["email"]).one()
     )
     assert subscriber.reseller_id == reseller.id
     assert getattr(subscriber.user_type, "value", subscriber.user_type) == "reseller"
@@ -60,7 +60,9 @@ def test_create_and_link_reseller_user_links_subscriber_without_reseller_users_t
 ):
     reseller = _create_reseller(db_session, "Fallback Reseller 2")
     monkeypatch.setattr(
-        web_admin_resellers_service, "_reseller_users_table_available", lambda _db: False
+        web_admin_resellers_service,
+        "_reseller_users_table_available",
+        lambda _db: False,
     )
     monkeypatch.setattr(
         web_admin_resellers_service,
@@ -87,10 +89,14 @@ def test_create_and_link_reseller_user_links_subscriber_without_reseller_users_t
     assert getattr(subscriber.user_type, "value", subscriber.user_type) == "reseller"
 
 
-def test_send_reseller_portal_invite_uses_reseller_login_target(db_session, monkeypatch):
+def test_send_reseller_portal_invite_uses_reseller_login_target(
+    db_session, monkeypatch
+):
     captured: dict[str, str] = {}
 
-    def _fake_send_user_invite(_db, *, email: str, next_login_path: str | None = None) -> str:
+    def _fake_send_user_invite(
+        _db, *, email: str, next_login_path: str | None = None
+    ) -> str:
         captured["email"] = email
         captured["next_login_path"] = str(next_login_path)
         return "Invitation sent."
@@ -108,10 +114,14 @@ def test_send_reseller_portal_invite_uses_reseller_login_target(db_session, monk
 
     assert "sent" in note.lower()
     assert captured["email"] == "invitee@example.com"
-    assert captured["next_login_path"] == "/reseller/auth/login?next=/reseller/dashboard"
+    assert (
+        captured["next_login_path"] == "/reseller/auth/login?next=/reseller/dashboard"
+    )
 
 
-def test_link_existing_subscriber_to_reseller_rejects_non_customer(db_session, subscriber):
+def test_link_existing_subscriber_to_reseller_rejects_non_customer(
+    db_session, subscriber
+):
     reseller = _create_reseller(db_session, "Reseller Link Test")
     with pytest.raises(ValueError, match="Only customer subscribers"):
         web_admin_resellers_service.link_existing_subscriber_to_reseller(

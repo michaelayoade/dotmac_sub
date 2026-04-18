@@ -3,7 +3,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-
 class Response:
     status_code: int
     text: str
@@ -11,9 +10,7 @@ class Response:
     def json(self) -> Any: ...
     def raise_for_status(self) -> None: ...
 
-
 class RequestException(Exception): ...
-
 
 def get(
     url: str,
@@ -24,8 +21,6 @@ def get(
     verify: bool | None = ...,
     timeout: float | int | None = ...,
 ) -> Response: ...
-
-
 def post(
     url: str,
     *,

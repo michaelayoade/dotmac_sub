@@ -11,7 +11,9 @@ from starlette.requests import Request
 from app.web.admin import system as system_web
 
 
-def test_settings_branding_update_ignores_non_subscriber_uploaded_by(db_session, monkeypatch):
+def test_settings_branding_update_ignores_non_subscriber_uploaded_by(
+    db_session, monkeypatch
+):
     captured: dict[str, object] = {}
 
     monkeypatch.setattr(
@@ -29,7 +31,14 @@ def test_settings_branding_update_ignores_non_subscriber_uploaded_by(db_session,
         _fake_upload_branding_asset,
     )
 
-    request = Request({"type": "http", "method": "POST", "path": "/admin/system/settings/branding", "headers": []})
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/admin/system/settings/branding",
+            "headers": [],
+        }
+    )
     upload = UploadFile(
         filename="logo.png",
         file=BytesIO(b"fake png"),

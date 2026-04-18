@@ -1,8 +1,9 @@
 """Remove speed tiers and references."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "f2a9c1d4e7b8"
@@ -22,7 +23,9 @@ def upgrade() -> None:
             op.drop_column("offer_versions", "speed_tier_id")
 
     if "catalog_offers" in existing_tables:
-        catalog_columns = {col["name"] for col in inspector.get_columns("catalog_offers")}
+        catalog_columns = {
+            col["name"] for col in inspector.get_columns("catalog_offers")
+        }
         if "speed_tier_id" in catalog_columns:
             op.drop_column("catalog_offers", "speed_tier_id")
 
@@ -43,8 +46,14 @@ def downgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column("catalog_offers", sa.Column("speed_tier_id", postgresql.UUID(as_uuid=True), nullable=True))
-    op.add_column("offer_versions", sa.Column("speed_tier_id", postgresql.UUID(as_uuid=True), nullable=True))
+    op.add_column(
+        "catalog_offers",
+        sa.Column("speed_tier_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
+    op.add_column(
+        "offer_versions",
+        sa.Column("speed_tier_id", postgresql.UUID(as_uuid=True), nullable=True),
+    )
     op.create_foreign_key(
         "fk_catalog_offers_speed_tier_id_speed_tiers",
         "catalog_offers",

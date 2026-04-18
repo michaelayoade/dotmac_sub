@@ -36,7 +36,11 @@ def upgrade() -> None:
     if "connection_type" not in columns:
         # Reuse existing connectiontype enum
         connection_type_enum = sa.Enum(
-            "pppoe", "dhcp", "ipoe", "static", "hotspot",
+            "pppoe",
+            "dhcp",
+            "ipoe",
+            "static",
+            "hotspot",
             name="connectiontype",
             create_type=False,
         )

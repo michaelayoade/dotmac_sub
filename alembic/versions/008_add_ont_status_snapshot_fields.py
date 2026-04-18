@@ -5,9 +5,9 @@ Revises: 996c8bca9c16
 Create Date: 2026-04-02
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "008_add_ont_status_snapshot_fields"
 down_revision = "996c8bca9c16"

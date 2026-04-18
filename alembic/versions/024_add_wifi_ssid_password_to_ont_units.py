@@ -4,8 +4,9 @@ Stores desired WiFi configuration on the ONT record, enabling automatic
 push via TR-069 when the ONT comes online and connects to ACS.
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "024_add_wifi_ssid_password_to_ont_units"

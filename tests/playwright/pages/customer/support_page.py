@@ -27,21 +27,19 @@ class CustomerSupportPage(BasePage):
 
     def expect_loaded(self) -> None:
         expect(
-            self.page.get_by_role("heading", name="Support", exact=True).or_(
-                self.page.get_by_text("Support", exact=False)
-            ).first
+            self.page.get_by_role("heading", name="Support", exact=True)
+            .or_(self.page.get_by_text("Support", exact=False))
+            .first
         ).to_be_visible()
 
     def expect_tickets_visible(self) -> None:
         expect(
-            self.page.locator("[data-testid='tickets']").or_(
-                self.page.get_by_text("Tickets", exact=False)
-            ).first
+            self.page.locator("[data-testid='tickets']")
+            .or_(self.page.get_by_text("Tickets", exact=False))
+            .first
         ).to_be_visible()
 
     def click_new_ticket(self) -> None:
         self.page.get_by_role("button", name="New Ticket").or_(
             self.page.get_by_role("link", name="New Ticket")
-        ).or_(
-            self.page.get_by_role("button", name="Create Ticket")
-        ).first.click()
+        ).or_(self.page.get_by_role("button", name="Create Ticket")).first.click()

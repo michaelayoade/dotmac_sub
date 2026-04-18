@@ -32,7 +32,8 @@ def upgrade() -> None:
         return
 
     # Find all Splynx company customers that don't already have an organization
-    company_subs = conn.execute(sa.text("""
+    company_subs = conn.execute(
+        sa.text("""
         SELECT id, display_name, address_line1, city, postal_code, country_code,
                metadata->>'splynx_deleted' as splynx_deleted
         FROM subscribers
@@ -40,7 +41,8 @@ def upgrade() -> None:
           AND metadata->>'splynx_category' = 'company'
           AND organization_id IS NULL
         ORDER BY splynx_customer_id
-    """)).fetchall()
+    """)
+    ).fetchall()
 
     if not company_subs:
         return
@@ -50,28 +52,34 @@ def upgrade() -> None:
         is_deleted = sub.splynx_deleted == "true"
 
         # Create Organization
-        result = conn.execute(sa.text("""
+        result = conn.execute(
+            sa.text("""
             INSERT INTO organizations (id, name, address_line1, city, postal_code,
                                        country_code, is_active, primary_login_subscriber_id,
                                        created_at, updated_at)
             VALUES (gen_random_uuid(), :name, :addr, :city, :postal, :country,
                     :is_active, :sub_id, NOW(), NOW())
             RETURNING id
-        """), {
-            "name": (sub.display_name or "Unknown Org")[:160],
-            "addr": sub.address_line1,
-            "city": sub.city,
-            "postal": sub.postal_code,
-            "country": sub.country_code,
-            "is_active": not is_deleted,
-            "sub_id": sub.id,
-        })
+        """),
+            {
+                "name": (sub.display_name or "Unknown Org")[:160],
+                "addr": sub.address_line1,
+                "city": sub.city,
+                "postal": sub.postal_code,
+                "country": sub.country_code,
+                "is_active": not is_deleted,
+                "sub_id": sub.id,
+            },
+        )
         org_id = result.scalar_one()
 
         # Link subscriber to organization
-        conn.execute(sa.text("""
+        conn.execute(
+            sa.text("""
             UPDATE subscribers SET organization_id = :org_id WHERE id = :sub_id
-        """), {"org_id": org_id, "sub_id": sub.id})
+        """),
+            {"org_id": org_id, "sub_id": sub.id},
+        )
 
         created += 1
 
@@ -83,21 +91,25 @@ def downgrade() -> None:
     conn = op.get_bind()
 
     # Remove organization links for Splynx company customers
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         UPDATE subscribers
         SET organization_id = NULL
         WHERE splynx_customer_id IS NOT NULL
           AND metadata->>'splynx_category' = 'company'
           AND organization_id IS NOT NULL
-    """))
+    """)
+    )
 
     # Delete organizations that were created for Splynx company customers
     # (identified by having a primary_login_subscriber that is a Splynx company customer)
-    conn.execute(sa.text("""
+    conn.execute(
+        sa.text("""
         DELETE FROM organizations
         WHERE primary_login_subscriber_id IN (
             SELECT id FROM subscribers
             WHERE splynx_customer_id IS NOT NULL
               AND metadata->>'splynx_category' = 'company'
         )
-    """))
+    """)
+    )

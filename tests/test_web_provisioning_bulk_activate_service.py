@@ -56,7 +56,9 @@ def test_bulk_activation_preview_counts(db_session):
     db_session.add(s2)
     db_session.commit()
 
-    offer = _create_offer(db_session, name="Internet Plan", category=PlanCategory.internet)
+    offer = _create_offer(
+        db_session, name="Internet Plan", category=PlanCategory.internet
+    )
     filters = bulk_service.BulkFilters(
         tab="internet",
         reseller_id=str(reseller.id),
@@ -104,7 +106,9 @@ def test_bulk_activation_execute_creates_subscriptions_and_audit(db_session):
     db_session.commit()
     db_session.refresh(subscriber)
 
-    offer = _create_offer(db_session, name="Recurring Plan", category=PlanCategory.recurring)
+    offer = _create_offer(
+        db_session, name="Recurring Plan", category=PlanCategory.recurring
+    )
     filters = bulk_service.BulkFilters(
         tab="recurring",
         reseller_id=str(reseller.id),
@@ -151,5 +155,7 @@ def test_bulk_activation_execute_creates_subscriptions_and_audit(db_session):
     db_session.refresh(subscriber)
     assert subscriber.status == SubscriberStatus.active
 
-    audit_rows = db_session.query(AuditEvent).filter(AuditEvent.action == "bulk_activate").all()
+    audit_rows = (
+        db_session.query(AuditEvent).filter(AuditEvent.action == "bulk_activate").all()
+    )
     assert audit_rows

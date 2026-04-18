@@ -10,9 +10,9 @@ Revises: 48d94c532a05
 Create Date: 2026-04-14
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "020_add_ont_lan_configuration_fields"

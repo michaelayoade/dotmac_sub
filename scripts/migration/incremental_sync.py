@@ -86,7 +86,9 @@ def _compute_invoice_aggregates(
     # Billing period: min(period_from), max(period_to) from items
     valid_starts = [d for d in period_starts if d]
     valid_ends = [d for d in period_ends if d]
-    billing_start = min(valid_starts) if valid_starts else _parse_date(row.get("date_created"))
+    billing_start = (
+        min(valid_starts) if valid_starts else _parse_date(row.get("date_created"))
+    )
     billing_end = max(valid_ends) if valid_ends else _parse_date(row.get("date_till"))
 
     return subtotal, tax_total, billing_start, billing_end
@@ -196,7 +198,9 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
             billing_period_end=billing_end,
             issued_at=_parse_date(row.get("date_created")),
             due_at=_parse_date(row.get("date_till")),
-            paid_at=_parse_date(row.get("date_updated")) if status == InvoiceStatus.paid else None,
+            paid_at=_parse_date(row.get("date_updated"))
+            if status == InvoiceStatus.paid
+            else None,
             is_sent=row.get("is_sent") in ("1", 1, True),
             splynx_invoice_id=inv_id,
             is_active=not is_deleted,
@@ -204,11 +208,13 @@ def sync_new_invoices(conn, db, since: datetime) -> dict[str, int]:
         db.add(invoice)
         db.flush()
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.invoice,
-            splynx_id=inv_id,
-            dotmac_id=invoice.id,
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.invoice,
+                splynx_id=inv_id,
+                dotmac_id=invoice.id,
+            )
+        )
 
         # Create invoice line items
         for item in items:
@@ -258,7 +264,7 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
     )
 
     since_str = since.strftime("%Y-%m-%d")
-    query = f"SELECT * FROM payments WHERE date >= '{since_str}' ORDER BY id" # noqa: S608
+    query = f"SELECT * FROM payments WHERE date >= '{since_str}' ORDER BY id"  # noqa: S608
     rows = fetch_all(conn, query)
     created = 0
     skipped = 0
@@ -281,7 +287,9 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
             account_id=subscriber_id,
             amount=amount,
             currency="NGN",
-            status=PaymentStatus.succeeded if not is_deleted else PaymentStatus.canceled,
+            status=PaymentStatus.succeeded
+            if not is_deleted
+            else PaymentStatus.canceled,
             paid_at=_parse_date(row.get("date")),
             receipt_number=(row.get("receipt_number") or "")[:120] or None,
             memo=(row.get("comment") or "")[:500] or None,
@@ -291,11 +299,13 @@ def sync_new_payments(conn, db, since: datetime) -> dict[str, int]:
         db.add(payment)
         db.flush()
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.payment,
-            splynx_id=pid,
-            dotmac_id=payment.id,
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.payment,
+                splynx_id=pid,
+                dotmac_id=payment.id,
+            )
+        )
         created += 1
 
     db.flush()
@@ -413,7 +423,9 @@ def sync_deleted_services(conn, db) -> dict[str, int]:
         return {"canceled": 0}
 
     splynx_ids = ",".join(str(sid) for sid in service_map)
-    query = f"SELECT id FROM services_internet WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    query = (
+        f"SELECT id FROM services_internet WHERE id IN ({splynx_ids}) AND deleted = '1'"  # noqa: S608
+    )
     deleted_rows = fetch_all(conn, query)
     deleted_splynx_ids = {row["id"] for row in deleted_rows}
 
@@ -445,11 +457,26 @@ def run_incremental_sync(
             if dry_run:
                 since_str = since.strftime("%Y-%m-%d %H:%M:%S")
                 tables = [
-                    ("new invoices", f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'"), # noqa: S608
-                    ("new payments", f"SELECT COUNT(*) as cnt FROM payments WHERE date >= '{since.strftime('%Y-%m-%d')}'"), # noqa: S608
-                    ("status changes", "SELECT COUNT(*) as cnt FROM customers WHERE deleted='0' AND category != 'lead'"),
-                    ("deleted customers", "SELECT COUNT(*) as cnt FROM customers WHERE deleted='1' AND category != 'lead'"),
-                    ("deleted services", "SELECT COUNT(*) as cnt FROM services_internet WHERE deleted='1'"),
+                    (
+                        "new invoices",
+                        f"SELECT COUNT(*) as cnt FROM invoices WHERE real_create_datetime >= '{since_str}'",
+                    ),  # noqa: S608
+                    (
+                        "new payments",
+                        f"SELECT COUNT(*) as cnt FROM payments WHERE date >= '{since.strftime('%Y-%m-%d')}'",
+                    ),  # noqa: S608
+                    (
+                        "status changes",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE deleted='0' AND category != 'lead'",
+                    ),
+                    (
+                        "deleted customers",
+                        "SELECT COUNT(*) as cnt FROM customers WHERE deleted='1' AND category != 'lead'",
+                    ),
+                    (
+                        "deleted services",
+                        "SELECT COUNT(*) as cnt FROM services_internet WHERE deleted='1'",
+                    ),
                 ]
                 for name, query in tables:
                     rows = fetch_all(conn, query)
@@ -498,5 +525,7 @@ if __name__ == "__main__":
         run_incremental_sync(hours_back=hours, dry_run=False)
     else:
         run_incremental_sync(hours_back=hours, dry_run=True)
-        print("\nTo execute: poetry run python -m scripts.migration.incremental_sync --execute")
+        print(
+            "\nTo execute: poetry run python -m scripts.migration.incremental_sync --execute"
+        )
         print("Options: --hours=48 (default: 24)")

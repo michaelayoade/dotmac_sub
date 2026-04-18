@@ -183,9 +183,7 @@ def test_configure_form_context_scopes_vlans_and_mgmt_ips_to_ont_olt(
     db_session, region
 ):
     olt = OLTDevice(name="OLT-Configure", mgmt_ip="198.51.100.60", is_active=True)
-    other_olt = OLTDevice(
-        name="OLT-Other", mgmt_ip="198.51.100.61", is_active=True
-    )
+    other_olt = OLTDevice(name="OLT-Other", mgmt_ip="198.51.100.61", is_active=True)
     db_session.add_all([olt, other_olt])
     db_session.commit()
 
@@ -263,12 +261,8 @@ def test_configure_form_context_scopes_vlans_and_mgmt_ips_to_ont_olt(
     assert [vlan.tag for vlan in context["vlans"]] == [450]
     assert context["mgmt_ip_pool"].id == pool.id
     assert [ip["address"] for ip in context["available_mgmt_ips"]] == ["10.45.0.2"]
-    assert "10.46.0.2" not in [
-        ip["address"] for ip in context["available_mgmt_ips"]
-    ]
-    assert "10.47.0.2" not in [
-        ip["address"] for ip in context["available_mgmt_ips"]
-    ]
+    assert "10.46.0.2" not in [ip["address"] for ip in context["available_mgmt_ips"]]
+    assert "10.47.0.2" not in [ip["address"] for ip in context["available_mgmt_ips"]]
 
 
 def test_configure_form_context_uses_pon_assignment_olt_when_ont_fk_missing(
@@ -342,13 +336,11 @@ def test_configure_form_context_uses_pon_assignment_olt_when_ont_fk_missing(
 
     assert [vlan.tag for vlan in context["vlans"]] == [550]
     assert [ip["address"] for ip in context["available_mgmt_ips"]] == ["10.55.0.2"]
-    assert "10.56.0.2" not in [
-        ip["address"] for ip in context["available_mgmt_ips"]
-    ]
+    assert "10.56.0.2" not in [ip["address"] for ip in context["available_mgmt_ips"]]
 
 
 def test_management_ip_choices_prefers_expected_olt_management_network_from_name_alias(
-    db_session
+    db_session,
 ):
     olt = OLTDevice(name="BOI Asokoro OLT 1", is_active=True, mgmt_ip=None)
     db_session.add(olt)
@@ -394,12 +386,30 @@ def test_management_ip_choices_prefers_expected_olt_management_network_from_name
 @pytest.mark.parametrize(
     "name,managed_network,managed_address,wrong_address,serial_suffix",
     [
-        ("Garki Huawei OLT 172.16.201.2/24", "172.16.201.0/24", "172.16.201.2", "10.201.0.2", "GARKI"),
-        ("BOI Huawei OLT 172.20.100.9/30", "172.20.100.8/30", "172.20.100.10", "10.220.0.2", "BOI"),
+        (
+            "Garki Huawei OLT 172.16.201.2/24",
+            "172.16.201.0/24",
+            "172.16.201.2",
+            "10.201.0.2",
+            "GARKI",
+        ),
+        (
+            "BOI Huawei OLT 172.20.100.9/30",
+            "172.20.100.8/30",
+            "172.20.100.10",
+            "10.220.0.2",
+            "BOI",
+        ),
         ("Gudu Huawei OLT", "172.16.205.0/24", "172.16.205.2", "10.205.0.2", "GUDU"),
         ("Karsana Huawei OLT", "172.16.203.0/24", "172.16.203.2", "10.203.0.2", "KARS"),
         ("Jabi Huawei OLT", "172.16.204.0/24", "172.16.204.2", "10.204.0.2", "JABI"),
-        ("Gwarimpa Huawei OLT", "172.16.207.0/24", "172.16.207.2", "10.207.0.2", "GWMR"),
+        (
+            "Gwarimpa Huawei OLT",
+            "172.16.207.0/24",
+            "172.16.207.2",
+            "10.207.0.2",
+            "GWMR",
+        ),
         ("SPDC Huawei OLT", "172.16.210.0/24", "172.16.210.2", "10.210.0.2", "SPDC"),
     ],
 )
@@ -577,7 +587,9 @@ def test_management_ip_choices_prefers_direct_olt_link_over_inactive_assignments
 def test_management_ip_choices_prefers_active_assignment_over_inactive(
     db_session,
 ):
-    garki_olt = OLTDevice(name="Garki Huawei OLT", mgmt_ip="172.16.201.2", is_active=True)
+    garki_olt = OLTDevice(
+        name="Garki Huawei OLT", mgmt_ip="172.16.201.2", is_active=True
+    )
     legacy_olt = OLTDevice(name="Legacy OLT", mgmt_ip="172.16.153.2", is_active=True)
     db_session.add_all([garki_olt, legacy_olt])
     db_session.commit()
@@ -682,10 +694,7 @@ def test_management_ip_choices_ignores_stale_inactive_assignment_without_explici
 
     assert choices["mgmt_ip_pool"] is None
     assert choices["available_mgmt_ips"] == []
-    assert (
-        choices["mgmt_ip_choice_message"]
-        == "No active IPv4 pools are available."
-    )
+    assert choices["mgmt_ip_choice_message"] == "No active IPv4 pools are available."
 
 
 def test_management_ip_choices_ignores_profile_pool_outside_expected_olt_range(
@@ -923,7 +932,9 @@ def test_return_to_inventory_keeps_local_state_when_olt_delete_fails(
 def test_return_to_inventory_succeeds_with_ambiguous_cpe_serial_match(
     db_session, subscriber, monkeypatch
 ):
-    olt = OLTDevice(name="OLT-Return-Ambiguous", mgmt_ip="198.51.100.60", is_active=True)
+    olt = OLTDevice(
+        name="OLT-Return-Ambiguous", mgmt_ip="198.51.100.60", is_active=True
+    )
     db_session.add(olt)
     db_session.commit()
 

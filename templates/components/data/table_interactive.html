@@ -10,14 +10,14 @@
    - create_url: URL for create button (optional)
    - create_label: Label for create button (default: "Add New")
 #}
-<div x-data="{ 
+<div x-data="{
     sortColumn: '{{ sort_column | default('') }}',
     sortDir: '{{ sort_dir | default('asc') }}',
     searchQuery: '{{ search | default('') }}',
     perPage: {{ per_page | default(25) }},
     loading: false
 }" class="space-y-4">
-    
+
     <!-- Table Controls -->
     <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         {% if searchable is not false %}
@@ -36,7 +36,7 @@
             </svg>
         </div>
         {% endif %}
-        
+
         <div class="flex items-center gap-3">
             <select name="per_page"
                     x-model="perPage"
@@ -50,7 +50,7 @@
                 <option value="50">50 per page</option>
                 <option value="100">100 per page</option>
             </select>
-            
+
             {% if create_url %}
             <a href="{{ create_url }}" class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -61,11 +61,11 @@
             {% endif %}
         </div>
     </div>
-    
+
     <!-- Hidden inputs for sort state -->
     <input type="hidden" name="sort" x-bind:value="sortColumn" />
     <input type="hidden" name="dir" x-bind:value="sortDir" />
-    
+
     <!-- Table -->
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="overflow-x-auto">
@@ -100,7 +100,7 @@
                 </tbody>
             </table>
         </div>
-        
+
         <!-- Loading Indicator -->
         <div x-show="loading" class="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-slate-800/50">
             <svg class="h-8 w-8 animate-spin text-primary-600" fill="none" viewBox="0 0 24 24">

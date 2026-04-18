@@ -6,12 +6,12 @@ Create Date: 2026-04-02 10:39:27.713403
 
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
-revision = 'ffdddc71211e'
-down_revision = '007_acs_periodic_inform_interval'
+revision = "ffdddc71211e"
+down_revision = "007_acs_periodic_inform_interval"
 branch_labels = None
 depends_on = None
 

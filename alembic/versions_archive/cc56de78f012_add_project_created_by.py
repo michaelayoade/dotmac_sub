@@ -5,10 +5,10 @@ Revises: bb34cd56ef78
 Create Date: 2026-01-14 00:00:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "cc56de78f012"
@@ -24,7 +24,9 @@ def upgrade() -> None:
     if "created_by_person_id" not in columns:
         op.add_column(
             "projects",
-            sa.Column("created_by_person_id", postgresql.UUID(as_uuid=True), nullable=True),
+            sa.Column(
+                "created_by_person_id", postgresql.UUID(as_uuid=True), nullable=True
+            ),
         )
     fks = {fk["name"] for fk in inspector.get_foreign_keys("projects")}
     if "fk_projects_created_by_person_id_people" not in fks:
@@ -38,5 +40,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_projects_created_by_person_id_people", "projects", type_="foreignkey")
+    op.drop_constraint(
+        "fk_projects_created_by_person_id_people", "projects", type_="foreignkey"
+    )
     op.drop_column("projects", "created_by_person_id")

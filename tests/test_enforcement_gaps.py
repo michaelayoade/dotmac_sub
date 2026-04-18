@@ -100,7 +100,9 @@ class TestUpdateSubscriptionSessions:
         credential = MagicMock(spec=AccessCredential)
         credential.username = "user1"
 
-        db.query.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = [session]
+        db.query.return_value.filter.return_value.filter.return_value.filter.return_value.all.return_value = [
+            session
+        ]
         # First db.get returns subscription, second returns credential, third returns NAS
         nas_device = MagicMock(spec=NasDevice)
         db.get.side_effect = [subscription, credential, nas_device]
@@ -108,7 +110,9 @@ class TestUpdateSubscriptionSessions:
         mock_coa_update.return_value = True
 
         # Need to also mock _resolve_nas_device
-        with patch("app.services.enforcement._resolve_nas_device", return_value=nas_device):
+        with patch(
+            "app.services.enforcement._resolve_nas_device", return_value=nas_device
+        ):
             count = update_subscription_sessions(db, str(sub_id))
 
         assert count == 1
@@ -224,7 +228,9 @@ class TestProvisioningHandlerAutoProvisioning:
         with (
             patch.object(handler, "_sync_radius_on_activation") as mock_sync,
             patch.object(handler, "_push_nas_provisioning") as mock_push,
-            patch("app.services.events.handlers.provisioning.provisioning_service") as mock_prov,
+            patch(
+                "app.services.events.handlers.provisioning.provisioning_service"
+            ) as mock_prov,
         ):
             handler._handle_subscription_activated(db, event)
             mock_sync.assert_called_once_with(db, str(sub_id))
@@ -241,6 +247,8 @@ class TestProvisioningHandlerAutoProvisioning:
         db.get.return_value = subscription
         mock_coerce.return_value = subscription.id
 
-        with patch("app.services.radius.sync_account_credentials_to_radius", return_value=2) as mock_sync:
+        with patch(
+            "app.services.radius.sync_account_credentials_to_radius", return_value=2
+        ) as mock_sync:
             handler._sync_radius_on_activation(db, str(uuid4()))
             mock_sync.assert_called_once()

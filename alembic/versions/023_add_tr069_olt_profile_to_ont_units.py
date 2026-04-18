@@ -5,8 +5,9 @@ the ONT record, so it persists even when no service-order execution context
 is present.
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "023_add_tr069_olt_profile_to_ont_units"

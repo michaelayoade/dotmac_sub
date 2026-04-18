@@ -51,7 +51,9 @@ def test_provision_user_logs_structured_lifecycle(monkeypatch, caplog):
     )
     monkeypatch.setattr(
         "app.services.nas.logs.ProvisioningLogs.get",
-        lambda *_args, **_kwargs: SimpleNamespace(id=log_id, status=ProvisioningLogStatus.success),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            id=log_id, status=ProvisioningLogStatus.success
+        ),
     )
     monkeypatch.setattr(
         DeviceProvisioner,

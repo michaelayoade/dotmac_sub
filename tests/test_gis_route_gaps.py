@@ -38,7 +38,10 @@ def test_areas_containing_point_route_is_not_shadowed() -> None:
 
 
 def test_admin_gis_registers_layer_edit_routes() -> None:
-    paths = {(route.path, tuple(sorted(route.methods or []))) for route in web_gis.router.routes}
+    paths = {
+        (route.path, tuple(sorted(route.methods or [])))
+        for route in web_gis.router.routes
+    }
     assert ("/gis/layers/{layer_id}/edit", ("GET",)) in paths
     assert ("/gis/layers/{layer_id}/edit", ("POST",)) in paths
     assert ("/gis/layers/{layer_id}/delete", ("POST",)) in paths
@@ -57,16 +60,21 @@ def test_coverage_check_defaults_to_serviceable_area_types(monkeypatch) -> None:
         ],
     )
 
-    result = gis_api.coverage_check(latitude=9.0, longitude=7.0, area_type=None, db=object())
+    result = gis_api.coverage_check(
+        latitude=9.0, longitude=7.0, area_type=None, db=object()
+    )
 
     assert result["covered"] is True
     assert result["count"] == 2
-    assert [item["area_type"] for item in result["matching_areas"]] == ["coverage", "service_area"]
+    assert [item["area_type"] for item in result["matching_areas"]] == [
+        "coverage",
+        "service_area",
+    ]
 
 
 def test_gis_dashboard_template_exposes_area_edit_link() -> None:
     template = Path("templates/admin/gis/index.html").read_text()
-    assert '/admin/gis/areas/{{ area.id }}/edit' in template
+    assert "/admin/gis/areas/{{ area.id }}/edit" in template
 
 
 def test_gis_dashboard_template_renders_area_and_layer_overlays() -> None:

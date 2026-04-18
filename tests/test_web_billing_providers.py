@@ -47,12 +47,16 @@ def test_run_provider_test_paystack_success(db_session):
     domain_settings_service.billing_settings.upsert_by_key(
         db_session,
         "paystack_secret_key",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="sk_test_abc123"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="sk_test_abc123"
+        ),
     )
     domain_settings_service.billing_settings.upsert_by_key(
         db_session,
         "paystack_public_key",
-        DomainSettingUpdate(value_type=SettingValueType.string, value_text="pk_test_abc123"),
+        DomainSettingUpdate(
+            value_type=SettingValueType.string, value_text="pk_test_abc123"
+        ),
     )
 
     result = run_provider_test(db_session, provider_type_value="paystack", mode="test")
@@ -121,7 +125,9 @@ def test_build_gateway_reconciliation_counts(db_session, subscriber):
     db_session.commit()
 
     payload = build_gateway_reconciliation(db_session)
-    paystack_row = [row for row in payload["rows"] if row["provider_type"] == "paystack"][0]
+    paystack_row = [
+        row for row in payload["rows"] if row["provider_type"] == "paystack"
+    ][0]
 
     assert paystack_row["payment_count"] == 2
     assert paystack_row["event_count"] == 2

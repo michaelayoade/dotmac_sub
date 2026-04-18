@@ -27,7 +27,9 @@ def _has_column(table_name: str, column_name: str) -> bool:
 
 def upgrade() -> None:
     if not _has_column("ont_units", "contact"):
-        op.add_column("ont_units", sa.Column("contact", sa.String(length=255), nullable=True))
+        op.add_column(
+            "ont_units", sa.Column("contact", sa.String(length=255), nullable=True)
+        )
 
     op.execute(
         text(

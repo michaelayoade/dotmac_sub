@@ -114,7 +114,10 @@ def test_dashboard_stats_ignore_splynx_deleted_import_churn(db_session):
     assert stats["new_this_month"] == 1
     assert stats["subscriber_status_chart"]["values"] == [1, 0, 1, 1]
     assert stats["churn_rate"] == 50.0
-    assert all(row.email != "imported-deleted@example.com" for row in stats["recent_subscribers"])
+    assert all(
+        row.email != "imported-deleted@example.com"
+        for row in stats["recent_subscribers"]
+    )
 
 
 def test_effective_dates_prefer_splynx_source_metadata(db_session):
@@ -137,8 +140,12 @@ def test_effective_dates_prefer_splynx_source_metadata(db_session):
     db_session.add(subscriber)
     db_session.commit()
 
-    assert subscriber_service.get_effective_created_at(subscriber) == datetime(2025, 12, 20, 8, 30, tzinfo=UTC)
-    assert subscriber_service.get_effective_updated_at(subscriber) == datetime(2026, 2, 14, 9, 45, tzinfo=UTC)
+    assert subscriber_service.get_effective_created_at(subscriber) == datetime(
+        2025, 12, 20, 8, 30, tzinfo=UTC
+    )
+    assert subscriber_service.get_effective_updated_at(subscriber) == datetime(
+        2026, 2, 14, 9, 45, tzinfo=UTC
+    )
 
 
 def test_effective_created_at_falls_back_to_account_start_for_splynx_import(db_session):
@@ -156,4 +163,6 @@ def test_effective_created_at_falls_back_to_account_start_for_splynx_import(db_s
     db_session.add(subscriber)
     db_session.commit()
 
-    assert subscriber_service.get_effective_created_at(subscriber) == datetime(2025, 11, 5, tzinfo=UTC)
+    assert subscriber_service.get_effective_created_at(subscriber) == datetime(
+        2025, 11, 5, tzinfo=UTC
+    )

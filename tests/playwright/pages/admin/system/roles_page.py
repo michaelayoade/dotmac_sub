@@ -21,7 +21,9 @@ class RolesPage(BasePage):
         last_error: Exception | None = None
         for _ in range(2):
             try:
-                self.page.goto(f"{self.base_url}{path}", wait_until="commit", timeout=30000)
+                self.page.goto(
+                    f"{self.base_url}{path}", wait_until="commit", timeout=30000
+                )
                 return
             except PlaywrightError as exc:
                 last_error = exc
@@ -30,7 +32,9 @@ class RolesPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the roles page is loaded."""
-        expect(self.page.get_by_role("heading", name="Roles & Permissions", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Roles & Permissions", exact=True)
+        ).to_be_visible()
 
     def click_new_role(self) -> None:
         """Click new role button."""
@@ -45,9 +49,11 @@ class RolesPage(BasePage):
     def expect_role_in_list(self, role_name: str) -> None:
         """Assert a role is visible in the list."""
         expect(
-            self.page.get_by_role("row").filter(
+            self.page.get_by_role("row")
+            .filter(
                 has_text=re.compile(rf"^{re.escape(role_name)}(?:\s|$)", re.IGNORECASE)
-            ).first
+            )
+            .first
         ).to_be_visible()
 
     def get_role_count(self) -> int:

@@ -13,7 +13,9 @@ from app.services.events.types import EventType
 
 
 def test_audit_record_is_deferred_until_commit(db_session):
-    subscriber = Subscriber(first_name="Audit", last_name="Deferred", email="audit-deferred@example.com")
+    subscriber = Subscriber(
+        first_name="Audit", last_name="Deferred", email="audit-deferred@example.com"
+    )
     db_session.add(subscriber)
     db_session.flush()
 
@@ -39,7 +41,9 @@ def test_audit_record_is_deferred_until_commit(db_session):
 
 
 def test_audit_record_is_discarded_on_rollback(db_session):
-    subscriber = Subscriber(first_name="Audit", last_name="Rollback", email="audit-rollback@example.com")
+    subscriber = Subscriber(
+        first_name="Audit", last_name="Rollback", email="audit-rollback@example.com"
+    )
     db_session.add(subscriber)
     db_session.flush()
 
@@ -146,7 +150,9 @@ def test_audit_request_payload_redacts_sensitive_query_params():
 @patch("app.services.events.dispatcher._dispatcher", None)
 @patch("app.services.events.dispatcher._initialize_handlers")
 def test_emit_event_is_deferred_until_commit(_mock_init_handlers, db_session):
-    subscriber = Subscriber(first_name="Event", last_name="Deferred", email="event-deferred@example.com")
+    subscriber = Subscriber(
+        first_name="Event", last_name="Deferred", email="event-deferred@example.com"
+    )
     db_session.add(subscriber)
     db_session.flush()
 
@@ -169,7 +175,9 @@ def test_emit_event_is_deferred_until_commit(_mock_init_handlers, db_session):
 @patch("app.services.events.dispatcher._dispatcher", None)
 @patch("app.services.events.dispatcher._initialize_handlers")
 def test_emit_event_is_discarded_on_rollback(_mock_init_handlers, db_session):
-    subscriber = Subscriber(first_name="Event", last_name="Rollback", email="event-rollback@example.com")
+    subscriber = Subscriber(
+        first_name="Event", last_name="Rollback", email="event-rollback@example.com"
+    )
     db_session.add(subscriber)
     db_session.flush()
 
@@ -197,7 +205,9 @@ def test_emit_event_sanitizes_sensitive_payload_values(db_session):
     )
     db_session.commit()
 
-    row = db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    row = (
+        db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    )
     assert row.payload["api_token"] == "<redacted>"
     assert row.payload["nested"]["password"] == "<redacted>"
     assert row.payload["nested"]["visible"] == "ok"
@@ -217,7 +227,9 @@ def test_dispatcher_persists_first_class_handler_attempts(db_session):
 
     dispatcher.dispatch(db_session, event)
 
-    stored_event = db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    stored_event = (
+        db_session.query(EventStore).filter(EventStore.event_id == event.event_id).one()
+    )
     attempts = (
         db_session.query(EventHandlerAttempt)
         .filter(EventHandlerAttempt.event_store_id == stored_event.id)
@@ -300,9 +312,7 @@ def test_emit_event_in_nested_transaction_waits_for_outer_commit(
 
 @patch("app.services.events.dispatcher._dispatcher", None)
 @patch("app.services.events.dispatcher._initialize_handlers")
-def test_emit_event_in_nested_rollback_is_discarded(
-    _mock_init_handlers, db_session
-):
+def test_emit_event_in_nested_rollback_is_discarded(_mock_init_handlers, db_session):
     subscriber = Subscriber(
         first_name="Event",
         last_name="NestedRollback",

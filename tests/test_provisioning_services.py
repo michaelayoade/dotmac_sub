@@ -129,7 +129,9 @@ def test_create_install_appointment(db_session, subscriber_account, subscription
     assert appointment.status == AppointmentStatus.proposed
 
 
-def test_list_appointments_by_service_order(db_session, subscriber_account, subscription):
+def test_list_appointments_by_service_order(
+    db_session, subscriber_account, subscription
+):
     """Test listing appointments by service order."""
     order = provisioning_service.service_orders.create(
         db_session,
@@ -336,7 +338,9 @@ def test_create_service_state_transition(db_session, subscriber_account, subscri
     assert transition.to_state == ServiceState.provisioning
 
 
-def test_list_transitions_by_service_order(db_session, subscriber_account, subscription):
+def test_list_transitions_by_service_order(
+    db_session, subscriber_account, subscription
+):
     """Test listing state transitions by service order."""
     order = provisioning_service.service_orders.create(
         db_session,

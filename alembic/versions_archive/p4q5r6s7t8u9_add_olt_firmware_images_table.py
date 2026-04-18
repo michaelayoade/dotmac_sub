@@ -5,9 +5,10 @@ Revises: o3p4q5r6s7t8
 Create Date: 2026-03-17
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision = "p4q5r6s7t8u9"
 down_revision = "o3p4q5r6s7t8"
@@ -31,9 +32,24 @@ def upgrade() -> None:
             sa.Column("upgrade_method", sa.String(60), nullable=True),
             sa.Column("notes", sa.Text, nullable=True),
             sa.Column("is_active", sa.Boolean, nullable=False, server_default="true"),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-            sa.UniqueConstraint("vendor", "model", "version", name="uq_olt_firmware_vendor_model_version"),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.UniqueConstraint(
+                "vendor",
+                "model",
+                "version",
+                name="uq_olt_firmware_vendor_model_version",
+            ),
         )
 
 

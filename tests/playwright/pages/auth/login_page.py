@@ -12,13 +12,16 @@ class LoginPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/auth/login") -> None:
         """Navigate to the login page."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the login page is loaded."""
-        expect(self.page.get_by_role("heading", name="Welcome back", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="Welcome back", exact=True)
+        ).to_be_visible()
 
     def fill_username(self, username: str) -> None:
         """Fill the username field."""

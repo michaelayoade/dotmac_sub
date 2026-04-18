@@ -8,9 +8,8 @@ Create Date: 2026-03-19 15:52:01.109265
 
 from alembic import op
 
-
-revision = 'a079511c71a3'
-down_revision = 'cc45f3350603'
+revision = "a079511c71a3"
+down_revision = "cc45f3350603"
 branch_labels = None
 depends_on = None
 
@@ -26,9 +25,7 @@ _NEW_VALUES = [
 def upgrade() -> None:
     # PostgreSQL enum ADD VALUE cannot run inside a transaction
     for value in _NEW_VALUES:
-        op.execute(
-            f"ALTER TYPE provisioningsteptype ADD VALUE IF NOT EXISTS '{value}'"
-        )
+        op.execute(f"ALTER TYPE provisioningsteptype ADD VALUE IF NOT EXISTS '{value}'")
 
 
 def downgrade() -> None:

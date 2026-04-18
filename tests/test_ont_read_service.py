@@ -55,7 +55,13 @@ class TestGetCapabilities:
         """If capability record exists, return feature dict."""
         ont = MagicMock(vendor="Huawei", model="EG8145V5", firmware_version=None)
         cap = MagicMock(
-            supported_features={"wifi": True, "voip": True, "catv": False, "iptv": False, "tr069": True},
+            supported_features={
+                "wifi": True,
+                "voip": True,
+                "catv": False,
+                "iptv": False,
+                "tr069": True,
+            },
             supports_vlan_tagging=True,
             supports_qinq=False,
             supports_ipv6=False,

@@ -53,9 +53,10 @@ class TestRoles:
         page.goto()
         page.expect_loaded()
         expect(
-            admin_page.get_by_role("row").filter(has_text="admin").or_(
-                admin_page.get_by_role("row").filter(has_text="Administrator")
-            ).first
+            admin_page.get_by_role("row")
+            .filter(has_text="admin")
+            .or_(admin_page.get_by_role("row").filter(has_text="Administrator"))
+            .first
         ).to_be_visible()
 
 
@@ -74,9 +75,9 @@ class TestAPIKeys:
         page.goto()
         page.expect_loaded()
         expect(
-            admin_page.get_by_text("Your API Keys", exact=True).or_(
-                admin_page.get_by_text("No API keys yet", exact=True)
-            ).first
+            admin_page.get_by_text("Your API Keys", exact=True)
+            .or_(admin_page.get_by_text("No API keys yet", exact=True))
+            .first
         ).to_be_visible()
 
 
@@ -95,9 +96,9 @@ class TestWebhooks:
         page.goto()
         page.expect_loaded()
         expect(
-            admin_page.get_by_role("heading", name="Webhook Endpoints", exact=True).or_(
-                admin_page.get_by_text("No webhook endpoints configured", exact=True)
-            ).first
+            admin_page.get_by_role("heading", name="Webhook Endpoints", exact=True)
+            .or_(admin_page.get_by_text("No webhook endpoints configured", exact=True))
+            .first
         ).to_be_visible()
 
 

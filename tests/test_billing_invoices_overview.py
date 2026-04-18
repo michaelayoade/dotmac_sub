@@ -5,12 +5,12 @@ from decimal import Decimal
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.subscriber import Reseller, Subscriber
+from app.services import web_billing_overview as web_billing_overview_service
 from app.services.web_billing_overview import (
     build_invoices_list_data,
     build_overview_data,
     render_invoices_csv,
 )
-from app.services import web_billing_overview as web_billing_overview_service
 
 
 def _reset_overview_cache() -> None:
@@ -288,6 +288,9 @@ def test_render_invoices_csv_contains_due_and_received_columns(db_session, subsc
 
     csv_text = render_invoices_csv([invoice])
 
-    assert "invoice_id,invoice_number,account_id,status,total,balance_due,payment_received,currency" in csv_text
+    assert (
+        "invoice_id,invoice_number,account_id,status,total,balance_due,payment_received,currency"
+        in csv_text
+    )
     assert "INV-CSV-1" in csv_text
     assert ",150.00,40.00,110.00,NGN," in csv_text

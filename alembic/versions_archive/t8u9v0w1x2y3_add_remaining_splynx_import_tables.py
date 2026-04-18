@@ -95,9 +95,7 @@ def upgrade() -> None:
         op.create_table(
             "splynx_archived_tickets",
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column(
-                "splynx_ticket_id", sa.Integer(), nullable=False, unique=True
-            ),
+            sa.Column("splynx_ticket_id", sa.Integer(), nullable=False, unique=True),
             sa.Column(
                 "subscriber_id",
                 postgresql.UUID(as_uuid=True),
@@ -143,9 +141,7 @@ def upgrade() -> None:
         op.create_table(
             "splynx_archived_ticket_messages",
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column(
-                "splynx_message_id", sa.Integer(), nullable=False, unique=True
-            ),
+            sa.Column("splynx_message_id", sa.Integer(), nullable=False, unique=True),
             sa.Column(
                 "ticket_id",
                 postgresql.UUID(as_uuid=True),
@@ -179,9 +175,7 @@ def upgrade() -> None:
         op.create_table(
             "splynx_archived_quotes",
             sa.Column("id", postgresql.UUID(as_uuid=True), primary_key=True),
-            sa.Column(
-                "splynx_quote_id", sa.Integer(), nullable=False, unique=True
-            ),
+            sa.Column("splynx_quote_id", sa.Integer(), nullable=False, unique=True),
             sa.Column(
                 "subscriber_id",
                 postgresql.UUID(as_uuid=True),
@@ -189,9 +183,7 @@ def upgrade() -> None:
                 nullable=True,
             ),
             sa.Column("quote_number", sa.String(60), nullable=True),
-            sa.Column(
-                "status", sa.String(40), nullable=False, server_default="draft"
-            ),
+            sa.Column("status", sa.String(40), nullable=False, server_default="draft"),
             sa.Column("currency", sa.String(3), nullable=False, server_default="NGN"),
             sa.Column(
                 "subtotal", sa.Numeric(12, 2), nullable=False, server_default="0"
@@ -199,9 +191,7 @@ def upgrade() -> None:
             sa.Column(
                 "tax_total", sa.Numeric(12, 2), nullable=False, server_default="0"
             ),
-            sa.Column(
-                "total", sa.Numeric(12, 2), nullable=False, server_default="0"
-            ),
+            sa.Column("total", sa.Numeric(12, 2), nullable=False, server_default="0"),
             sa.Column("valid_until", sa.DateTime(timezone=True), nullable=True),
             sa.Column("memo", sa.Text(), nullable=True),
             sa.Column(
@@ -249,9 +239,7 @@ def upgrade() -> None:
             sa.Column(
                 "unit_price", sa.Numeric(12, 2), nullable=False, server_default="0"
             ),
-            sa.Column(
-                "amount", sa.Numeric(12, 2), nullable=False, server_default="0"
-            ),
+            sa.Column("amount", sa.Numeric(12, 2), nullable=False, server_default="0"),
             sa.Column(
                 "created_at",
                 sa.DateTime(timezone=True),

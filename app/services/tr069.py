@@ -1393,7 +1393,11 @@ class Jobs(ListResponseMixin):
                 # Check for fault in response
                 fault = result.get("fault")
                 if fault:
-                    fault_msg = fault.get("detail", {}).get("faultString") or str(fault)
+                    fault_msg = (
+                        fault.get("detail", {}).get("faultString")
+                        if isinstance(fault, dict)
+                        else None
+                    ) or str(fault)
                     job.status = Tr069JobStatus.failed
                     job.error = f"Task fault: {fault_msg}"
                     logger.error(

@@ -5,8 +5,9 @@ Revises: k2l3m4n5o6p7
 Create Date: 2026-01-22
 """
 
-from alembic import op
 from sqlalchemy import text
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "l1m2n3o4p5q6"

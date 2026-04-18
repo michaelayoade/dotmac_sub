@@ -5,11 +5,12 @@ Revises: c1f4d6a8b9e2
 Create Date: 2026-03-10
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from sqlalchemy import inspect
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision = "d2e5f7a9b1c3"
 down_revision = "c1f4d6a8b9e2"
@@ -33,11 +34,21 @@ def upgrade() -> None:
     inspector = inspect(conn)
 
     # Create enum types that don't exist yet
-    _create_enum_if_not_exists("ontprofiletype", ["residential", "business", "management"])
-    _create_enum_if_not_exists("wanservicetype", ["internet", "iptv", "voip", "management", "data"])
-    _create_enum_if_not_exists("vlanmode", ["tagged", "untagged", "transparent", "translate"])
-    _create_enum_if_not_exists("wanconnectiontype", ["pppoe", "dhcp", "static", "bridged"])
-    _create_enum_if_not_exists("pppoepasswordmode", ["from_credential", "generate", "static"])
+    _create_enum_if_not_exists(
+        "ontprofiletype", ["residential", "business", "management"]
+    )
+    _create_enum_if_not_exists(
+        "wanservicetype", ["internet", "iptv", "voip", "management", "data"]
+    )
+    _create_enum_if_not_exists(
+        "vlanmode", ["tagged", "untagged", "transparent", "translate"]
+    )
+    _create_enum_if_not_exists(
+        "wanconnectiontype", ["pppoe", "dhcp", "static", "bridged"]
+    )
+    _create_enum_if_not_exists(
+        "pppoepasswordmode", ["from_credential", "generate", "static"]
+    )
     _create_enum_if_not_exists("configmethod", ["omci", "tr069"])
     _create_enum_if_not_exists("onumode", ["routing", "bridging"])
     _create_enum_if_not_exists("ipprotocol", ["ipv4", "dual_stack"])
@@ -76,15 +87,33 @@ def upgrade() -> None:
             # Device-level defaults
             sa.Column(
                 "config_method",
-                PGEnum("omci", "tr069", name="configmethod", create_constraint=False, create_type=False),
+                PGEnum(
+                    "omci",
+                    "tr069",
+                    name="configmethod",
+                    create_constraint=False,
+                    create_type=False,
+                ),
             ),
             sa.Column(
                 "onu_mode",
-                PGEnum("routing", "bridging", name="onumode", create_constraint=False, create_type=False),
+                PGEnum(
+                    "routing",
+                    "bridging",
+                    name="onumode",
+                    create_constraint=False,
+                    create_type=False,
+                ),
             ),
             sa.Column(
                 "ip_protocol",
-                PGEnum("ipv4", "dual_stack", name="ipprotocol", create_constraint=False, create_type=False),
+                PGEnum(
+                    "ipv4",
+                    "dual_stack",
+                    name="ipprotocol",
+                    create_constraint=False,
+                    create_type=False,
+                ),
             ),
             # Speed profiles
             sa.Column(
@@ -133,7 +162,9 @@ def upgrade() -> None:
                 sa.DateTime(timezone=True),
                 server_default=sa.func.now(),
             ),
-            sa.UniqueConstraint("organization_id", "name", name="uq_ont_prov_profiles_org_name"),
+            sa.UniqueConstraint(
+                "organization_id", "name", name="uq_ont_prov_profiles_org_name"
+            ),
         )
 
     # Create ont_profile_wan_services table
@@ -202,7 +233,13 @@ def upgrade() -> None:
             sa.Column("nat_enabled", sa.Boolean, server_default="true"),
             sa.Column(
                 "ip_mode",
-                PGEnum("ipv4", "dual_stack", name="ipprotocol", create_constraint=False, create_type=False),
+                PGEnum(
+                    "ipv4",
+                    "dual_stack",
+                    name="ipprotocol",
+                    create_constraint=False,
+                    create_type=False,
+                ),
             ),
             # PPPoE
             sa.Column("pppoe_username_template", sa.String(200)),

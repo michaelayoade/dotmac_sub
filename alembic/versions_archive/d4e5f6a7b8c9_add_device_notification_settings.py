@@ -27,16 +27,28 @@ def upgrade() -> None:
     if "send_notifications" not in columns:
         op.add_column(
             "network_devices",
-            sa.Column("send_notifications", sa.Boolean(), nullable=False, server_default=sa.true()),
+            sa.Column(
+                "send_notifications",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.true(),
+            ),
         )
         op.alter_column("network_devices", "send_notifications", server_default=None)
 
     if "notification_delay_minutes" not in columns:
         op.add_column(
             "network_devices",
-            sa.Column("notification_delay_minutes", sa.Integer(), nullable=False, server_default="0"),
+            sa.Column(
+                "notification_delay_minutes",
+                sa.Integer(),
+                nullable=False,
+                server_default="0",
+            ),
         )
-        op.alter_column("network_devices", "notification_delay_minutes", server_default=None)
+        op.alter_column(
+            "network_devices", "notification_delay_minutes", server_default=None
+        )
 
 
 def downgrade() -> None:

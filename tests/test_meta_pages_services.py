@@ -448,7 +448,12 @@ def test_create_instagram_carousel_post(db_session):
     with patch("httpx.AsyncClient") as mock_client:
         mock_instance = AsyncMock()
         mock_instance.request = AsyncMock(
-            side_effect=[child1_response, child2_response, carousel_response, publish_response]
+            side_effect=[
+                child1_response,
+                child2_response,
+                carousel_response,
+                publish_response,
+            ]
         )
         mock_client.return_value.__aenter__ = AsyncMock(return_value=mock_instance)
         mock_client.return_value.__aexit__ = AsyncMock(return_value=None)

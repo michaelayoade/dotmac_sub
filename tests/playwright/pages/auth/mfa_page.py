@@ -12,13 +12,18 @@ class MFAPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/auth/mfa") -> None:
         """Navigate to the MFA page."""
         super().goto(path)
 
     def expect_loaded(self) -> None:
         """Assert the MFA page is loaded."""
-        expect(self.page.get_by_role("heading", name="Two-Factor Authentication", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role(
+                "heading", name="Two-Factor Authentication", exact=True
+            )
+        ).to_be_visible()
 
     def fill_code(self, code: str) -> None:
         """Fill the verification code."""

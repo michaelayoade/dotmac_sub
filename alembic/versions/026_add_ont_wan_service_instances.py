@@ -9,9 +9,9 @@ Create Date: 2026-04-17
 
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "026_add_ont_wan_service_instances"
 down_revision = "025_acs_interval_3600"
@@ -33,9 +33,7 @@ def upgrade() -> None:
 
     # Create the wanserviceprovisioningstatus enum type if it doesn't exist
     result = conn.execute(
-        sa.text(
-            "SELECT 1 FROM pg_type WHERE typname = 'wanserviceprovisioningstatus'"
-        )
+        sa.text("SELECT 1 FROM pg_type WHERE typname = 'wanserviceprovisioningstatus'")
     )
     if not result.fetchone():
         op.execute(
@@ -106,12 +104,8 @@ def downgrade() -> None:
         return  # Table doesn't exist, nothing to do
 
     # Drop indexes (if they exist)
-    op.execute(
-        "DROP INDEX IF EXISTS ix_ont_wan_service_instances_ont_type"
-    )
-    op.execute(
-        "DROP INDEX IF EXISTS ix_ont_wan_service_instances_ont_id"
-    )
+    op.execute("DROP INDEX IF EXISTS ix_ont_wan_service_instances_ont_type")
+    op.execute("DROP INDEX IF EXISTS ix_ont_wan_service_instances_ont_id")
     op.drop_table("ont_wan_service_instances")
 
     # Only drop the enum if no other tables use it

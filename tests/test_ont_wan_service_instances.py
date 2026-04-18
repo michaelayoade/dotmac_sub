@@ -201,9 +201,7 @@ class TestVlanResolutionByTag:
         db_session.add(olt)
         db_session.flush()
 
-        vlan = Vlan(
-            tag=500, region_id=region.id, olt_device_id=olt.id, is_active=True
-        )
+        vlan = Vlan(tag=500, region_id=region.id, olt_device_id=olt.id, is_active=True)
         db_session.add(vlan)
         db_session.commit()
 
@@ -291,9 +289,7 @@ class TestApplyProfileCreatesWanInstances:
         assert internet_inst.connection_type == WanConnectionType.pppoe
         assert internet_inst.s_vlan == 203
 
-        iptv_inst = next(
-            i for i in instances if i.service_type == WanServiceType.iptv
-        )
+        iptv_inst = next(i for i in instances if i.service_type == WanServiceType.iptv)
         assert iptv_inst.connection_type == WanConnectionType.dhcp
         assert iptv_inst.s_vlan == 500
 

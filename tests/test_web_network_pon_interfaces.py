@@ -19,17 +19,34 @@ def test_build_page_data_merges_modeled_and_discovered_interfaces(db_session):
     db_session.add(olt)
     db_session.flush()
 
-    modeled = PonPort(olt_id=olt.id, name="0/1/0", notes="Primary splitter\n[[alias:Main Street]]", is_active=True)
+    modeled = PonPort(
+        olt_id=olt.id,
+        name="0/1/0",
+        notes="Primary splitter\n[[alias:Main Street]]",
+        is_active=True,
+    )
     db_session.add(modeled)
 
     monitor = NetworkDevice(name="OLT-A", mgmt_ip="198.51.100.10", is_active=True)
     db_session.add(monitor)
     db_session.flush()
 
-    db_session.add_all([
-        DeviceInterface(device_id=monitor.id, name="gpon 0/1/0", status=InterfaceStatus.up, description="Frame A"),
-        DeviceInterface(device_id=monitor.id, name="gpon 0/1/1", status=InterfaceStatus.down, description="Frame B"),
-    ])
+    db_session.add_all(
+        [
+            DeviceInterface(
+                device_id=monitor.id,
+                name="gpon 0/1/0",
+                status=InterfaceStatus.up,
+                description="Frame A",
+            ),
+            DeviceInterface(
+                device_id=monitor.id,
+                name="gpon 0/1/1",
+                status=InterfaceStatus.down,
+                description="Frame B",
+            ),
+        ]
+    )
     db_session.commit()
 
     page = build_page_data(db_session)
@@ -51,17 +68,29 @@ def test_build_page_data_filters_by_status_and_search(db_session):
     db_session.add(olt)
     db_session.flush()
 
-    db_session.add_all([
-        PonPort(olt_id=olt.id, name="0/2/0", notes="[[alias:Alpha]]", is_active=True),
-        PonPort(olt_id=olt.id, name="0/2/1", notes="[[alias:Beta]]", is_active=True),
-    ])
+    db_session.add_all(
+        [
+            PonPort(
+                olt_id=olt.id, name="0/2/0", notes="[[alias:Alpha]]", is_active=True
+            ),
+            PonPort(
+                olt_id=olt.id, name="0/2/1", notes="[[alias:Beta]]", is_active=True
+            ),
+        ]
+    )
     monitor = NetworkDevice(name="OLT-B", mgmt_ip="198.51.100.11", is_active=True)
     db_session.add(monitor)
     db_session.flush()
-    db_session.add_all([
-        DeviceInterface(device_id=monitor.id, name="gpon 0/2/0", status=InterfaceStatus.up),
-        DeviceInterface(device_id=monitor.id, name="gpon 0/2/1", status=InterfaceStatus.down),
-    ])
+    db_session.add_all(
+        [
+            DeviceInterface(
+                device_id=monitor.id, name="gpon 0/2/0", status=InterfaceStatus.up
+            ),
+            DeviceInterface(
+                device_id=monitor.id, name="gpon 0/2/1", status=InterfaceStatus.down
+            ),
+        ]
+    )
     db_session.commit()
 
     filtered = build_page_data(db_session, status="down", search="beta")
@@ -195,4 +224,6 @@ def test_save_alias_rejects_mismatched_explicit_pon_port(db_session):
         )
 
     assert exc_info.value.status_code == 400
-    assert exc_info.value.detail == "PON port does not match the submitted interface name"
+    assert (
+        exc_info.value.detail == "PON port does not match the submitted interface name"
+    )

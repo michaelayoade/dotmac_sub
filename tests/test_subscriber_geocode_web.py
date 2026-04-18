@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.models.network import OnuOnlineStatus, OntAssignment, OntUnit
+from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
 from app.models.subscriber import Address, Subscriber
 from app.services.web_subscriber_details import build_subscriber_detail_snapshot
 from app.web.admin import subscribers as subscribers_web
@@ -20,7 +20,9 @@ def _create_subscriber(db_session) -> Subscriber:
     return subscriber
 
 
-def test_subscriber_detail_snapshot_includes_geocode_target_without_coordinates(db_session):
+def test_subscriber_detail_snapshot_includes_geocode_target_without_coordinates(
+    db_session,
+):
     subscriber = _create_subscriber(db_session)
     address = Address(
         subscriber_id=subscriber.id,

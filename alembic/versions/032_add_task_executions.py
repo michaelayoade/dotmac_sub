@@ -34,12 +34,8 @@ def upgrade() -> None:
 
     op.create_table(
         "task_executions",
-        sa.Column(
-            "id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True
-        ),
-        sa.Column(
-            "idempotency_key", sa.String(255), unique=True, nullable=False
-        ),
+        sa.Column("id", sa.dialects.postgresql.UUID(as_uuid=True), primary_key=True),
+        sa.Column("idempotency_key", sa.String(255), unique=True, nullable=False),
         sa.Column("task_name", sa.String(255), nullable=False, index=True),
         sa.Column(
             "status",
@@ -48,9 +44,7 @@ def upgrade() -> None:
             index=True,
         ),
         sa.Column("celery_task_id", sa.String(255), nullable=True),
-        sa.Column(
-            "result", sa.dialects.postgresql.JSONB, nullable=True
-        ),
+        sa.Column("result", sa.dialects.postgresql.JSONB, nullable=True),
         sa.Column("error_message", sa.Text, nullable=True),
         sa.Column(
             "created_at",

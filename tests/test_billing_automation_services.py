@@ -150,7 +150,9 @@ class TestResolvePrice:
         subscription.offer_version_id = offer_version.id
         db_session.commit()
 
-        amount, currency, cycle = billing_automation._resolve_price(db_session, subscription)
+        amount, currency, cycle = billing_automation._resolve_price(
+            db_session, subscription
+        )
         assert amount == Decimal("99.99")
         assert currency == "USD"
         assert cycle == BillingCycle.monthly
@@ -171,7 +173,9 @@ class TestResolvePrice:
         db_session.add(offer_price)
         db_session.commit()
 
-        amount, currency, cycle = billing_automation._resolve_price(db_session, subscription)
+        amount, currency, cycle = billing_automation._resolve_price(
+            db_session, subscription
+        )
         assert amount == Decimal("79.99")
         assert currency == "EUR"
         assert cycle == BillingCycle.annual
@@ -179,7 +183,9 @@ class TestResolvePrice:
     def test_no_price_found(self, db_session, subscription):
         """Test when no price is found."""
         # No prices created
-        amount, currency, cycle = billing_automation._resolve_price(db_session, subscription)
+        amount, currency, cycle = billing_automation._resolve_price(
+            db_session, subscription
+        )
         assert amount is None
         assert currency is None
         assert cycle is None
@@ -373,13 +379,17 @@ class TestRunInvoiceCycle:
         db_session.commit()
 
         # Run dry mode - pass naive run_at to match SQLite
-        summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive, dry_run=True)
+        summary = billing_automation.run_invoice_cycle(
+            db_session, run_at=now_naive, dry_run=True
+        )
 
         assert summary["run_id"] is None
         assert summary["subscriptions_scanned"] >= 1
         # No actual invoices created in dry_run
 
-    def test_creates_invoice_for_active_subscription(self, db_session, subscription, subscriber_account):
+    def test_creates_invoice_for_active_subscription(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test creates invoice for active subscription."""
         from app.models.billing import Invoice
         from app.models.catalog import (
@@ -411,9 +421,11 @@ class TestRunInvoiceCycle:
         db_session.add(offer_price)
         db_session.commit()
 
-        initial_invoices = db_session.query(Invoice).filter(
-            Invoice.account_id == subscriber_account.id
-        ).count()
+        initial_invoices = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+        )
 
         # Run billing - pass naive run_at to match SQLite
         summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive)
@@ -423,12 +435,16 @@ class TestRunInvoiceCycle:
         assert summary["lines_created"] >= 1
 
         # Verify invoice was created
-        final_invoices = db_session.query(Invoice).filter(
-            Invoice.account_id == subscriber_account.id
-        ).count()
+        final_invoices = (
+            db_session.query(Invoice)
+            .filter(Invoice.account_id == subscriber_account.id)
+            .count()
+        )
         assert final_invoices > initial_invoices
 
-    def test_skips_subscription_without_price(self, db_session, subscription, subscriber_account):
+    def test_skips_subscription_without_price(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test skips subscription without a price."""
         from app.models.catalog import SubscriptionStatus
         from app.models.subscriber import AccountStatus
@@ -443,11 +459,15 @@ class TestRunInvoiceCycle:
 
         # No price created
 
-        summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive, dry_run=True)
+        summary = billing_automation.run_invoice_cycle(
+            db_session, run_at=now_naive, dry_run=True
+        )
 
         assert summary["skipped"] >= 1
 
-    def test_skips_future_billing_date(self, db_session, subscription, subscriber_account):
+    def test_skips_future_billing_date(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test skips subscription with future billing date."""
         from app.models.catalog import (
             BillingCycle,
@@ -475,13 +495,17 @@ class TestRunInvoiceCycle:
         db_session.add(offer_price)
         db_session.commit()
 
-        summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive, dry_run=True)
+        summary = billing_automation.run_invoice_cycle(
+            db_session, run_at=now_naive, dry_run=True
+        )
 
         # Subscription should be scanned but not billed
         assert summary["subscriptions_scanned"] >= 1
         assert summary["subscriptions_billed"] == 0
 
-    def test_skips_inactive_subscription(self, db_session, subscription, subscriber_account):
+    def test_skips_inactive_subscription(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test skips inactive subscription."""
         from app.models.catalog import (
             BillingCycle,
@@ -540,7 +564,9 @@ class TestRunInvoiceCycle:
 
         assert summary["subscriptions_billed"] == 0
 
-    def test_filter_by_billing_cycle(self, db_session, subscription, subscriber_account):
+    def test_filter_by_billing_cycle(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test filtering by billing cycle."""
         from app.models.catalog import (
             BillingCycle,
@@ -580,7 +606,9 @@ class TestRunInvoiceCycle:
 
         assert summary["subscriptions_billed"] == 0
 
-    def test_skips_ended_subscription(self, db_session, subscription, subscriber_account):
+    def test_skips_ended_subscription(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test skips subscription that has ended."""
         from app.models.catalog import (
             BillingCycle,
@@ -610,11 +638,15 @@ class TestRunInvoiceCycle:
         db_session.add(offer_price)
         db_session.commit()
 
-        summary = billing_automation.run_invoice_cycle(db_session, run_at=now_naive, dry_run=True)
+        summary = billing_automation.run_invoice_cycle(
+            db_session, run_at=now_naive, dry_run=True
+        )
 
         assert summary["subscriptions_billed"] == 0
 
-    def test_updates_next_billing_at(self, db_session, subscription, subscriber_account):
+    def test_updates_next_billing_at(
+        self, db_session, subscription, subscriber_account
+    ):
         """Test updates next_billing_at after invoicing."""
         from app.models.catalog import (
             BillingCycle,
@@ -775,18 +807,29 @@ class TestRunInvoiceCycle:
             )
         )
         db_session.commit()
-        monkeypatch.setattr("app.services.billing_automation.emit_event", lambda *a, **k: None)
+        monkeypatch.setattr(
+            "app.services.billing_automation.emit_event", lambda *a, **k: None
+        )
 
         caplog.set_level("INFO")
         summary = billing_automation.run_invoice_cycle(db_session, run_at=run_at)
 
         start_record = next(
-            record for record in caplog.records if record.getMessage() == "billing_run_start"
+            record
+            for record in caplog.records
+            if record.getMessage() == "billing_run_start"
         )
         complete_record = next(
-            record for record in caplog.records if "Billing run completed:" in record.getMessage()
+            record
+            for record in caplog.records
+            if "Billing run completed:" in record.getMessage()
         )
 
         assert start_record.event == "billing_run"
-        assert complete_record.invoice_reminders_sent == summary["invoice_reminders_sent"]
-        assert complete_record.dunning_escalations_sent == summary["dunning_escalations_sent"]
+        assert (
+            complete_record.invoice_reminders_sent == summary["invoice_reminders_sent"]
+        )
+        assert (
+            complete_record.dunning_escalations_sent
+            == summary["dunning_escalations_sent"]
+        )

@@ -15,7 +15,7 @@ def main() -> None:
     # Extract Step 1 (between STEP 1 header and STEP 2 header)
     step1_sql = sql.split("-- STEP 2:")[0]
     # Get everything after the first sub-step comment
-    step1_sql = step1_sql[step1_sql.index("-- 1a."):]
+    step1_sql = step1_sql[step1_sql.index("-- 1a.") :]
 
     # Split into individual statements
     statements = []

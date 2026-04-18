@@ -16,7 +16,11 @@ from app.web.admin import usage as admin_usage
 
 def _get_route(module_router, path: str, method: str) -> APIRoute:
     for route in module_router.routes:
-        if isinstance(route, APIRoute) and route.path == path and method in route.methods:
+        if (
+            isinstance(route, APIRoute)
+            and route.path == path
+            and method in route.methods
+        ):
             return route
     raise AssertionError(f"Route not found: {method} {path}")
 
@@ -43,8 +47,12 @@ def _route_has_permission(module_router, path: str, method: str, expected: str) 
 
 
 def test_catalog_routes_require_catalog_permissions():
-    assert _route_has_permission(admin_catalog.router, "/catalog", "GET", "catalog:read")
-    assert _route_has_permission(admin_catalog.router, "/catalog/offers", "POST", "catalog:write")
+    assert _route_has_permission(
+        admin_catalog.router, "/catalog", "GET", "catalog:read"
+    )
+    assert _route_has_permission(
+        admin_catalog.router, "/catalog/offers", "POST", "catalog:write"
+    )
 
 
 def test_dashboard_routes_require_any_domain_read_permission():
@@ -73,13 +81,19 @@ def test_catalog_settings_routes_require_catalog_permissions():
 
 def test_gis_routes_require_network_permissions():
     assert _route_has_permission(admin_gis.router, "/gis", "GET", "network:read")
-    assert _route_has_permission(admin_gis.router, "/gis/locations/new", "POST", "network:write")
+    assert _route_has_permission(
+        admin_gis.router, "/gis/locations/new", "POST", "network:write"
+    )
     # Note: /gis/location-corrections/{request_id}/approve route not yet implemented
 
 
 def test_reseller_routes_require_customer_permissions():
-    assert _route_has_permission(admin_resellers.router, "/resellers", "GET", "customer:read")
-    assert _route_has_permission(admin_resellers.router, "/resellers", "POST", "customer:write")
+    assert _route_has_permission(
+        admin_resellers.router, "/resellers", "GET", "customer:read"
+    )
+    assert _route_has_permission(
+        admin_resellers.router, "/resellers", "POST", "customer:write"
+    )
 
 
 def test_design_system_routes_require_system_read():
@@ -164,9 +178,15 @@ def test_usage_routes_require_catalog_permissions():
 
 
 def test_report_routes_require_domain_permissions():
-    assert _route_has_permission(admin_reports.router, "/reports/revenue", "GET", "billing:read")
-    assert _route_has_permission(admin_reports.router, "/reports/subscribers", "GET", "customer:read")
-    assert _route_has_permission(admin_reports.router, "/reports/network", "GET", "network:read")
+    assert _route_has_permission(
+        admin_reports.router, "/reports/revenue", "GET", "billing:read"
+    )
+    assert _route_has_permission(
+        admin_reports.router, "/reports/subscribers", "GET", "customer:read"
+    )
+    assert _route_has_permission(
+        admin_reports.router, "/reports/network", "GET", "network:read"
+    )
     assert _route_has_permission(
         admin_reports.router,
         "/reports/technician",

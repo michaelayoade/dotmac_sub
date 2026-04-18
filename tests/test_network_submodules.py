@@ -14,8 +14,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.models.event_store import EventStore
 from app.models.catalog import NasDeviceStatus, NasVendor
+from app.models.event_store import EventStore
 from app.models.network import CPEDevice, DeviceStatus, DeviceType, IPVersion
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice
@@ -1402,7 +1402,9 @@ class TestOntAssignmentsCRUD:
         ont.olt_device_id = pon.olt_id
         foreign_olt = network_service.olt_devices.create(
             db_session,
-            OLTDeviceCreate(name="Foreign Update OLT", hostname="foreign-update-olt.local"),
+            OLTDeviceCreate(
+                name="Foreign Update OLT", hostname="foreign-update-olt.local"
+            ),
         )
         foreign_pon = network_service.pon_ports.create(
             db_session,

@@ -89,7 +89,9 @@ class TestCanAuthorizeViaNetconf:
 class TestDiscoverGponNamespace:
     def test_returns_cached_namespace(self, mock_olt):
         # Prime the cache
-        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = "urn:huawei:yang:huawei-gpon"
+        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = (
+            "urn:huawei:yang:huawei-gpon"
+        )
         try:
             result = olt_netconf_ont.discover_gpon_namespace(mock_olt)
             assert result == "urn:huawei:yang:huawei-gpon"
@@ -210,7 +212,9 @@ class TestAuthorizeOnt:
 
     def test_success_returns_none_for_ont_id(self, mock_olt):
         """ONT-ID is populated by post-auth SNMP sync, not NETCONF."""
-        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = "urn:huawei:yang:huawei-gpon"
+        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = (
+            "urn:huawei:yang:huawei-gpon"
+        )
         try:
             with patch.object(olt_netconf_ont, "olt_netconf") as mock_nc:
                 mock_nc.edit_config.return_value = (True, "Configuration applied")
@@ -229,7 +233,9 @@ class TestAuthorizeOnt:
             olt_netconf_ont.clear_namespace_cache(str(mock_olt.id))
 
     def test_edit_config_failure_returns_error(self, mock_olt):
-        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = "urn:huawei:yang:huawei-gpon"
+        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = (
+            "urn:huawei:yang:huawei-gpon"
+        )
         try:
             with patch.object(olt_netconf_ont, "olt_netconf") as mock_nc:
                 mock_nc.edit_config.return_value = (False, "OLT rejected configuration")
@@ -254,7 +260,9 @@ class TestDeauthorizeOnt:
         assert "invalid" in msg.lower()
 
     def test_success_deletes_ont(self, mock_olt):
-        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = "urn:huawei:yang:huawei-gpon"
+        olt_netconf_ont._namespace_cache[str(mock_olt.id)] = (
+            "urn:huawei:yang:huawei-gpon"
+        )
         try:
             with patch.object(olt_netconf_ont, "olt_netconf") as mock_nc:
                 mock_nc.edit_config.return_value = (True, "Configuration applied")

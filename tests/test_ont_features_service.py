@@ -89,9 +89,7 @@ class TestToggleWanRemoteAccess:
         ont = MagicMock()
         mock_get.return_value = (ont, None)
         db = MagicMock()
-        result = OntFeatureService.toggle_wan_remote_access(
-            db, "ont-1", enabled=True
-        )
+        result = OntFeatureService.toggle_wan_remote_access(db, "ont-1", enabled=True)
         assert result.success is True
         assert ont.wan_remote_access is True
 

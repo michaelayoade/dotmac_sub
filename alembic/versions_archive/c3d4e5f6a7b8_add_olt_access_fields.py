@@ -18,33 +18,55 @@ depends_on = None
 def upgrade() -> None:
     conn = op.get_bind()
     inspector = sa.inspect(conn)
-    existing_columns = {column["name"] for column in inspector.get_columns("olt_devices")}
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("olt_devices")
+    }
 
     if "ssh_username" not in existing_columns:
-        op.add_column("olt_devices", sa.Column("ssh_username", sa.String(length=120), nullable=True))
+        op.add_column(
+            "olt_devices",
+            sa.Column("ssh_username", sa.String(length=120), nullable=True),
+        )
     if "ssh_password" not in existing_columns:
-        op.add_column("olt_devices", sa.Column("ssh_password", sa.String(length=255), nullable=True))
+        op.add_column(
+            "olt_devices",
+            sa.Column("ssh_password", sa.String(length=255), nullable=True),
+        )
     if "ssh_port" not in existing_columns:
         op.add_column(
             "olt_devices",
-            sa.Column("ssh_port", sa.Integer(), nullable=True, server_default=sa.text("22")),
+            sa.Column(
+                "ssh_port", sa.Integer(), nullable=True, server_default=sa.text("22")
+            ),
         )
     if "netconf_enabled" not in existing_columns:
         op.add_column(
             "olt_devices",
-            sa.Column("netconf_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column(
+                "netconf_enabled",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
         )
     if "netconf_port" not in existing_columns:
         op.add_column(
             "olt_devices",
-            sa.Column("netconf_port", sa.Integer(), nullable=True, server_default=sa.text("830")),
+            sa.Column(
+                "netconf_port",
+                sa.Integer(),
+                nullable=True,
+                server_default=sa.text("830"),
+            ),
         )
 
 
 def downgrade() -> None:
     conn = op.get_bind()
     inspector = sa.inspect(conn)
-    existing_columns = {column["name"] for column in inspector.get_columns("olt_devices")}
+    existing_columns = {
+        column["name"] for column in inspector.get_columns("olt_devices")
+    }
 
     if "netconf_port" in existing_columns:
         op.drop_column("olt_devices", "netconf_port")

@@ -215,12 +215,17 @@ def _preselect_rows(rows: list[CsvRow]) -> tuple[list[CsvRow], dict[int, list[st
     seen_usernames: dict[str, list[int]] = defaultdict(list)
     for serial, group in by_serial.items():
         candidates = [
-            row for row in group
-            if row.wan_mode.lower() == "pppoe" and _clean(row.username) and _clean(row.password)
+            row
+            for row in group
+            if row.wan_mode.lower() == "pppoe"
+            and _clean(row.username)
+            and _clean(row.password)
         ]
         if not candidates:
             for row in group:
-                skipped[row.row_number].append("Row is not a usable PPPoE import candidate")
+                skipped[row.row_number].append(
+                    "Row is not a usable PPPoE import candidate"
+                )
             continue
         chosen = candidates[0]
         selected.append(chosen)
@@ -249,7 +254,9 @@ def _preselect_rows(rows: list[CsvRow]) -> tuple[list[CsvRow], dict[int, list[st
     return filtered, skipped
 
 
-def _resolve_subscriber(row: CsvRow, subscribers: list[Subscriber]) -> tuple[Subscriber | None, str | None]:
+def _resolve_subscriber(
+    row: CsvRow, subscribers: list[Subscriber]
+) -> tuple[Subscriber | None, str | None]:
     active_subscribers = [item for item in subscribers if item.is_active]
 
     exact_keys = {
@@ -290,7 +297,9 @@ def _resolve_subscriber(row: CsvRow, subscribers: list[Subscriber]) -> tuple[Sub
 
 def _resolve_olt(row: CsvRow, olts: list[OLTDevice]) -> OLTDevice | None:
     target = row.olt_name.lower()
-    exact = [olt for olt in olts if _clean(olt.name).lower() == target and olt.is_active]
+    exact = [
+        olt for olt in olts if _clean(olt.name).lower() == target and olt.is_active
+    ]
     if len(exact) == 1:
         return exact[0]
     return None
@@ -317,10 +326,14 @@ def _resolve_pon_port(row: CsvRow, olt_ports: list[PonPort]) -> PonPort | None:
     return None
 
 
-def _resolve_active_subscription(subscriptions: list[Subscription], subscriber_id: str) -> tuple[Subscription | None, str | None]:
+def _resolve_active_subscription(
+    subscriptions: list[Subscription], subscriber_id: str
+) -> tuple[Subscription | None, str | None]:
     active = [
-        item for item in subscriptions
-        if str(item.subscriber_id) == subscriber_id and item.status == SubscriptionStatus.active
+        item
+        for item in subscriptions
+        if str(item.subscriber_id) == subscriber_id
+        and item.status == SubscriptionStatus.active
     ]
     if len(active) == 1:
         return active[0], None
@@ -336,12 +349,15 @@ def _resolve_credential(
 ) -> tuple[AccessCredential | None, str | None]:
     username = row.username.lower()
     active_for_subscriber = [
-        item for item in credentials
+        item
+        for item in credentials
         if str(item.subscriber_id) == subscriber_id and item.is_active
     ]
     exact_for_subscriber = [
-        item for item in credentials
-        if str(item.subscriber_id) == subscriber_id and _clean(item.username).lower() == username
+        item
+        for item in credentials
+        if str(item.subscriber_id) == subscriber_id
+        and _clean(item.username).lower() == username
     ]
     if exact_for_subscriber:
         return exact_for_subscriber[0], None
@@ -388,7 +404,9 @@ def _build_plan(
     if olt:
         pon_port = _resolve_pon_port(row, pon_ports_by_olt_id.get(str(olt.id), []))
         if not pon_port:
-            reasons.append("PON port could not be resolved uniquely from OLT/board/port")
+            reasons.append(
+                "PON port could not be resolved uniquely from OLT/board/port"
+            )
 
     serial_key = _normalize_serial(row.serial_number)
     ont = onts_by_serial.get(serial_key)
@@ -397,10 +415,9 @@ def _build_plan(
         reasons.append("Existing ONT is linked to a different OLT")
 
     if active_assignment and subscriber and subscription and pon_port:
-        same_assignment = (
-            str(active_assignment.subscriber_id or "") == str(subscriber.id)
-            and str(active_assignment.pon_port_id) == str(pon_port.id)
-        )
+        same_assignment = str(active_assignment.subscriber_id or "") == str(
+            subscriber.id
+        ) and str(active_assignment.pon_port_id) == str(pon_port.id)
         if not same_assignment:
             reasons.append("Existing active ONT assignment conflicts with CSV mapping")
 
@@ -408,7 +425,8 @@ def _build_plan(
     if subscriber:
         username_conflict = next(
             (
-                item for item in credentials
+                item
+                for item in credentials
                 if _clean(item.username).lower() == row.username.lower()
                 and str(item.subscriber_id) != str(subscriber.id)
             ),
@@ -425,7 +443,11 @@ def _build_plan(
             if credential_reason:
                 reasons.append(credential_reason)
 
-    if subscription and _clean(subscription.login) and _clean(subscription.login).lower() != row.username.lower():
+    if (
+        subscription
+        and _clean(subscription.login)
+        and _clean(subscription.login).lower() != row.username.lower()
+    ):
         reasons.append("Active subscription already has a different login")
 
     create_ont = ont is None and olt is not None and pon_port is not None
@@ -433,7 +455,12 @@ def _build_plan(
         actions.append("create_ont")
     if ont is not None:
         actions.append("update_ont")
-    create_assignment = active_assignment is None and subscriber is not None and subscription is not None and pon_port is not None
+    create_assignment = (
+        active_assignment is None
+        and subscriber is not None
+        and subscription is not None
+        and pon_port is not None
+    )
     if create_assignment:
         actions.append("create_assignment")
     if credential is None and subscriber is not None:
@@ -479,7 +506,9 @@ def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
-def _prepare(output_dir: Path, csv_path: Path, limit: int | None = None) -> tuple[list[CsvRow], list[RowPlan], dict[int, list[str]]]:
+def _prepare(
+    output_dir: Path, csv_path: Path, limit: int | None = None
+) -> tuple[list[CsvRow], list[RowPlan], dict[int, list[str]]]:
     rows = _load_csv_rows(csv_path)
     candidate_rows, pre_skipped = _preselect_rows(rows)
     if limit:
@@ -490,10 +519,14 @@ def _prepare(output_dir: Path, csv_path: Path, limit: int | None = None) -> tupl
         subscriptions = list(db.scalars(select(Subscription)).all())
         credentials = list(db.scalars(select(AccessCredential)).all())
         olts = list(db.scalars(select(OLTDevice)).all())
-        pon_ports = list(db.scalars(select(PonPort).where(PonPort.is_active.is_(True))).all())
+        pon_ports = list(
+            db.scalars(select(PonPort).where(PonPort.is_active.is_(True))).all()
+        )
         onts = list(db.scalars(select(OntUnit)).all())
         active_assignments = list(
-            db.scalars(select(OntAssignment).where(OntAssignment.active.is_(True))).all()
+            db.scalars(
+                select(OntAssignment).where(OntAssignment.active.is_(True))
+            ).all()
         )
 
     pon_ports_by_olt_id: dict[str, list[PonPort]] = defaultdict(list)
@@ -505,7 +538,9 @@ def _prepare(output_dir: Path, csv_path: Path, limit: int | None = None) -> tupl
         for ont in onts
         if _normalize_serial(ont.serial_number)
     }
-    active_assignments_by_ont_id = {str(item.ont_unit_id): item for item in active_assignments}
+    active_assignments_by_ont_id = {
+        str(item.ont_unit_id): item for item in active_assignments
+    }
 
     plans = [
         _build_plan(
@@ -666,7 +701,9 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
                     is_active=True,
                     olt_device_id=olt.id,
                     pon_type=PonType.gpon if row.pon_type.lower() == "gpon" else None,
-                    gpon_channel=GponChannel.gpon if row.pon_type.lower() == "gpon" else None,
+                    gpon_channel=GponChannel.gpon
+                    if row.pon_type.lower() == "gpon"
+                    else None,
                     board=f"0/{row.board}" if row.board else None,
                     port=row.port or None,
                     external_id=row.allocated_onu or None,
@@ -684,7 +721,9 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
             ont.model = row.model or ont.model
             ont.vendor = _derive_vendor(row.serial_number, olt) or ont.vendor
             ont.olt_device_id = olt.id
-            ont.pon_type = PonType.gpon if row.pon_type.lower() == "gpon" else ont.pon_type
+            ont.pon_type = (
+                PonType.gpon if row.pon_type.lower() == "gpon" else ont.pon_type
+            )
             ont.gpon_channel = (
                 GponChannel.gpon if row.pon_type.lower() == "gpon" else ont.gpon_channel
             )
@@ -697,14 +736,12 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
             ont.pppoe_password = encrypt_credential(row.password)
             ont.is_active = True
 
-            active_assignment = (
-                db.scalars(
-                    select(OntAssignment)
-                    .where(OntAssignment.ont_unit_id == ont.id)
-                    .where(OntAssignment.active.is_(True))
-                    .limit(1)
-                ).first()
-            )
+            active_assignment = db.scalars(
+                select(OntAssignment)
+                .where(OntAssignment.ont_unit_id == ont.id)
+                .where(OntAssignment.active.is_(True))
+                .limit(1)
+            ).first()
             if active_assignment is None:
                 assignment = OntAssignment(
                     ont_unit_id=ont.id,
@@ -734,13 +771,11 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
                         "radius_profile_id",
                     ],
                 )
-                existing_radius_user = (
-                    db.scalars(
-                        select(RadiusUser)
-                        .where(RadiusUser.access_credential_id == credential.id)
-                        .limit(1)
-                    ).first()
-                )
+                existing_radius_user = db.scalars(
+                    select(RadiusUser)
+                    .where(RadiusUser.access_credential_id == credential.id)
+                    .limit(1)
+                ).first()
                 if existing_radius_user:
                     rollback_entry["radius_user_before"] = _serialize_model(
                         existing_radius_user,
@@ -782,7 +817,9 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
             pre_radius_users = {
                 str(item.id)
                 for item in db.scalars(
-                    select(RadiusUser).where(RadiusUser.subscription_id == subscription.id)
+                    select(RadiusUser).where(
+                        RadiusUser.subscription_id == subscription.id
+                    )
                 ).all()
             }
             ensure_radius_users_for_subscription(db, subscription)
@@ -791,10 +828,14 @@ def _apply_rows(csv_rows: list[CsvRow], plans: list[RowPlan], output_dir: Path) 
             post_radius_users = {
                 str(item.id)
                 for item in db.scalars(
-                    select(RadiusUser).where(RadiusUser.subscription_id == subscription.id)
+                    select(RadiusUser).where(
+                        RadiusUser.subscription_id == subscription.id
+                    )
                 ).all()
             }
-            rollback_entry["created_radius_user_ids"] = sorted(post_radius_users - pre_radius_users)
+            rollback_entry["created_radius_user_ids"] = sorted(
+                post_radius_users - pre_radius_users
+            )
             rollback_entries.append(rollback_entry)
             applied_rows.append(
                 {
@@ -863,10 +904,14 @@ def _rollback(rollback_path: Path) -> None:
                 if radius_user:
                     radius_user.subscriber_id = radius_user_before["subscriber_id"]
                     radius_user.subscription_id = radius_user_before["subscription_id"]
-                    radius_user.access_credential_id = radius_user_before["access_credential_id"]
+                    radius_user.access_credential_id = radius_user_before[
+                        "access_credential_id"
+                    ]
                     radius_user.username = radius_user_before["username"]
                     radius_user.secret_hash = radius_user_before["secret_hash"]
-                    radius_user.radius_profile_id = radius_user_before["radius_profile_id"]
+                    radius_user.radius_profile_id = radius_user_before[
+                        "radius_profile_id"
+                    ]
                     radius_user.is_active = radius_user_before["is_active"]
 
             created_assignment_id = entry.get("created_assignment_id")
@@ -879,13 +924,11 @@ def _rollback(rollback_path: Path) -> None:
             if created_credential_id:
                 credential = db.get(AccessCredential, created_credential_id)
                 if credential:
-                    radius_user = (
-                        db.scalars(
-                            select(RadiusUser)
-                            .where(RadiusUser.access_credential_id == credential.id)
-                            .limit(1)
-                        ).first()
-                    )
+                    radius_user = db.scalars(
+                        select(RadiusUser)
+                        .where(RadiusUser.access_credential_id == credential.id)
+                        .limit(1)
+                    ).first()
                     if radius_user:
                         db.delete(radius_user)
                     db.delete(credential)
@@ -898,7 +941,9 @@ def _rollback(rollback_path: Path) -> None:
                     credential.username = credential_before["username"]
                     credential.secret_hash = credential_before["secret_hash"]
                     credential.is_active = credential_before["is_active"]
-                    credential.radius_profile_id = credential_before["radius_profile_id"]
+                    credential.radius_profile_id = credential_before[
+                        "radius_profile_id"
+                    ]
 
             subscription_before = entry.get("subscription_before")
             if subscription_before:
@@ -914,7 +959,9 @@ def _rollback(rollback_path: Path) -> None:
                     ont.vendor = ont_before["vendor"]
                     ont.olt_device_id = ont_before["olt_device_id"]
                     ont.pon_type = _restore_enum(PonType, ont_before["pon_type"])
-                    ont.gpon_channel = _restore_enum(GponChannel, ont_before["gpon_channel"])
+                    ont.gpon_channel = _restore_enum(
+                        GponChannel, ont_before["gpon_channel"]
+                    )
                     ont.board = ont_before["board"]
                     ont.port = ont_before["port"]
                     ont.name = ont_before["name"]
@@ -956,7 +1003,9 @@ def _rollback(rollback_path: Path) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Import SmartOLT unconfigured ONU rows safely")
+    parser = argparse.ArgumentParser(
+        description="Import SmartOLT unconfigured ONU rows safely"
+    )
     parser.add_argument(
         "--csv-path",
         default=DEFAULT_CSV,
@@ -967,9 +1016,13 @@ def main() -> None:
         default=f"tmp/smartolt_import_{_utc_stamp()}",
         help="Directory for dry-run/apply artifacts",
     )
-    parser.add_argument("--limit", type=int, default=None, help="Limit candidate rows processed")
+    parser.add_argument(
+        "--limit", type=int, default=None, help="Limit candidate rows processed"
+    )
     parser.add_argument("--apply", action="store_true", help="Apply safe rows")
-    parser.add_argument("--rollback", default=None, help="Rollback from a previous rollback.json")
+    parser.add_argument(
+        "--rollback", default=None, help="Rollback from a previous rollback.json"
+    )
     args = parser.parse_args()
 
     if args.apply and args.rollback:

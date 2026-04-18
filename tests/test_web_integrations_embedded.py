@@ -65,7 +65,9 @@ def test_build_embedded_connector_data_auth_required_on_probe(db_session, monkey
     class _Resp:
         status_code = 403
 
-    monkeypatch.setattr(web_integrations_service.httpx, "get", lambda *args, **kwargs: _Resp())
+    monkeypatch.setattr(
+        web_integrations_service.httpx, "get", lambda *args, **kwargs: _Resp()
+    )
     state = web_integrations_service.build_embedded_connector_data(
         db_session, connector_id=str(connector.id), perform_check=True
     )
@@ -74,7 +76,9 @@ def test_build_embedded_connector_data_auth_required_on_probe(db_session, monkey
     assert state["probe_checked"] is True
 
 
-def test_build_embedded_connector_data_unreachable_on_probe_error(db_session, monkeypatch):
+def test_build_embedded_connector_data_unreachable_on_probe_error(
+    db_session, monkeypatch
+):
     connector = connector_service.connector_configs.create(
         db_session,
         ConnectorConfigCreate(

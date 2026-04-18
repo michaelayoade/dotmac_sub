@@ -5,9 +5,9 @@ Revises: 3a7f1d2c9e41
 Create Date: 2026-01-13 15:45:00.000000
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "8f3c1b2a9c01"
@@ -21,7 +21,10 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     columns = {col["name"] for col in inspector.get_columns("integration_jobs")}
     if "interval_seconds" not in columns:
-        op.add_column("integration_jobs", sa.Column("interval_seconds", sa.Integer(), nullable=True))
+        op.add_column(
+            "integration_jobs",
+            sa.Column("interval_seconds", sa.Integer(), nullable=True),
+        )
 
 
 def downgrade() -> None:

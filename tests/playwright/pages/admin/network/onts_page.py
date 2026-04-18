@@ -13,6 +13,7 @@ class ONTsPage(BasePage):
 
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
+
     def goto(self, path: str = "/admin/network/onts") -> None:
         """Navigate to the ONTs list."""
         url = f"{self.base_url}{path}"
@@ -27,7 +28,9 @@ class ONTsPage(BasePage):
 
     def expect_loaded(self) -> None:
         """Assert the ONTs page is loaded."""
-        expect(self.page.get_by_role("heading", name="ONT Fleet", exact=True)).to_be_visible()
+        expect(
+            self.page.get_by_role("heading", name="ONT Fleet", exact=True)
+        ).to_be_visible()
 
     def search(self, query: str) -> None:
         """Search ONTs."""

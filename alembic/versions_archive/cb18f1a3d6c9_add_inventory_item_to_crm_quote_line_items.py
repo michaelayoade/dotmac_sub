@@ -1,8 +1,9 @@
 """Link CRM quote line items to inventory items."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "cb18f1a3d6c9"

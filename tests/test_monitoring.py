@@ -23,8 +23,14 @@ def test_setup_loki_is_idempotent(monkeypatch):
     original_handlers = list(root_logger.handlers)
     root_logger.handlers = []
     try:
-        assert monitoring_module._setup_loki("dotmac-sub", "srv1", "test", "http://loki") is True
-        assert monitoring_module._setup_loki("dotmac-sub", "srv1", "test", "http://loki") is True
+        assert (
+            monitoring_module._setup_loki("dotmac-sub", "srv1", "test", "http://loki")
+            is True
+        )
+        assert (
+            monitoring_module._setup_loki("dotmac-sub", "srv1", "test", "http://loki")
+            is True
+        )
         matching = [
             handler
             for handler in root_logger.handlers

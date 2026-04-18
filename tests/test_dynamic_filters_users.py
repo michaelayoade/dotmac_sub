@@ -16,7 +16,9 @@ from app.services.dynamic_filters import (
 from app.services.web_system_users import USER_DOCTYPE, USER_FILTER_SPECS, list_users
 
 
-def _system_user(first_name: str, last_name: str, email: str, *, is_active: bool = True) -> SystemUser:
+def _system_user(
+    first_name: str, last_name: str, email: str, *, is_active: bool = True
+) -> SystemUser:
     return SystemUser(
         first_name=first_name,
         last_name=last_name,
@@ -52,8 +54,12 @@ def test_users_list_applies_dynamic_status_and_role_filters(db_session):
     admin_role = Role(name=f"Admin-{uuid.uuid4().hex}", is_active=True)
     db_session.add(admin_role)
 
-    pending_user = _system_user("Pending", "User", f"pending-{uuid.uuid4().hex}@example.com")
-    active_user = _system_user("Active", "User", f"active-{uuid.uuid4().hex}@example.com")
+    pending_user = _system_user(
+        "Pending", "User", f"pending-{uuid.uuid4().hex}@example.com"
+    )
+    active_user = _system_user(
+        "Active", "User", f"active-{uuid.uuid4().hex}@example.com"
+    )
     db_session.add_all([pending_user, active_user])
     db_session.flush()
 
@@ -66,7 +72,9 @@ def test_users_list_applies_dynamic_status_and_role_filters(db_session):
             must_change_password=False,
         )
     )
-    db_session.add(SystemUserRole(system_user_id=pending_user.id, role_id=admin_role.id))
+    db_session.add(
+        SystemUserRole(system_user_id=pending_user.id, role_id=admin_role.id)
+    )
     db_session.commit()
 
     payload = json.dumps(

@@ -6,9 +6,10 @@ Create Date: 2026-03-29
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import JSON, UUID
+
+from alembic import op
 
 revision = "005_router_management"
 down_revision = "d1d2d3d4d5d6"
@@ -33,7 +34,9 @@ def _add_enum_value_if_not_exists(enum_name: str, value: str) -> None:
     )
     if result.fetchone() is None:
         # ALTER TYPE ADD VALUE does not accept bound parameters — inline the literal safely
-        conn.execute(sa.text(f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{value}'"))
+        conn.execute(
+            sa.text(f"ALTER TYPE {enum_name} ADD VALUE IF NOT EXISTS '{value}'")
+        )
 
 
 def upgrade() -> None:
@@ -48,8 +51,12 @@ def upgrade() -> None:
             sa.Column("ssh_key", sa.Text, nullable=True),
             sa.Column("ssh_password", sa.String(512), nullable=True),
             sa.Column("is_active", sa.Boolean, server_default="true"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
 
     if not _table_exists("routers"):
@@ -73,18 +80,39 @@ def upgrade() -> None:
             sa.Column("notes", sa.Text, nullable=True),
             sa.Column("tags", JSON, nullable=True),
             sa.Column("access_method", sa.String(20), server_default="direct"),
-            sa.Column("jump_host_id", UUID(as_uuid=True), sa.ForeignKey("jump_hosts.id"), nullable=True),
-            sa.Column("nas_device_id", UUID(as_uuid=True), sa.ForeignKey("nas_devices.id"), nullable=True),
-            sa.Column("network_device_id", UUID(as_uuid=True), sa.ForeignKey("network_devices.id"), nullable=True),
+            sa.Column(
+                "jump_host_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("jump_hosts.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "nas_device_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("nas_devices.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "network_device_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("network_devices.id"),
+                nullable=True,
+            ),
             sa.Column("status", sa.String(20), server_default="offline"),
             sa.Column("last_seen_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("last_config_sync_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("last_config_change_at", sa.DateTime(timezone=True), nullable=True),
+            sa.Column(
+                "last_config_change_at", sa.DateTime(timezone=True), nullable=True
+            ),
             sa.Column("reseller_id", UUID(as_uuid=True), nullable=True),
             sa.Column("organization_id", UUID(as_uuid=True), nullable=True),
             sa.Column("is_active", sa.Boolean, server_default="true"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
         op.create_index("ix_routers_status", "routers", ["status"])
         op.create_index("ix_routers_management_ip", "routers", ["management_ip"])
@@ -93,7 +121,12 @@ def upgrade() -> None:
         op.create_table(
             "router_interfaces",
             sa.Column("id", UUID(as_uuid=True), primary_key=True),
-            sa.Column("router_id", UUID(as_uuid=True), sa.ForeignKey("routers.id", ondelete="CASCADE"), nullable=False),
+            sa.Column(
+                "router_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("routers.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
             sa.Column("name", sa.String(100), nullable=False),
             sa.Column("type", sa.String(50), server_default="ether"),
             sa.Column("mac_address", sa.String(17), nullable=True),
@@ -106,22 +139,37 @@ def upgrade() -> None:
             sa.Column("last_link_up_time", sa.String(100), nullable=True),
             sa.Column("speed", sa.String(50), nullable=True),
             sa.Column("comment", sa.String(255), nullable=True),
-            sa.Column("synced_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "synced_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
-        op.create_unique_constraint("uq_router_interface_name", "router_interfaces", ["router_id", "name"])
+        op.create_unique_constraint(
+            "uq_router_interface_name", "router_interfaces", ["router_id", "name"]
+        )
 
     if not _table_exists("router_config_snapshots"):
         op.create_table(
             "router_config_snapshots",
             sa.Column("id", UUID(as_uuid=True), primary_key=True),
-            sa.Column("router_id", UUID(as_uuid=True), sa.ForeignKey("routers.id", ondelete="CASCADE"), nullable=False),
+            sa.Column(
+                "router_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("routers.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
             sa.Column("config_export", sa.Text, nullable=False),
             sa.Column("config_hash", sa.String(64), nullable=False),
             sa.Column("source", sa.String(20), nullable=False),
             sa.Column("captured_by", UUID(as_uuid=True), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
-        op.create_index("ix_router_config_snapshots_router_id", "router_config_snapshots", ["router_id"])
+        op.create_index(
+            "ix_router_config_snapshots_router_id",
+            "router_config_snapshots",
+            ["router_id"],
+        )
 
     if not _table_exists("router_config_templates"):
         op.create_table(
@@ -133,20 +181,31 @@ def upgrade() -> None:
             sa.Column("category", sa.String(20), server_default="custom"),
             sa.Column("variables", JSON, server_default="{}"),
             sa.Column("is_active", sa.Boolean, server_default="true"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
 
     if not _table_exists("router_config_pushes"):
         op.create_table(
             "router_config_pushes",
             sa.Column("id", UUID(as_uuid=True), primary_key=True),
-            sa.Column("template_id", UUID(as_uuid=True), sa.ForeignKey("router_config_templates.id"), nullable=True),
+            sa.Column(
+                "template_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("router_config_templates.id"),
+                nullable=True,
+            ),
             sa.Column("commands", JSON, nullable=False),
             sa.Column("variable_values", JSON, nullable=True),
             sa.Column("initiated_by", UUID(as_uuid=True), nullable=False),
             sa.Column("status", sa.String(20), server_default="pending"),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
             sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         )
 
@@ -154,17 +213,41 @@ def upgrade() -> None:
         op.create_table(
             "router_config_push_results",
             sa.Column("id", UUID(as_uuid=True), primary_key=True),
-            sa.Column("push_id", UUID(as_uuid=True), sa.ForeignKey("router_config_pushes.id", ondelete="CASCADE"), nullable=False),
-            sa.Column("router_id", UUID(as_uuid=True), sa.ForeignKey("routers.id"), nullable=False),
+            sa.Column(
+                "push_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("router_config_pushes.id", ondelete="CASCADE"),
+                nullable=False,
+            ),
+            sa.Column(
+                "router_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("routers.id"),
+                nullable=False,
+            ),
             sa.Column("status", sa.String(20), server_default="pending"),
             sa.Column("response_data", JSON, nullable=True),
             sa.Column("error_message", sa.Text, nullable=True),
-            sa.Column("pre_snapshot_id", UUID(as_uuid=True), sa.ForeignKey("router_config_snapshots.id"), nullable=True),
-            sa.Column("post_snapshot_id", UUID(as_uuid=True), sa.ForeignKey("router_config_snapshots.id"), nullable=True),
+            sa.Column(
+                "pre_snapshot_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("router_config_snapshots.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "post_snapshot_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("router_config_snapshots.id"),
+                nullable=True,
+            ),
             sa.Column("duration_ms", sa.Integer, nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
         )
-        op.create_index("ix_push_results_push_id", "router_config_push_results", ["push_id"])
+        op.create_index(
+            "ix_push_results_push_id", "router_config_push_results", ["push_id"]
+        )
 
     for val in [
         "router_config_push",

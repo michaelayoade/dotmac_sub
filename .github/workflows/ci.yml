@@ -205,6 +205,14 @@ jobs:
             sleep 2
           done
 
+      - name: Run database migrations
+        run: |
+          docker run --rm --network ci-net \
+            -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
+            -e SECRET_KEY=ci-test-secret-key-not-for-production \
+            -e REDIS_URL=redis://ci-redis:6379/0 \
+            dotmac-sub:ci alembic upgrade head
+
       - name: Start application
         run: |
           docker run -d --name ci-app --network ci-net \
@@ -223,7 +231,7 @@ jobs:
               docker logs ci-app
               exit 1
             fi
-            HEALTH=$(docker exec ci-app python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8000/health').read().decode())" 2>/dev/null || echo "")
+            HEALTH=$(docker exec ci-app python -c "import urllib.request; print(urllib.request.urlopen('http://localhost:8001/health').read().decode())" 2>/dev/null || echo "")
             if echo "$HEALTH" | grep -qi 'ok\|healthy'; then
               echo "Health check passed: $HEALTH"
               exit 0

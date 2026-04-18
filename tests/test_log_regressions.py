@@ -95,7 +95,7 @@ def test_olt_detail_autofind_partial_supports_force_authorize_loading_state() ->
     template = Path("templates/admin/network/olts/_autofind_results.html").read_text()
 
     assert 'name="force_reauthorize"' in template
-    assert "x-data=\"{ force: false, submitting: false }\"" in template
+    assert 'x-data="{ force: false, submitting: false }"' in template
     assert "Force re-authorize" in template
     assert "This will DELETE any existing registration" in template
     assert "Authorizing..." in template

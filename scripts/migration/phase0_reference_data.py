@@ -61,12 +61,14 @@ def migrate_locations(conn, db) -> dict[int, uuid.UUID]:
         db.add(pop_site)
         db.flush()
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.location,
-            splynx_id=row["id"],
-            dotmac_id=pop_site.id,
-            metadata_={"splynx_name": row["name"]},
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.location,
+                splynx_id=row["id"],
+                dotmac_id=pop_site.id,
+                metadata_={"splynx_name": row["name"]},
+            )
+        )
         mapping[row["id"]] = pop_site.id
         created += 1
 
@@ -107,12 +109,14 @@ def migrate_partners(conn, db) -> dict[int, uuid.UUID]:
         db.add(reseller)
         db.flush()
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.partner,
-            splynx_id=row["id"],
-            dotmac_id=reseller.id,
-            metadata_={"splynx_name": row["name"], "deleted": is_deleted},
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.partner,
+                splynx_id=row["id"],
+                dotmac_id=reseller.id,
+                metadata_={"splynx_name": row["name"], "deleted": is_deleted},
+            )
+        )
         mapping[row["id"]] = reseller.id
         created += 1
 
@@ -134,7 +138,8 @@ def migrate_tax_rates(conn, db) -> dict[int, uuid.UUID]:
         existing = db.scalars(
             select(SplynxIdMapping).where(
                 SplynxIdMapping.entity_type == SplynxEntityType.tariff,
-                SplynxIdMapping.splynx_id == -row["id"],  # Negative to avoid tariff collision
+                SplynxIdMapping.splynx_id
+                == -row["id"],  # Negative to avoid tariff collision
             )
         ).first()
         if existing:
@@ -152,12 +157,18 @@ def migrate_tax_rates(conn, db) -> dict[int, uuid.UUID]:
         db.flush()
 
         # Use a separate namespace to avoid collision with tariff IDs
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.tariff,
-            splynx_id=-row["id"],  # Negative = tax rate
-            dotmac_id=tax_rate.id,
-            metadata_={"type": "tax_rate", "splynx_name": row["name"], "rate": str(row["rate"])},
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.tariff,
+                splynx_id=-row["id"],  # Negative = tax rate
+                dotmac_id=tax_rate.id,
+                metadata_={
+                    "type": "tax_rate",
+                    "splynx_name": row["name"],
+                    "rate": str(row["rate"]),
+                },
+            )
+        )
         mapping[row["id"]] = tax_rate.id
         created += 1
 
@@ -166,7 +177,9 @@ def migrate_tax_rates(conn, db) -> dict[int, uuid.UUID]:
     return mapping
 
 
-def migrate_tariffs(conn, db, tax_mapping: dict[int, uuid.UUID]) -> dict[int, uuid.UUID]:
+def migrate_tariffs(
+    conn, db, tax_mapping: dict[int, uuid.UUID]
+) -> dict[int, uuid.UUID]:
     """Migrate Splynx tariffs_internet → CatalogOffer + OfferPrice."""
     from app.models.catalog import (
         AccessType,
@@ -232,18 +245,20 @@ def migrate_tariffs(conn, db, tax_mapping: dict[int, uuid.UUID]) -> dict[int, uu
         )
         db.add(offer_price)
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.tariff,
-            splynx_id=row["id"],
-            dotmac_id=offer.id,
-            metadata_={
-                "title": row["title"],
-                "price": str(price_amount),
-                "speed_down_kbps": row.get("speed_download"),
-                "speed_up_kbps": row.get("speed_upload"),
-                "deleted": is_deleted,
-            },
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.tariff,
+                splynx_id=row["id"],
+                dotmac_id=offer.id,
+                metadata_={
+                    "title": row["title"],
+                    "price": str(price_amount),
+                    "speed_down_kbps": row.get("speed_download"),
+                    "speed_up_kbps": row.get("speed_upload"),
+                    "deleted": is_deleted,
+                },
+            )
+        )
         mapping[row["id"]] = offer.id
         created += 1
 
@@ -252,7 +267,9 @@ def migrate_tariffs(conn, db, tax_mapping: dict[int, uuid.UUID]) -> dict[int, uu
     return mapping
 
 
-def migrate_custom_tariffs(conn, db, tax_mapping: dict[int, uuid.UUID]) -> dict[int, uuid.UUID]:
+def migrate_custom_tariffs(
+    conn, db, tax_mapping: dict[int, uuid.UUID]
+) -> dict[int, uuid.UUID]:
     """Migrate Splynx tariffs_custom → CatalogOffer."""
     from app.models.catalog import (
         AccessType,
@@ -299,21 +316,29 @@ def migrate_custom_tariffs(conn, db, tax_mapping: dict[int, uuid.UUID]) -> dict[
         db.flush()
 
         price_amount = Decimal(str(row.get("price") or "0"))
-        db.add(OfferPrice(
-            offer_id=offer.id,
-            price_type=PriceType.recurring,
-            currency="NGN",
-            amount=price_amount,
-            billing_cycle=BillingCycle.monthly,
-            is_active=not is_deleted,
-        ))
+        db.add(
+            OfferPrice(
+                offer_id=offer.id,
+                price_type=PriceType.recurring,
+                currency="NGN",
+                amount=price_amount,
+                billing_cycle=BillingCycle.monthly,
+                is_active=not is_deleted,
+            )
+        )
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.tariff,
-            splynx_id=mapping_id,
-            dotmac_id=offer.id,
-            metadata_={"title": row["title"], "type": "custom", "price": str(price_amount)},
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.tariff,
+                splynx_id=mapping_id,
+                dotmac_id=offer.id,
+                metadata_={
+                    "title": row["title"],
+                    "type": "custom",
+                    "price": str(price_amount),
+                },
+            )
+        )
         mapping[row["id"]] = offer.id
         created += 1
 
@@ -323,7 +348,8 @@ def migrate_custom_tariffs(conn, db, tax_mapping: dict[int, uuid.UUID]) -> dict[
 
 
 def migrate_tariff_availability(
-    conn, db,
+    conn,
+    db,
     tariff_mapping: dict[int, uuid.UUID],
     partner_mapping: dict[int, uuid.UUID],
     location_mapping: dict[int, uuid.UUID],
@@ -368,9 +394,12 @@ def migrate_tariff_availability(
         if offer_id and reseller_id:
             if (offer_id, reseller_id) in existing_reseller:
                 continue
-            db.add(OfferResellerAvailability(
-                offer_id=offer_id, reseller_id=reseller_id,
-            ))
+            db.add(
+                OfferResellerAvailability(
+                    offer_id=offer_id,
+                    reseller_id=reseller_id,
+                )
+            )
             existing_reseller.add((offer_id, reseller_id))
             reseller_count += 1
     logger.info("Offer-reseller availability: %d new", reseller_count)
@@ -384,9 +413,12 @@ def migrate_tariff_availability(
         if offer_id and pop_site_id:
             if (offer_id, pop_site_id) in existing_location:
                 continue
-            db.add(OfferLocationAvailability(
-                offer_id=offer_id, pop_site_id=pop_site_id,
-            ))
+            db.add(
+                OfferLocationAvailability(
+                    offer_id=offer_id,
+                    pop_site_id=pop_site_id,
+                )
+            )
             existing_location.add((offer_id, pop_site_id))
             location_count += 1
     logger.info("Offer-location availability: %d new", location_count)
@@ -404,9 +436,12 @@ def migrate_tariff_availability(
         if offer_id and cat:
             if (offer_id, cat.value) in existing_category:
                 continue
-            db.add(OfferCategoryAvailability(
-                offer_id=offer_id, subscriber_category=cat,
-            ))
+            db.add(
+                OfferCategoryAvailability(
+                    offer_id=offer_id,
+                    subscriber_category=cat,
+                )
+            )
             existing_category.add((offer_id, cat.value))
             cat_count += 1
     logger.info("Offer-category availability: %d new", cat_count)
@@ -425,9 +460,12 @@ def migrate_tariff_availability(
         if offer_id and mode:
             if (offer_id, mode.value) in existing_billing:
                 continue
-            db.add(OfferBillingModeAvailability(
-                offer_id=offer_id, billing_mode=mode,
-            ))
+            db.add(
+                OfferBillingModeAvailability(
+                    offer_id=offer_id,
+                    billing_mode=mode,
+                )
+            )
             existing_billing.add((offer_id, mode.value))
             billing_count += 1
     logger.info("Offer-billing mode availability: %d new", billing_count)
@@ -440,6 +478,7 @@ def _encrypt_if_present(value: str | None) -> str | None:
     if not value or not value.strip():
         return None
     from app.services.credential_crypto import encrypt_credential
+
     return encrypt_credential(value)
 
 
@@ -471,7 +510,8 @@ def _map_nas_vendor(nas_type: str | int | None, model: str | None) -> str:
 
 
 def migrate_routers(
-    conn, db,
+    conn,
+    db,
     location_mapping: dict[int, uuid.UUID],
 ) -> dict[int, uuid.UUID]:
     """Migrate Splynx routers → NasDevice.
@@ -559,34 +599,40 @@ def migrate_routers(
             api_username=api_username,
             api_password=_encrypt_if_present(api_password),
             snmp_community=_encrypt_if_present(snmp_community),
-            status=NasDeviceStatus.decommissioned if is_deleted else NasDeviceStatus.active,
+            status=NasDeviceStatus.decommissioned
+            if is_deleted
+            else NasDeviceStatus.active,
             is_active=not is_deleted,
         )
         db.add(nas)
         db.flush()
 
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.router,
-            splynx_id=row["id"],
-            dotmac_id=nas.id,
-            metadata_={
-                "title": row["title"],
-                "ip": row.get("ip"),
-                "nas_ip": row.get("nas_ip"),
-                "model": row.get("model"),
-                "nas_type": row.get("nas_type"),
-                "auth_method": row.get("authorization_method"),
-                "acct_method": row.get("accounting_method"),
-                "has_ssh_creds": bool(ssh_username and ssh_password),
-                "has_api_creds": bool(api_username and api_password),
-                "deleted": is_deleted,
-            },
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.router,
+                splynx_id=row["id"],
+                dotmac_id=nas.id,
+                metadata_={
+                    "title": row["title"],
+                    "ip": row.get("ip"),
+                    "nas_ip": row.get("nas_ip"),
+                    "model": row.get("model"),
+                    "nas_type": row.get("nas_type"),
+                    "auth_method": row.get("authorization_method"),
+                    "acct_method": row.get("accounting_method"),
+                    "has_ssh_creds": bool(ssh_username and ssh_password),
+                    "has_api_creds": bool(api_username and api_password),
+                    "deleted": is_deleted,
+                },
+            )
+        )
         mapping[row["id"]] = nas.id
         created += 1
 
     db.flush()
-    logger.info("Routers/NAS: %d created, %d updated, %d total", created, updated, len(mapping))
+    logger.info(
+        "Routers/NAS: %d created, %d updated, %d total", created, updated, len(mapping)
+    )
     return mapping
 
 
@@ -648,12 +694,14 @@ def migrate_ip_pools(conn, db) -> dict[int, uuid.UUID]:
         db.flush()
 
         # Create SplynxIdMapping
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.ip_network,
-            splynx_id=row["id"],
-            dotmac_id=pool.id,
-            metadata_={"network": network, "name": name},
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.ip_network,
+                splynx_id=row["id"],
+                dotmac_id=pool.id,
+                metadata_={"network": network, "name": name},
+            )
+        )
         mapping[row["id"]] = pool.id
         pools_created += 1
 
@@ -679,17 +727,22 @@ def migrate_ip_pools(conn, db) -> dict[int, uuid.UUID]:
                 # For larger networks, just log - don't populate all addresses
                 logger.info(
                     "  Large network %s (%d hosts) - not populating individual addresses",
-                    cidr, ip_net.num_addresses - 2
+                    cidr,
+                    ip_net.num_addresses - 2,
                 )
         except ValueError as e:
             logger.warning("  Invalid CIDR %s: %s", cidr, e)
 
     db.flush()
-    logger.info("IP pools: %d created, %d addresses populated", pools_created, addresses_created)
+    logger.info(
+        "IP pools: %d created, %d addresses populated", pools_created, addresses_created
+    )
     return mapping
 
 
-def migrate_radius_profiles(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> dict[int, uuid.UUID]:
+def migrate_radius_profiles(
+    conn, db, tariff_mapping: dict[int, uuid.UUID]
+) -> dict[int, uuid.UUID]:
     """Create RadiusProfile records from Splynx tariff speed data.
 
     Links profiles to offers via OfferRadiusProfile.
@@ -768,16 +821,18 @@ def migrate_radius_profiles(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> d
         db.flush()
 
         # Create mapping
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.radius_profile,
-            splynx_id=row["id"],
-            dotmac_id=profile.id,
-            metadata_={
-                "tariff_title": row["title"],
-                "speed_down": speed_download,
-                "speed_up": speed_upload,
-            },
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.radius_profile,
+                splynx_id=row["id"],
+                dotmac_id=profile.id,
+                metadata_={
+                    "tariff_title": row["title"],
+                    "speed_down": speed_download,
+                    "speed_up": speed_upload,
+                },
+            )
+        )
         mapping[row["id"]] = profile.id
         profiles_created += 1
 
@@ -790,7 +845,11 @@ def migrate_radius_profiles(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> d
         links_created += 1
 
     db.flush()
-    logger.info("RADIUS profiles: %d created, %d linked to offers", profiles_created, links_created)
+    logger.info(
+        "RADIUS profiles: %d created, %d linked to offers",
+        profiles_created,
+        links_created,
+    )
     return mapping
 
 
@@ -824,10 +883,14 @@ def migrate_fup_policies(conn, db, tariff_mapping: dict[int, uuid.UUID]) -> None
         fup_cap_download = row.get("fup_cap_download") or row.get("fup_download")
         fup_cap_upload = row.get("fup_cap_upload") or row.get("fup_upload")
         fup_cap_total = row.get("fup_cap_total") or row.get("fup_traffic")
-        fup_speed_percent = row.get("fup_speed_percent") or row.get("fup_speed_reduction")
+        fup_speed_percent = row.get("fup_speed_percent") or row.get(
+            "fup_speed_reduction"
+        )
 
         # Skip if no FUP config
-        if not fup_enabled and not any([fup_cap_download, fup_cap_upload, fup_cap_total]):
+        if not fup_enabled and not any(
+            [fup_cap_download, fup_cap_upload, fup_cap_total]
+        ):
             continue
 
         # Check if policy already exists for this offer
@@ -931,16 +994,34 @@ def run_phase0(dry_run: bool = True) -> None:
             if dry_run:
                 logger.info("DRY RUN — counting source data only")
                 tables = [
-                    ("locations", "SELECT COUNT(*) as cnt FROM locations WHERE deleted='0'"),
+                    (
+                        "locations",
+                        "SELECT COUNT(*) as cnt FROM locations WHERE deleted='0'",
+                    ),
                     ("partners (all)", "SELECT COUNT(*) as cnt FROM partners"),
-                    ("partners (deleted)", "SELECT COUNT(*) as cnt FROM partners WHERE deleted='1'"),
+                    (
+                        "partners (deleted)",
+                        "SELECT COUNT(*) as cnt FROM partners WHERE deleted='1'",
+                    ),
                     ("tax", "SELECT COUNT(*) as cnt FROM tax"),
-                    ("tariffs_internet", "SELECT COUNT(*) as cnt FROM tariffs_internet"),
+                    (
+                        "tariffs_internet",
+                        "SELECT COUNT(*) as cnt FROM tariffs_internet",
+                    ),
                     ("tariffs_custom", "SELECT COUNT(*) as cnt FROM tariffs_custom"),
                     ("routers", "SELECT COUNT(*) as cnt FROM routers"),
-                    ("ipv4_networks", "SELECT COUNT(*) as cnt FROM ipv4_networks WHERE deleted='0'"),
-                    ("tariffs_to_partners", "SELECT COUNT(*) as cnt FROM tariffs_internet_to_partners"),
-                    ("tariffs_to_locations", "SELECT COUNT(*) as cnt FROM tariffs_internet_to_locations"),
+                    (
+                        "ipv4_networks",
+                        "SELECT COUNT(*) as cnt FROM ipv4_networks WHERE deleted='0'",
+                    ),
+                    (
+                        "tariffs_to_partners",
+                        "SELECT COUNT(*) as cnt FROM tariffs_internet_to_partners",
+                    ),
+                    (
+                        "tariffs_to_locations",
+                        "SELECT COUNT(*) as cnt FROM tariffs_internet_to_locations",
+                    ),
                 ]
                 for name, query in tables:
                     rows = fetch_all(conn, query)
@@ -955,7 +1036,11 @@ def run_phase0(dry_run: bool = True) -> None:
             tariff_mapping = migrate_tariffs(conn, db, tax_mapping)
             custom_tariff_mapping = migrate_custom_tariffs(conn, db, tax_mapping)
             migrate_tariff_availability(
-                conn, db, tariff_mapping, partner_mapping, location_mapping,
+                conn,
+                db,
+                tariff_mapping,
+                partner_mapping,
+                location_mapping,
             )
             router_mapping = migrate_routers(conn, db, location_mapping)
             ip_pool_mapping = migrate_ip_pools(conn, db)
@@ -973,9 +1058,11 @@ def run_phase0(dry_run: bool = True) -> None:
             from sqlalchemy import func
 
             from app.models.splynx_mapping import SplynxIdMapping
+
             counts = db.execute(
-                select(SplynxIdMapping.entity_type, func.count(SplynxIdMapping.id))
-                .group_by(SplynxIdMapping.entity_type)
+                select(
+                    SplynxIdMapping.entity_type, func.count(SplynxIdMapping.id)
+                ).group_by(SplynxIdMapping.entity_type)
             ).all()
             logger.info("--- SplynxIdMapping summary ---")
             for entity_type, count in counts:
@@ -987,4 +1074,6 @@ if __name__ == "__main__":
         run_phase0(dry_run=False)
     else:
         run_phase0(dry_run=True)
-        print("\nTo execute: poetry run python scripts/migration/phase0_reference_data.py --execute")
+        print(
+            "\nTo execute: poetry run python scripts/migration/phase0_reference_data.py --execute"
+        )

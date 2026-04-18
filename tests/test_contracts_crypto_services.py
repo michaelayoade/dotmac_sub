@@ -35,8 +35,8 @@ from app.services.audit_helpers import (
 from app.services.contracts import contract_signatures
 from app.services.credential_crypto import (
     ENCRYPTED_CREDENTIAL_FIELDS,
-    decrypt_credential_with_key,
     decrypt_credential,
+    decrypt_credential_with_key,
     encrypt_credential,
     encrypt_nas_credentials,
     generate_encryption_key,
@@ -121,7 +121,9 @@ class TestCredentialCrypto:
     def test_encrypt_plain_prefix_reencrypts_when_enforced(self):
         key = Fernet.generate_key()
         with (
-            patch("app.services.credential_crypto.get_encryption_key", return_value=key),
+            patch(
+                "app.services.credential_crypto.get_encryption_key", return_value=key
+            ),
             patch("app.services.credential_crypto._encryption_key_required", True),
         ):
             result = encrypt_credential("plain:my-password")
@@ -528,17 +530,13 @@ class TestContracts:
     def test_get_for_service_order(self, db_session, subscriber):
         order = self._create_service_order(db_session, subscriber)
         sig = self._create_signature(db_session, subscriber, service_order=order)
-        fetched = contract_signatures.get_for_service_order(
-            db_session, str(order.id)
-        )
+        fetched = contract_signatures.get_for_service_order(db_session, str(order.id))
         assert fetched is not None
         assert fetched.id == sig.id
 
     def test_get_for_service_order_none(self, db_session, subscriber):
         order = self._create_service_order(db_session, subscriber)
-        fetched = contract_signatures.get_for_service_order(
-            db_session, str(order.id)
-        )
+        fetched = contract_signatures.get_for_service_order(db_session, str(order.id))
         assert fetched is None
 
     def test_is_signed_true(self, db_session, subscriber):
@@ -553,9 +551,7 @@ class TestContracts:
     def test_list_for_account(self, db_session, subscriber):
         sig1 = self._create_signature(db_session, subscriber)
         sig2 = self._create_signature(db_session, subscriber)
-        sigs = contract_signatures.list_for_account(
-            db_session, str(subscriber.id)
-        )
+        sigs = contract_signatures.list_for_account(db_session, str(subscriber.id))
         sig_ids = [s.id for s in sigs]
         assert sig1.id in sig_ids
         assert sig2.id in sig_ids
@@ -589,9 +585,7 @@ class TestContracts:
         sig = self._create_signature(db_session, subscriber, service_order=order)
         sig.is_active = False
         db_session.commit()
-        fetched = contract_signatures.get_for_service_order(
-            db_session, str(order.id)
-        )
+        fetched = contract_signatures.get_for_service_order(db_session, str(order.id))
         assert fetched is None
 
     def test_get_contract_context_not_found(self, db_session, subscriber):
@@ -664,11 +658,15 @@ class TestPaymentArrangementHelpers:
 
     def test_calculate_next_due_date_biweekly(self):
         d = date(2025, 3, 1)
-        assert _calculate_next_due_date(d, PaymentFrequency.biweekly) == date(2025, 3, 15)
+        assert _calculate_next_due_date(d, PaymentFrequency.biweekly) == date(
+            2025, 3, 15
+        )
 
     def test_calculate_next_due_date_monthly(self):
         d = date(2025, 3, 15)
-        assert _calculate_next_due_date(d, PaymentFrequency.monthly) == date(2025, 4, 15)
+        assert _calculate_next_due_date(d, PaymentFrequency.monthly) == date(
+            2025, 4, 15
+        )
 
     def test_calculate_next_due_date_monthly_december(self):
         d = date(2025, 12, 1)
@@ -676,8 +674,13 @@ class TestPaymentArrangementHelpers:
 
 
 def _create_arrangement_directly(
-    db_session, subscriber, total=Decimal("400.00"), num_installments=2,
-    frequency=PaymentFrequency.monthly, start=None, notes=None,
+    db_session,
+    subscriber,
+    total=Decimal("400.00"),
+    num_installments=2,
+    frequency=PaymentFrequency.monthly,
+    start=None,
+    notes=None,
 ):
     """Create a PaymentArrangement + installments directly via the ORM,
     bypassing the service create method to avoid field name mismatches."""
@@ -727,8 +730,10 @@ class TestPaymentArrangements:
 
     def test_create_arrangement_directly(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(
-            db_session, subscriber,
-            total=Decimal("600.00"), num_installments=3,
+            db_session,
+            subscriber,
+            total=Decimal("600.00"),
+            num_installments=3,
         )
         assert arrangement is not None
         assert arrangement.total_amount == Decimal("600.00")
@@ -740,8 +745,10 @@ class TestPaymentArrangements:
 
     def test_create_arrangement_rounding(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(
-            db_session, subscriber,
-            total=Decimal("100.00"), num_installments=3,
+            db_session,
+            subscriber,
+            total=Decimal("100.00"),
+            num_installments=3,
         )
         assert arrangement.installment_amount == Decimal("33.33")
         installments = (
@@ -788,7 +795,9 @@ class TestPaymentArrangements:
 
     def test_cancel_arrangement(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(
-            db_session, subscriber, notes=None,
+            db_session,
+            subscriber,
+            notes=None,
         )
         canceled = payment_arrangements.cancel(
             db_session, str(arrangement.id), notes="Customer request"
@@ -832,7 +841,9 @@ class TestPaymentArrangements:
         db_session.refresh(installments[1])
         assert installments[1].status == InstallmentStatus.due
 
-    def test_record_all_installments_completes_arrangement(self, db_session, subscriber):
+    def test_record_all_installments_completes_arrangement(
+        self, db_session, subscriber
+    ):
         arrangement = _create_arrangement_directly(db_session, subscriber)
         payment_arrangements.approve(db_session, str(arrangement.id))
 
@@ -863,13 +874,9 @@ class TestPaymentArrangements:
             .filter(PaymentArrangementInstallment.installment_number == 1)
             .first()
         )
-        payment_arrangements.record_installment_payment(
-            db_session, str(first.id)
-        )
+        payment_arrangements.record_installment_payment(db_session, str(first.id))
         with pytest.raises(HTTPException) as exc_info:
-            payment_arrangements.record_installment_payment(
-                db_session, str(first.id)
-            )
+            payment_arrangements.record_installment_payment(db_session, str(first.id))
         assert exc_info.value.status_code == 400
         assert "already paid" in exc_info.value.detail
 
@@ -882,7 +889,9 @@ class TestPaymentArrangements:
 
     def test_cancel_with_existing_notes(self, db_session, subscriber):
         arrangement = _create_arrangement_directly(
-            db_session, subscriber, notes="Original note",
+            db_session,
+            subscriber,
+            notes="Original note",
         )
         canceled = payment_arrangements.cancel(
             db_session, str(arrangement.id), notes="Cancellation reason"
@@ -907,7 +916,11 @@ class TestPaymentArrangements:
 
 
 def _create_change_request_directly(
-    db_session, subscription, new_offer, effective_date=None, notes=None,
+    db_session,
+    subscription,
+    new_offer,
+    effective_date=None,
+    notes=None,
 ):
     """Create a SubscriptionChangeRequest directly via the ORM."""
     cr = SubscriptionChangeRequest(

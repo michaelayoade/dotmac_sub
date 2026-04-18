@@ -27,12 +27,16 @@ def upgrade() -> None:
     if "retry_count" not in columns:
         op.add_column(
             "tr069_jobs",
-            sa.Column("retry_count", sa.Integer(), nullable=True, server_default=sa.text("0")),
+            sa.Column(
+                "retry_count", sa.Integer(), nullable=True, server_default=sa.text("0")
+            ),
         )
     if "max_retries" not in columns:
         op.add_column(
             "tr069_jobs",
-            sa.Column("max_retries", sa.Integer(), nullable=True, server_default=sa.text("3")),
+            sa.Column(
+                "max_retries", sa.Integer(), nullable=True, server_default=sa.text("3")
+            ),
         )
 
 

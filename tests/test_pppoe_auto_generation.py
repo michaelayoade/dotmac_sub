@@ -26,7 +26,12 @@ def _seed_pppoe_settings(
         ("pppoe_username_prefix", SettingValueType.string, prefix, None),
         ("pppoe_username_padding", SettingValueType.integer, str(padding), None),
         ("pppoe_username_start", SettingValueType.integer, str(start), None),
-        ("pppoe_default_password_length", SettingValueType.integer, str(password_length), None),
+        (
+            "pppoe_default_password_length",
+            SettingValueType.integer,
+            str(password_length),
+            None,
+        ),
     ]
     for key, vtype, text, json_val in specs:
         db.add(
@@ -73,7 +78,9 @@ class TestAutoGeneratePppoeCredential:
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
         assert result is None
 
-    def test_generates_when_only_inactive_credential_exists(self, db_session, subscriber):
+    def test_generates_when_only_inactive_credential_exists(
+        self, db_session, subscriber
+    ):
         """When subscriber only has inactive credentials, generates new one."""
         _seed_pppoe_settings(db_session, start=5000)
 
@@ -120,7 +127,10 @@ class TestAutoGeneratePppoeCredential:
     def test_custom_prefix_and_padding(self, db_session, subscriber):
         """Respects custom prefix and padding settings."""
         _seed_pppoe_settings(
-            db_session, prefix="PPP", padding=3, start=1,
+            db_session,
+            prefix="PPP",
+            padding=3,
+            start=1,
         )
         result = auto_generate_pppoe_credential(db_session, str(subscriber.id))
 

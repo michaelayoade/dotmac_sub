@@ -30,7 +30,10 @@ def upgrade() -> None:
 
     # Create the plancategory enum type if it does not exist
     plancategory_enum = postgresql.ENUM(
-        "internet", "recurring", "one_time", "bundle",
+        "internet",
+        "recurring",
+        "one_time",
+        "bundle",
         name="plancategory",
         create_type=False,
     )

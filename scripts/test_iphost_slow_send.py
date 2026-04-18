@@ -2,12 +2,15 @@
 """Test IPHOST configuration with slow send fix."""
 
 import sys
+
 sys.path.insert(0, "/opt/dotmac_sub")
+
+from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.network import OLTDevice, OntUnit
 from app.services.network.olt_ssh_ont import configure_ont_iphost
-from sqlalchemy import select
+
 
 def main():
     db = SessionLocal()
@@ -22,12 +25,16 @@ def main():
         print(f"Testing on OLT: {olt.name} ({olt.mgmt_ip})")
 
         # Get ONTs on board 0/2 with management IPs
-        stmt = select(OntUnit).where(
-            OntUnit.olt_device_id == olt.id,
-            OntUnit.board == "0/2",
-            OntUnit.mgmt_ip_address.isnot(None),
-            OntUnit.external_id.isnot(None),
-        ).limit(3)
+        stmt = (
+            select(OntUnit)
+            .where(
+                OntUnit.olt_device_id == olt.id,
+                OntUnit.board == "0/2",
+                OntUnit.mgmt_ip_address.isnot(None),
+                OntUnit.external_id.isnot(None),
+            )
+            .limit(3)
+        )
 
         onts = db.scalars(stmt).all()
         if not onts:
@@ -49,7 +56,9 @@ def main():
                 try:
                     ont_id = int(ext_id)
                 except ValueError:
-                    print(f"Skipping {ont.serial_number} - invalid external_id: {ext_id}")
+                    print(
+                        f"Skipping {ont.serial_number} - invalid external_id: {ext_id}"
+                    )
                     continue
 
             ip = str(ont.mgmt_ip_address)
@@ -61,7 +70,9 @@ def main():
 
             port_num = ont.port if ont.port else "0"
             print(f"{ont.serial_number} @ {fsp} ONT-{ont_id}: {ip}")
-            print(f"  Command: ont ipconfig {port_num} {ont_id} ip-index 0 static ip-address {ip} mask 255.255.255.0 gateway 172.16.205.1 vlan {vlan}")
+            print(
+                f"  Command: ont ipconfig {port_num} {ont_id} ip-index 0 static ip-address {ip} mask 255.255.255.0 gateway 172.16.205.1 vlan {vlan}"
+            )
 
             ok, msg = configure_ont_iphost(
                 olt,
@@ -85,6 +96,7 @@ def main():
 
     finally:
         db.close()
+
 
 if __name__ == "__main__":
     main()

@@ -68,6 +68,7 @@ logger = logging.getLogger("bulk_rebind")
 # Checkpoint directory for resume capability
 CHECKPOINT_DIR = Path("scripts/migration/.rebind_checkpoints")
 
+
 class OntBatchItem(TypedDict):
     serial_number: str
     fsp: str
@@ -108,7 +109,9 @@ def _load_checkpoint(olt_name: str, profile_id: int) -> set[str]:
     try:
         data = json.loads(path.read_text())
         serials = set(data.get("completed", []))
-        logger.info("  Loaded checkpoint: %d ONTs already rebound on %s", len(serials), olt_name)
+        logger.info(
+            "  Loaded checkpoint: %d ONTs already rebound on %s", len(serials), olt_name
+        )
         return serials
     except (json.JSONDecodeError, KeyError) as exc:
         logger.warning("  Corrupt checkpoint for %s, starting fresh: %s", olt_name, exc)
@@ -312,7 +315,12 @@ def _rebind_batch_on_olt(
     if already_done is None:
         already_done = set()
 
-    stats: BatchStats = {"bound": 0, "skipped": 0, "errors": 0, "completed_serials": set()}
+    stats: BatchStats = {
+        "bound": 0,
+        "skipped": 0,
+        "errors": 0,
+        "completed_serials": set(),
+    }
     completed: set[str] = set(already_done)
 
     # Filter out already-done ONTs
@@ -330,7 +338,10 @@ def _rebind_batch_on_olt(
         for ont in pending:
             logger.info(
                 "  [DRY RUN] Would rebind ONT %s (ONT-ID %d on %s) → profile %d",
-                ont["serial_number"], ont["ont_id"], ont["fsp"], profile_id,
+                ont["serial_number"],
+                ont["ont_id"],
+                ont["fsp"],
+                profile_id,
             )
             stats["bound"] += 1
         stats["completed_serials"] = completed
@@ -369,19 +380,30 @@ def _rebind_batch_on_olt(
                 eta_min = remaining / 60
                 logger.info(
                     "  [%d/%d] ONT %s (ID %d on %s) — ETA: %.1f min",
-                    i, len(pending), serial, ont_id, ont["fsp"], eta_min,
+                    i,
+                    len(pending),
+                    serial,
+                    ont_id,
+                    ont["fsp"],
+                    eta_min,
                 )
             else:
                 logger.info(
                     "  [%d/%d] ONT %s (ID %d on %s)",
-                    i, len(pending), serial, ont_id, ont["fsp"],
+                    i,
+                    len(pending),
+                    serial,
+                    ont_id,
+                    ont["fsp"],
                 )
 
             # Enter interface context if needed (minimize quit/re-enter)
             if fs != current_frame_slot:
                 if current_frame_slot is not None:
                     core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
-                core._run_huawei_cmd(channel, f"interface gpon {fs}", prompt=config_prompt)
+                core._run_huawei_cmd(
+                    channel, f"interface gpon {fs}", prompt=config_prompt
+                )
                 current_frame_slot = fs
 
             # Bind TR-069 profile
@@ -391,14 +413,17 @@ def _rebind_batch_on_olt(
             if core.is_error_output(output):
                 logger.warning(
                     "  FAILED bind for ONT %s (ID %d): %s",
-                    serial, ont_id, output.strip()[-120:],
+                    serial,
+                    ont_id,
+                    output.strip()[-120:],
                 )
                 stats["errors"] += 1
                 continue
 
             # Reset ONT to trigger re-registration with new ACS
             reset_out = core._run_huawei_cmd(
-                channel, f"ont reset {port_num} {ont_id}",
+                channel,
+                f"ont reset {port_num} {ont_id}",
                 prompt=r"[#)]\s*$|\[?[yYnN/]+\]|Are you sure",
             )
             if _YN_PROMPT.search(reset_out):
@@ -407,7 +432,10 @@ def _rebind_batch_on_olt(
 
             logger.info(
                 "  ✓ Rebound ONT %s (ID %d on %s) → profile %d",
-                serial, ont_id, ont["fsp"], profile_id,
+                serial,
+                ont_id,
+                ont["fsp"],
+                profile_id,
             )
             stats["bound"] += 1
             completed.add(serial)
@@ -470,11 +498,15 @@ def run(
     from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
 
     # Build OLT filter — require SSH credentials for rebind
-    olt_stmt = select(OLTDevice).where(
-        OLTDevice.mgmt_ip.isnot(None),
-        OLTDevice.ssh_username.isnot(None),
-        OLTDevice.ssh_password.isnot(None),
-    ).options(joinedload(OLTDevice.tr069_acs_server))
+    olt_stmt = (
+        select(OLTDevice)
+        .where(
+            OLTDevice.mgmt_ip.isnot(None),
+            OLTDevice.ssh_username.isnot(None),
+            OLTDevice.ssh_password.isnot(None),
+        )
+        .options(joinedload(OLTDevice.tr069_acs_server))
+    )
     if olt_name:
         olt_stmt = olt_stmt.where(OLTDevice.name == olt_name)
     olts = db.scalars(olt_stmt).all()
@@ -495,7 +527,8 @@ def run(
         else:
             logger.info("  Auto-detecting linked ACS profile...")
             resolved_id, resolve_msg = _resolve_linked_acs_profile(
-                olt, auto_create=auto_create_profile and not dry_run,
+                olt,
+                auto_create=auto_create_profile and not dry_run,
             )
             if resolved_id is None:
                 logger.error("  SKIPPING %s — %s", olt.name, resolve_msg)
@@ -554,7 +587,10 @@ def run(
             if ont_id is None or fsp is None:
                 logger.warning(
                     "  Skipping %s — cannot resolve ONT-ID (external_id=%s, board=%s, port=%s)",
-                    serial_number, external_id, board, port,
+                    serial_number,
+                    external_id,
+                    board,
+                    port,
                 )
                 totals["skipped"] += 1
                 continue
@@ -565,18 +601,24 @@ def run(
                 offline_count += 1
 
             parts = fsp.split("/")
-            batch.append({
-                "serial_number": serial_number or "",
-                "fsp": fsp,
-                "ont_id": ont_id,
-                "frame_slot": f"{parts[0]}/{parts[1]}",
-                "port_num": parts[2],
-                "online_status": online_status or "unknown",
-            })
+            batch.append(
+                {
+                    "serial_number": serial_number or "",
+                    "fsp": fsp,
+                    "ont_id": ont_id,
+                    "frame_slot": f"{parts[0]}/{parts[1]}",
+                    "port_num": parts[2],
+                    "online_status": online_status or "unknown",
+                }
+            )
 
         logger.info(
             "  %d ONTs total (%d online, %d offline), %d with valid ONT-ID, %d skipped",
-            len(rows), online_count, offline_count, len(batch), len(rows) - len(batch),
+            len(rows),
+            online_count,
+            offline_count,
+            len(batch),
+            len(rows) - len(batch),
         )
 
         if not batch:
@@ -591,7 +633,9 @@ def run(
             already_done = _load_checkpoint(olt.name, olt_profile_id)
 
         stats = _rebind_batch_on_olt(
-            olt, batch, olt_profile_id,
+            olt,
+            batch,
+            olt_profile_id,
             dry_run=dry_run,
             already_done=already_done,
         )
@@ -646,7 +690,12 @@ def verify_genieacs_informs(db: Session) -> dict[str, int | str]:
         genieacs_devices = resp.json()
     except Exception as exc:
         logger.error("Failed to query GenieACS: %s", exc)
-        return {"rebound": len(rebound_serials), "informed": 0, "missing": 0, "error": str(exc)}
+        return {
+            "rebound": len(rebound_serials),
+            "informed": 0,
+            "missing": 0,
+            "error": str(exc),
+        }
 
     # Extract serial numbers from GenieACS device IDs
     # GenieACS _id format varies: could be OUI-ProductClass-SerialNumber
@@ -671,14 +720,19 @@ def verify_genieacs_informs(db: Session) -> dict[str, int | str]:
 
     logger.info("━━━ GenieACS Verification ━━━")
     logger.info("  Rebound:  %d ONTs", len(rebound_serials))
-    logger.info("  Informed: %d ONTs (%.1f%%)", informed, informed / len(rebound_serials) * 100 if rebound_serials else 0)
+    logger.info(
+        "  Informed: %d ONTs (%.1f%%)",
+        informed,
+        informed / len(rebound_serials) * 100 if rebound_serials else 0,
+    )
     logger.info("  Missing:  %d ONTs", len(missing_serials))
 
     if missing_serials:
         # Check their online status in DB
         ont_rows = db.execute(
-            select(OntUnit.serial_number, OntUnit.online_status)
-            .where(OntUnit.serial_number.in_(missing_serials))
+            select(OntUnit.serial_number, OntUnit.online_status).where(
+                OntUnit.serial_number.in_(missing_serials)
+            )
         ).fetchall()
         status_counts: dict[str, int] = {}
         for r in ont_rows:
@@ -705,35 +759,46 @@ def main() -> None:
         description="Bulk TR-069 profile rebind for SmartOLT → GenieACS migration",
     )
     parser.add_argument(
-        "--profile-id", type=int, default=None,
+        "--profile-id",
+        type=int,
+        default=None,
         help="Override auto-detection with explicit OLT profile ID",
     )
     parser.add_argument(
-        "--olt", type=str, default=None,
+        "--olt",
+        type=str,
+        default=None,
         help="Only rebind ONTs on this OLT (exact name match)",
     )
     parser.add_argument(
-        "--execute", action="store_true",
+        "--execute",
+        action="store_true",
         help="Actually execute the rebind (default is dry-run)",
     )
     parser.add_argument(
-        "--limit", type=int, default=None,
+        "--limit",
+        type=int,
+        default=None,
         help="Max ONTs per OLT (for staged rollout)",
     )
     parser.add_argument(
-        "--resume", action="store_true",
+        "--resume",
+        action="store_true",
         help="Resume from checkpoint (skip already-rebound ONTs)",
     )
     parser.add_argument(
-        "--skip-preflight", action="store_true",
+        "--skip-preflight",
+        action="store_true",
         help="Skip SSH/profile pre-flight check",
     )
     parser.add_argument(
-        "--no-auto-create", action="store_true",
+        "--no-auto-create",
+        action="store_true",
         help="Don't auto-create the linked ACS profile on OLTs that lack it",
     )
     parser.add_argument(
-        "--verify", action="store_true",
+        "--verify",
+        action="store_true",
         help="Verify GenieACS has received informs from rebound ONTs",
     )
     args = parser.parse_args()
@@ -757,7 +822,9 @@ def main() -> None:
         else:
             logger.info("Profile: auto-detect per OLT (linked ACS by URL/username)")
             if not args.no_auto_create:
-                logger.info("Auto-create: ON (will create profile on OLTs that lack it)")
+                logger.info(
+                    "Auto-create: ON (will create profile on OLTs that lack it)"
+                )
         if args.olt:
             logger.info("OLT filter: %s", args.olt)
         if args.limit:
@@ -784,13 +851,17 @@ def main() -> None:
         logger.info("║  Skipped:          %s║", str(totals["skipped"]).ljust(22))
         logger.info("║  Errors:           %s║", str(totals["errors"]).ljust(22))
         if totals.get("preflight_failed"):
-            logger.info("║  Preflight failed: %s║", str(totals["preflight_failed"]).ljust(22))
+            logger.info(
+                "║  Preflight failed: %s║", str(totals["preflight_failed"]).ljust(22)
+            )
         logger.info("╚══════════════════════════════════════════╝")
 
         if dry_run:
             logger.info("")
             logger.info("This was a DRY RUN. Add --execute to actually rebind.")
-            logger.info("Tip: Use --execute --resume to safely resume after interruption.")
+            logger.info(
+                "Tip: Use --execute --resume to safely resume after interruption."
+            )
     finally:
         db.close()
 

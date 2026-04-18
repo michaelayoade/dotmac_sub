@@ -20,7 +20,9 @@ def _billing_setting(key: str, value: str) -> DomainSetting:
     )
 
 
-def test_person_detail_includes_billing_policy_override_snapshot(db_session, subscriber):
+def test_person_detail_includes_billing_policy_override_snapshot(
+    db_session, subscriber
+):
     db_session.add_all(
         [
             _billing_setting("billing_enabled", "true"),
@@ -89,4 +91,7 @@ def test_person_detail_includes_json_safe_geocode_payload(db_session, subscriber
 
     assert context["geocode_target"] is not None
     assert context["geocode_target"]["payload"]["address_line1"] == "123 Sample Street"
-    assert json.loads(context["geocode_target"]["payload_json"]) == context["geocode_target"]["payload"]
+    assert (
+        json.loads(context["geocode_target"]["payload_json"])
+        == context["geocode_target"]["payload"]
+    )

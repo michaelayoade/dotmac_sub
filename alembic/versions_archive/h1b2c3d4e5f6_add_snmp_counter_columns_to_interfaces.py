@@ -11,6 +11,7 @@ Create Date: 2026-03-22
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "h1b2c3d4e5f6"
@@ -25,13 +26,22 @@ def upgrade() -> None:
     columns = [c["name"] for c in inspector.get_columns("device_interfaces")]
 
     if "snmp_index" not in columns:
-        op.add_column("device_interfaces", sa.Column("snmp_index", sa.BigInteger(), nullable=True))
+        op.add_column(
+            "device_interfaces", sa.Column("snmp_index", sa.BigInteger(), nullable=True)
+        )
     if "last_in_octets" not in columns:
-        op.add_column("device_interfaces", sa.Column("last_in_octets", sa.Float(), nullable=True))
+        op.add_column(
+            "device_interfaces", sa.Column("last_in_octets", sa.Float(), nullable=True)
+        )
     if "last_out_octets" not in columns:
-        op.add_column("device_interfaces", sa.Column("last_out_octets", sa.Float(), nullable=True))
+        op.add_column(
+            "device_interfaces", sa.Column("last_out_octets", sa.Float(), nullable=True)
+        )
     if "last_counter_at" not in columns:
-        op.add_column("device_interfaces", sa.Column("last_counter_at", sa.DateTime(timezone=True), nullable=True))
+        op.add_column(
+            "device_interfaces",
+            sa.Column("last_counter_at", sa.DateTime(timezone=True), nullable=True),
+        )
 
 
 def downgrade() -> None:

@@ -5,17 +5,18 @@ Revises: b3c2d9a4f1aa
 Create Date: 2026-01-20 11:00:00.000000
 
 """
-from typing import Sequence, Union
 
-from alembic import op
+from collections.abc import Sequence
+
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "3a7f1d2c9e41"
-down_revision: Union[str, None] = "b3c2d9a4f1aa"
-branch_labels: Union[str, Sequence[str], None] = None
-depends_on: Union[str, Sequence[str], None] = None
+down_revision: str | None = "b3c2d9a4f1aa"
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
@@ -47,31 +48,60 @@ def upgrade() -> None:
     if "ping_enabled" not in columns:
         op.add_column(
             "network_devices",
-            sa.Column("ping_enabled", sa.Boolean(), server_default=sa.true(), nullable=False),
+            sa.Column(
+                "ping_enabled", sa.Boolean(), server_default=sa.true(), nullable=False
+            ),
         )
     if "snmp_enabled" not in columns:
         op.add_column(
             "network_devices",
-            sa.Column("snmp_enabled", sa.Boolean(), server_default=sa.false(), nullable=False),
+            sa.Column(
+                "snmp_enabled", sa.Boolean(), server_default=sa.false(), nullable=False
+            ),
         )
     if "snmp_port" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_port", sa.Integer(), nullable=True))
+        op.add_column(
+            "network_devices", sa.Column("snmp_port", sa.Integer(), nullable=True)
+        )
     if "snmp_version" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_version", sa.String(length=10), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_version", sa.String(length=10), nullable=True),
+        )
     if "snmp_community" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_community", sa.String(length=255), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_community", sa.String(length=255), nullable=True),
+        )
     if "snmp_username" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_username", sa.String(length=120), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_username", sa.String(length=120), nullable=True),
+        )
     if "snmp_auth_protocol" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_auth_protocol", sa.String(length=16), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_auth_protocol", sa.String(length=16), nullable=True),
+        )
     if "snmp_auth_secret" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_auth_secret", sa.String(length=255), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_auth_secret", sa.String(length=255), nullable=True),
+        )
     if "snmp_priv_protocol" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_priv_protocol", sa.String(length=16), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_priv_protocol", sa.String(length=16), nullable=True),
+        )
     if "snmp_priv_secret" not in columns:
-        op.add_column("network_devices", sa.Column("snmp_priv_secret", sa.String(length=255), nullable=True))
+        op.add_column(
+            "network_devices",
+            sa.Column("snmp_priv_secret", sa.String(length=255), nullable=True),
+        )
 
-    op.execute("UPDATE network_devices SET snmp_port = 161 WHERE snmp_port IS NULL AND snmp_enabled IS TRUE;")
+    op.execute(
+        "UPDATE network_devices SET snmp_port = 161 WHERE snmp_port IS NULL AND snmp_enabled IS TRUE;"
+    )
     if "ping_enabled" not in columns:
         op.alter_column("network_devices", "ping_enabled", server_default=None)
     if "snmp_enabled" not in columns:

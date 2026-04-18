@@ -14,6 +14,7 @@ from app.services import avatar
 # Helper Function Tests
 # =============================================================================
 
+
 def _run_async(coro):
     # Run coroutine in a dedicated thread to avoid nested event loops from anyio.
     with ThreadPoolExecutor(max_workers=1) as executor:

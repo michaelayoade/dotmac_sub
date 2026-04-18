@@ -50,7 +50,9 @@ def upgrade() -> None:
                 server_default=sa.func.now(),
             ),
             sa.UniqueConstraint(
-                "vendor", "model", "firmware_pattern",
+                "vendor",
+                "model",
+                "firmware_pattern",
                 name="uq_vmc_vendor_model_fw",
             ),
         )
@@ -82,7 +84,8 @@ def upgrade() -> None:
                 server_default=sa.func.now(),
             ),
             sa.UniqueConstraint(
-                "capability_id", "canonical_name",
+                "capability_id",
+                "canonical_name",
                 name="uq_tr069_param_cap_canonical",
             ),
         )

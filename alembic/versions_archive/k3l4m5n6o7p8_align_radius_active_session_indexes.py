@@ -9,7 +9,6 @@ from sqlalchemy import inspect, text
 
 from alembic import op
 
-
 revision = "k3l4m5n6o7p8"
 down_revision = "k1l2m3n4o5p7"
 branch_labels = None
@@ -59,7 +58,9 @@ def downgrade() -> None:
     conn = op.get_bind()
 
     _drop_if_exists(conn, "radius_active_sessions", "ix_radius_sessions_nas_start")
-    _drop_if_exists(conn, "radius_active_sessions", "ix_radius_sessions_subscriber_start")
+    _drop_if_exists(
+        conn, "radius_active_sessions", "ix_radius_sessions_subscriber_start"
+    )
 
     _create_if_missing(
         conn,
@@ -72,8 +73,7 @@ def downgrade() -> None:
         conn,
         "radius_active_sessions",
         "ix_radius_sessions_nas",
-        "CREATE INDEX ix_radius_sessions_nas "
-        "ON radius_active_sessions (nas_device_id)",
+        "CREATE INDEX ix_radius_sessions_nas ON radius_active_sessions (nas_device_id)",
     )
     _create_if_missing(
         conn,

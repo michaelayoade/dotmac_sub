@@ -7,12 +7,12 @@ Create Date: 2026-03-23 10:52:02.533931
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy import inspect, text
 
+from alembic import op
 
-revision = '476141795140'
-down_revision = '0fe6eb089ea9'
+revision = "476141795140"
+down_revision = "0fe6eb089ea9"
 branch_labels = None
 depends_on = None
 
@@ -22,11 +22,13 @@ def upgrade() -> None:
     inspector = inspect(conn)
 
     # Ensure the billingmode enum type exists (already created by catalog models)
-    conn.execute(text(
-        "DO $$ BEGIN "
-        "CREATE TYPE billingmode AS ENUM ('prepaid', 'postpaid'); "
-        "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
-    ))
+    conn.execute(
+        text(
+            "DO $$ BEGIN "
+            "CREATE TYPE billingmode AS ENUM ('prepaid', 'postpaid'); "
+            "EXCEPTION WHEN duplicate_object THEN NULL; END $$"
+        )
+    )
 
     existing_columns = [c["name"] for c in inspector.get_columns("subscribers")]
     if "billing_mode" not in existing_columns:
@@ -41,7 +43,8 @@ def upgrade() -> None:
         )
 
         # Backfill from active subscription billing_mode where available
-        conn.execute(text("""
+        conn.execute(
+            text("""
             UPDATE subscribers s
             SET billing_mode = sub.billing_mode
             FROM (
@@ -53,7 +56,8 @@ def upgrade() -> None:
             ) sub
             WHERE s.id = sub.subscriber_id
               AND s.billing_mode = 'prepaid'
-        """))
+        """)
+        )
 
 
 def downgrade() -> None:

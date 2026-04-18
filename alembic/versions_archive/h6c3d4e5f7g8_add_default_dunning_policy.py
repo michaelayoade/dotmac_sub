@@ -6,9 +6,6 @@ Seeds a default suspension policy with:
 """
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
-import uuid
 
 # revision identifiers, used by Alembic.
 revision = "h6c3d4e5f7g8"

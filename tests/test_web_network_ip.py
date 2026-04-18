@@ -168,7 +168,9 @@ def test_ipv4_block_detail_marks_assigned_reserved_and_available(monkeypatch):
         lambda **_kwargs: block,
     )
 
-    state = web_network_ip.build_ipv4_block_detail_data(db, block_id=str(block.id), limit=10)
+    state = web_network_ip.build_ipv4_block_detail_data(
+        db, block_id=str(block.id), limit=10
+    )
 
     assert state is not None
     rows = {row["ip_address"]: row["status"] for row in state["ip_rows"]}

@@ -27,7 +27,9 @@ def upgrade() -> None:
         sa.Column("entity_type", sa.String(length=100), nullable=False),
         sa.Column("entity_id", sa.String(length=100), nullable=False),
         sa.Column("original_filename", sa.String(length=255), nullable=False),
-        sa.Column("storage_key_or_relative_path", sa.String(length=1024), nullable=False),
+        sa.Column(
+            "storage_key_or_relative_path", sa.String(length=1024), nullable=False
+        ),
         sa.Column("legacy_local_path", sa.String(length=1024), nullable=True),
         sa.Column("file_size", sa.Integer(), nullable=False),
         sa.Column("content_type", sa.String(length=255), nullable=True),
@@ -43,7 +45,10 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(
-        "ix_stored_files_entity", "stored_files", ["entity_type", "entity_id"], unique=False
+        "ix_stored_files_entity",
+        "stored_files",
+        ["entity_type", "entity_id"],
+        unique=False,
     )
     op.create_index(
         "ix_stored_files_org_active",

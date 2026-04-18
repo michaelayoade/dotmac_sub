@@ -8,8 +8,9 @@ Create Date: 2026-02-25 14:20:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = "a9b8c7d6e5f5"
@@ -28,7 +29,9 @@ def upgrade() -> None:
         sa.Column("phone", sa.String(length=40), nullable=True),
         sa.Column("email", sa.String(length=255), nullable=True),
         sa.Column("notes", sa.Text(), nullable=True),
-        sa.Column("is_primary", sa.Boolean(), nullable=False, server_default=sa.false()),
+        sa.Column(
+            "is_primary", sa.Boolean(), nullable=False, server_default=sa.false()
+        ),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.true()),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),

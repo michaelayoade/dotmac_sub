@@ -10,8 +10,9 @@ Create Date: 2026-03-29
 
 from collections.abc import Sequence
 
-from alembic import op
 from sqlalchemy import text
+
+from alembic import op
 
 revision: str = "001_squashed"
 down_revision: str | None = None
@@ -29,8 +30,8 @@ def upgrade() -> None:
     conn.execute(text("COMMIT"))
 
     # Import all models so Base.metadata knows about them
-    from app.db import Base
     import app.models  # noqa: F401
+    from app.db import Base
 
     # Create all tables from the model definitions
     Base.metadata.create_all(conn.engine)
@@ -38,6 +39,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     raise RuntimeError(
-        "Cannot downgrade squashed initial migration. "
-        "Restore from backup instead."
+        "Cannot downgrade squashed initial migration. Restore from backup instead."
     )

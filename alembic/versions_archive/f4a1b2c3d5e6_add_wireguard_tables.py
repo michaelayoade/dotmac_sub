@@ -10,9 +10,10 @@ WireGuard replaces OpenVPN as the sole VPN protocol.
 - wireguard_connection_logs: Connection tracking (optional auditing)
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "f4a1b2c3d5e6"
@@ -206,14 +207,18 @@ def upgrade() -> None:
 
     # Create indexes
     if "wireguard_servers" in existing_tables:
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("wireguard_servers")}
+        existing_indexes = {
+            idx["name"] for idx in inspector.get_indexes("wireguard_servers")
+        }
         if "ix_wireguard_servers_is_active" not in existing_indexes:
             op.create_index(
                 "ix_wireguard_servers_is_active", "wireguard_servers", ["is_active"]
             )
 
     if "wireguard_peers" in existing_tables:
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("wireguard_peers")}
+        existing_indexes = {
+            idx["name"] for idx in inspector.get_indexes("wireguard_peers")
+        }
         if "ix_wireguard_peers_server_id" not in existing_indexes:
             op.create_index(
                 "ix_wireguard_peers_server_id", "wireguard_peers", ["server_id"]
@@ -232,7 +237,9 @@ def upgrade() -> None:
             )
 
     if "wireguard_connection_logs" in existing_tables:
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("wireguard_connection_logs")}
+        existing_indexes = {
+            idx["name"] for idx in inspector.get_indexes("wireguard_connection_logs")
+        }
         if "ix_wireguard_connection_logs_peer_id" not in existing_indexes:
             op.create_index(
                 "ix_wireguard_connection_logs_peer_id",

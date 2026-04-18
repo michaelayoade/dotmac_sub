@@ -45,4 +45,3 @@ def test_email_page_prefills_smtp_sender_form_for_edit(db_session):
     assert form["use_tls"] is False
     assert form["use_ssl"] is True
     assert form["is_default"] is True
-

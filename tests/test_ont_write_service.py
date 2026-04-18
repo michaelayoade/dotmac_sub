@@ -65,9 +65,7 @@ class TestUpdateWanConfig:
         ont = MagicMock(wan_mode=None)
         mock_get.return_value = (ont, None)
         db = MagicMock()
-        result = OntWriteService.update_wan_config(
-            db, "ont-1", wan_mode="invalid_mode"
-        )
+        result = OntWriteService.update_wan_config(db, "ont-1", wan_mode="invalid_mode")
         assert result.success is False
         assert "invalid" in result.message.lower()
 
@@ -306,9 +304,7 @@ class TestMoveOnt:
         mock_get.return_value = (ont, None)
         db = MagicMock()
         db.get.return_value = None  # port not found
-        result = OntWriteService.move_ont(
-            db, "ont-1", target_pon_port_id=FAKE_UUID
-        )
+        result = OntWriteService.move_ont(db, "ont-1", target_pon_port_id=FAKE_UUID)
         assert result.success is False
         assert "not found" in result.message.lower()
 
@@ -334,9 +330,7 @@ class TestMoveOnt:
         db.get.return_value = target_port
         db.scalars.return_value = scalar_result
 
-        result = OntWriteService.move_ont(
-            db, "ont-1", target_pon_port_id=FAKE_UUID
-        )
+        result = OntWriteService.move_ont(db, "ont-1", target_pon_port_id=FAKE_UUID)
 
         assert result.success is True
         assert ont.olt_device_id == "new-olt"

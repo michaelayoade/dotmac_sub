@@ -9,7 +9,14 @@ from app.services import billing as billing_service
 from app.services import web_billing_statements as statements_service
 
 
-def _create_entry(db_session, account_id, *, entry_type: LedgerEntryType, amount: str, created_at: datetime):
+def _create_entry(
+    db_session,
+    account_id,
+    *,
+    entry_type: LedgerEntryType,
+    amount: str,
+    created_at: datetime,
+):
     entry = billing_service.ledger_entries.create(
         db_session,
         LedgerEntryCreate(
@@ -28,7 +35,9 @@ def _create_entry(db_session, account_id, *, entry_type: LedgerEntryType, amount
     return entry
 
 
-def test_build_account_statement_calculates_opening_and_closing_balances(db_session, subscriber):
+def test_build_account_statement_calculates_opening_and_closing_balances(
+    db_session, subscriber
+):
     _create_entry(
         db_session,
         subscriber.id,

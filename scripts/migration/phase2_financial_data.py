@@ -38,21 +38,21 @@ INVOICE_STATUS_MAP = {
 
 # --- Splynx billing_transactions_categories → LedgerCategory ---
 LEDGER_CATEGORY_MAP = {
-    1: "internet_service",    # Service
-    2: "discount",            # Discount
-    3: "other",               # Payment (handled as credit)
-    4: "other",               # Refund
-    5: "other",               # Correction
-    6: "other",               # Credit note
-    7: "installation_fee",    # Air Fibre Installation Cost
-    8: "other",               # Call down support
+    1: "internet_service",  # Service
+    2: "discount",  # Discount
+    3: "other",  # Payment (handled as credit)
+    4: "other",  # Refund
+    5: "other",  # Correction
+    6: "other",  # Credit note
+    7: "installation_fee",  # Air Fibre Installation Cost
+    8: "other",  # Call down support
     11: "equipment_purchase",  # Faulty Device Replacement
-    12: "installation_fee",   # Dropcable Rerun
-    13: "custom_service",     # IP Addresses
-    17: "installation_fee",   # Ground Fibre Installation Cost
-    20: "reconnection_fee",   # Relocations
-    21: "tax",                # Withholding Tax
-    22: "tax",                # Stampduty deducted from sales
+    12: "installation_fee",  # Dropcable Rerun
+    13: "custom_service",  # IP Addresses
+    17: "installation_fee",  # Ground Fibre Installation Cost
+    20: "reconnection_fee",  # Relocations
+    21: "tax",  # Withholding Tax
+    22: "tax",  # Stampduty deducted from sales
 }
 
 
@@ -63,6 +63,7 @@ def _parse_date(val) -> datetime | None:
         return val.replace(tzinfo=UTC) if val.tzinfo is None else val
     try:
         from datetime import date as date_type
+
         if isinstance(val, date_type):
             return datetime(val.year, val.month, val.day, tzinfo=UTC)
     except (ValueError, TypeError):
@@ -70,7 +71,9 @@ def _parse_date(val) -> datetime | None:
     return None
 
 
-def migrate_invoices(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[int, uuid.UUID]:
+def migrate_invoices(
+    conn, db, customer_mapping: dict[int, uuid.UUID]
+) -> dict[int, uuid.UUID]:
     """Migrate Splynx invoices + invoices_items → Invoice + InvoiceLine."""
     from app.models.billing import Invoice, InvoiceStatus
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
@@ -127,7 +130,9 @@ def migrate_invoices(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[i
                 balance_due=due,
                 issued_at=_parse_date(row.get("date_created")),
                 due_at=_parse_date(row.get("date_payment")),
-                paid_at=_parse_date(row.get("date_updated")) if status_str == "paid" else None,
+                paid_at=_parse_date(row.get("date_updated"))
+                if status_str == "paid"
+                else None,
                 is_proforma=False,
                 is_sent=row.get("is_sent") in ("1", 1, True),
                 splynx_invoice_id=inv_id,
@@ -143,11 +148,13 @@ def migrate_invoices(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[i
                 skipped += 1
                 continue
 
-            db.add(SplynxIdMapping(
-                entity_type=SplynxEntityType.invoice,
-                splynx_id=inv_id,
-                dotmac_id=invoice.id,
-            ))
+            db.add(
+                SplynxIdMapping(
+                    entity_type=SplynxEntityType.invoice,
+                    splynx_id=inv_id,
+                    dotmac_id=invoice.id,
+                )
+            )
             mapping[inv_id] = invoice.id
             created += 1
 
@@ -156,12 +163,15 @@ def migrate_invoices(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[i
             logger.info("Invoices: %d created so far (%d skipped)", created, skipped)
 
     db.flush()
-    logger.info("Invoices: %d created, %d skipped, %d total", created, skipped, len(mapping))
+    logger.info(
+        "Invoices: %d created, %d skipped, %d total", created, skipped, len(mapping)
+    )
     return mapping
 
 
 def migrate_invoice_items(
-    conn, db,
+    conn,
+    db,
     invoice_mapping: dict[int, uuid.UUID],
     tax_mapping: dict[int, uuid.UUID],
 ) -> None:
@@ -201,7 +211,9 @@ def migrate_invoice_items(
     logger.info("Invoice lines: %d created, %d skipped", created, skipped)
 
 
-def migrate_payments(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[int, uuid.UUID]:
+def migrate_payments(
+    conn, db, customer_mapping: dict[int, uuid.UUID]
+) -> dict[int, uuid.UUID]:
     """Migrate Splynx payments → Payment."""
     from app.models.billing import Payment, PaymentStatus
     from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
@@ -238,7 +250,9 @@ def migrate_payments(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[i
                 account_id=subscriber_id,
                 amount=amount,
                 currency="NGN",
-                status=PaymentStatus.succeeded if not is_deleted else PaymentStatus.canceled,
+                status=PaymentStatus.succeeded
+                if not is_deleted
+                else PaymentStatus.canceled,
                 paid_at=_parse_date(row.get("date")),
                 receipt_number=(row.get("receipt_number") or "")[:120] or None,
                 memo=(row.get("comment") or "")[:500] or None,
@@ -255,11 +269,13 @@ def migrate_payments(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[i
                 skipped += 1
                 continue
 
-            db.add(SplynxIdMapping(
-                entity_type=SplynxEntityType.payment,
-                splynx_id=pid,
-                dotmac_id=payment.id,
-            ))
+            db.add(
+                SplynxIdMapping(
+                    entity_type=SplynxEntityType.payment,
+                    splynx_id=pid,
+                    dotmac_id=payment.id,
+                )
+            )
             mapping[pid] = payment.id
             created += 1
 
@@ -268,12 +284,15 @@ def migrate_payments(conn, db, customer_mapping: dict[int, uuid.UUID]) -> dict[i
             logger.info("Payments: %d created so far (%d skipped)", created, skipped)
 
     db.flush()
-    logger.info("Payments: %d created, %d skipped, %d total", created, skipped, len(mapping))
+    logger.info(
+        "Payments: %d created, %d skipped, %d total", created, skipped, len(mapping)
+    )
     return mapping
 
 
 def migrate_payment_allocations(
-    conn, db,
+    conn,
+    db,
     invoice_mapping: dict[int, uuid.UUID],
     payment_mapping: dict[int, uuid.UUID],
 ) -> None:
@@ -315,7 +334,8 @@ def migrate_payment_allocations(
 
 
 def migrate_ledger_entries(
-    conn, db,
+    conn,
+    db,
     customer_mapping: dict[int, uuid.UUID],
     invoice_mapping: dict[int, uuid.UUID],
     payment_mapping: dict[int, uuid.UUID],
@@ -384,14 +404,17 @@ def migrate_ledger_entries(
 
         db.flush()
         if created % 10000 == 0 and created > 0:
-            logger.info("Ledger entries: %d created so far (%d skipped)", created, skipped)
+            logger.info(
+                "Ledger entries: %d created so far (%d skipped)", created, skipped
+            )
 
     db.flush()
     logger.info("Ledger entries: %d created, %d skipped", created, skipped)
 
 
 def migrate_credit_notes(
-    conn, db,
+    conn,
+    db,
     customer_mapping: dict[int, uuid.UUID],
     invoice_mapping: dict[int, uuid.UUID],
 ) -> None:
@@ -449,11 +472,13 @@ def migrate_credit_notes(
         )
         db.add(cn)
         db.flush()
-        db.add(SplynxIdMapping(
-            entity_type=SplynxEntityType.credit_note,
-            splynx_id=splynx_credit_note_id,
-            dotmac_id=cn.id,
-        ))
+        db.add(
+            SplynxIdMapping(
+                entity_type=SplynxEntityType.credit_note,
+                splynx_id=splynx_credit_note_id,
+                dotmac_id=cn.id,
+            )
+        )
         created += 1
 
     db.flush()
@@ -470,11 +495,20 @@ def run_phase2(dry_run: bool = True) -> None:
                 logger.info("DRY RUN — counting source data only")
                 tables = [
                     ("invoices", "SELECT COUNT(*) as cnt FROM invoices"),
-                    ("invoices (not deleted)", "SELECT COUNT(*) as cnt FROM invoices WHERE deleted='0'"),
-                    ("invoices_items", "SELECT COUNT(*) as cnt FROM invoices_items WHERE deleted='0'"),
+                    (
+                        "invoices (not deleted)",
+                        "SELECT COUNT(*) as cnt FROM invoices WHERE deleted='0'",
+                    ),
+                    (
+                        "invoices_items",
+                        "SELECT COUNT(*) as cnt FROM invoices_items WHERE deleted='0'",
+                    ),
                     ("payments", "SELECT COUNT(*) as cnt FROM payments"),
                     ("invoice_payers", "SELECT COUNT(*) as cnt FROM invoice_payers"),
-                    ("billing_transactions", "SELECT COUNT(*) as cnt FROM billing_transactions"),
+                    (
+                        "billing_transactions",
+                        "SELECT COUNT(*) as cnt FROM billing_transactions",
+                    ),
                     ("credit_notes", "SELECT COUNT(*) as cnt FROM credit_notes"),
                 ]
                 for name, query in tables:
@@ -485,6 +519,7 @@ def run_phase2(dry_run: bool = True) -> None:
 
             # Load customer mapping
             from app.models.splynx_mapping import SplynxEntityType, SplynxIdMapping
+
             customer_mapping = {
                 m.splynx_id: m.dotmac_id
                 for m in db.scalars(
@@ -528,7 +563,11 @@ def run_phase2(dry_run: bool = True) -> None:
 
             # Step 5: Ledger entries
             migrate_ledger_entries(
-                conn, db, customer_mapping, invoice_mapping, payment_mapping,
+                conn,
+                db,
+                customer_mapping,
+                invoice_mapping,
+                payment_mapping,
             )
             db.commit()
             logger.info("--- Ledger entries committed ---")
@@ -541,8 +580,9 @@ def run_phase2(dry_run: bool = True) -> None:
             # Summary
             logger.info("=== Phase 2 complete ===")
             counts = db.execute(
-                select(SplynxIdMapping.entity_type, func.count(SplynxIdMapping.id))
-                .group_by(SplynxIdMapping.entity_type)
+                select(
+                    SplynxIdMapping.entity_type, func.count(SplynxIdMapping.id)
+                ).group_by(SplynxIdMapping.entity_type)
             ).all()
             logger.info("--- SplynxIdMapping summary ---")
             for entity_type, count in counts:
@@ -554,4 +594,6 @@ if __name__ == "__main__":
         run_phase2(dry_run=False)
     else:
         run_phase2(dry_run=True)
-        print("\nTo execute: poetry run python -m scripts.migration.phase2_financial_data --execute")
+        print(
+            "\nTo execute: poetry run python -m scripts.migration.phase2_financial_data --execute"
+        )

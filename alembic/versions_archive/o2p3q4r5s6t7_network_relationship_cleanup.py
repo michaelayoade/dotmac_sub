@@ -11,9 +11,9 @@ Revises: n1o2p3q4r5s6
 Create Date: 2026-01-21
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "o2p3q4r5s6t7"
 down_revision = "n1o2p3q4r5s6"
@@ -119,11 +119,15 @@ def upgrade() -> None:
     )
     op.add_column(
         "network_devices",
-        sa.Column("current_subscriber_count", sa.Integer(), server_default="0", nullable=False),
+        sa.Column(
+            "current_subscriber_count", sa.Integer(), server_default="0", nullable=False
+        ),
     )
     op.add_column(
         "network_devices",
-        sa.Column("health_status", sa.String(20), server_default="unknown", nullable=False),
+        sa.Column(
+            "health_status", sa.String(20), server_default="unknown", nullable=False
+        ),
     )
     op.add_column(
         "network_devices",
@@ -140,11 +144,15 @@ def upgrade() -> None:
     )
     op.add_column(
         "nas_devices",
-        sa.Column("current_subscriber_count", sa.Integer(), server_default="0", nullable=False),
+        sa.Column(
+            "current_subscriber_count", sa.Integer(), server_default="0", nullable=False
+        ),
     )
     op.add_column(
         "nas_devices",
-        sa.Column("health_status", sa.String(20), server_default="unknown", nullable=False),
+        sa.Column(
+            "health_status", sa.String(20), server_default="unknown", nullable=False
+        ),
     )
     op.add_column(
         "nas_devices",

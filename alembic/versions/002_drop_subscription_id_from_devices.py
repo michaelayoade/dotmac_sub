@@ -118,7 +118,9 @@ def downgrade() -> None:
     )
     op.add_column(
         "ip_assignments",
-        sa.Column("subscription_add_on_id", postgresql.UUID(as_uuid=True), nullable=True),
+        sa.Column(
+            "subscription_add_on_id", postgresql.UUID(as_uuid=True), nullable=True
+        ),
     )
     op.create_foreign_key(
         "ip_assignments_subscription_add_on_id_fkey",
