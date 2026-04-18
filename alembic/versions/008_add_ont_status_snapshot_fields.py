@@ -15,6 +15,24 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table_name: str, column_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
+def _add_column_if_missing(table_name: str, column: sa.Column) -> None:
+    if not _column_exists(table_name, column.name):
+        op.add_column(table_name, column)
+
+
+def _drop_column_if_exists(table_name: str, column_name: str) -> None:
+    if _column_exists(table_name, column_name):
+        op.drop_column(table_name, column_name)
+
+
 def upgrade() -> None:
     bind = op.get_bind()
     ont_acs_status = sa.Enum(
@@ -43,7 +61,7 @@ def upgrade() -> None:
     ont_effective_status.create(bind, checkfirst=True)
     ont_status_source.create(bind, checkfirst=True)
 
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column(
             "acs_status",
@@ -52,11 +70,11 @@ def upgrade() -> None:
             server_default="unknown",
         ),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("acs_last_inform_at", sa.DateTime(timezone=True), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column(
             "effective_status",
@@ -65,7 +83,7 @@ def upgrade() -> None:
             server_default="unknown",
         ),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column(
             "effective_status_source",
@@ -74,7 +92,7 @@ def upgrade() -> None:
             server_default="derived",
         ),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("status_resolved_at", sa.DateTime(timezone=True), nullable=True),
     )
@@ -90,8 +108,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_column("ont_units", "status_resolved_at")
-    op.drop_column("ont_units", "effective_status_source")
-    op.drop_column("ont_units", "effective_status")
-    op.drop_column("ont_units", "acs_last_inform_at")
-    op.drop_column("ont_units", "acs_status")
+    _drop_column_if_exists("ont_units", "status_resolved_at")
+    _drop_column_if_exists("ont_units", "effective_status_source")
+    _drop_column_if_exists("ont_units", "effective_status")
+    _drop_column_if_exists("ont_units", "acs_last_inform_at")
+    _drop_column_if_exists("ont_units", "acs_status")

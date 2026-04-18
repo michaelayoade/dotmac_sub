@@ -15,6 +15,12 @@ branch_labels = None
 depends_on = None
 
 
+def _index_exists(table_name: str, index_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return index_name in {index["name"] for index in inspector.get_indexes(table_name)}
+
+
 def upgrade() -> None:
     op.execute(
         """
@@ -38,17 +44,21 @@ def upgrade() -> None:
         """
     )
 
-    op.create_index(
-        "uq_tr069_cpe_devices_active_ont_unit_id",
-        "tr069_cpe_devices",
-        ["ont_unit_id"],
-        unique=True,
-        postgresql_where=sa.text("is_active AND ont_unit_id IS NOT NULL"),
-    )
+    if not _index_exists(
+        "tr069_cpe_devices", "uq_tr069_cpe_devices_active_ont_unit_id"
+    ):
+        op.create_index(
+            "uq_tr069_cpe_devices_active_ont_unit_id",
+            "tr069_cpe_devices",
+            ["ont_unit_id"],
+            unique=True,
+            postgresql_where=sa.text("is_active AND ont_unit_id IS NOT NULL"),
+        )
 
 
 def downgrade() -> None:
-    op.drop_index(
-        "uq_tr069_cpe_devices_active_ont_unit_id",
-        table_name="tr069_cpe_devices",
-    )
+    if _index_exists("tr069_cpe_devices", "uq_tr069_cpe_devices_active_ont_unit_id"):
+        op.drop_index(
+            "uq_tr069_cpe_devices_active_ont_unit_id",
+            table_name="tr069_cpe_devices",
+        )

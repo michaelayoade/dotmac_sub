@@ -16,12 +16,22 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table_name: str, column_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
 def upgrade() -> None:
-    op.add_column(
-        "ont_units",
-        sa.Column("tr069_olt_profile_id", sa.Integer, nullable=True),
-    )
+    if not _column_exists("ont_units", "tr069_olt_profile_id"):
+        op.add_column(
+            "ont_units",
+            sa.Column("tr069_olt_profile_id", sa.Integer, nullable=True),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("ont_units", "tr069_olt_profile_id")
+    if _column_exists("ont_units", "tr069_olt_profile_id"):
+        op.drop_column("ont_units", "tr069_olt_profile_id")

@@ -21,33 +21,51 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table_name: str, column_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
+def _add_column_if_missing(table_name: str, column: sa.Column) -> None:
+    if not _column_exists(table_name, column.name):
+        op.add_column(table_name, column)
+
+
+def _drop_column_if_exists(table_name: str, column_name: str) -> None:
+    if _column_exists(table_name, column_name):
+        op.drop_column(table_name, column_name)
+
+
 def upgrade() -> None:
     # Add LAN configuration fields to ont_units table
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("lan_gateway_ip", sa.String(64), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("lan_subnet_mask", sa.String(64), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("lan_dhcp_enabled", sa.Boolean(), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("lan_dhcp_start", sa.String(64), nullable=True),
     )
-    op.add_column(
+    _add_column_if_missing(
         "ont_units",
         sa.Column("lan_dhcp_end", sa.String(64), nullable=True),
     )
 
 
 def downgrade() -> None:
-    op.drop_column("ont_units", "lan_dhcp_end")
-    op.drop_column("ont_units", "lan_dhcp_start")
-    op.drop_column("ont_units", "lan_dhcp_enabled")
-    op.drop_column("ont_units", "lan_subnet_mask")
-    op.drop_column("ont_units", "lan_gateway_ip")
+    _drop_column_if_exists("ont_units", "lan_dhcp_end")
+    _drop_column_if_exists("ont_units", "lan_dhcp_start")
+    _drop_column_if_exists("ont_units", "lan_dhcp_enabled")
+    _drop_column_if_exists("ont_units", "lan_subnet_mask")
+    _drop_column_if_exists("ont_units", "lan_gateway_ip")

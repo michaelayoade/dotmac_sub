@@ -15,18 +15,28 @@ branch_labels = None
 depends_on = None
 
 
+def _column_exists(table_name: str, column_name: str) -> bool:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    return column_name in {
+        column["name"] for column in inspector.get_columns(table_name)
+    }
+
+
 def upgrade() -> None:
     # Add periodic_inform_interval column with default 300 seconds (5 minutes)
-    op.add_column(
-        "tr069_acs_servers",
-        sa.Column(
-            "periodic_inform_interval",
-            sa.Integer(),
-            nullable=False,
-            server_default="300",
-        ),
-    )
+    if not _column_exists("tr069_acs_servers", "periodic_inform_interval"):
+        op.add_column(
+            "tr069_acs_servers",
+            sa.Column(
+                "periodic_inform_interval",
+                sa.Integer(),
+                nullable=False,
+                server_default="300",
+            ),
+        )
 
 
 def downgrade() -> None:
-    op.drop_column("tr069_acs_servers", "periodic_inform_interval")
+    if _column_exists("tr069_acs_servers", "periodic_inform_interval"):
+        op.drop_column("tr069_acs_servers", "periodic_inform_interval")
