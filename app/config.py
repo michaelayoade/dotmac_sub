@@ -59,6 +59,11 @@ class Settings:
     crm_username: str = os.getenv("CRM_USERNAME", "")
     crm_password: str = os.getenv("CRM_PASSWORD", "")
 
+    # Mono lookup API
+    mono_secret_key: str = os.getenv("MONO_SECRET_KEY", "")
+    mono_base_url: str = os.getenv("MONO_BASE_URL", "https://api.withmono.com")
+    mono_timeout_seconds: float = float(os.getenv("MONO_TIMEOUT_SECONDS", "15"))
+
     # S3-compatible object storage
     s3_endpoint_url: str = os.getenv("S3_ENDPOINT_URL", "http://minio:9000")
     s3_access_key: str = os.getenv("S3_ACCESS_KEY", "")

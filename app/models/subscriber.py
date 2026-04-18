@@ -21,7 +21,7 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 
@@ -101,6 +101,12 @@ class ChannelType(enum.Enum):
     phone = "phone"
     sms = "sms"
     whatsapp = "whatsapp"
+
+
+class NINVerificationStatus(enum.Enum):
+    pending = "pending"
+    success = "success"
+    failed = "failed"
 
 
 class Reseller(Base):
@@ -284,6 +290,12 @@ class Subscriber(Base):
     channels = relationship(
         "SubscriberChannel", back_populates="subscriber", cascade="all, delete-orphan"
     )
+    nin_verifications = relationship(
+        "SubscriberNINVerification",
+        back_populates="subscriber",
+        cascade="all, delete-orphan",
+        order_by="SubscriberNINVerification.created_at.desc()",
+    )
 
     # Service relationships
     subscriptions = relationship("Subscription", back_populates="subscriber")
@@ -388,6 +400,45 @@ class SubscriberChannel(Base):
     )
 
     subscriber = relationship("Subscriber", back_populates="channels")
+
+
+class SubscriberNINVerification(Base):
+    """Mono NIN verification attempts for a subscriber."""
+
+    __tablename__ = "subscriber_nin_verifications"
+    __table_args__ = (
+        Index("ix_subscriber_nin_verifications_subscriber_id", "subscriber_id"),
+        Index("ix_subscriber_nin_verifications_nin", "nin"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    subscriber_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscribers.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    nin: Mapped[str] = mapped_column(String(11), nullable=False)
+    status: Mapped[NINVerificationStatus] = mapped_column(
+        Enum(
+            NINVerificationStatus,
+            name="subscriber_nin_verification_status",
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        default=NINVerificationStatus.pending,
+        nullable=False,
+    )
+    is_match: Mapped[bool | None] = mapped_column(Boolean)
+    match_score: Mapped[int | None] = mapped_column(Integer)
+    mono_response: Mapped[dict | None] = mapped_column(JSONB)
+    failure_reason: Mapped[str | None] = mapped_column(Text)
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    subscriber = relationship("Subscriber", back_populates="nin_verifications")
 
 
 class SubscriberCustomField(Base):

@@ -1,7 +1,11 @@
-from fastapi import APIRouter, Depends, Query, status
+import uuid
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
+from app.celery_app import enqueue_celery_task
 from app.db import get_db
+from app.models.subscriber import Subscriber
 from app.schemas.common import ListResponse
 from app.schemas.subscriber import (
     AddressCreate,
@@ -19,6 +23,8 @@ from app.schemas.subscriber import (
 )
 from app.services import subscriber as subscriber_service
 from app.services.auth_dependencies import require_permission
+from app.services.nin_matching import normalize_nin, validate_nin
+from app.tasks.nin_tasks import verify_nin_task
 
 router = APIRouter()
 
@@ -153,6 +159,50 @@ def update_subscriber(
 )
 def delete_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
     subscriber_service.subscribers.delete(db, subscriber_id)
+
+
+@router.post(
+    "/subscribers/{subscriber_id}/verify-nin",
+    tags=["subscribers"],
+    dependencies=[Depends(require_permission("subscriber:write"))],
+)
+async def verify_subscriber_nin(
+    subscriber_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    nin: str | None = None
+    content_type = request.headers.get("content-type", "")
+    if "application/json" in content_type:
+        try:
+            payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid NIN") from exc
+        if isinstance(payload, dict):
+            nin = str(payload.get("nin") or "")
+    else:
+        form = await request.form()
+        nin = str(form.get("nin") or "")
+
+    normalized_nin = normalize_nin(nin or "")
+    if not validate_nin(normalized_nin):
+        raise HTTPException(status_code=400, detail="Invalid NIN")
+
+    try:
+        subscriber_uuid = uuid.UUID(str(subscriber_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Subscriber not found") from exc
+
+    subscriber = db.get(Subscriber, subscriber_uuid)
+    if subscriber is None:
+        raise HTTPException(status_code=404, detail="Subscriber not found")
+
+    enqueue_celery_task(
+        verify_nin_task,
+        args=[str(subscriber.id), normalized_nin],
+        source="subscriber_nin_verification",
+    )
+    return {"status": "queued"}
 
 
 @router.post(

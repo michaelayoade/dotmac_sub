@@ -23,10 +23,12 @@ from app.models.network import CPEDevice, IPAssignment, OntAssignment
 from app.models.provisioning import ServiceOrder, ServiceOrderStatus
 from app.models.subscriber import (
     ChannelType,
+    NINVerificationStatus,
     Reseller,
     Subscriber,
     SubscriberCategory,
     SubscriberChannel,
+    SubscriberNINVerification,
 )
 from app.models.support import Ticket, TicketStatus
 from app.schemas.geocoding import GeocodePreviewRequest
@@ -1141,6 +1143,12 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         customer_user_access = {"error": str(exc)}
 
     network_access_cards = _build_network_access_cards(subscriptions)
+    nin_verification = (
+        db.query(SubscriberNINVerification)
+        .filter(SubscriberNINVerification.subscriber_id == customer.id)
+        .order_by(SubscriberNINVerification.created_at.desc())
+        .first()
+    )
 
     return {
         "customer": customer,
@@ -1167,6 +1175,9 @@ def build_customer_detail_snapshot(db: Session, customer_id: str) -> dict[str, A
         "customer_user_access": customer_user_access,
         "billing_policy": _billing_policy_snapshot(db, accounts),
         "network_access_cards": network_access_cards,
+        "nin_verification": nin_verification,
+        "nin_verified": bool((customer.metadata_ or {}).get("nin_verified")),
+        "nin_verification_statuses": NINVerificationStatus,
         **relationship_data,
     }
 
