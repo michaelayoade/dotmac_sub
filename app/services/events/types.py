@@ -107,6 +107,14 @@ class EventType(enum.Enum):
     ont_wifi_password_set = "ont.wifi_password_set"
     ont_wifi_config_updated = "ont.wifi_config_updated"
 
+    # ONT provisioning drift detection (async verification)
+    ont_provisioning_drift_detected = "ont.provisioning_drift_detected"
+    ont_provisioning_verified = "ont.provisioning_verified"
+
+    # OLT circuit breaker events
+    olt_circuit_opened = "olt.circuit_opened"
+    olt_circuit_closed = "olt.circuit_closed"
+
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"

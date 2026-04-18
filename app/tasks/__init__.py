@@ -49,6 +49,10 @@ from app.tasks.olt_polling import (
     poll_all_olt_signals,
     poll_single_olt,
 )
+from app.tasks.olt_queue import (
+    process_deferred_olt_operations,
+    retry_failed_operations,
+)
 from app.tasks.ont_authorization import (
     run_authorize_autofind_ont_task,
     run_post_authorization_follow_up_task,
@@ -59,6 +63,11 @@ from app.tasks.ont_discovery import discover_all_olt_onts, discover_single_olt_o
 from app.tasks.ont_provisioning import (
     auto_link_profiles,
     detect_profile_drift,
+)
+from app.tasks.ont_verification import (
+    mark_pending_verification,
+    verify_ont_provisioning_state,
+    verify_single_ont,
 )
 from app.tasks.provisioning import run_bulk_activation_job, run_service_migration_job
 from app.tasks.provisioning_enforcement import run_enforcement
@@ -179,4 +188,11 @@ __all__ = [
     "dispatch_portal_usage_ingestion",
     "ingest_portal_usage",
     "ingest_portal_usage_chunk",
+    # ONT verification (Phase 2)
+    "verify_ont_provisioning_state",
+    "verify_single_ont",
+    "mark_pending_verification",
+    # OLT queue processing (Phase 4)
+    "process_deferred_olt_operations",
+    "retry_failed_operations",
 ]
