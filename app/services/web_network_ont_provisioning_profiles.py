@@ -195,6 +195,7 @@ def parse_profile_form(form: FormData) -> dict[str, object]:
         "download_speed_profile_id": _form_str(form, "download_speed_profile_id")
         or None,
         "upload_speed_profile_id": _form_str(form, "upload_speed_profile_id") or None,
+        "owner_subscriber_id": _form_str(form, "owner_subscriber_id") or None,
         "olt_device_id": _form_str(form, "olt_device_id") or None,
         "mgmt_ip_mode": _form_str(form, "mgmt_ip_mode") or None,
         "mgmt_vlan_tag": _form_int(form, "mgmt_vlan_tag"),
@@ -282,6 +283,9 @@ def handle_create(
         upload_speed_profile_id=str(form_data["upload_speed_profile_id"])
         if form_data.get("upload_speed_profile_id")
         else None,
+        owner_subscriber_id=str(form_data["owner_subscriber_id"])
+        if form_data.get("owner_subscriber_id")
+        else None,
         olt_device_id=str(form_data["olt_device_id"])
         if form_data.get("olt_device_id")
         else None,
@@ -366,6 +370,9 @@ def handle_update(
         else None,
         upload_speed_profile_id=str(form_data["upload_speed_profile_id"])
         if form_data.get("upload_speed_profile_id")
+        else None,
+        owner_subscriber_id=str(form_data["owner_subscriber_id"])
+        if form_data.get("owner_subscriber_id")
         else None,
         olt_device_id=str(form_data["olt_device_id"])
         if form_data.get("olt_device_id")

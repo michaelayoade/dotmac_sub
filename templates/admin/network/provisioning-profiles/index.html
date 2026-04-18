@@ -78,6 +78,7 @@
         columns=[
             {"key": "name",          "label": "Profile"},
             {"key": "profile_type",  "label": "Type"},
+            {"key": "owner",         "label": "Business Account"},
             {"key": "olt_scope",     "label": "OLT Scope"},
             {"key": "config_method", "label": "Config Method"},
             {"key": "onu_mode",      "label": "ONU Mode"},
@@ -116,6 +117,17 @@
         {% endcall %}
         {{ cell_badge("profile_type", row.profile_type.value|title,
             "info" if row.profile_type.value == "residential" else "purple" if row.profile_type.value == "business" else "default") }}
+        {% call cell_custom("owner") %}
+            <span class="text-xs text-slate-500 dark:text-slate-400">
+                {% if row.owner_subscriber %}
+                    {{ row.owner_subscriber.display_name or row.owner_subscriber.subscriber_number or row.owner_subscriber.email or row.owner_subscriber_id }}
+                {% elif row.owner_subscriber_id %}
+                    {{ row.owner_subscriber_id }}
+                {% else %}
+                    No business account
+                {% endif %}
+            </span>
+        {% endcall %}
         {% call cell_custom("olt_scope") %}
             <span class="text-xs text-slate-500 dark:text-slate-400">
                 {% if row.olt_device %}{{ row.olt_device.name }}{% else %}No OLT scope{% endif %}

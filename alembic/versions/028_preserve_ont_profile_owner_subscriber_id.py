@@ -1,12 +1,12 @@
-"""Drop ont_provisioning_profiles.owner_subscriber_id.
+"""Preserve ont_provisioning_profiles.owner_subscriber_id.
 
 Part of DCP-10 (OLT/ONT standalone decoupling): ONT provisioning profiles
-are no longer scoped to a business-account owner. The column, its FK, and
-the composite (owner_subscriber_id, name) unique constraint are removed.
-No replacement unique constraint on ``name`` is added because existing data
-may contain duplicate names across former owners.
+keep an optional business-account owner reference for display and ownership
+context while network-domain services avoid importing subscriber-domain models.
+This migration is defensive: it restores the nullable owner column, FK, and
+legacy owner/name uniqueness constraint if an environment has already lost them.
 
-Revision ID: 028_drop_profile_owner
+Revision ID: 028_preserve_profile_owner
 Revises: 027_ip_subscriber_nullable
 Create Date: 2026-04-17
 
@@ -17,7 +17,7 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision = "028_drop_profile_owner"
+revision = "028_preserve_profile_owner"
 down_revision = "027_ip_subscriber_nullable"
 branch_labels = None
 depends_on = None
@@ -53,28 +53,7 @@ def _find_unique_constraint(
 
 
 def upgrade() -> None:
-    conn = op.get_bind()
-    inspector = sa.inspect(conn)
-
-    uc = _find_unique_constraint(inspector, [_COLUMN, "name"])
-    if uc is not None:
-        op.drop_constraint(uc["name"], _TABLE, type_="unique")
-
-    fk = _find_fk_for_column(inspector)
-    if fk is not None:
-        op.drop_constraint(fk["name"], _TABLE, type_="foreignkey")
-
-    column = _get_column(inspector, _COLUMN)
-    if column is not None:
-        op.drop_column(_TABLE, _COLUMN)
-
-
-def downgrade() -> None:
-    """Restore owner_subscriber_id as a nullable FK with the composite UQ.
-
-    Historical owner data is not reconstructible; the restored column is
-    always nullable and left empty.
-    """
+    """Ensure owner_subscriber_id relationship metadata remains present."""
     conn = op.get_bind()
     inspector = sa.inspect(conn)
 
@@ -85,6 +64,7 @@ def downgrade() -> None:
             sa.Column(_COLUMN, postgresql.UUID(as_uuid=True), nullable=True),
         )
 
+    inspector = sa.inspect(conn)
     fk = _find_fk_for_column(inspector)
     if fk is None:
         op.create_foreign_key(
@@ -95,6 +75,7 @@ def downgrade() -> None:
             ["id"],
         )
 
+    inspector = sa.inspect(conn)
     uc = _find_unique_constraint(inspector, [_COLUMN, "name"])
     if uc is None:
         op.create_unique_constraint(
@@ -102,3 +83,7 @@ def downgrade() -> None:
             _TABLE,
             [_COLUMN, "name"],
         )
+
+
+def downgrade() -> None:
+    """No-op: downgrading must not drop profile owner relationship data."""

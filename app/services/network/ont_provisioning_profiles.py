@@ -136,6 +136,7 @@ class OntProvisioningProfiles:
     def list(
         db: Session,
         *,
+        owner_subscriber_id: str | None = None,
         profile_type: str | None = None,
         config_method: str | None = None,
         onu_mode: str | None = None,
@@ -151,10 +152,16 @@ class OntProvisioningProfiles:
         """List provisioning profiles with optional filtering."""
         stmt = select(OntProvisioningProfile).options(
             selectinload(OntProvisioningProfile.wan_services),
+            selectinload(OntProvisioningProfile.owner_subscriber),
             selectinload(OntProvisioningProfile.olt_device),
             selectinload(OntProvisioningProfile.download_speed_profile),
             selectinload(OntProvisioningProfile.upload_speed_profile),
         )
+        if owner_subscriber_id:
+            stmt = stmt.where(
+                OntProvisioningProfile.owner_subscriber_id
+                == coerce_uuid(owner_subscriber_id)
+            )
         if olt_device_id:
             olt_uuid = coerce_uuid(olt_device_id)
             if include_global:
@@ -207,6 +214,7 @@ class OntProvisioningProfiles:
             select(OntProvisioningProfile)
             .options(
                 selectinload(OntProvisioningProfile.wan_services),
+                selectinload(OntProvisioningProfile.owner_subscriber),
                 selectinload(OntProvisioningProfile.olt_device),
                 selectinload(OntProvisioningProfile.download_speed_profile),
                 selectinload(OntProvisioningProfile.upload_speed_profile),
@@ -224,6 +232,7 @@ class OntProvisioningProfiles:
     def create(
         db: Session,
         *,
+        owner_subscriber_id: str | None = None,
         name: str,
         profile_type: OntProfileType = OntProfileType.residential,
         description: str | None = None,
@@ -268,6 +277,7 @@ class OntProvisioningProfiles:
         )
 
         profile = OntProvisioningProfile(
+            owner_subscriber_id=coerce_uuid(owner_subscriber_id),
             name=name,
             profile_type=profile_type,
             description=description,
@@ -355,6 +365,8 @@ class OntProvisioningProfiles:
 
         for key, value in kwargs.items():
             if hasattr(profile, key):
+                if key == "owner_subscriber_id":
+                    value = coerce_uuid(value)
                 setattr(profile, key, value)
         db.commit()
         db.refresh(profile)
