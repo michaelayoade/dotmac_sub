@@ -6,10 +6,8 @@ Create Date: 2026-01-13 05:08:33.985819
 
 """
 
-
-
-revision = '69928eb6e61f'
-down_revision = ('9c2d6c8f4a2b', 'b9f0d1c6c3f7')
+revision = "69928eb6e61f"
+down_revision = ("9c2d6c8f4a2b", "b9f0d1c6c3f7")
 branch_labels = None
 depends_on = None
 

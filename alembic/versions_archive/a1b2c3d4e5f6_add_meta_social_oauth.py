@@ -9,6 +9,7 @@ Revises: f3b7c9d1a2e4
 Create Date: 2026-01-15
 
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -83,7 +84,9 @@ def upgrade() -> None:
 
     # Create unique constraint for one token per account per connector
     if "oauth_tokens" in existing_tables:
-        existing_constraints = {c["name"] for c in inspector.get_unique_constraints("oauth_tokens")}
+        existing_constraints = {
+            c["name"] for c in inspector.get_unique_constraints("oauth_tokens")
+        }
         if "uq_oauth_tokens_connector_provider_account" not in existing_constraints:
             op.create_unique_constraint(
                 "uq_oauth_tokens_connector_provider_account",
@@ -92,7 +95,9 @@ def upgrade() -> None:
             )
 
         # Create indexes for common queries
-        existing_indexes = {idx["name"] for idx in inspector.get_indexes("oauth_tokens")}
+        existing_indexes = {
+            idx["name"] for idx in inspector.get_indexes("oauth_tokens")
+        }
         if "ix_oauth_tokens_connector_config_id" not in existing_indexes:
             op.create_index(
                 "ix_oauth_tokens_connector_config_id",

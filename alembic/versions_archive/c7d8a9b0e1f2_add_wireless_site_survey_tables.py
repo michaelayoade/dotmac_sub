@@ -5,6 +5,7 @@ Revises: 980c97473791
 Create Date: 2026-01-13 12:00:00.000000
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -83,10 +84,27 @@ def upgrade() -> None:
             sa.Column("default_tx_power_dbm", sa.Float, default=20.0),
             sa.Column("notes", sa.Text, nullable=True),
             sa.Column("metadata", sa.JSON, nullable=True),
-            sa.Column("created_by_id", UUID(as_uuid=True), sa.ForeignKey("people.id"), nullable=True),
-            sa.Column("project_id", UUID(as_uuid=True), sa.ForeignKey("projects.id"), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), onupdate=sa.func.now()),
+            sa.Column(
+                "created_by_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("people.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "project_id",
+                UUID(as_uuid=True),
+                sa.ForeignKey("projects.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "created_at", sa.DateTime(timezone=True), server_default=sa.func.now()
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                server_default=sa.func.now(),
+                onupdate=sa.func.now(),
+            ),
         )
 
     # Create survey_points table
@@ -142,11 +160,21 @@ def upgrade() -> None:
     )
 
     # Create indexes
-    op.execute("CREATE INDEX IF NOT EXISTS idx_survey_points_survey_id ON survey_points(survey_id);")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_survey_points_geom ON survey_points USING GIST(geom);")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_survey_los_paths_survey_id ON survey_los_paths(survey_id);")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_wireless_surveys_status ON wireless_site_surveys(status);")
-    op.execute("CREATE INDEX IF NOT EXISTS idx_wireless_surveys_project_id ON wireless_site_surveys(project_id);")
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_survey_points_survey_id ON survey_points(survey_id);"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_survey_points_geom ON survey_points USING GIST(geom);"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_survey_los_paths_survey_id ON survey_los_paths(survey_id);"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wireless_surveys_status ON wireless_site_surveys(status);"
+    )
+    op.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wireless_surveys_project_id ON wireless_site_surveys(project_id);"
+    )
 
 
 def downgrade() -> None:

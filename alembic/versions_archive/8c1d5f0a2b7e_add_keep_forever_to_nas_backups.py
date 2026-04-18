@@ -5,6 +5,7 @@ Revises: 6b2d9f4a8c3e
 Create Date: 2026-01-14
 
 """
+
 import sqlalchemy as sa
 
 from alembic import op
@@ -22,7 +23,12 @@ def upgrade() -> None:
     if "keep_forever" not in columns:
         op.add_column(
             "nas_config_backups",
-            sa.Column("keep_forever", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column(
+                "keep_forever",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
         )
 
 

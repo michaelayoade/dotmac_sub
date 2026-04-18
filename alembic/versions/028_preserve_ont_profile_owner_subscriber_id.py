@@ -43,9 +43,7 @@ def _find_fk_for_column(inspector: sa.Inspector) -> dict | None:
     return None
 
 
-def _find_unique_constraint(
-    inspector: sa.Inspector, columns: list[str]
-) -> dict | None:
+def _find_unique_constraint(inspector: sa.Inspector, columns: list[str]) -> dict | None:
     for uc in inspector.get_unique_constraints(_TABLE):
         if uc.get("column_names") == columns:
             return uc

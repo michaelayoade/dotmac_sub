@@ -267,7 +267,7 @@ def _emit_drift_event(db, ont) -> None:
     # Get subscriber if available
     from app.models.network import OntAssignment
     from app.services.events.dispatcher import emit_event
-    from app.services.events.types import Event, EventType
+    from app.services.events.types import EventType
 
     stmt = select(OntAssignment).where(
         OntAssignment.ont_unit_id == ont.id,
@@ -277,20 +277,19 @@ def _emit_drift_event(db, ont) -> None:
 
     subscriber_id = assignment.subscriber_id if assignment else None
 
-    event = Event(
-        event_type=EventType.custom,
-        payload={
-            "type": "ont.provisioning_drift_detected",
-            "ont_id": str(ont.id),
-            "serial_number": ont.serial_number,
-            "olt_device_id": str(ont.olt_device_id) if ont.olt_device_id else None,
-            "detected_at": datetime.now(UTC).isoformat(),
-        },
-        subscriber_id=subscriber_id,
-    )
-
     try:
-        emit_event(db, event)
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "type": "ont.provisioning_drift_detected",
+                "ont_id": str(ont.id),
+                "serial_number": ont.serial_number,
+                "olt_device_id": str(ont.olt_device_id) if ont.olt_device_id else None,
+                "detected_at": datetime.now(UTC).isoformat(),
+            },
+            subscriber_id=subscriber_id,
+        )
     except Exception as e:
         logger.error("Failed to emit drift event: %s", e)
 

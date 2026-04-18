@@ -10,8 +10,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision = '8f802e49c452'
-down_revision = 'a1b2c3d4e5f6'
+revision = "8f802e49c452"
+down_revision = "a1b2c3d4e5f6"
 branch_labels = None
 depends_on = None
 
@@ -21,10 +21,15 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     columns = {col["name"] for col in inspector.get_columns("subscribers")}
     if "account_start_date" not in columns:
-        op.add_column('subscribers', sa.Column('account_start_date', sa.DateTime(timezone=True), nullable=True))
+        op.add_column(
+            "subscribers",
+            sa.Column("account_start_date", sa.DateTime(timezone=True), nullable=True),
+        )
     # Backfill existing records with created_at value
-    op.execute("UPDATE subscribers SET account_start_date = created_at WHERE account_start_date IS NULL")
+    op.execute(
+        "UPDATE subscribers SET account_start_date = created_at WHERE account_start_date IS NULL"
+    )
 
 
 def downgrade() -> None:
-    op.drop_column('subscribers', 'account_start_date')
+    op.drop_column("subscribers", "account_start_date")

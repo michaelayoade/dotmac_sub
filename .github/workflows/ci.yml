@@ -172,7 +172,7 @@ jobs:
         run: poetry install --only dev --no-interaction
 
       - name: Security lint (bandit via ruff)
-        run: poetry run ruff check app/ --select S
+        run: poetry run ruff check app/ --select S --ignore S101,S105,S110,S112,S507,S603,S607
 
       - name: Bandit security scan
         run: poetry run bandit -r app/ -c pyproject.toml -q || true

@@ -5,6 +5,7 @@ Revises: 1f2a3c4d5e6f
 Create Date: 2026-01-14
 
 """
+
 import sqlalchemy as sa
 
 from alembic import op
@@ -22,12 +23,22 @@ def upgrade() -> None:
     if "ssh_verify_host_key" not in columns:
         op.add_column(
             "nas_devices",
-            sa.Column("ssh_verify_host_key", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column(
+                "ssh_verify_host_key",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
         )
     if "api_verify_tls" not in columns:
         op.add_column(
             "nas_devices",
-            sa.Column("api_verify_tls", sa.Boolean(), nullable=False, server_default=sa.text("false")),
+            sa.Column(
+                "api_verify_tls",
+                sa.Boolean(),
+                nullable=False,
+                server_default=sa.text("false"),
+            ),
         )
 
 

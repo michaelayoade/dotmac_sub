@@ -5,6 +5,7 @@ Revises: e3f1a8b2c4d6
 Create Date: 2026-01-13
 
 """
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
@@ -61,24 +62,61 @@ def upgrade() -> None:
             sa.Column("operation", operation_enum, nullable=False),
             sa.Column("payload", postgresql.JSON(), nullable=False),
             sa.Column("status", status_enum, nullable=False, server_default="pending"),
-            sa.Column("requested_by_person_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("people.id"), nullable=True),
-            sa.Column("requested_by_vendor_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("vendors.id"), nullable=True),
-            sa.Column("reviewed_by_person_id", postgresql.UUID(as_uuid=True), sa.ForeignKey("people.id"), nullable=True),
+            sa.Column(
+                "requested_by_person_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("people.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "requested_by_vendor_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("vendors.id"),
+                nullable=True,
+            ),
+            sa.Column(
+                "reviewed_by_person_id",
+                postgresql.UUID(as_uuid=True),
+                sa.ForeignKey("people.id"),
+                nullable=True,
+            ),
             sa.Column("review_notes", sa.Text(), nullable=True),
             sa.Column("reviewed_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("applied_at", sa.DateTime(timezone=True), nullable=True),
-            sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-            sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+            sa.Column(
+                "created_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
+            sa.Column(
+                "updated_at",
+                sa.DateTime(timezone=True),
+                nullable=False,
+                server_default=sa.func.now(),
+            ),
         )
-    indexes = {idx["name"] for idx in inspector.get_indexes("fiber_change_requests")} if "fiber_change_requests" in existing_tables else set()
+    indexes = (
+        {idx["name"] for idx in inspector.get_indexes("fiber_change_requests")}
+        if "fiber_change_requests" in existing_tables
+        else set()
+    )
     if "ix_fiber_change_requests_status" not in indexes:
-        op.create_index("ix_fiber_change_requests_status", "fiber_change_requests", ["status"])
+        op.create_index(
+            "ix_fiber_change_requests_status", "fiber_change_requests", ["status"]
+        )
     if "ix_fiber_change_requests_asset_type" not in indexes:
-        op.create_index("ix_fiber_change_requests_asset_type", "fiber_change_requests", ["asset_type"])
+        op.create_index(
+            "ix_fiber_change_requests_asset_type",
+            "fiber_change_requests",
+            ["asset_type"],
+        )
 
 
 def downgrade() -> None:
-    op.drop_index("ix_fiber_change_requests_asset_type", table_name="fiber_change_requests")
+    op.drop_index(
+        "ix_fiber_change_requests_asset_type", table_name="fiber_change_requests"
+    )
     op.drop_index("ix_fiber_change_requests_status", table_name="fiber_change_requests")
     op.drop_table("fiber_change_requests")
     op.execute("DROP TYPE fiberchangerequestoperation")

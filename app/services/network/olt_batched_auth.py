@@ -212,9 +212,6 @@ def execute_batched_authorization(
         with olt_session(olt) as session:
             ont_id: int | None = spec.ont_id
 
-            # Enter config mode
-            session.enter_mode(CliMode.CONFIG)
-
             for cmd_template, description, _ in commands:
                 # Substitute ONT-ID if we have it
                 cmd = cmd_template
@@ -226,7 +223,7 @@ def execute_batched_authorization(
                     return result
 
                 # Execute command
-                cmd_result = session.send_command(cmd)
+                cmd_result = session.run_command(cmd, require_mode=CliMode.CONFIG)
                 result.raw_output[description] = cmd_result.output
 
                 if not cmd_result.success:

@@ -7,9 +7,10 @@ Create Date: 2026-04-18
 Tracks failed compensation (rollback) entries for manual resolution.
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 revision = "034_add_compensation_failures"
 down_revision = "85f2cdc1eedd"
@@ -37,7 +38,9 @@ def upgrade() -> None:
         sa.Column("olt_device_id", sa.UUID(), nullable=True),
         sa.Column("operation_type", sa.String(length=64), nullable=False),
         sa.Column("step_name", sa.String(length=128), nullable=False),
-        sa.Column("undo_commands", postgresql.JSON(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "undo_commands", postgresql.JSON(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column("description", sa.Text(), nullable=False),
         sa.Column("resource_id", sa.String(length=128), nullable=True),
         sa.Column("interface_path", sa.String(length=64), nullable=True),
@@ -78,7 +81,9 @@ def upgrade() -> None:
         "ix_compensation_failures_ont_unit", "compensation_failures", ["ont_unit_id"]
     )
     op.create_index(
-        "ix_compensation_failures_olt_device", "compensation_failures", ["olt_device_id"]
+        "ix_compensation_failures_olt_device",
+        "compensation_failures",
+        ["olt_device_id"],
     )
     op.create_index(
         "ix_compensation_failures_status", "compensation_failures", ["status"]
@@ -89,10 +94,16 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_compensation_failures_created_at", table_name="compensation_failures")
+    op.drop_index(
+        "ix_compensation_failures_created_at", table_name="compensation_failures"
+    )
     op.drop_index("ix_compensation_failures_status", table_name="compensation_failures")
-    op.drop_index("ix_compensation_failures_olt_device", table_name="compensation_failures")
-    op.drop_index("ix_compensation_failures_ont_unit", table_name="compensation_failures")
+    op.drop_index(
+        "ix_compensation_failures_olt_device", table_name="compensation_failures"
+    )
+    op.drop_index(
+        "ix_compensation_failures_ont_unit", table_name="compensation_failures"
+    )
     op.drop_table("compensation_failures")
 
     # Note: We don't drop the enum type as it may be used by other code

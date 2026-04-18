@@ -5,6 +5,7 @@ Revises: 4b1b2a5f0c6e
 Create Date: 2026-01-20 10:00:00.000000
 
 """
+
 from collections.abc import Sequence
 
 import sqlalchemy as sa
@@ -24,7 +25,10 @@ def upgrade() -> None:
     inspector = sa.inspect(bind)
     columns = {col["name"] for col in inspector.get_columns("wireless_masts")}
     if "pop_site_id" not in columns:
-        op.add_column("wireless_masts", sa.Column("pop_site_id", UUID(as_uuid=True), nullable=True))
+        op.add_column(
+            "wireless_masts",
+            sa.Column("pop_site_id", UUID(as_uuid=True), nullable=True),
+        )
 
     indexes = {idx["name"] for idx in inspector.get_indexes("wireless_masts")}
     if "idx_wireless_masts_pop_site_id" not in indexes:
@@ -44,6 +48,8 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_wireless_masts_pop_site_id", "wireless_masts", type_="foreignkey")
+    op.drop_constraint(
+        "fk_wireless_masts_pop_site_id", "wireless_masts", type_="foreignkey"
+    )
     op.drop_index("idx_wireless_masts_pop_site_id", table_name="wireless_masts")
     op.drop_column("wireless_masts", "pop_site_id")
