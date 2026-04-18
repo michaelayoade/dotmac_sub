@@ -8,7 +8,6 @@ from datetime import UTC, datetime
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.services.network.olt_polling import get_signal_thresholds
 from app.services.network.ont_metrics import (
     ChartData,
     ChartSeries,
@@ -16,6 +15,7 @@ from app.services.network.ont_metrics import (
     get_traffic_history,
 )
 from app.services.network.ont_tr069 import OntTR069
+from app.services.network.signal_thresholds import get_signal_thresholds
 
 logger = logging.getLogger(__name__)
 

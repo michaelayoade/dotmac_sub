@@ -714,7 +714,7 @@ class OntUnits(CRUDManager[OntUnit]):
         Returns:
             Tuple of (filtered ONTs, total count before pagination).
         """
-        from app.services.network.olt_polling import get_signal_thresholds
+        from app.services.network.signal_thresholds import get_signal_thresholds
 
         stmt = select(OntUnit).options(*_ONT_STATUS_LOADS)
 

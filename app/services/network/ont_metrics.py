@@ -1,157 +1,25 @@
-"""Query per-ONT time-series metrics from VictoriaMetrics.
+"""Query per-ONT time-series metrics from configured data source.
 
 Provides signal history and traffic history for ONT detail page charts.
+Uses the metrics adapter pattern to support multiple data sources
+(VictoriaMetrics, Zabbix, or composite).
+
+Configure via METRICS_ADAPTER env var:
+- "victoriametrics" (default): Query VictoriaMetrics directly
+- "zabbix": Query Zabbix API history
+- "composite": Try VictoriaMetrics first, fall back to Zabbix
 """
 
 from __future__ import annotations
 
-import logging
-import os
-import re
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from app.services.network.metrics_adapters import (
+    ChartData,
+    ChartSeries,
+    get_metrics_adapter,
+)
 
-import httpx
-
-from app.services.genieacs import normalize_tr069_serial
-
-logger = logging.getLogger(__name__)
-
-_VM_URL = os.getenv("VICTORIAMETRICS_URL", "http://victoriametrics:8428")
-
-# Step resolution per time range
-_RANGE_STEPS: dict[str, str] = {
-    "6h": "2m",
-    "24h": "5m",
-    "7d": "30m",
-    "30d": "2h",
-}
-
-
-@dataclass
-class ChartSeries:
-    """A single time-series for chart rendering."""
-
-    label: str
-    timestamps: list[str] = field(default_factory=list)
-    values: list[float | None] = field(default_factory=list)
-
-
-@dataclass
-class ChartData:
-    """Complete chart data payload for the frontend."""
-
-    series: list[ChartSeries] = field(default_factory=list)
-    time_range: str = "24h"
-    available: bool = False
-    error: str | None = None
-
-
-def _parse_range(time_range: str) -> tuple[datetime, datetime, str]:
-    """Parse a time range string into (start, end, step)."""
-    now = datetime.now(UTC)
-    hours_map: dict[str, int] = {
-        "6h": 6,
-        "24h": 24,
-        "7d": 168,
-        "30d": 720,
-    }
-    hours = hours_map.get(time_range, 24)
-    start = now - timedelta(hours=hours)
-    step = _RANGE_STEPS.get(time_range, "5m")
-    return start, now, step
-
-
-def _query_range_sync(
-    query: str, start: datetime, end: datetime, step: str
-) -> list[dict]:
-    """Execute a PromQL range query synchronously.
-
-    Returns list of result dicts with 'metric' and 'values' keys.
-    """
-    try:
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.get(
-                f"{_VM_URL}/api/v1/query_range",
-                params={
-                    "query": query,
-                    "start": start.isoformat(),
-                    "end": end.isoformat(),
-                    "step": step,
-                },
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("status") != "success":
-                return []
-            return data.get("data", {}).get("result", [])
-    except httpx.HTTPError as e:
-        logger.error("VictoriaMetrics range query failed: %s", e)
-        return []
-
-
-def _result_to_series(result: dict, label: str) -> ChartSeries:
-    """Convert a VictoriaMetrics result dict to a ChartSeries."""
-    timestamps: list[str] = []
-    values: list[float | None] = []
-    for ts, val in result.get("values", []):
-        dt = datetime.fromtimestamp(float(ts), tz=UTC)
-        timestamps.append(dt.strftime("%Y-%m-%dT%H:%M:%SZ"))
-        try:
-            values.append(float(val))
-        except (ValueError, TypeError):
-            values.append(None)
-    return ChartSeries(label=label, timestamps=timestamps, values=values)
-
-
-def _serial_candidates(ont_serial: str) -> list[str]:
-    raw = str(ont_serial or "").strip()
-    if not raw:
-        return []
-    candidates = {raw, raw.upper(), raw.lower()}
-    normalized = normalize_tr069_serial(raw)
-    if normalized:
-        candidates.add(normalized)
-    compact = re.sub(r"[^0-9A-Za-z]", "", raw)
-    if compact:
-        candidates.add(compact)
-        candidates.add(compact.upper())
-    return [candidate for candidate in candidates if candidate]
-
-
-def _build_label_selector(*, ont_serial: str, ont_id: str | None = None) -> str:
-    selectors: list[str] = []
-    if ont_id:
-        selectors.append(f'ont_id="{ont_id}"')
-    serial_candidates = _serial_candidates(ont_serial)
-    if serial_candidates:
-        if len(serial_candidates) == 1:
-            selectors.append(f'ont_serial="{serial_candidates[0]}"')
-        else:
-            escaped = "|".join(
-                re.escape(candidate) for candidate in sorted(serial_candidates)
-            )
-            selectors.append(f'ont_serial=~"{escaped}"')
-    return ",".join(selectors)
-
-
-def _build_label_selectors(*, ont_serial: str, ont_id: str | None = None) -> list[str]:
-    selectors: list[str] = []
-    if ont_id:
-        selectors.append(f'ont_id="{ont_id}"')
-    serial_candidates = _serial_candidates(ont_serial)
-    if serial_candidates:
-        if len(serial_candidates) == 1:
-            selectors.append(f'ont_serial="{serial_candidates[0]}"')
-        else:
-            escaped = "|".join(
-                re.escape(candidate) for candidate in sorted(serial_candidates)
-            )
-            selectors.append(f'ont_serial=~"{escaped}"')
-    combined = _build_label_selector(ont_serial=ont_serial, ont_id=ont_id)
-    if combined:
-        selectors.insert(0, combined)
-    return list(dict.fromkeys(selector for selector in selectors if selector))
+# Re-export dataclasses for backwards compatibility
+__all__ = ["ChartData", "ChartSeries", "get_signal_history", "get_traffic_history"]
 
 
 def get_signal_history(
@@ -159,43 +27,18 @@ def get_signal_history(
 ) -> ChartData:
     """Query signal level history for an ONT.
 
+    Uses the configured metrics adapter (VictoriaMetrics, Zabbix, or composite).
+
     Args:
         ont_serial: ONT serial number.
         time_range: Time range string (6h, 24h, 7d, 30d).
+        ont_id: Optional ONT database ID for additional filtering.
 
     Returns:
         ChartData with ONU Rx and OLT Rx series.
     """
-    start, end, step = _parse_range(time_range)
-
-    label_selector = _build_label_selector(ont_serial=ont_serial, ont_id=ont_id)
-    if not label_selector:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error="No signal history data available for this ONT.",
-        )
-
-    onu_query = f"ont_onu_rx_dbm{{{label_selector}}}"
-    olt_query = f"ont_olt_rx_dbm{{{label_selector}}}"
-
-    onu_results = _query_range_sync(onu_query, start, end, step)
-    olt_results = _query_range_sync(olt_query, start, end, step)
-
-    series: list[ChartSeries] = []
-    if onu_results:
-        series.append(_result_to_series(onu_results[0], "ONU Rx (dBm)"))
-    if olt_results:
-        series.append(_result_to_series(olt_results[0], "OLT Rx (dBm)"))
-
-    if not series:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error="No signal history data available for this ONT.",
-        )
-
-    return ChartData(series=series, time_range=time_range, available=True)
+    adapter = get_metrics_adapter()
+    return adapter.get_signal_history(ont_serial, time_range, ont_id=ont_id)
 
 
 def get_traffic_history(
@@ -203,61 +46,15 @@ def get_traffic_history(
 ) -> ChartData:
     """Query traffic history for an ONT.
 
-    Uses OLT/ONT traffic counters exported into VictoriaMetrics.
+    Uses the configured metrics adapter (VictoriaMetrics, Zabbix, or composite).
 
     Args:
         ont_serial: ONT serial number.
         time_range: Time range string (6h, 24h, 7d, 30d).
+        ont_id: Optional ONT database ID for additional filtering.
 
     Returns:
         ChartData with Rx and Tx throughput series.
     """
-    start, end, step = _parse_range(time_range)
-
-    label_selectors = _build_label_selectors(ont_serial=ont_serial, ont_id=ont_id)
-    if not label_selectors:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error="No traffic history data available for this ONT.",
-        )
-
-    counter_pairs = [
-        ("ont_rx_bytes_total", "ont_tx_bytes_total"),
-        ("onu_rx_bytes_total", "onu_tx_bytes_total"),
-        ("ont_downstream_bytes_total", "ont_upstream_bytes_total"),
-    ]
-
-    series: list[ChartSeries] = []
-    for label_selector in label_selectors:
-        for rx_metric, tx_metric in counter_pairs:
-            rx_query = f"rate({rx_metric}{{{label_selector}}}[5m]) * 8"
-            tx_query = f"rate({tx_metric}{{{label_selector}}}[5m]) * 8"
-
-            rx_results = _query_range_sync(rx_query, start, end, step)
-            tx_results = _query_range_sync(tx_query, start, end, step)
-
-            series = []
-            if rx_results:
-                series.append(_result_to_series(rx_results[0], "Download (bps)"))
-            if tx_results:
-                series.append(_result_to_series(tx_results[0], "Upload (bps)"))
-            if series:
-                return ChartData(
-                    series=series,
-                    time_range=time_range,
-                    available=True,
-                    error=f"Showing OLT/ONT counter series from {rx_metric}/{tx_metric}.",
-                )
-
-    if not series:
-        return ChartData(
-            time_range=time_range,
-            available=False,
-            error=(
-                "No OLT/ONT traffic counter series found for this ONT "
-                "(expected ont_rx_bytes_total/ont_tx_bytes_total or compatible counters)."
-            ),
-        )
-
-    return ChartData(series=series, time_range=time_range, available=True)
+    adapter = get_metrics_adapter()
+    return adapter.get_traffic_history(ont_serial, time_range, ont_id=ont_id)

@@ -663,6 +663,7 @@ def build_beat_schedule() -> dict:
         )
 
         # OLT polling (RX/TX levels + ONU online status)
+        # DISABLED: Replaced by Zabbix OLT SNMP monitoring (Phase 5 cleanup)
         olt_poll_minutes = _resolve_int(
             session,
             SettingDomain.network_monitoring,
@@ -673,7 +674,7 @@ def build_beat_schedule() -> dict:
             session,
             name="olt_signal_polling",
             task_name="app.tasks.olt_polling.poll_all_olt_signals",
-            enabled=True,
+            enabled=False,  # Disabled - Zabbix monitors OLT signals now
             interval_seconds=max(olt_poll_minutes * 60, 60),
         )
         # Finalize OLT polling - push aggregated metrics (runs 90s after poll dispatch)
@@ -681,7 +682,7 @@ def build_beat_schedule() -> dict:
             session,
             name="olt_polling_finalize",
             task_name="app.tasks.olt_polling.finalize_olt_polling",
-            enabled=True,
+            enabled=False,  # Disabled - Zabbix monitors OLT signals now
             interval_seconds=max(olt_poll_minutes * 60, 60),
         )
 
@@ -1149,9 +1150,35 @@ def build_beat_schedule() -> dict:
         _sync_scheduled_task(
             session,
             name="zabbix_device_sync",
-            task_name="app.tasks.zabbix_sync.sync_devices_to_zabbix",
+            task_name="app.tasks.zabbix_ingestion.sync_devices_to_zabbix",
             enabled=zabbix_device_sync_enabled,
             interval_seconds=zabbix_device_sync_interval,
+        )
+
+        # Zabbix signal ingest - pulls signal data from Zabbix into DB
+        # then pushes to VictoriaMetrics (replaces old SNMP polling)
+        zabbix_signal_ingest_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "zabbix_signal_ingest_enabled",
+            "ZABBIX_SIGNAL_INGEST_ENABLED",
+            zabbix_sync_enabled_by_default,
+        )
+        zabbix_signal_ingest_interval = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "zabbix_signal_ingest_interval_seconds",
+            300,  # 5 minutes
+        )
+        zabbix_signal_ingest_interval = max(
+            zabbix_signal_ingest_interval, 60
+        )  # Min: 1 minute
+        _sync_scheduled_task(
+            session,
+            name="zabbix_signal_ingest",
+            task_name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
+            enabled=zabbix_signal_ingest_enabled,
+            interval_seconds=zabbix_signal_ingest_interval,
         )
 
         tasks = (

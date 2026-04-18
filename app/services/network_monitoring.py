@@ -1270,7 +1270,7 @@ def get_onu_status_summary(db: Session) -> dict[str, int]:
     )
 
     # Low signal: ONTs with ONU Rx below warning threshold
-    from app.services.network.olt_polling import get_signal_thresholds
+    from app.services.network.signal_thresholds import get_signal_thresholds
 
     warn_threshold, _crit = get_signal_thresholds(db)
     low_signal = (

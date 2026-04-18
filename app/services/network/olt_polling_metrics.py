@@ -33,7 +33,7 @@ def _push_signal_metrics(db: Session) -> int:
         Number of metric lines written.
     """
     # Import here to avoid circular imports at module level
-    from app.services.network.olt_polling import get_signal_thresholds
+    from app.services.network.signal_thresholds import get_signal_thresholds
 
     # Collect ONTs with recent signal data and their OLT/PON info
     stmt = (

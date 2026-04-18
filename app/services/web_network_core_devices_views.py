@@ -649,7 +649,7 @@ def olt_detail_page_data(db: Session, olt_id: str) -> dict[str, object] | None:
     )
 
     # Gather ONT assignments and build per-port stats
-    from app.services.network.olt_polling import classify_signal, get_signal_thresholds
+    from app.services.network.signal_thresholds import classify_signal, get_signal_thresholds
 
     warn, crit = get_signal_thresholds(db)
     ont_assignments = []
@@ -1502,7 +1502,7 @@ def onts_list_page_data(
 ) -> dict[str, object]:
     """Return ONT/CPE list payload with advanced filtering and signal classification."""
     from app.models.network import OLTDevice, OntUnit
-    from app.services.network.olt_polling import get_signal_thresholds
+    from app.services.network.signal_thresholds import get_signal_thresholds
 
     normalized_view = (
         "diagnostics"
@@ -1864,7 +1864,7 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
     past_assignments = [a for a in assignments if not a.active]
 
     # Signal classification
-    from app.services.network.olt_polling import classify_signal, get_signal_thresholds
+    from app.services.network.signal_thresholds import classify_signal, get_signal_thresholds
 
     warn, crit = get_signal_thresholds(db)
     olt_rx = getattr(ont, "olt_rx_signal_dbm", None)

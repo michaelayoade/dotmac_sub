@@ -215,3 +215,108 @@ def ingest_portal_usage_chunk(
 def ingest_portal_usage() -> dict[str, Any]:
     """Backward-compatible entrypoint; use dispatcher for chunked ingestion."""
     return dispatch_portal_usage_ingestion()
+
+
+@celery_app.task(
+    name="app.tasks.zabbix_ingestion.ingest_olt_signals_from_zabbix",
+    soft_time_limit=300,
+    time_limit=360,
+)
+def ingest_olt_signals_from_zabbix() -> dict[str, Any]:
+    """Pull ONT signal data from Zabbix and update database.
+
+    This task replaces the old direct SNMP polling. It:
+    1. Fetches latest signal values from Zabbix API
+    2. Updates OntUnit records with new signal data
+    3. Pushes aggregated metrics to VictoriaMetrics
+
+    Schedule: Every 5 minutes (configured in scheduler_config.py)
+    """
+    if not _zabbix_enabled():
+        return {"skipped": "zabbix_token_missing"}
+
+    db = SessionLocal()
+    try:
+        # Import here to avoid circular imports
+        from app.services.zabbix_data_ingest import ingest_all_olt_signals
+        from app.services.network.olt_polling_metrics import (
+            push_signal_metrics_to_victoriametrics,
+        )
+
+        # Step 1: Pull data from Zabbix into database
+        ingest_result = ingest_all_olt_signals(db)
+        db.commit()
+
+        # Step 2: Push aggregated metrics to VictoriaMetrics
+        metrics_count = 0
+        try:
+            metrics_count = push_signal_metrics_to_victoriametrics(db)
+        except Exception as exc:
+            logger.warning("signal_metrics_push_failed: %s", exc)
+
+        logger.info(
+            "zabbix_signal_ingest_complete",
+            extra={
+                "event": "zabbix_signal_ingest_complete",
+                "olts_processed": ingest_result.olts_processed,
+                "onts_updated": ingest_result.onts_updated,
+                "metrics_pushed": metrics_count,
+                "errors": len(ingest_result.errors),
+            },
+        )
+
+        return {
+            "olts_processed": ingest_result.olts_processed,
+            "onts_updated": ingest_result.onts_updated,
+            "metrics_pushed": metrics_count,
+            "errors": ingest_result.errors[:10],  # Limit error list
+        }
+
+    except SoftTimeLimitExceeded:
+        logger.warning("zabbix_signal_ingest_timed_out")
+        return {"error": "zabbix_signal_ingest_timed_out"}
+    except Exception as exc:
+        logger.exception("zabbix_signal_ingest_failed")
+        return {"error": str(exc)}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.zabbix_ingestion.sync_devices_to_zabbix")
+def sync_devices_to_zabbix() -> dict[str, Any]:
+    """Sync DotMac devices to Zabbix hosts.
+
+    Creates or updates Zabbix hosts for all active OLTs and NAS devices.
+    Schedule: Every 5 minutes (configured in scheduler_config.py)
+    """
+    if not _zabbix_enabled():
+        return {"skipped": "zabbix_token_missing"}
+
+    db = SessionLocal()
+    try:
+        from app.services.zabbix_host_sync import sync_all_devices
+
+        result = sync_all_devices(db)
+        db.commit()
+
+        logger.info(
+            "zabbix_device_sync_complete",
+            extra={
+                "event": "zabbix_device_sync_complete",
+                "olt_created": result["olt"]["created"],
+                "olt_updated": result["olt"]["updated"],
+                "nas_created": result["nas"]["created"],
+                "nas_updated": result["nas"]["updated"],
+            },
+        )
+
+        return result
+
+    except ZabbixClientError as exc:
+        logger.warning("zabbix_device_sync_failed: %s", exc)
+        return {"error": "zabbix_unavailable"}
+    except Exception as exc:
+        logger.exception("zabbix_device_sync_exception")
+        return {"error": str(exc)}
+    finally:
+        db.close()
