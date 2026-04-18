@@ -34,6 +34,9 @@ celery_app.conf.task_routes = {
     "app.tasks.tr069.scrape_genieacs_metrics": {"queue": "acs"},
     "app.tasks.tr069.execute_bulk_action": {"queue": "acs"},
     "app.tasks.tr069.wait_for_ont_bootstrap": {"queue": "acs"},
+    # OLT queue processing (circuit breaker recovery) - route to tr069 queue
+    "app.tasks.olt_queue.process_deferred_olt_operations": {"queue": "tr069"},
+    "app.tasks.olt_queue.retry_failed_operations": {"queue": "tr069"},
 }
 
 celery_app.conf.task_queues = (
@@ -83,8 +86,8 @@ def _build_enqueue_headers(
 ) -> dict[str, object]:
     merged = dict(headers or {})
     task_request = getattr(current_task, "request", None)
-    inherited_correlation_id = (
-        getattr(task_request, "correlation_id", None) or getattr(task_request, "id", None)
+    inherited_correlation_id = getattr(task_request, "correlation_id", None) or getattr(
+        task_request, "id", None
     )
     inherited_request_id = getattr(task_request, "request_id", None)
     inherited_actor_id = getattr(task_request, "actor_id", None)

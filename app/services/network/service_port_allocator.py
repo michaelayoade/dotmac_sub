@@ -1,0 +1,479 @@
+"""DB-backed service-port index allocator.
+
+This module provides service-port index allocation from a DB pool,
+eliminating the need for SSH queries to discover available indices.
+
+The allocator follows the same pattern as IpPool allocation:
+1. Lock pool row with SELECT FOR UPDATE
+2. Try cached next_available_index
+3. Verify still free, else recompute
+4. Create allocation, refresh cache
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from uuid import UUID
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from app.models.network import (
+    OLTDevice,
+    OltServicePortPool,
+    OntUnit,
+    ServicePortAllocation,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class AllocationError(Exception):
+    """Raised when service-port allocation fails."""
+
+
+def get_or_create_pool(
+    db: Session,
+    olt_id: UUID | str,
+    *,
+    min_index: int = 0,
+    max_index: int = 65535,
+) -> OltServicePortPool:
+    """Get existing pool or create new one for an OLT.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        min_index: Minimum service-port index (default 0)
+        max_index: Maximum service-port index (default 65535)
+
+    Returns:
+        The OltServicePortPool for this OLT
+    """
+    olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
+
+    stmt = select(OltServicePortPool).where(
+        OltServicePortPool.olt_device_id == olt_uuid,
+        OltServicePortPool.is_active.is_(True),
+    )
+    pool = db.scalars(stmt).first()
+
+    if pool is None:
+        # Verify OLT exists
+        olt = db.get(OLTDevice, olt_uuid)
+        if not olt:
+            raise AllocationError(f"OLT {olt_id} not found")
+
+        pool = OltServicePortPool(
+            olt_device_id=olt_uuid,
+            min_index=min_index,
+            max_index=max_index,
+            next_available_index=min_index,
+        )
+        db.add(pool)
+        db.flush()
+        logger.info(
+            "Created service-port pool for OLT %s (range %d-%d)",
+            olt.name,
+            min_index,
+            max_index,
+        )
+
+    return pool
+
+
+def _get_allocated_indices(db: Session, pool_id: UUID) -> set[int]:
+    """Get all currently allocated indices for a pool."""
+    stmt = select(ServicePortAllocation.port_index).where(
+        ServicePortAllocation.pool_id == pool_id,
+        ServicePortAllocation.is_active.is_(True),
+    )
+    return set(db.scalars(stmt).all())
+
+
+def _find_next_available(
+    pool: OltServicePortPool,
+    allocated: set[int],
+    start_from: int | None = None,
+) -> int | None:
+    """Find the next available index in the pool range."""
+    reserved = set(pool.reserved_indices or [])
+    start = start_from if start_from is not None else pool.min_index
+
+    for idx in range(start, pool.max_index + 1):
+        if idx not in allocated and idx not in reserved:
+            return idx
+
+    # Wrap around and check from beginning
+    for idx in range(pool.min_index, start):
+        if idx not in allocated and idx not in reserved:
+            return idx
+
+    return None
+
+
+def _refresh_pool_cache(db: Session, pool: OltServicePortPool) -> None:
+    """Update the pool's cached next_available_index and available_count."""
+    allocated = _get_allocated_indices(db, pool.id)
+    reserved = set(pool.reserved_indices or [])
+
+    total_range = pool.max_index - pool.min_index + 1
+    pool.available_count = total_range - len(allocated) - len(reserved)
+    pool.next_available_index = _find_next_available(pool, allocated)
+
+
+def allocate_service_port(
+    db: Session,
+    olt_id: UUID | str,
+    ont_id: UUID | str,
+    *,
+    service_type: str | None = None,
+    vlan_id: int | None = None,
+    gem_index: int | None = None,
+) -> ServicePortAllocation:
+    """Allocate a service-port index for an ONT.
+
+    This function locks the pool row and allocates the next available index.
+    The allocation is recorded in the database for tracking.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        ont_id: ONT unit ID
+        service_type: Type of service (internet, management, tr069, iptv, voip)
+        vlan_id: Associated VLAN ID
+        gem_index: GEM port index
+
+    Returns:
+        ServicePortAllocation with the allocated port_index
+
+    Raises:
+        AllocationError: If no indices are available or allocation fails
+    """
+    olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
+    ont_uuid = UUID(str(ont_id)) if isinstance(ont_id, str) else ont_id
+
+    # Lock pool row for update
+    stmt = (
+        select(OltServicePortPool)
+        .where(
+            OltServicePortPool.olt_device_id == olt_uuid,
+            OltServicePortPool.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    pool = db.scalars(stmt).first()
+
+    if not pool:
+        # Create pool if it doesn't exist
+        pool = get_or_create_pool(db, olt_id)
+        # Re-lock after creation
+        stmt = (
+            select(OltServicePortPool)
+            .where(OltServicePortPool.id == pool.id)
+            .with_for_update()
+        )
+        pool = db.scalars(stmt).first()
+
+    if not pool:
+        raise AllocationError(f"Failed to acquire pool for OLT {olt_id}")
+
+    # Verify ONT exists
+    ont = db.get(OntUnit, ont_uuid)
+    if not ont:
+        raise AllocationError(f"ONT {ont_id} not found")
+
+    # Get current allocations
+    allocated = _get_allocated_indices(db, pool.id)
+
+    # Try cached index first
+    port_index = pool.next_available_index
+    if port_index is not None and port_index in allocated:
+        # Cache stale, recompute
+        port_index = _find_next_available(pool, allocated)
+
+    if port_index is None:
+        # Try fresh search from beginning
+        port_index = _find_next_available(pool, allocated, pool.min_index)
+
+    if port_index is None:
+        raise AllocationError(
+            f"No available service-port indices on OLT (pool {pool.id})"
+        )
+
+    # Create allocation
+    allocation = ServicePortAllocation(
+        pool_id=pool.id,
+        ont_unit_id=ont_uuid,
+        port_index=port_index,
+        vlan_id=vlan_id,
+        gem_index=gem_index,
+        service_type=service_type,
+        is_active=True,
+    )
+    db.add(allocation)
+
+    # Update cache
+    allocated.add(port_index)
+    pool.next_available_index = _find_next_available(pool, allocated, port_index + 1)
+    reserved = set(pool.reserved_indices or [])
+    total_range = pool.max_index - pool.min_index + 1
+    pool.available_count = total_range - len(allocated) - len(reserved)
+
+    db.flush()
+
+    logger.info(
+        "Allocated service-port %d for ONT %s on pool %s (type=%s, vlan=%s, gem=%s)",
+        port_index,
+        ont_id,
+        pool.id,
+        service_type,
+        vlan_id,
+        gem_index,
+    )
+
+    return allocation
+
+
+def release_service_port(db: Session, allocation_id: UUID | str) -> bool:
+    """Release a previously allocated service-port.
+
+    Args:
+        db: Database session
+        allocation_id: ID of the allocation to release
+
+    Returns:
+        True if released, False if allocation not found
+    """
+    alloc_uuid = (
+        UUID(str(allocation_id)) if isinstance(allocation_id, str) else allocation_id
+    )
+
+    allocation = db.get(ServicePortAllocation, alloc_uuid)
+    if not allocation or not allocation.is_active:
+        return False
+
+    allocation.is_active = False
+    allocation.released_at = datetime.now(UTC)
+
+    # Refresh pool cache
+    pool = db.get(OltServicePortPool, allocation.pool_id)
+    if pool:
+        _refresh_pool_cache(db, pool)
+
+    db.flush()
+
+    logger.info(
+        "Released service-port %d (allocation %s)",
+        allocation.port_index,
+        allocation_id,
+    )
+
+    return True
+
+
+def release_all_for_ont(db: Session, ont_id: UUID | str) -> int:
+    """Release all service-port allocations for an ONT.
+
+    Args:
+        db: Database session
+        ont_id: ONT unit ID
+
+    Returns:
+        Number of allocations released
+    """
+    ont_uuid = UUID(str(ont_id)) if isinstance(ont_id, str) else ont_id
+
+    stmt = select(ServicePortAllocation).where(
+        ServicePortAllocation.ont_unit_id == ont_uuid,
+        ServicePortAllocation.is_active.is_(True),
+    )
+    allocations = list(db.scalars(stmt).all())
+
+    if not allocations:
+        return 0
+
+    now = datetime.now(UTC)
+    pool_ids = set()
+
+    for alloc in allocations:
+        alloc.is_active = False
+        alloc.released_at = now
+        pool_ids.add(alloc.pool_id)
+
+    # Refresh all affected pool caches
+    for pool_id in pool_ids:
+        pool = db.get(OltServicePortPool, pool_id)
+        if pool:
+            _refresh_pool_cache(db, pool)
+
+    db.flush()
+
+    logger.info(
+        "Released %d service-port allocations for ONT %s", len(allocations), ont_id
+    )
+
+    return len(allocations)
+
+
+def get_allocations_for_ont(
+    db: Session,
+    ont_id: UUID | str,
+) -> list[ServicePortAllocation]:
+    """Get all active service-port allocations for an ONT.
+
+    Args:
+        db: Database session
+        ont_id: ONT unit ID
+
+    Returns:
+        List of active allocations
+    """
+    ont_uuid = UUID(str(ont_id)) if isinstance(ont_id, str) else ont_id
+
+    stmt = (
+        select(ServicePortAllocation)
+        .where(
+            ServicePortAllocation.ont_unit_id == ont_uuid,
+            ServicePortAllocation.is_active.is_(True),
+        )
+        .order_by(ServicePortAllocation.port_index)
+    )
+
+    return list(db.scalars(stmt).all())
+
+
+def mark_provisioned(db: Session, allocation_id: UUID | str) -> bool:
+    """Mark an allocation as provisioned (written to OLT).
+
+    Args:
+        db: Database session
+        allocation_id: ID of the allocation
+
+    Returns:
+        True if updated, False if not found
+    """
+    alloc_uuid = (
+        UUID(str(allocation_id)) if isinstance(allocation_id, str) else allocation_id
+    )
+
+    allocation = db.get(ServicePortAllocation, alloc_uuid)
+    if not allocation:
+        return False
+
+    allocation.provisioned_at = datetime.now(UTC)
+    db.flush()
+
+    return True
+
+
+def sync_allocations_from_olt(
+    db: Session,
+    olt_id: UUID | str,
+    actual_ports: list[dict],
+) -> dict[str, int]:
+    """Sync allocation records from OLT-observed state.
+
+    Used during initial import or periodic reconciliation to ensure
+    DB allocations match what's actually on the OLT.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        actual_ports: List of dicts with keys: index, ont_id, vlan_id, gem_index
+
+    Returns:
+        Dict with counts: created, released, matched, orphaned
+    """
+    olt_uuid = UUID(str(olt_id)) if isinstance(olt_id, str) else olt_id
+
+    # Get or create pool
+    pool = get_or_create_pool(db, olt_uuid)
+
+    # Get existing allocations
+    stmt = select(ServicePortAllocation).where(
+        ServicePortAllocation.pool_id == pool.id,
+        ServicePortAllocation.is_active.is_(True),
+    )
+    existing = {a.port_index: a for a in db.scalars(stmt).all()}
+
+    # Track what we found on OLT
+    actual_indices = {p["index"] for p in actual_ports}
+
+    created = 0
+    matched = 0
+    orphaned = 0
+
+    # Process actual ports
+    for port_info in actual_ports:
+        idx = port_info["index"]
+        if idx in existing:
+            matched += 1
+        else:
+            # Port exists on OLT but not in DB - create placeholder
+            # Note: We may not know the ont_unit_id, so this needs manual resolution
+            logger.warning(
+                "Service-port %d exists on OLT %s but not in allocation DB",
+                idx,
+                olt_id,
+            )
+            orphaned += 1
+
+    # Mark allocations that don't exist on OLT as released
+    released = 0
+    now = datetime.now(UTC)
+    for idx, alloc in existing.items():
+        if idx not in actual_indices:
+            alloc.is_active = False
+            alloc.released_at = now
+            released += 1
+            logger.info(
+                "Releasing stale allocation %d (not found on OLT)",
+                idx,
+            )
+
+    # Refresh pool cache
+    _refresh_pool_cache(db, pool)
+    db.flush()
+
+    return {
+        "created": created,
+        "released": released,
+        "matched": matched,
+        "orphaned": orphaned,
+    }
+
+
+def reserve_indices(
+    db: Session,
+    olt_id: UUID | str,
+    indices: list[int],
+) -> bool:
+    """Reserve specific indices so they won't be allocated.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        indices: List of indices to reserve
+
+    Returns:
+        True if updated
+    """
+    pool = get_or_create_pool(db, olt_id)
+
+    existing = set(pool.reserved_indices or [])
+    existing.update(indices)
+    pool.reserved_indices = sorted(existing)
+
+    _refresh_pool_cache(db, pool)
+    db.flush()
+
+    logger.info(
+        "Reserved indices %s on pool %s (total reserved: %d)",
+        indices,
+        pool.id,
+        len(pool.reserved_indices),
+    )
+
+    return True

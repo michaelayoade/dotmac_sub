@@ -684,6 +684,18 @@ class OLTDevice(Base):
     last_ping_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_ping_ok: Mapped[bool | None] = mapped_column(Boolean)
 
+    # Circuit breaker state (Phase 4)
+    circuit_state: Mapped[str | None] = mapped_column(
+        String(20),
+        doc="closed (normal), open (failing), half_open (testing)",
+    )
+    circuit_failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    backoff_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_ssh_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    circuit_failure_threshold: Mapped[int] = mapped_column(Integer, default=3)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
@@ -1190,6 +1202,20 @@ class OntUnit(Base):
     )
     last_provisioned_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
+    )
+
+    # Async verification tracking (Phase 2)
+    last_applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        doc="When provisioning commands were last applied to OLT",
+    )
+    last_verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        doc="When provisioning state was last verified against OLT",
+    )
+    verification_status: Mapped[str | None] = mapped_column(
+        String(20),
+        doc="pending, verified, drift_detected, failed",
     )
 
     # TR-069 data model root (detected from GenieACS device record)
@@ -2198,7 +2224,9 @@ class OntWanServiceInstance(Base):
         nullable=False,
         default=WanServiceProvisioningStatus.pending,
     )
-    last_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_provisioned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     last_error: Mapped[str | None] = mapped_column(String(500))
 
     created_at: Mapped[datetime] = mapped_column(
@@ -2484,6 +2512,186 @@ class SignalThresholdOverride(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt_device = relationship("OLTDevice")
+
+
+# =============================================================================
+# Phase 1: Service-Port Allocator Models
+# =============================================================================
+
+
+class OltServicePortPool(Base):
+    """Per-OLT service-port index pool.
+
+    Tracks the available service-port indices for an OLT, enabling DB-based
+    allocation rather than SSH discovery. Similar pattern to IpPool.
+    """
+
+    __tablename__ = "olt_service_port_pools"
+    __table_args__ = (
+        UniqueConstraint("olt_device_id", name="uq_olt_service_port_pools_olt"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    min_index: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    max_index: Mapped[int] = mapped_column(Integer, nullable=False, default=65535)
+    reserved_indices: Mapped[list[int] | None] = mapped_column(
+        JSON, doc="JSON array of indices reserved for special use (e.g., management)"
+    )
+
+    # Cached allocation tracking for faster index allocation (mirrors IpPool pattern)
+    next_available_index: Mapped[int | None] = mapped_column(Integer)
+    available_count: Mapped[int | None] = mapped_column(Integer)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt_device = relationship("OLTDevice")
+    allocations = relationship(
+        "ServicePortAllocation",
+        back_populates="pool",
+        cascade="all, delete-orphan",
+    )
+
+
+class ServicePortAllocation(Base):
+    """Tracks allocated service-port indices per ONT.
+
+    Each row represents a single service-port allocated from an OLT pool.
+    Similar to IP address allocation but for service-port indices.
+    """
+
+    __tablename__ = "service_port_allocations"
+    __table_args__ = (
+        UniqueConstraint(
+            "pool_id", "port_index", name="uq_service_port_allocations_pool_index"
+        ),
+        Index("ix_service_port_allocations_ont", "ont_unit_id"),
+        Index("ix_service_port_allocations_active", "is_active"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_service_port_pools.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ont_unit_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    port_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    vlan_id: Mapped[int | None] = mapped_column(Integer)
+    gem_index: Mapped[int | None] = mapped_column(Integer)
+    service_type: Mapped[str | None] = mapped_column(
+        String(40), doc="internet, management, tr069, iptv, voip"
+    )
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    pool = relationship("OltServicePortPool", back_populates="allocations")
+    ont_unit = relationship("OntUnit")
+
+
+# =============================================================================
+# Phase 2: Verification Status for Async Drift Detection
+# =============================================================================
+
+
+class VerificationStatus(enum.Enum):
+    """Status of ONT provisioning verification."""
+
+    pending = "pending"
+    verified = "verified"
+    drift_detected = "drift_detected"
+    failed = "failed"
+
+
+# =============================================================================
+# Phase 4: Circuit Breaker Models
+# =============================================================================
+
+
+class CircuitState(enum.Enum):
+    """Circuit breaker state for OLT SSH connections."""
+
+    closed = "closed"  # Normal operation
+    open = "open"  # Failing, reject requests
+    half_open = "half_open"  # Testing recovery
+
+
+class QueuedOltOperation(Base):
+    """Operations queued while OLT circuit is open.
+
+    When an OLT's circuit breaker is open, provisioning operations are
+    queued here for later execution when the circuit recovers.
+    """
+
+    __tablename__ = "queued_olt_operations"
+    __table_args__ = (
+        Index("ix_queued_olt_operations_olt_status", "olt_device_id", "status"),
+        Index("ix_queued_olt_operations_scheduled", "scheduled_for"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    olt_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("olt_devices.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    operation_type: Mapped[str] = mapped_column(
+        String(64), nullable=False, doc="authorize, deprovision, service_port"
+    )
+    payload: Mapped[dict] = mapped_column(JSON, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="pending", server_default="pending"
+    )
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)

@@ -55,6 +55,19 @@ class ProvisioningDefaults:
     # - tr069: Only use TR-069/GenieACS (skip OMCI entirely)
     pppoe_provisioning_method: str = "auto"
 
+    # Async verification settings (Phase 2)
+    verification_interval_sec: int = 300  # 5 minutes
+    verification_staleness_minutes: int = 15
+    drift_handling_mode: str = "alert_only"  # or "auto_repair"
+
+    # Circuit breaker settings (Phase 4)
+    circuit_breaker_failure_threshold: int = 3
+    circuit_breaker_backoff_sec: int = 30
+
+    # Service-port allocator settings (Phase 1)
+    service_port_pool_min_index: int = 0
+    service_port_pool_max_index: int = 65535
+
 
 DEFAULTS = ProvisioningDefaults()
 
@@ -72,6 +85,16 @@ SETTING_KEYS = {
     "stale_runtime_hours": DEFAULTS.stale_runtime_hours,
     "olt_write_mode_enabled": DEFAULTS.olt_write_mode_enabled,
     "pppoe_provisioning_method": DEFAULTS.pppoe_provisioning_method,
+    # Phase 2: Async verification
+    "verification_interval_sec": DEFAULTS.verification_interval_sec,
+    "verification_staleness_minutes": DEFAULTS.verification_staleness_minutes,
+    "drift_handling_mode": DEFAULTS.drift_handling_mode,
+    # Phase 4: Circuit breaker
+    "circuit_breaker_failure_threshold": DEFAULTS.circuit_breaker_failure_threshold,
+    "circuit_breaker_backoff_sec": DEFAULTS.circuit_breaker_backoff_sec,
+    # Phase 1: Service-port allocator
+    "service_port_pool_min_index": DEFAULTS.service_port_pool_min_index,
+    "service_port_pool_max_index": DEFAULTS.service_port_pool_max_index,
 }
 
 
@@ -146,7 +169,9 @@ def get_int_setting(db: Session | None, key: str, default: int | None = None) ->
         return default if default is not None else int(str(fallback))
 
 
-def get_float_setting(db: Session | None, key: str, default: float | None = None) -> float:
+def get_float_setting(
+    db: Session | None, key: str, default: float | None = None
+) -> float:
     """Get a float provisioning setting."""
     value = get_setting(db, key, default)
     try:
@@ -220,8 +245,49 @@ def get_pppoe_provisioning_method(db: Session | None = None) -> str:
     - "omci": Only use OLT OMCI commands
     - "tr069": Only use TR-069/GenieACS, skip OMCI entirely
     """
-    value = get_setting(db, "pppoe_provisioning_method", DEFAULTS.pppoe_provisioning_method)
+    value = get_setting(
+        db, "pppoe_provisioning_method", DEFAULTS.pppoe_provisioning_method
+    )
     normalized = str(value).strip().lower()
     if normalized in {"omci", "tr069"}:
         return normalized
     return "auto"
+
+
+# Phase 2: Async verification settings
+def get_verification_interval(db: Session | None = None) -> int:
+    """Get verification interval in seconds (default 300 = 5 minutes)."""
+    return get_int_setting(db, "verification_interval_sec")
+
+
+def get_verification_staleness_minutes(db: Session | None = None) -> int:
+    """Get verification staleness threshold in minutes."""
+    return get_int_setting(db, "verification_staleness_minutes")
+
+
+def get_drift_handling_mode(db: Session | None = None) -> str:
+    """Get drift handling mode: 'alert_only' or 'auto_repair'."""
+    value = get_setting(db, "drift_handling_mode", DEFAULTS.drift_handling_mode)
+    normalized = str(value).strip().lower()
+    if normalized in {"auto_repair"}:
+        return normalized
+    return "alert_only"
+
+
+# Phase 4: Circuit breaker settings
+def get_circuit_breaker_threshold(db: Session | None = None) -> int:
+    """Get number of failures before circuit opens."""
+    return get_int_setting(db, "circuit_breaker_failure_threshold")
+
+
+def get_circuit_breaker_backoff(db: Session | None = None) -> int:
+    """Get circuit breaker backoff period in seconds."""
+    return get_int_setting(db, "circuit_breaker_backoff_sec")
+
+
+# Phase 1: Service-port allocator settings
+def get_service_port_pool_range(db: Session | None = None) -> tuple[int, int]:
+    """Get service-port pool index range (min, max)."""
+    min_idx = get_int_setting(db, "service_port_pool_min_index")
+    max_idx = get_int_setting(db, "service_port_pool_max_index")
+    return (min_idx, max_idx)

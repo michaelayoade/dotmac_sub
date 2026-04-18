@@ -881,7 +881,9 @@ def build_beat_schedule() -> dict:
             "tr069_genieacs_stale_cleanup_interval_seconds",
             21600,  # 6 hours
         )
-        tr069_genieacs_cleanup_interval = max(tr069_genieacs_cleanup_interval, 3600)  # Min: 1 hour
+        tr069_genieacs_cleanup_interval = max(
+            tr069_genieacs_cleanup_interval, 3600
+        )  # Min: 1 hour
         _sync_scheduled_task(
             session,
             name="tr069_genieacs_stale_cleanup",
@@ -1056,6 +1058,75 @@ def build_beat_schedule() -> dict:
                 "schedule": timedelta(minutes=splynx_sync_interval),
                 "kwargs": {"hours_back": 2},
             }
+
+        # ONT provisioning verification - periodic drift detection (Phase 2)
+        ont_verification_enabled = _effective_bool(
+            session,
+            SettingDomain.provisioning,
+            "ont_verification_enabled",
+            "ONT_VERIFICATION_ENABLED",
+            True,
+        )
+        ont_verification_interval = _resolve_int(
+            session,
+            SettingDomain.provisioning,
+            "ont_verification_interval_seconds",
+            300,  # 5 minutes
+        )
+        ont_verification_interval = max(ont_verification_interval, 60)  # Min: 1 minute
+        _sync_scheduled_task(
+            session,
+            name="ont_provisioning_verification",
+            task_name="app.tasks.ont_verification.verify_ont_provisioning_state",
+            enabled=ont_verification_enabled,
+            interval_seconds=ont_verification_interval,
+        )
+
+        # OLT deferred operations queue processor (Phase 4 - Circuit Breaker)
+        olt_queue_enabled = _effective_bool(
+            session,
+            SettingDomain.provisioning,
+            "olt_queue_processing_enabled",
+            "OLT_QUEUE_PROCESSING_ENABLED",
+            True,
+        )
+        olt_queue_interval = _resolve_int(
+            session,
+            SettingDomain.provisioning,
+            "olt_queue_processing_interval_seconds",
+            30,  # 30 seconds
+        )
+        olt_queue_interval = max(olt_queue_interval, 10)  # Min: 10 seconds
+        _sync_scheduled_task(
+            session,
+            name="olt_deferred_queue_processor",
+            task_name="app.tasks.olt_queue.process_deferred_olt_operations",
+            enabled=olt_queue_enabled,
+            interval_seconds=olt_queue_interval,
+        )
+
+        # OLT failed operations retry (Phase 4 - Circuit Breaker recovery)
+        olt_retry_enabled = _effective_bool(
+            session,
+            SettingDomain.provisioning,
+            "olt_failed_retry_enabled",
+            "OLT_FAILED_RETRY_ENABLED",
+            True,
+        )
+        olt_retry_interval = _resolve_int(
+            session,
+            SettingDomain.provisioning,
+            "olt_failed_retry_interval_seconds",
+            3600,  # 1 hour
+        )
+        olt_retry_interval = max(olt_retry_interval, 300)  # Min: 5 minutes
+        _sync_scheduled_task(
+            session,
+            name="olt_failed_operations_retry",
+            task_name="app.tasks.olt_queue.retry_failed_operations",
+            enabled=olt_retry_enabled,
+            interval_seconds=olt_retry_interval,
+        )
 
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()

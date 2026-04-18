@@ -528,14 +528,40 @@ def build_service_port_command(
     vlan_id: int,
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
+    port_index: int | None = None,
 ) -> str:
-    """Build a Huawei service-port command preserving modeled VLAN intent."""
+    """Build a Huawei service-port command preserving modeled VLAN intent.
+
+    Args:
+        fsp: Frame/Slot/Port string (e.g., "0/1/0")
+        ont_id: ONT ID on the PON port
+        gem_index: GEM port index
+        vlan_id: Service VLAN ID
+        user_vlan: User VLAN (default: same as vlan_id)
+        tag_transform: VLAN tag transform mode (default: translate)
+        port_index: Pre-allocated service-port index. If provided, creates
+                    a service-port with explicit index. If None, OLT auto-assigns.
+
+    Returns:
+        Huawei CLI command string for service-port creation
+    """
     resolved_user_vlan = user_vlan
     if resolved_user_vlan is None:
         resolved_user_vlan = vlan_id
-    return (
-        f"service-port vlan {vlan_id} gpon {fsp} "
-        f"ont {ont_id} gemport {gem_index} "
-        f"multi-service user-vlan {resolved_user_vlan} "
-        f"tag-transform {tag_transform}"
-    )
+
+    if port_index is not None:
+        # Use pre-allocated index from DB allocator (Phase 1)
+        return (
+            f"service-port {port_index} vlan {vlan_id} gpon {fsp} "
+            f"ont {ont_id} gemport {gem_index} "
+            f"multi-service user-vlan {resolved_user_vlan} "
+            f"tag-transform {tag_transform}"
+        )
+    else:
+        # Legacy: auto-assign index
+        return (
+            f"service-port vlan {vlan_id} gpon {fsp} "
+            f"ont {ont_id} gemport {gem_index} "
+            f"multi-service user-vlan {resolved_user_vlan} "
+            f"tag-transform {tag_transform}"
+        )
