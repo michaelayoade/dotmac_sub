@@ -1,35 +1,34 @@
 """Shared Huawei OLT SNMP profile helpers.
 
-Huawei OLT families share most GPON OIDs, but model-specific handling still
-matters for index decoding and future overrides. Centralizing the profile
-definition keeps pollers, sync jobs, and UI helpers aligned.
+This module now delegates to olt_vendor_adapters.py for Huawei-specific
+SNMP operations. The functions here provide backward compatibility.
+
+For new code, use:
+    from app.services.network.olt_vendor_adapters import get_olt_adapter
+    adapter = get_olt_adapter(vendor="huawei", model="MA5800")
+    fsp = adapter.decode_snmp_index(packed_value)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.services.network.olt_vendor_adapters import HuaweiOltAdapter, get_olt_adapter
+
 
 @dataclass(frozen=True)
 class HuaweiSnmpProfile:
+    """Legacy profile class for backward compatibility."""
+
     key: str
     model_tokens: tuple[str, ...]
     oids: dict[str, str]
     packed_ports_per_slot: int = 32
 
 
-_HUAWEI_SHARED_OIDS: dict[str, str] = {
-    # hwGponOltOpticsDdmInfoRxPower
-    "olt_rx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.4",
-    # hwGponOltOpticsDdmInfoTxPower
-    "onu_rx": ".1.3.6.1.4.1.2011.6.128.1.1.2.51.1.6",
-    # hwGponDeviceOntControlDistance
-    "distance": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.20",
-    # hwGponDeviceOntControlRunStatus
-    "status": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.15",
-    # hwGponDeviceOntControlLastDownCause
-    "last_down_cause": ".1.3.6.1.4.1.2011.6.128.1.1.2.46.1.24",
-}
+# Get shared OIDs from adapter
+_huawei_adapter = HuaweiOltAdapter()
+_HUAWEI_SHARED_OIDS: dict[str, str] = _huawei_adapter.get_oid_set().to_dict()
 
 
 _PROFILES: tuple[HuaweiSnmpProfile, ...] = (
@@ -58,10 +57,15 @@ _DEFAULT_PROFILE = HuaweiSnmpProfile(
 
 
 def is_huawei_vendor(vendor: str | None) -> bool:
+    """Check if vendor string indicates Huawei."""
     return "huawei" in str(vendor or "").strip().lower()
 
 
 def resolve_huawei_snmp_profile(model: str | None) -> HuaweiSnmpProfile:
+    """Resolve SNMP profile for a Huawei model.
+
+    Deprecated: Use get_olt_adapter(vendor="huawei", model=model)
+    """
     model_text = str(model or "").strip().lower()
     for profile in _PROFILES:
         if any(token in model_text for token in profile.model_tokens):
@@ -74,20 +78,9 @@ def decode_huawei_packed_fsp(
     *,
     model: str | None = None,
 ) -> str | None:
-    """Best-effort decode of Huawei packed FSP index to frame/slot/port."""
-    if packed_value < 0:
-        return None
-    base = 0xFA000000
-    if packed_value < base:
-        return None
-    delta = packed_value - base
-    if delta % 256 != 0:
-        return None
-    profile = resolve_huawei_snmp_profile(model)
-    slot_port = delta // 256
-    frame = 0
-    slot = slot_port // profile.packed_ports_per_slot
-    port = slot_port % profile.packed_ports_per_slot
-    if slot < 0 or port < 0:
-        return None
-    return f"{frame}/{slot}/{port}"
+    """Best-effort decode of Huawei packed FSP index to frame/slot/port.
+
+    Deprecated: Use get_olt_adapter(vendor="huawei").decode_snmp_index(packed_value)
+    """
+    adapter = get_olt_adapter(vendor="huawei", model=model)
+    return adapter.decode_snmp_index(packed_value)

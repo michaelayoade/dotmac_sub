@@ -3,6 +3,9 @@
 This module provides SSH connectivity and CLI parsing for Huawei OLTs.
 Parsing is done via TextFSM templates (see parsers/ subdirectory) with
 fallback to legacy regex parsing for robustness.
+
+SSH policies are now managed by olt_vendor_adapters.py. This module
+provides the resolve_policy() function for backward compatibility.
 """
 
 from __future__ import annotations
@@ -32,6 +35,12 @@ from app.services.credential_crypto import decrypt_credential
 from app.services.network._common import decode_huawei_hex_serial
 from app.services.network.olt_command_gen import build_service_port_command
 
+# Import SSH policy from adapter (re-export for backward compatibility)
+from app.services.network.olt_vendor_adapters import (
+    OltSshPolicy,
+    get_olt_adapter,
+)
+
 # TextFSM-based parsers (preferred)
 try:
     from app.services.network.parsers import parse_autofind as _textfsm_parse_autofind
@@ -45,85 +54,33 @@ except ImportError:
     logger.warning("TextFSM parsers not available, using legacy regex parsing")
 
 
-@dataclass(frozen=True)
-class OltSshPolicy:
-    key: str
-    kex: tuple[str, ...]
-    host_key_types: tuple[str, ...]
-    ciphers: tuple[str, ...]
-    macs: tuple[str, ...]
-    prompt_regex: str = r"[>#]\s*$"
-    version_command: str = "display version"
-
-
-_HUAWEI_LEGACY_KEX = (
-    "diffie-hellman-group-exchange-sha1",
-    "diffie-hellman-group1-sha1",
-)
-_HUAWEI_HOST_KEYS = ("ssh-rsa",)
-_HUAWEI_MACS = ("hmac-sha1",)
-
-_POLICIES: dict[str, OltSshPolicy] = {
-    "huawei_ma5608t": OltSshPolicy(
-        key="huawei_ma5608t",
-        kex=_HUAWEI_LEGACY_KEX,
-        host_key_types=_HUAWEI_HOST_KEYS,
-        ciphers=("aes128-cbc",),
-        macs=_HUAWEI_MACS,
-    ),
-    "huawei_ma5800": OltSshPolicy(
-        key="huawei_ma5800",
-        kex=_HUAWEI_LEGACY_KEX,
-        host_key_types=_HUAWEI_HOST_KEYS,
-        ciphers=("aes256-ctr",),
-        macs=_HUAWEI_MACS,
-    ),
-    "huawei_ma5600": OltSshPolicy(
-        key="huawei_ma5600",
-        kex=_HUAWEI_LEGACY_KEX,
-        host_key_types=_HUAWEI_HOST_KEYS,
-        ciphers=("aes128-cbc",),
-        macs=_HUAWEI_MACS,
-    ),
-}
-
-
 def _normalized(value: str | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", (value or "").strip().lower())
 
 
 def resolve_policy(olt: OLTDevice) -> OltSshPolicy:
-    vendor = _normalized(olt.vendor)
-    model = _normalized(olt.model)
-    if vendor == "huawei":
-        if "ma5608t" in model:
-            return _POLICIES["huawei_ma5608t"]
-        if "ma5800" in model:
-            return _POLICIES["huawei_ma5800"]
-        if "ma5600" in model:
-            return _POLICIES["huawei_ma5600"]
-        # Unknown Huawei model - use MA5800 policy as fallback
-        logger.warning(
-            "Unknown Huawei model '%s', using MA5800 SSH policy as fallback",
-            olt.model,
-        )
-        return _POLICIES["huawei_ma5800"]
+    """Get SSH policy for an OLT device.
 
-    if vendor == "zte":
+    Delegates to the vendor adapter system for policy resolution.
+
+    Args:
+        olt: OLT device model instance
+
+    Returns:
+        SSH policy for the OLT's vendor/model
+
+    Raises:
+        ValueError: If vendor doesn't support SSH or is unknown
+    """
+    adapter = get_olt_adapter(olt)
+
+    if not adapter.supports_ssh():
         raise ValueError(
-            f"ZTE OLT SSH not implemented. Model: {olt.model!r}. "
-            "Consider SNMP or NETCONF for this vendor."
-        )
-    if vendor == "nokia":
-        raise ValueError(
-            f"Nokia OLT SSH not implemented. Model: {olt.model!r}. "
+            f"{adapter.vendor_name} OLT SSH not implemented. Model: {olt.model!r}. "
             "Consider SNMP or NETCONF for this vendor."
         )
 
-    raise ValueError(
-        f"No SSH policy for vendor={olt.vendor!r}, model={olt.model!r}. "
-        "Supported vendors: Huawei (MA5608T, MA5800, MA5600)"
-    )
+    return adapter.get_ssh_policy(model=olt.model)
 
 
 def _apply_preferred_algorithms(transport: Transport, policy: OltSshPolicy) -> None:
@@ -1168,8 +1125,13 @@ def create_single_service_port(
     *,
     user_vlan: int | str | None = None,
     tag_transform: str = "translate",
-) -> tuple[bool, str]:
+    port_index: int | None = None,
+) -> tuple[bool, str, int | None]:
     """Create a single service-port on an OLT.
+
+    Note: This is a legacy function. Prefer using the version from
+    app.services.network.olt_ssh_service_ports which integrates with
+    the DB-backed allocator.
 
     Args:
         olt: The OLT device.
@@ -1177,18 +1139,21 @@ def create_single_service_port(
         ont_id: The ONT-ID assigned by the OLT.
         gem_index: GEM port index.
         vlan_id: VLAN ID for the service-port.
+        user_vlan: User VLAN (default: same as vlan_id).
+        tag_transform: VLAN tag transform mode.
+        port_index: Pre-allocated service-port index. If None, OLT auto-assigns.
 
     Returns:
-        Tuple of (success, message).
+        Tuple of (success, message, assigned_index).
     """
     ok, err = _validate_fsp(fsp)
     if not ok:
-        return False, err
+        return False, err, None
 
     try:
         transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
-        return False, f"Connection failed: {exc}"
+        return False, f"Connection failed: {exc}", None
 
     try:
         channel.send("enable\n")
@@ -1204,6 +1169,7 @@ def create_single_service_port(
             vlan_id=vlan_id,
             user_vlan=user_vlan,
             tag_transform=tag_transform,
+            port_index=port_index,
         )
         output = _run_huawei_cmd(channel, cmd, prompt=config_prompt)
 
@@ -1215,22 +1181,24 @@ def create_single_service_port(
                 olt.name,
                 output.strip()[-150:],
             )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
+            return False, f"OLT rejected: {output.strip()[-150:]}", None
 
+        idx_str = str(port_index) if port_index is not None else "auto"
         logger.info(
-            "Created service-port VLAN %d GEM %d for ONT %d on OLT %s %s",
+            "Created service-port %s VLAN %d GEM %d for ONT %d on OLT %s %s",
+            idx_str,
             vlan_id,
             gem_index,
             ont_id,
             olt.name,
             fsp,
         )
-        return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})"
+        return True, f"Service-port created (VLAN {vlan_id}, GEM {gem_index})", port_index
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
             "Error creating service-port on OLT %s: %s", olt.name, exc, exc_info=True
         )
-        return False, f"Error: {exc}"
+        return False, f"Error: {exc}", None
     finally:
         transport.close()
 
