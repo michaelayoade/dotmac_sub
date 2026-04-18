@@ -84,6 +84,66 @@ def queue_authorize_ont(
     )
 
 
+def authorize_ont_resilient(
+    db: Session,
+    olt_id: str,
+    *,
+    fsp: str,
+    serial_number: str,
+    force_reauthorize: bool = False,
+    request: Request | None = None,
+    prefer_sync: bool = False,
+) -> OltApiWriteResult:
+    """Authorize ONT with async/sync fallback for resilience.
+
+    Tries Celery (async) first, falls back to synchronous execution
+    if Celery/Redis is unavailable.
+
+    Args:
+        db: Database session
+        olt_id: OLT device ID
+        fsp: Frame/Slot/Port location
+        serial_number: ONT serial number
+        force_reauthorize: Delete existing registration first
+        request: HTTP request for audit logging
+        prefer_sync: Skip async and run synchronously
+
+    Returns:
+        OltApiWriteResult with execution details
+    """
+    from app.services.network.authorization_executor import execute_authorization
+
+    result = execute_authorization(
+        db,
+        olt_id,
+        fsp,
+        serial_number,
+        force_reauthorize=force_reauthorize,
+        request=request,
+        prefer_sync=prefer_sync,
+    )
+
+    status = "queued" if result.mode.value == "async_queued" else result.mode.value
+    if not result.success:
+        status = "error"
+
+    return OltApiWriteResult(
+        result.success,
+        result.message,
+        {
+            "status": status,
+            "mode": result.mode.value,
+            "operation_id": result.operation_id,
+            "ont_id": result.ont_id,
+            "olt_id": olt_id,
+            "fsp": fsp,
+            "serial_number": serial_number,
+            "force_reauthorize": force_reauthorize,
+            **result.details,
+        },
+    )
+
+
 def create_service_port(
     db: Session,
     olt_id: str,

@@ -750,23 +750,22 @@ def olt_authorize_ont(
 ) -> Response:
     """Authorize a discovered ONT on the OLT via SSH.
 
+    Uses resilient execution: tries async (Celery) first, falls back to
+    synchronous execution if Celery/Redis is unavailable.
+
     Args:
         force_reauthorize: If "true" or "1", delete any existing registration
             of this serial on the OLT before authorizing on the specified port.
     """
-    from app.services.network.result_adapter import AuthorizationResult
+    from app.services.network.authorization_executor import execute_authorization
 
     if not fsp or not serial_number:
-        result = AuthorizationResult(
-            success=False,
-            message="Missing port or serial number",
-            fsp=fsp,
-            serial_number=serial_number,
-        )
-        op_result = result.to_operation_result()
-        op_result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
-        op_result.redirect_tab = "autofind"
-        return op_result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
+        from app.services.network.result_adapter import OperationResult
+
+        result = OperationResult.error("Missing port or serial number")
+        result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
+        result.redirect_tab = "autofind"
+        return result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
 
     # Parse force_reauthorize checkbox value
     force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
@@ -778,40 +777,29 @@ def olt_authorize_ont(
     )
 
     try:
-        api_result = olt_api_operations_service.queue_authorize_ont(
+        exec_result = execute_authorization(
             db,
             olt_id,
-            fsp=fsp,
-            serial_number=serial_number,
+            fsp,
+            serial_number,
             force_reauthorize=force,
             request=request,
         )
-        result = AuthorizationResult(
-            success=api_result.success,
-            message=api_result.message,
-            operation_id=api_result.data.get("operation_id") if api_result.data else None,
-            serial_number=serial_number,
-            fsp=fsp,
-            queued=api_result.success,
-        )
+        op_result = exec_result.to_operation_result()
     except Exception as exc:
         db.rollback()
         logger.error(
-            "Failed to queue ONT authorization olt_id=%s fsp=%s serial=%s: %s",
+            "Failed to authorize ONT olt_id=%s fsp=%s serial=%s: %s",
             olt_id,
             fsp,
             serial_number,
             exc,
             exc_info=True,
         )
-        result = AuthorizationResult(
-            success=False,
-            message=f"Failed to queue authorization: {exc}",
-            serial_number=serial_number,
-            fsp=fsp,
-        )
+        from app.services.network.result_adapter import OperationResult
 
-    op_result = result.to_operation_result()
+        op_result = OperationResult.error(f"Authorization failed: {exc}")
+
     op_result.redirect_url = _get_authorize_redirect_url(olt_id, return_to)
     op_result.redirect_tab = "autofind"
     return op_result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
