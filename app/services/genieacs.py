@@ -16,6 +16,33 @@ import httpx
 logger = logging.getLogger(__name__)
 
 
+_BOOLEAN_VALUE_STRINGS = frozenset({"true", "false", "1", "0"})
+
+
+def _infer_cwmp_value_type(path: str, value: Any) -> str:
+    """Infer a CWMP xsd type for a GenieACS setParameterValues item.
+
+    GenieACS lets callers send all values as strings, but some ONTs reject
+    boolean parameters like ``*.Enable`` unless their CWMP type is boolean.
+    Keep the inference intentionally conservative: only explicit bools and
+    common boolean path suffixes with boolean-looking values are typed as
+    ``xsd:boolean``. Everything else remains ``xsd:string``.
+    """
+    if isinstance(value, bool):
+        return "xsd:boolean"
+
+    normalized_value = str(value).strip().lower()
+    if normalized_value not in _BOOLEAN_VALUE_STRINGS:
+        return "xsd:string"
+
+    leaf = path.rsplit(".", 1)[-1].lower()
+    if leaf in {"enable", "enabled", "ipv4enable", "ipv6enable"}:
+        return "xsd:boolean"
+    if leaf.endswith("enable") or leaf.endswith("enabled"):
+        return "xsd:boolean"
+    return "xsd:string"
+
+
 def normalize_tr069_serial(value: str | None) -> str:
     """Normalize device serials for cross-system matching."""
     return re.sub(r"[^A-Za-z0-9]+", "", str(value or "")).upper()
@@ -334,7 +361,9 @@ class GenieACSClient:
             Task result
         """
         # GenieACS expects [[path, value, type], ...]
-        param_list = [[k, v, "xsd:string"] for k, v in parameters.items()]
+        param_list = [
+            [k, v, _infer_cwmp_value_type(k, v)] for k, v in parameters.items()
+        ]
         task = {"name": "setParameterValues", "parameterValues": param_list}
         return self.create_task(device_id, task, connection_request)
 

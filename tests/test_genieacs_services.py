@@ -459,6 +459,46 @@ class TestTaskOperations:
             assert task["name"] == "setParameterValues"
             assert "parameterValues" in task
 
+    def test_set_parameter_values_types_boolean_enable_paths(
+        self, client, mock_response
+    ):
+        """Boolean Enable paths must be sent as xsd:boolean for strict ONTs."""
+        with patch("httpx.Client") as mock_client:
+            mock_client.return_value.__enter__.return_value.request.return_value = (
+                mock_response()
+            )
+
+            client.set_parameter_values(
+                "device1",
+                {
+                    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable": "true",
+                    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID": "Dotmac-isp",
+                    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType": (
+                        "WPAand11i"
+                    ),
+                },
+            )
+
+            call_args = mock_client.return_value.__enter__.return_value.request.call_args
+            task = call_args.kwargs["json"]
+            assert task["parameterValues"] == [
+                [
+                    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.Enable",
+                    "true",
+                    "xsd:boolean",
+                ],
+                [
+                    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.SSID",
+                    "Dotmac-isp",
+                    "xsd:string",
+                ],
+                [
+                    "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.BeaconType",
+                    "WPAand11i",
+                    "xsd:string",
+                ],
+            ]
+
     def test_refresh_object(self, client, mock_response):
         """Test refresh_object creates correct task."""
         with patch("httpx.Client") as mock_client:
