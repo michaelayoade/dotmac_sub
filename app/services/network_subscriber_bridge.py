@@ -83,5 +83,20 @@ class DefaultSubscriberValidator:
         ]
         return stmt, extra_conditions
 
+    def get_template_context(
+        self,
+        db: Session,
+        *,
+        subscriber_id: object,
+    ) -> dict[str, str]:
+        """Return subscriber values used by network-domain template rendering."""
+        subscriber = db.get(Subscriber, subscriber_id)
+        if not subscriber:
+            return {}
+        return {
+            "subscriber_code": getattr(subscriber, "external_code", "") or "",
+            "subscriber_name": getattr(subscriber, "name", "") or "",
+        }
+
 
 default_subscriber_validator = DefaultSubscriberValidator()

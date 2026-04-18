@@ -32,6 +32,7 @@ __all__ = [
     "_apply_pagination",
     "_validate_enum",
     "NasTarget",
+    "SubscriberTemplateContextProvider",
     "SubscriberValidator",
     "decode_huawei_hex_serial",
     "encode_to_hex_serial",
@@ -78,6 +79,19 @@ class SubscriberValidator(Protocol):
         Implementations that don't support subscriber search may return the
         statement unchanged and an empty sequence.
         """
+        ...
+
+
+class SubscriberTemplateContextProvider(Protocol):
+    """Bridge for subscriber-owned template fields used by network profiles."""
+
+    def get_template_context(
+        self,
+        db: Session,
+        *,
+        subscriber_id: object,
+    ) -> dict[str, str]:
+        """Return subscriber fields safe for network template rendering."""
         ...
 
 
