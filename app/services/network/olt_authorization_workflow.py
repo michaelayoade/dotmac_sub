@@ -517,7 +517,7 @@ def _configure_management_ip_for_authorization(
     # Create management service port before configuring IP
     # Uses gemport 2 which is the standard for management/TR-069 traffic
     mgmt_gemport = 2
-    sp_ok, sp_msg = create_single_service_port(
+    sp_ok, sp_msg, _sp_index = create_single_service_port(
         olt,
         fsp,
         ont_id_on_olt,
@@ -1180,76 +1180,49 @@ def authorize_autofind_ont(
 
     authorize_started_at = monotonic()
 
-    # Try NETCONF first if enabled on the OLT, with automatic fallback to SSH
-    auth_method = "SSH"
-    netconf_fallback_reason: str | None = None
-    if olt.netconf_enabled:
-        from app.services.network import olt_netconf_ont
+    # Use protocol adapter for automatic NETCONF/SSH selection with fallback
+    from app.services.network.olt_protocol_adapters import get_protocol_adapter
 
-        netconf_ok, netconf_reason = olt_netconf_ont.can_authorize_via_netconf(olt)
-        if netconf_ok:
-            auth_method = "NETCONF"
-            logger.info(
-                "ONT authorization starting via NETCONF: olt=%s olt_id=%s fsp=%s serial=%s",
-                olt.name,
-                olt_id,
-                fsp,
-                serial_number,
-            )
-            ok, msg, ont_id = olt_netconf_ont.authorize_ont(
-                olt,
-                fsp,
-                serial_number,
-                line_profile_id=authorization_profiles.line_profile_id,
-                service_profile_id=authorization_profiles.service_profile_id,
-            )
-            if ok:
-                logger.info(
-                    "ONT authorization succeeded via NETCONF: olt=%s fsp=%s serial=%s ont_id=%s",
-                    olt.name,
-                    fsp,
-                    serial_number,
-                    ont_id,
-                )
-            else:
-                logger.warning(
-                    "ONT authorization failed via NETCONF: olt=%s fsp=%s serial=%s error=%s",
-                    olt.name,
-                    fsp,
-                    serial_number,
-                    msg,
-                )
-        else:
-            netconf_fallback_reason = netconf_reason
-            logger.info(
-                "NETCONF unavailable for OLT %s (%s), using SSH instead: olt_id=%s fsp=%s serial=%s",
-                olt.name,
-                netconf_reason,
-                olt_id,
-                fsp,
-                serial_number,
-            )
-            ok, msg, ont_id = olt_ssh_service.authorize_ont(
-                olt,
-                fsp,
-                serial_number,
-                line_profile_id=authorization_profiles.line_profile_id,
-                service_profile_id=authorization_profiles.service_profile_id,
-            )
-    else:
+    protocol_adapter = get_protocol_adapter(olt)
+    logger.info(
+        "ONT authorization starting: olt=%s olt_id=%s fsp=%s serial=%s protocol=%s",
+        olt.name,
+        olt_id,
+        fsp,
+        serial_number,
+        protocol_adapter.protocol.value,
+    )
+
+    auth_result = protocol_adapter.authorize_ont(
+        fsp,
+        serial_number,
+        line_profile_id=authorization_profiles.line_profile_id,
+        service_profile_id=authorization_profiles.service_profile_id,
+    )
+
+    ok = auth_result.success
+    msg = auth_result.message
+    ont_id = auth_result.ont_id
+    auth_method = auth_result.protocol_used.value.upper() if auth_result.protocol_used else "SSH"
+    netconf_fallback_reason = auth_result.fallback_reason
+
+    if ok:
         logger.info(
-            "ONT authorization starting via SSH: olt=%s olt_id=%s fsp=%s serial=%s netconf_enabled=False",
+            "ONT authorization succeeded via %s: olt=%s fsp=%s serial=%s ont_id=%s",
+            auth_method,
             olt.name,
-            olt_id,
             fsp,
             serial_number,
+            ont_id,
         )
-        ok, msg, ont_id = olt_ssh_service.authorize_ont(
-            olt,
+    else:
+        logger.warning(
+            "ONT authorization failed via %s: olt=%s fsp=%s serial=%s error=%s",
+            auth_method,
+            olt.name,
             fsp,
             serial_number,
-            line_profile_id=authorization_profiles.line_profile_id,
-            service_profile_id=authorization_profiles.service_profile_id,
+            msg,
         )
     if not ok or ont_id is None:
         failure_message = msg
@@ -2230,8 +2203,8 @@ def queue_authorize_autofind_ont(
                 olt_id,
                 fsp,
                 serial_number,
-                force_reauthorize,
             ],
+            kwargs={"force_reauthorize": force_reauthorize},
             correlation_id=correlation_key,
             source="olt_authorization",
         )
