@@ -29,7 +29,6 @@ from app.models.network import (
     OltServicePortPool,
     OntAssignment,
     OntUnit,
-    PonPort,
     ServicePortAllocation,
 )
 
