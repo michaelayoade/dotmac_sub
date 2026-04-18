@@ -116,7 +116,8 @@ def _build_ont_operations_runbook(
     has_acs_device = bool(linked_tr069 and linked_tr069.genieacs_device_id)
     has_cr_url = bool(linked_tr069 and linked_tr069.connection_request_url)
     intent_complete = bool(service_intent.get("is_complete"))
-    missing_count = int(service_intent.get("missing_count") or 0)
+    raw_missing_count = service_intent.get("missing_count")
+    missing_count = int(raw_missing_count) if isinstance(raw_missing_count, int | str) else 0
     has_service_path_intent = bool(
         _intent_step_present(ont_plan, "create_service_port")
         or _service_path_intent_present(service_intent)

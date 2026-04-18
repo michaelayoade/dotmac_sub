@@ -5,10 +5,9 @@ Seeds a default suspension policy with:
 - Day 37: Suspend (account suspension)
 """
 
+
+
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
-import uuid
 
 # revision identifiers, used by Alembic.
 revision = "h6c3d4e5f7g8"
@@ -24,13 +23,13 @@ DUNNING_STEP_37_ID = "00000000-0000-0000-0000-000000000003"
 
 def upgrade() -> None:
     # Insert default policy set
-    op.execute(f"""
+    op.execute("""
         INSERT INTO policy_sets (
             id, name, proration_policy, downgrade_policy, trial_card_required,
             grace_days, suspension_action, refund_policy, is_active, created_at, updated_at
         )
         VALUES (
-            '{DEFAULT_POLICY_SET_ID}',
+            '00000000-0000-0000-0000-000000000001',
             'Standard Suspension Policy',
             'immediate',
             'next_cycle',
@@ -46,13 +45,13 @@ def upgrade() -> None:
     """)
 
     # Insert dunning step: Day 30 - Notify (suspension warning)
-    op.execute(f"""
+    op.execute("""
         INSERT INTO policy_dunning_steps (
             id, policy_set_id, day_offset, action, note
         )
         VALUES (
-            '{DUNNING_STEP_30_ID}',
-            '{DEFAULT_POLICY_SET_ID}',
+            '00000000-0000-0000-0000-000000000002',
+            '00000000-0000-0000-0000-000000000001',
             30,
             'notify',
             'Suspension warning - payment overdue 30 days'
@@ -61,13 +60,13 @@ def upgrade() -> None:
     """)
 
     # Insert dunning step: Day 37 - Suspend
-    op.execute(f"""
+    op.execute("""
         INSERT INTO policy_dunning_steps (
             id, policy_set_id, day_offset, action, note
         )
         VALUES (
-            '{DUNNING_STEP_37_ID}',
-            '{DEFAULT_POLICY_SET_ID}',
+            '00000000-0000-0000-0000-000000000003',
+            '00000000-0000-0000-0000-000000000001',
             37,
             'suspend',
             'Account suspended - payment overdue 37 days'
@@ -78,13 +77,16 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     # Remove dunning steps
-    op.execute(f"""
+    op.execute("""
         DELETE FROM policy_dunning_steps
-        WHERE id IN ('{DUNNING_STEP_30_ID}', '{DUNNING_STEP_37_ID}')
+        WHERE id IN (
+            '00000000-0000-0000-0000-000000000002',
+            '00000000-0000-0000-0000-000000000003'
+        )
     """)
 
     # Remove policy set
-    op.execute(f"""
+    op.execute("""
         DELETE FROM policy_sets
-        WHERE id = '{DEFAULT_POLICY_SET_ID}'
+        WHERE id = '00000000-0000-0000-0000-000000000001'
     """)

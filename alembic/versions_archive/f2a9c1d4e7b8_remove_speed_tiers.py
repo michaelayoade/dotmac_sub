@@ -1,8 +1,9 @@
 """Remove speed tiers and references."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "f2a9c1d4e7b8"

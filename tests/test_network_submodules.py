@@ -14,8 +14,8 @@ import pytest
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app.models.event_store import EventStore
 from app.models.catalog import NasDeviceStatus, NasVendor
+from app.models.event_store import EventStore
 from app.models.network import CPEDevice, DeviceStatus, DeviceType, IPVersion
 from app.models.subscriber import Address, AddressType, Subscriber
 from app.models.tr069 import Tr069AcsServer, Tr069CpeDevice

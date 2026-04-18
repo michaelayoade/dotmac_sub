@@ -270,8 +270,10 @@ def execute_push_tr069_wan_config(
 
         # Build WAN parameters based on mode
         from app.services.genieacs import GenieACSError
-        from app.services.network.ont_action_common import build_tr069_params
-        from app.services.network.ont_action_common import set_and_verify
+        from app.services.network.ont_action_common import (
+            build_tr069_params,
+            set_and_verify,
+        )
 
         params: dict[str, str] = {}
         if wan_mode == "pppoe":

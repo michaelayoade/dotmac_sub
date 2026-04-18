@@ -6,9 +6,10 @@ Create Date: 2026-03-29
 """
 
 import sqlalchemy as sa
-from alembic import op
 from sqlalchemy import inspect
 from sqlalchemy.dialects.postgresql import JSON, UUID
+
+from alembic import op
 
 revision = "005_router_management"
 down_revision = "d1d2d3d4d5d6"

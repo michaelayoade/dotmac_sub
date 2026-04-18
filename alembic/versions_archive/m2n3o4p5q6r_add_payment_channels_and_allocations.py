@@ -5,12 +5,13 @@ Revises: l1m2n3o4p5q6
 Create Date: 2026-01-25
 """
 
-from alembic import op
-from datetime import datetime, timezone
 import uuid
+from datetime import UTC, datetime
+
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
+from alembic import op
 
 revision = "m2n3o4p5q6r"
 down_revision = "l1m2n3o4p5q6"
@@ -192,7 +193,7 @@ def upgrade() -> None:
                     "invoice_id": row[1],
                     "amount": row[2],
                     "memo": row[3],
-                    "created_at": row[4] or datetime.now(timezone.utc),
+                    "created_at": row[4] or datetime.now(UTC),
                 }
                 for row in payments
             ],
@@ -244,8 +245,8 @@ def upgrade() -> None:
                 "currency": currency,
                 "is_active": True,
                 "notes": "Auto-created for backfill",
-                "created_at": datetime.now(timezone.utc),
-                "updated_at": datetime.now(timezone.utc),
+                "created_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
             },
         )
         collection_accounts[currency] = account_id
@@ -305,8 +306,8 @@ def upgrade() -> None:
                     "is_active": True,
                     "is_default": True,
                     "notes": "Auto-created for backfill",
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
                 },
             )
         for currency, account_id in collection_accounts.items():
@@ -337,8 +338,8 @@ def upgrade() -> None:
                     "priority": 0,
                     "is_default": True,
                     "is_active": True,
-                    "created_at": datetime.now(timezone.utc),
-                    "updated_at": datetime.now(timezone.utc),
+                    "created_at": datetime.now(UTC),
+                    "updated_at": datetime.now(UTC),
                 },
             )
 

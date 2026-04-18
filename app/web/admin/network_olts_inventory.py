@@ -912,7 +912,7 @@ def olt_discover_hardware(
 
 @router.post(
     "/olts/{olt_id}/autofind",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_autofind_scan(
     request: Request, olt_id: str, db: Session = Depends(get_db)

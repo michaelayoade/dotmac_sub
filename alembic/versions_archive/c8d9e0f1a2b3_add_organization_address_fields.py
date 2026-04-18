@@ -7,9 +7,9 @@ Create Date: 2026-01-20
 Adds address fields to organizations table to match the customer wizard form.
 """
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 revision = "c8d9e0f1a2b3"
 down_revision = "b7c8d9e0f1a2"

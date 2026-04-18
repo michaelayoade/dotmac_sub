@@ -2,12 +2,14 @@
 """Test IPHOST configuration via NETCONF (preferred) with SSH fallback."""
 
 import sys
+
 sys.path.insert(0, "/opt/dotmac_sub")
+
+from sqlalchemy import select
 
 from app.db import SessionLocal
 from app.models.network import OLTDevice, OntUnit
 from app.services.network.olt_ssh_ont import configure_ont_iphost
-from sqlalchemy import select
 
 
 def main():

@@ -204,6 +204,7 @@ module = [
     "app.services.network.ip",
     "app.services.network.olt",
     "app.services.network.splitters",
+    "app.services.provisioning_managers",
 ]
 disable_error_code = ["override"]
 

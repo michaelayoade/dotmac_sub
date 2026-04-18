@@ -1,8 +1,9 @@
 """Add contract_signatures table for click-to-sign workflow."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "i7d4e5f6g8h9"

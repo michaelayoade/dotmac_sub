@@ -8,8 +8,8 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import domain_settings as settings_service
 from app.services.response import ListResponseMixin
-from app.services.settings_specs.provisioning import build_provisioning_specs
 from app.services.settings_cache import SettingsCache
+from app.services.settings_specs.provisioning import build_provisioning_specs
 from app.timezone import APP_TIMEZONE_NAME
 
 if TYPE_CHECKING:

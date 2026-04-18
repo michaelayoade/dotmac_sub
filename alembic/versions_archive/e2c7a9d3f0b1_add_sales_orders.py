@@ -1,8 +1,9 @@
 """Add sales orders and line items."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import ENUM, UUID
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "e2c7a9d3f0b1"

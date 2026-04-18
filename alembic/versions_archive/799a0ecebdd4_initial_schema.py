@@ -1,15 +1,16 @@
 """initial schema
 
 Revision ID: 799a0ecebdd4
-Revises: 
+Revises:
 Create Date: 2026-01-09 07:31:51.528180
 
 """
 
-from alembic import op
+import geoalchemy2
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
-import geoalchemy2
+
+from alembic import op
 
 revision = '799a0ecebdd4'
 down_revision = None

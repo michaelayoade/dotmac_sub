@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import redis
 
-from app.services import redis_client
-from app.services import settings_cache
+from app.services import redis_client, settings_cache
 
 
 def test_settings_cache_returns_none_when_redis_unavailable(monkeypatch, caplog):

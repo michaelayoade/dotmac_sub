@@ -69,6 +69,12 @@ def _operation_extra(op: NetworkOperation) -> dict[str, object]:
     }
 
 
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
 def _get_operation(db: Session, operation_id: str) -> NetworkOperation:
     """Fetch an operation by ID or raise 404."""
     op = db.get(NetworkOperation, operation_id)
@@ -138,7 +144,8 @@ class NetworkOperations(ListResponseMixin):
             if (
                 existing.status == NetworkOperationStatus.waiting
                 and existing.created_at
-                and datetime.now(UTC) - existing.created_at > STALE_WAITING_OPERATION_AGE
+                and datetime.now(UTC) - _as_aware_utc(existing.created_at)
+                > STALE_WAITING_OPERATION_AGE
             ):
                 existing.status = NetworkOperationStatus.failed
                 existing.completed_at = datetime.now(UTC)

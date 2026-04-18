@@ -9,9 +9,10 @@ This migration implements the unified party model:
 6. Backfills person_id on crm_leads, crm_quotes, crm_conversations
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, ENUM
+from sqlalchemy.dialects.postgresql import ENUM, UUID
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "d1e2f3a4b5c6"

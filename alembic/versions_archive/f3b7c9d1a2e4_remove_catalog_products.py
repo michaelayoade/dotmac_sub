@@ -1,8 +1,9 @@
 """Remove catalog products and offer product_id."""
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "f3b7c9d1a2e4"

@@ -198,7 +198,7 @@ def update_ont_config(
                 push_messages.append("PPPoE OMCI: internet VLAN is required.")
                 push_success = False
 
-            if push_success:
+            if push_success and wan_vlan_tag is not None and ont.pppoe_username and password_for_push:
                 step_result = ont_provision_steps.push_pppoe_omci(
                     db,
                     ont_id,

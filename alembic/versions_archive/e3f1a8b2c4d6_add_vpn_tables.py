@@ -5,9 +5,10 @@ Revises: dc9b3d0b6b2a
 Create Date: 2025-01-14
 
 """
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = 'e3f1a8b2c4d6'
@@ -60,7 +61,7 @@ def upgrade() -> None:
             sa.Column('description', sa.Text(), nullable=True),
 
         # Server network configuration
-        sa.Column('listen_address', sa.String(64), nullable=False, server_default='0.0.0.0'),
+        sa.Column('listen_address', sa.String(64), nullable=False, server_default='0.0.0.0'),  # noqa: S104
         sa.Column('port', sa.Integer(), nullable=False, server_default='1194'),
         sa.Column('protocol', postgresql.ENUM('udp', 'tcp', name='vpnprotocol', create_type=False), nullable=False, server_default='udp'),
 

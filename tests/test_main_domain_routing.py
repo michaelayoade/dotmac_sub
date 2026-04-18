@@ -1,4 +1,5 @@
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from time import monotonic
 
 from sqlalchemy.exc import OperationalError
@@ -6,6 +7,13 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app import main
+
+
+def _run_async(coro):
+    # Run coroutine in a dedicated thread to avoid nested event loops from anyio/pytest-asyncio.
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(asyncio.run, coro)
+        return future.result()
 
 
 def _request(path: str = "/", host: str = "example.com") -> Request:
@@ -108,6 +116,6 @@ def test_grafana_webhook_sink_accepts_alert_posts():
         receive=_receive,
     )
 
-    response = asyncio.run(main.grafana_webhook_sink(request))
+    response = _run_async(main.grafana_webhook_sink(request))
 
     assert response.status_code == 204

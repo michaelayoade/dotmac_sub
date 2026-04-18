@@ -5,11 +5,12 @@ Revises: c1f4d6a8b9e2
 Create Date: 2026-03-10
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID
-from sqlalchemy.dialects.postgresql import ENUM as PGEnum
 from sqlalchemy import inspect
+from sqlalchemy.dialects.postgresql import ENUM as PGEnum
+from sqlalchemy.dialects.postgresql import UUID
+
+from alembic import op
 
 revision = "d2e5f7a9b1c3"
 down_revision = "c1f4d6a8b9e2"

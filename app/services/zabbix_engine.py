@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import RLock
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy.orm import Session
 
@@ -222,7 +222,7 @@ class ZabbixMetricsEngine:
         if not cached:
             return None
         try:
-            usage = json.loads(cached)
+            usage = json.loads(cast(str | bytes | bytearray, cached))
         except (TypeError, ValueError):
             return None
         if not isinstance(usage, dict) or not isinstance(usage.get("graph"), list):

@@ -475,3 +475,15 @@ make pre-commit-run     # Run all pre-commit hooks
 - Audit logging is configurable via `DomainSetting` with domain `audit`
 - Settings are seeded on startup from `app/services/settings_seed.py`
 - WebSocket support at `/ws` for real-time notifications
+
+## OLT SSH Credentials
+
+| OLT | Username | Password |
+|-----|----------|----------|
+| BOI Asokoro | dotmac | Dotmac246 |
+| Jabi OLT | dotmac | Dotmac246 |
+| Karsana OLT | dotmac | Dotmac@1 |
+| Gwarimpa OLT | dotmac | Dotmac246 |
+| SPDC OLT | spdcolt | Dotmac246 |
+| Garki OLT | garkiolt | Dotmac246 |
+| Gudu OLT | guduolt | Dotmac246 |

@@ -22,8 +22,8 @@ from starlette.routing import Route
 
 from app.models.network import (
     OLTDevice,
-    OntAuthorizationStatus,
     OntAssignment,
+    OntAuthorizationStatus,
     OntProvisioningProfile,
     OntProvisioningStatus,
     OntStatusSource,

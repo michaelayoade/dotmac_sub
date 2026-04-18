@@ -9,7 +9,6 @@ from sqlalchemy import inspect, text
 
 from alembic import op
 
-
 revision = "k3l4m5n6o7p8"
 down_revision = "k1l2m3n4o5p7"
 branch_labels = None

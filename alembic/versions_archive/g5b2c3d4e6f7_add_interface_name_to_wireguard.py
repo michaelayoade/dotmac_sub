@@ -8,8 +8,9 @@ Adds the interface_name column to wireguard_servers for tracking
 the Linux interface name (e.g., wg0, wg-infra) on the VPS.
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "g5b2c3d4e6f7"

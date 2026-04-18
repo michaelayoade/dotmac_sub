@@ -64,7 +64,7 @@ def _period_bounds(period: str) -> tuple[datetime, datetime]:
 
 
 def _lock_key_for_chunk(subscription_ids: list[str], period: str) -> str:
-    digest = hashlib.sha1(",".join(sorted(subscription_ids)).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(",".join(sorted(subscription_ids)).encode("utf-8")).hexdigest()
     return f"{_CHUNK_LOCK_PREFIX}:{period}:{digest}"
 
 
@@ -82,7 +82,7 @@ def _acquire_lock(key: str, ttl_seconds: int = _LOCK_TTL_SECONDS) -> tuple[Any, 
 def _release_lock(redis: Any, key: str, token: str) -> None:
     try:
         if redis.get(key) == token:
-            getattr(redis, "delete")(key)
+            redis.delete(key)
     except Exception:
         logger.info(
             "zabbix_portal_usage_ingestion_unlock_failed",

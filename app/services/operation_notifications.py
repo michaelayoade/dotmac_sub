@@ -20,7 +20,7 @@ CHANNEL_PREFIX = "inbox_ws:"
 
 def publish_operation_status(
     operation_id: str,
-    status: Literal["running", "succeeded", "failed"],
+    status: Literal["running", "succeeded", "failed", "warning"],
     message: str,
     *,
     operation_type: str = "ont_authorize",

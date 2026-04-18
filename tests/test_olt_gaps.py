@@ -64,6 +64,12 @@ class TestOltCliValidation:
     def test_config_mode_is_rejected(self) -> None:
         assert validate_cli_command("config") is not None
 
+    def test_multiline_command_is_rejected(self) -> None:
+        assert validate_cli_command("display version\nreboot") is not None
+
+    def test_dangerous_command_after_allowed_prefix_is_rejected(self) -> None:
+        assert validate_cli_command("display version reboot") is not None
+
 
 class TestOltOntStatusBySerial:
     """Verify OLT-level ONT status lookup can start from a serial number."""

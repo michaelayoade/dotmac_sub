@@ -5,8 +5,9 @@ Revises: 021_add_mgmt_ip_pool_to_provisioning_profile
 Create Date: 2026-04-15
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 # revision identifiers
 revision = "022_next_available_ip"

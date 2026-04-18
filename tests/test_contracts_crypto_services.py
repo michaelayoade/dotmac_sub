@@ -35,8 +35,8 @@ from app.services.audit_helpers import (
 from app.services.contracts import contract_signatures
 from app.services.credential_crypto import (
     ENCRYPTED_CREDENTIAL_FIELDS,
-    decrypt_credential_with_key,
     decrypt_credential,
+    decrypt_credential_with_key,
     encrypt_credential,
     encrypt_nas_credentials,
     generate_encryption_key,

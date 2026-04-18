@@ -1,6 +1,5 @@
 from typing import Any
 
-
 class _BaseCursor:
     def execute(self, query: str, args: Any = ...) -> int: ...
     def fetchmany(self, size: int = ...) -> list[dict[str, Any]]: ...

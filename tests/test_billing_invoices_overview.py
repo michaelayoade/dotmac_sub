@@ -5,12 +5,12 @@ from decimal import Decimal
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.subscriber import Reseller, Subscriber
+from app.services import web_billing_overview as web_billing_overview_service
 from app.services.web_billing_overview import (
     build_invoices_list_data,
     build_overview_data,
     render_invoices_csv,
 )
-from app.services import web_billing_overview as web_billing_overview_service
 
 
 def _reset_overview_cache() -> None:

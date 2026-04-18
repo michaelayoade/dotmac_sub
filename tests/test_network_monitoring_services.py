@@ -4,8 +4,13 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 
-from app.models.domain_settings import DomainSetting, SettingDomain
-from app.models.network import OLTDevice, OntAssignment, OntUnit, OnuOnlineStatus, PonPort
+from app.models.network import (
+    OLTDevice,
+    OntAssignment,
+    OntUnit,
+    OnuOnlineStatus,
+    PonPort,
+)
 from app.models.network_monitoring import (
     Alert,
     AlertOperator,

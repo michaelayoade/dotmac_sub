@@ -14,8 +14,8 @@ from app.models.audit import AuditEvent
 from app.models.auth import AuthProvider, UserCredential
 from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory
-from app.services.audit_helpers import log_audit_event
 from app.services import web_system_user_mutations as web_system_user_mutations_service
+from app.services.audit_helpers import log_audit_event
 from app.services.settings_spec import resolve_value
 from app.timezone import APP_TIMEZONE_NAME, format_in_app_timezone
 

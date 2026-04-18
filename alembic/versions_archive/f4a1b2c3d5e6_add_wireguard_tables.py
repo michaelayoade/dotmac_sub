@@ -10,9 +10,10 @@ WireGuard replaces OpenVPN as the sole VPN protocol.
 - wireguard_connection_logs: Connection tracking (optional auditing)
 """
 
-from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "f4a1b2c3d5e6"

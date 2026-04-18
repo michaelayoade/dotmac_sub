@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from app.models.network import OnuOnlineStatus, OntAssignment, OntUnit
+from app.models.network import OntAssignment, OntUnit, OnuOnlineStatus
 from app.models.subscriber import Address, Subscriber
 from app.services.web_subscriber_details import build_subscriber_detail_snapshot
 from app.web.admin import subscribers as subscribers_web

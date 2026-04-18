@@ -6,9 +6,10 @@ Create Date: 2026-01-14 13:03:46.855484
 
 """
 
-from alembic import op
 import geoalchemy2
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = 'dd4f107ba42b'
 down_revision = '75dc9b60dbcc'

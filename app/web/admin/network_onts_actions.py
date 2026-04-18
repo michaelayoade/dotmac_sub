@@ -325,7 +325,7 @@ def ont_return_to_inventory(
 
     if result.success:
         # Redirect to the global unconfigured ONT list so the returned device can be re-authorized.
-        target = (
+        target = str(
             result.data.get("unconfigured_url")
             if result.data and result.data.get("unconfigured_url")
             else "/admin/network/onts?view=unconfigured"

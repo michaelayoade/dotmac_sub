@@ -5,8 +5,9 @@ Revises: 006_ont_external_id_unique
 Create Date: 2026-04-01
 """
 
-from alembic import op
 import sqlalchemy as sa
+
+from alembic import op
 
 revision = "007_acs_periodic_inform_interval"
 down_revision = "006_ont_external_id_unique"
