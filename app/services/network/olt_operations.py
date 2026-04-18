@@ -494,10 +494,12 @@ def validate_cli_command(command: str) -> str | None:
         return "Command is empty"
     if len(cmd) > 500:
         return "Command too long (max 500 characters)"
+    if any(char in cmd for char in ("\r", "\n", "\x00")):
+        return "Command must be a single line"
 
     cmd_lower = cmd.lower()
     for pattern in _CLI_BLOCKED_PATTERNS:
-        if cmd_lower.startswith(pattern):
+        if pattern in cmd_lower:
             return f"Command contains blocked keyword: {pattern}"
 
     if not any(cmd_lower.startswith(prefix) for prefix in _CLI_ALLOWED_PREFIXES):

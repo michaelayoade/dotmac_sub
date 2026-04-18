@@ -22,7 +22,6 @@ from app.services.network.ont_provisioning.profiles import (
 )
 from app.services.network.serial_utils import parse_ont_id_on_olt
 
-
 _AUTHORIZED_SYNC_SOURCES = {
     "olt_ssh_authorize",
     "olt_ssh_readback",

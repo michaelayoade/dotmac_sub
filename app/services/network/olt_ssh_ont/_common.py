@@ -23,7 +23,8 @@ _SSH_CONNECTION_ERRORS = (
 
 # Delay between characters when using slow send (seconds).
 # Some OLT terminals corrupt commands sent too quickly.
-_SLOW_SEND_CHAR_DELAY = 0.05
+# Increased from 0.05 to 0.1 for MA5608T compatibility.
+_SLOW_SEND_CHAR_DELAY = 0.1
 
 # Regex patterns for validation
 _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
@@ -91,20 +92,27 @@ class ServicePortDiagnostics:
 
 
 def _send_slow(channel, command: str, char_delay: float = _SLOW_SEND_CHAR_DELAY) -> None:
-    """Send command character-by-character with delay.
+    """Send command with delays to avoid terminal corruption.
 
     Some OLT terminals (particularly certain Huawei MA5608T units) have terminal
     processing issues that corrupt commands with spaces when sent at full speed.
-    Sending character-by-character with small delays works around this issue.
+    This version sends each word (space-separated) with a delay after each word.
 
     Args:
         channel: Paramiko SSH channel.
         command: Command string to send (without trailing newline).
-        char_delay: Delay in seconds between each character.
+        char_delay: Delay in seconds between each word.
     """
-    for char in command:
-        channel.send(char)
-        time.sleep(char_delay)
+    # Split by spaces and send each part with space, adding delay after spaces
+    parts = command.split(' ')
+    for i, part in enumerate(parts):
+        channel.send(part)
+        if i < len(parts) - 1:
+            # Send space and wait for terminal to process
+            channel.send(' ')
+            time.sleep(char_delay)
+    # Small delay before newline
+    time.sleep(char_delay)
     channel.send("\n")
 
 

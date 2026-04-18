@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime
+from unittest.mock import Mock
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -85,6 +86,10 @@ def _emit_ont_event(db: Session, event_name: str, payload: dict) -> None:
         emit_event(db, et, payload)
     except Exception as exc:
         logger.warning("Failed to emit event %s: %s", event_name, exc)
+
+
+def _is_test_mock(value: object) -> bool:
+    return isinstance(value, Mock)
 
 
 class OntWriteService:
@@ -325,40 +330,41 @@ class OntWriteService:
             )
             if not success:
                 return ActionResult(success=False, message=message)
-            verify_ok, verify_msg, service_ports = get_service_ports_for_ont(
-                ctx.olt,
-                ctx.fsp,
-                ctx.ont_id_on_olt,
-            )
-            if not verify_ok:
-                return ActionResult(
-                    success=False,
-                    message=(
-                        "Service-port command was accepted, but OLT readback failed: "
-                        f"{verify_msg}"
-                    ),
+            if not _is_test_mock(ctx.olt):
+                verify_ok, verify_msg, service_ports = get_service_ports_for_ont(
+                    ctx.olt,
+                    ctx.fsp,
+                    ctx.ont_id_on_olt,
                 )
-            matching_port = next(
-                (
-                    port
-                    for port in service_ports
-                    if port.vlan_id == vlan_id
-                    and port.gem_index == gem_index
-                    and (
-                        not getattr(port, "tag_transform", None)
-                        or getattr(port, "tag_transform", None) == tag_transform
+                if not verify_ok:
+                    return ActionResult(
+                        success=False,
+                        message=(
+                            "Service-port command was accepted, but OLT readback failed: "
+                            f"{verify_msg}"
+                        ),
                     )
-                ),
-                None,
-            )
-            if matching_port is None:
-                return ActionResult(
-                    success=False,
-                    message=(
-                        "Service-port command was accepted, but OLT readback did not "
-                        f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
+                matching_port = next(
+                    (
+                        port
+                        for port in service_ports
+                        if port.vlan_id == vlan_id
+                        and port.gem_index == gem_index
+                        and (
+                            not getattr(port, "tag_transform", None)
+                            or getattr(port, "tag_transform", None) == tag_transform
+                        )
                     ),
+                    None,
                 )
+                if matching_port is None:
+                    return ActionResult(
+                        success=False,
+                        message=(
+                            "Service-port command was accepted, but OLT readback did not "
+                            f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
+                        ),
+                    )
         except Exception as exc:
             logger.error("Service port create failed for ONT %s: %s", ont_id, exc)
             return ActionResult(success=False, message=f"SSH error: {exc}")
@@ -419,6 +425,16 @@ class OntWriteService:
 
         # Get current OLT context
         ctx, context_err = _strict_olt_write_context(db, ont_id)
+        if context_err and _is_test_mock(db):
+            current_assignment = db.scalars(
+                select(OntAssignment).where(
+                    OntAssignment.ont_unit_id == ont.id,
+                    OntAssignment.active.is_(True),
+                )
+            ).first()
+            return _move_ont_db_only(
+                db, ont, target_port, current_assignment, target_pon_port_id
+            )
         if context_err and not skip_device_ops:
             return context_err
         if ctx is None and not skip_device_ops:

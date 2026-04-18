@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from paramiko.ssh_exception import SSHException
 
@@ -11,6 +12,10 @@ from app.services.network.olt_ssh_ont._common import _SSH_CONNECTION_ERRORS, _se
 from app.services.network.olt_ssh_ont.iphost import _run_ont_config_command
 
 logger = logging.getLogger(__name__)
+
+
+def _mask_pppoe_password(text: str) -> str:
+    return re.sub(r"(password\s+)\S+", r"\1***", text)
 
 
 def configure_ont_internet_config(
@@ -248,13 +253,14 @@ def configure_ont_pppoe_omci(
         core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
 
         if core.is_error_output(output):
+            clean_output = _mask_pppoe_password(output.strip()[-150:])
             logger.warning(
                 "PPPoE OMCI config failed for ONT %d on OLT %s: %s",
                 ont_id,
                 olt.name,
-                output.strip()[-150:],
+                clean_output,
             )
-            return False, f"OLT rejected: {output.strip()[-150:]}"
+            return False, f"OLT rejected: {clean_output}"
 
         logger.info(
             "Configured PPPoE via OMCI for ONT %d on OLT %s (VLAN %d, user %s)",

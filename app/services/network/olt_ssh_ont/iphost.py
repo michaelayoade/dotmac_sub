@@ -11,9 +11,9 @@ from paramiko.ssh_exception import SSHException
 from app.models.network import OLTDevice
 from app.services.network.olt_ssh_ont._common import (
     _SSH_CONNECTION_ERRORS,
-    _send_slow,
     OntIphostConfig,
     OntIphostResult,
+    _send_slow,
 )
 from app.services.network.olt_validators import (
     ValidationError,

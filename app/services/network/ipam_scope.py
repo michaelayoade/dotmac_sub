@@ -2,10 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Protocol
+from uuid import UUID
+
 from sqlalchemy.orm import Session
 
 
-def sync_ip_pool_olt_scope_for_vlan(db: Session, vlan: object) -> int:
+class _VlanScope(Protocol):
+    id: UUID
+    olt_device_id: UUID | None
+
+
+def sync_ip_pool_olt_scope_for_vlan(db: Session, vlan: _VlanScope) -> int:
     """Keep pools scoped to a VLAN aligned with that VLAN's OLT scope."""
     from app.models.network import IpPool
 

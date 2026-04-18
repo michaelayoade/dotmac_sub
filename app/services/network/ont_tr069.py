@@ -379,7 +379,7 @@ def _extract_connection_row(obj: dict[str, Any], *, kind: str, wcd_index: str) -
         "wcd_index": wcd_index,
         "instance": str(obj.get("_instance") or "1"),
     }
-    for field in (
+    for param_name in (
         "Name",
         "ConnectionType",
         "ConnectionStatus",
@@ -391,7 +391,7 @@ def _extract_connection_row(obj: dict[str, Any], *, kind: str, wcd_index: str) -
         "X_HW_SERVICELIST",
         "X_HW_VLAN",
     ):
-        row[field] = _unwrap_tr069_value(obj.get(field))
+        row[param_name] = _unwrap_tr069_value(obj.get(param_name))
     return row
 
 

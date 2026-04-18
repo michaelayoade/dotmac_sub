@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -32,6 +33,11 @@ if TYPE_CHECKING:
     from app.models.network import OLTDevice
 
 logger = logging.getLogger(__name__)
+
+# Delay between characters when using slow send (seconds).
+# Some OLT terminals (particularly Huawei MA5608T) corrupt commands with spaces
+# when sent at full speed. 100ms delay per character works around this issue.
+SLOW_SEND_CHAR_DELAY = 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +193,29 @@ class CliMode(Enum):
 
 
 # ---------------------------------------------------------------------------
+# Slow Send Helper
+# ---------------------------------------------------------------------------
+
+
+def _send_slow(channel: Channel, command: str, char_delay: float = SLOW_SEND_CHAR_DELAY) -> None:
+    """Send command character-by-character with delay.
+
+    Some OLT terminals (particularly Huawei MA5608T) have terminal processing
+    issues that corrupt commands with spaces when sent at full speed.
+    Sending character-by-character with small delays works around this issue.
+
+    Args:
+        channel: Paramiko SSH channel.
+        command: Command string to send (without trailing newline).
+        char_delay: Delay in seconds between each character.
+    """
+    for char in command:
+        channel.send(char)
+        time.sleep(char_delay)
+    channel.send("\n")
+
+
+# ---------------------------------------------------------------------------
 # OLT Session Context Manager
 # ---------------------------------------------------------------------------
 
@@ -215,6 +244,7 @@ class OltSession:
         *,
         timeout_sec: float = 12.0,
         require_mode: CliMode | None = None,
+        slow_send: bool = True,
     ) -> CommandResult:
         """Execute a command on the OLT.
 
@@ -222,12 +252,17 @@ class OltSession:
             command: CLI command to execute.
             timeout_sec: Timeout for command response.
             require_mode: If set, ensure we're in this mode before running command.
+            slow_send: If True, send command character-by-character with delays
+                to avoid terminal corruption on some OLT models (MA5608T).
+                Default is True for reliability.
 
         Returns:
             CommandResult with success/error classification.
         """
         from app.services.network.olt_ssh import (
-            _run_huawei_cmd,
+            _HUAWEI_OPTIONAL_ARG_PROMPT,
+            _needs_huawei_command_confirm,
+            _read_until_prompt,
         )
 
         try:
@@ -237,12 +272,26 @@ class OltSession:
             elif require_mode == CliMode.ENABLE and self.current_mode == CliMode.USER:
                 self._enter_enable_mode()
 
-            # Execute command
-            output = _run_huawei_cmd(
+            # Execute command with slow send if requested
+            logger.debug("OLT command: %r (slow_send=%s)", command, slow_send)
+            if slow_send:
+                _send_slow(self.channel, command)
+            else:
+                self.channel.send(f"{command}\n")
+
+            # Read response
+            output = _read_until_prompt(
                 self.channel,
-                command,
-                prompt=self.prompt_regex,
+                rf"{self.prompt_regex}|<cr>|{_HUAWEI_OPTIONAL_ARG_PROMPT}",
+                timeout_sec=timeout_sec,
             )
+
+            # Handle optional argument prompts
+            if _needs_huawei_command_confirm(output):
+                self.channel.send("\n")
+                output = _read_until_prompt(
+                    self.channel, self.prompt_regex, timeout_sec=timeout_sec
+                )
 
             return parse_command_result(output)
 
@@ -302,26 +351,28 @@ class OltSession:
         """Enter enable/privileged mode."""
         from app.services.network.olt_ssh import _read_until_prompt
 
-        self.channel.send("enable\n")
+        _send_slow(self.channel, "enable")
         _read_until_prompt(self.channel, r"#\s*$", timeout_sec=5)
         self.current_mode = CliMode.ENABLE
 
     def _enter_config_mode(self) -> None:
         """Enter global config mode."""
-        from app.services.network.olt_ssh import _run_huawei_cmd
+        from app.services.network.olt_ssh import _read_until_prompt
 
         if self.current_mode == CliMode.USER:
             self._enter_enable_mode()
 
-        _run_huawei_cmd(self.channel, "config", prompt=r"[#)]\s*$")
+        _send_slow(self.channel, "config")
+        _read_until_prompt(self.channel, r"[#)]\s*$", timeout_sec=5)
         self.current_mode = CliMode.CONFIG
 
     def exit_config_mode(self) -> None:
         """Exit from config mode back to enable mode."""
-        from app.services.network.olt_ssh import _run_huawei_cmd
+        from app.services.network.olt_ssh import _read_until_prompt
 
         if self.current_mode == CliMode.CONFIG:
-            _run_huawei_cmd(self.channel, "quit", prompt=r"#\s*$")
+            _send_slow(self.channel, "quit")
+            _read_until_prompt(self.channel, r"#\s*$", timeout_sec=5)
             self.current_mode = CliMode.ENABLE
 
 
@@ -367,7 +418,7 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
 
         # Enter enable mode and set terminal length
         session._enter_enable_mode()
-        channel.send("screen-length 0 temporary\n")
+        _send_slow(channel, "screen-length 0 temporary")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
 
         yield session

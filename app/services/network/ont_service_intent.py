@@ -413,12 +413,16 @@ def build_service_intent(
         },
     ]
 
-    missing = sum(
-        1
-        for section in sections
-        for row in section["rows"]
-        if row["value"] == "Not set"
-    )
+    missing = 0
+    for section in sections:
+        rows = section.get("rows", [])
+        if not isinstance(rows, list):
+            continue
+        missing += sum(
+            1
+            for row in rows
+            if isinstance(row, dict) and row.get("value") == "Not set"
+        )
 
     # Include WAN service instances if available (Phase 2+3 architecture)
     wan_service_instances = _active_wan_service_instances(ont, db)

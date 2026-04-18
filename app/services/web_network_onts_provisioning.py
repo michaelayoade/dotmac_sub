@@ -108,7 +108,7 @@ def _ipv4_row_is_available(
     address, assignment = row
     reservation_owner = _reservation_owner(getattr(address, "notes", None))
     belongs_to_pool = not address.pool_id or str(address.pool_id) == normalized_pool_id
-    reservation_available = not bool(address.is_reserved) or (
+    reservation_available = not bool(address.is_reserved) or bool(
         owner and reservation_owner == owner
     )
     return assignment is None and reservation_available and belongs_to_pool
@@ -295,7 +295,7 @@ def _reserve_static_ipv4_for_ont(
             owner=ont_id,
         ):
             raise ValueError("Selected static IP is not available in this pool.")
-        choices_state = {
+        choices_state: dict[str, object] = {
             "netmask": _pool_netmask(pool),
             "gateway": gateway,
             "dns": ", ".join(v for v in [pool.dns_primary, pool.dns_secondary] if v),
@@ -880,7 +880,7 @@ def save_provision_settings(
                 commit=False,
             )
         if wan_vlan_id_value or wan_protocol_value:
-            wan_values = {
+            wan_values: dict[str, object] = {
                 "wan_mode": wan_protocol_value,
                 "wan_vlan_id": wan_vlan_id_value,
                 "wan_vlan": wan_vlan_tag_value,

@@ -39,6 +39,8 @@ def remote_ping_ont(
         return False, e.message
 
     parts = fsp.split("/")
+    frame_slot = f"{parts[0]}/{parts[1]}"
+    port_num = parts[2]
     try:
         transport, channel, _policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:

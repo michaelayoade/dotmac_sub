@@ -45,7 +45,6 @@ _OLT_MANAGEMENT_NETWORKS_BY_NAME: dict[str, list[str]] = {
     "garki olt 1": ["172.16.201.0/24"],
     "karasana": ["172.16.203.0/24"],
     "karasana olt 1": ["172.16.203.0/24"],
-    "karsana olt 1": ["172.16.203.0/24"],
     "boi": ["172.20.100.8/30"],
     "boi huawei olt": ["172.20.100.8/30"],
     "boi asokoro olt 1": ["172.20.100.8/30"],
@@ -218,7 +217,9 @@ def _expected_management_networks_for_olt(
                 continue
             if mgmt_address is not None and mgmt_address in known_network:
                 try:
-                    candidates.add(ip_network(cidr, strict=False))
+                    network = ip_network(cidr, strict=False)
+                    if isinstance(network, IPv4Network):
+                        candidates.add(network)
                 except ValueError:
                     continue
             if (
@@ -226,7 +227,9 @@ def _expected_management_networks_for_olt(
                 and declared_network.overlaps(known_network)
             ):
                 try:
-                    candidates.add(ip_network(cidr, strict=False))
+                    network = ip_network(cidr, strict=False)
+                    if isinstance(network, IPv4Network):
+                        candidates.add(network)
                 except ValueError:
                     continue
 
@@ -258,7 +261,9 @@ def _expected_management_networks_for_olt(
             if key in identity or key_tokens.issubset(identity_tokens):
                 for cidr in cidrs:
                     try:
-                        candidates.add(ip_network(cidr, strict=False))
+                        network = ip_network(cidr, strict=False)
+                        if isinstance(network, IPv4Network):
+                            candidates.add(network)
                     except ValueError:
                         continue
 
@@ -509,7 +514,12 @@ def management_ip_choices_for_ont(
             selected_ip=selected_ip,
             limit=per_pool_limit,
         )
-        for choice in state.get("choices", []):
+        choice_values = state.get("choices", [])
+        if not isinstance(choice_values, list):
+            continue
+        for choice in choice_values:
+            if not isinstance(choice, dict):
+                continue
             enriched = dict(choice)
             enriched["label"] = f"{choice.get('address')} - {candidate_pool.name}"
             choices.append(enriched)
@@ -848,10 +858,12 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         for pool in ip_pools
         if getattr(pool, "vlan_id", None)
     }
-    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
+    ont_plan: dict[str, Any] = load_ont_plan_for_ont(db, ont_id=ont_id) or {}
+    lan_plan_value = ont_plan.get("configure_lan_tr069")
+    wifi_plan_value = ont_plan.get("configure_wifi_tr069")
     lan_intent_from_order = (
-        ont_plan.get("configure_lan_tr069")
-        if isinstance(ont_plan.get("configure_lan_tr069"), dict)
+        lan_plan_value
+        if isinstance(lan_plan_value, dict)
         else {}
     )
     # LAN config is stored directly on ONT; service-order context is fallback
@@ -868,8 +880,8 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         "dhcp_end": getattr(ont, "lan_dhcp_end", None) or lan_intent_from_order.get("dhcp_end"),
     }
     wifi_intent_from_order = (
-        ont_plan.get("configure_wifi_tr069")
-        if isinstance(ont_plan.get("configure_wifi_tr069"), dict)
+        wifi_plan_value
+        if isinstance(wifi_plan_value, dict)
         else {}
     )
     wifi_intent = {
@@ -923,7 +935,6 @@ def provision_wizard_context(request: Any, db: Session, ont_id: str) -> dict[str
         wan_protocol=wan_protocol,
         wan_vlan_id=str(ont.wan_vlan_id) if ont.wan_vlan_id else None,
         pppoe_username=ont.pppoe_username,
-        pppoe_password="stored" if getattr(ont, "pppoe_password", None) else None,
         static_ip_pool_id=None,
         static_ip=None,
         static_subnet=None,
@@ -1045,6 +1056,8 @@ def resolve_effective_tr069_profile_for_ont(
     # intent if no explicit ONT value exists.
     planned_profile_id: Any = getattr(ont, "tr069_olt_profile_id", None)
     if planned_profile_id is None:
+        from app.services.network.ont_service_intent import load_ont_plan_for_ont
+
         try:
             ont_id = str(getattr(ont, "id", ""))
             ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)

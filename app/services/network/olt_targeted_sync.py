@@ -156,7 +156,7 @@ def sync_authorized_ont_from_olt_snmp(
                         decoded,
                         hinted,
                     )
-                idx_fsp = hinted or decoded
+                idx_fsp = str(hinted or decoded or "")
             else:
                 idx_fsp = ""
 

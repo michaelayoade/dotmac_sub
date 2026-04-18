@@ -10,7 +10,9 @@ from dataclasses import dataclass
 
 from app.models.network import OLTDevice
 from app.services.network.serial_utils import normalize as normalize_serial
-from app.services.network.serial_utils import search_candidates as serial_search_candidates
+from app.services.network.serial_utils import (
+    search_candidates as serial_search_candidates,
+)
 
 
 @dataclass(frozen=True)

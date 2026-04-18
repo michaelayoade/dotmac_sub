@@ -49,6 +49,12 @@ class ProvisioningDefaults:
     stale_runtime_hours: int = 24
     olt_write_mode_enabled: bool = False
 
+    # PPPoE provisioning method: "auto", "omci", or "tr069"
+    # - auto: Try OMCI first, fall back to TR-069 on failure
+    # - omci: Only use OLT OMCI commands (requires olt_write_mode_enabled)
+    # - tr069: Only use TR-069/GenieACS (skip OMCI entirely)
+    pppoe_provisioning_method: str = "auto"
+
 
 DEFAULTS = ProvisioningDefaults()
 
@@ -65,6 +71,7 @@ SETTING_KEYS = {
     "force_reauthorize_retry_delay_sec": DEFAULTS.force_reauthorize_retry_delay_sec,
     "stale_runtime_hours": DEFAULTS.stale_runtime_hours,
     "olt_write_mode_enabled": DEFAULTS.olt_write_mode_enabled,
+    "pppoe_provisioning_method": DEFAULTS.pppoe_provisioning_method,
 }
 
 
@@ -135,7 +142,8 @@ def get_int_setting(db: Session | None, key: str, default: int | None = None) ->
     try:
         return int(value)
     except (TypeError, ValueError):
-        return default if default is not None else int(SETTING_KEYS.get(key, 0))
+        fallback = SETTING_KEYS.get(key, 0)
+        return default if default is not None else int(str(fallback))
 
 
 def get_float_setting(db: Session | None, key: str, default: float | None = None) -> float:
@@ -144,7 +152,8 @@ def get_float_setting(db: Session | None, key: str, default: float | None = None
     try:
         return float(value)
     except (TypeError, ValueError):
-        return default if default is not None else float(SETTING_KEYS.get(key, 0.0))
+        fallback = SETTING_KEYS.get(key, 0.0)
+        return default if default is not None else float(str(fallback))
 
 
 def get_bool_setting(db: Session | None, key: str, default: bool | None = None) -> bool:
@@ -201,3 +210,18 @@ def get_stale_runtime_hours(db: Session | None = None) -> int:
 def get_olt_write_mode_enabled(db: Session | None = None) -> bool:
     """Return whether provisioning may execute OLT write commands."""
     return get_bool_setting(db, "olt_write_mode_enabled")
+
+
+def get_pppoe_provisioning_method(db: Session | None = None) -> str:
+    """Get PPPoE provisioning method preference.
+
+    Returns one of:
+    - "auto": Try OMCI first, fall back to TR-069 on failure (default)
+    - "omci": Only use OLT OMCI commands
+    - "tr069": Only use TR-069/GenieACS, skip OMCI entirely
+    """
+    value = get_setting(db, "pppoe_provisioning_method", DEFAULTS.pppoe_provisioning_method)
+    normalized = str(value).strip().lower()
+    if normalized in {"omci", "tr069"}:
+        return normalized
+    return "auto"
