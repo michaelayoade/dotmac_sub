@@ -1,0 +1,35 @@
+# vmagent configuration for scraping Zabbix metrics
+# These metrics are forwarded to VictoriaMetrics
+
+global:
+  scrape_interval: 60s
+  scrape_timeout: 30s
+
+scrape_configs:
+  # Scrape Zabbix server metrics (internal Zabbix performance)
+  - job_name: 'zabbix-server'
+    static_configs:
+      - targets: ['zabbix-server:10051']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'zabbix-server'
+
+  # Scrape Zabbix agent metrics from app server
+  - job_name: 'zabbix-agent'
+    static_configs:
+      - targets: ['zabbix-agent:10050']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'dotmac-app-server'
+
+  # DotMac app health endpoint
+  - job_name: 'dotmac-app'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['app:8001']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'dotmac-app'

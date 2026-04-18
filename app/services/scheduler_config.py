@@ -1128,6 +1128,32 @@ def build_beat_schedule() -> dict:
             interval_seconds=olt_retry_interval,
         )
 
+        # Zabbix device sync - syncs OLT/NAS devices to Zabbix hosts
+        zabbix_sync_enabled_by_default = bool(_env_value("ZABBIX_API_TOKEN"))
+        zabbix_device_sync_enabled = _effective_bool(
+            session,
+            SettingDomain.network_monitoring,
+            "zabbix_device_sync_enabled",
+            "ZABBIX_DEVICE_SYNC_ENABLED",
+            zabbix_sync_enabled_by_default,
+        )
+        zabbix_device_sync_interval = _resolve_int(
+            session,
+            SettingDomain.network_monitoring,
+            "zabbix_device_sync_interval_seconds",
+            300,  # 5 minutes
+        )
+        zabbix_device_sync_interval = max(
+            zabbix_device_sync_interval, 60
+        )  # Min: 1 minute
+        _sync_scheduled_task(
+            session,
+            name="zabbix_device_sync",
+            task_name="app.tasks.zabbix_sync.sync_devices_to_zabbix",
+            enabled=zabbix_device_sync_enabled,
+            interval_seconds=zabbix_device_sync_interval,
+        )
+
         tasks = (
             session.query(ScheduledTask).filter(ScheduledTask.enabled.is_(True)).all()
         )

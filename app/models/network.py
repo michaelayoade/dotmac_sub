@@ -700,6 +700,10 @@ class OLTDevice(Base):
     )
     circuit_failure_threshold: Mapped[int] = mapped_column(Integer, default=3)
 
+    # Zabbix monitoring integration
+    zabbix_host_id: Mapped[str | None] = mapped_column(String(20))
+    zabbix_last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )

@@ -3,6 +3,10 @@ services:
     build: .
     container_name: dotmac_sub_app
     restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.5
+    pids_limit: 256
     ports:
     - 127.0.0.1:8001:8001
     environment:
@@ -57,6 +61,10 @@ services:
     build: .
     container_name: dotmac_sub_celery_worker
     restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2.0
+    pids_limit: 128
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -71,6 +79,7 @@ services:
       SPLYNX_MYSQL_PASSWORD: ${SPLYNX_MYSQL_PASSWORD:-}
       OPENBAO_ADDR: http://openbao:8200
       OPENBAO_TOKEN: dotmac-sub-dev-token
+      NETWORK_MONITORING_MAX_WORKERS: ${NETWORK_MONITORING_MAX_WORKERS:-4}
     env_file:
     - .env
     depends_on:
@@ -91,12 +100,18 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
+    - --concurrency=2
+    - --max-tasks-per-child=50
     - -Q
     - celery
   celery-worker-tr069:
     build: .
     container_name: dotmac_sub_celery_worker_tr069
     restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    pids_limit: 96
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -131,12 +146,18 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
+    - --concurrency=1
+    - --max-tasks-per-child=50
     - -Q
     - tr069
   celery-worker-acs:
     build: .
     container_name: dotmac_sub_celery_worker_acs
     restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    pids_limit: 96
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -171,12 +192,18 @@ services:
     - app.celery_app.celery_app
     - worker
     - --loglevel=info
+    - --concurrency=1
+    - --max-tasks-per-child=50
     - -Q
     - acs
   celery-beat:
     build: .
     container_name: dotmac_sub_celery_beat
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 64
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -214,6 +241,10 @@ services:
     image: postgis/postgis:16-3.4
     container_name: dotmac_sub_db
     restart: unless-stopped
+    mem_limit: 3g
+    mem_reservation: 1g
+    cpus: 2.0
+    pids_limit: 160
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -231,6 +262,10 @@ services:
     image: redis:7
     container_name: dotmac_sub_redis
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 64
     command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
     - 6379:6379
@@ -243,6 +278,10 @@ services:
     image: minio/minio:RELEASE.2025-01-20T14-49-07Z
     container_name: dotmac_sub_minio
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 64
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY}
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY}
@@ -256,6 +295,10 @@ services:
     image: mediagis/nominatim:4.4
     container_name: dotmac_sub_nominatim
     restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    pids_limit: 128
     environment:
       PBF_URL: https://download.geofabrik.de/africa/nigeria-latest.osm.pbf
       IMPORT_STYLE: extratags
@@ -268,6 +311,10 @@ services:
     image: freeradius/freeradius-server:3.2.3
     container_name: dotmac_sub_freeradius
     restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 64
     ports:
     - 1812:1812/udp
     - 1813:1813/udp
@@ -287,6 +334,10 @@ services:
     image: postgres:16
     container_name: dotmac_sub_radius_db
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 96
     environment:
       POSTGRES_USER: radius
       POSTGRES_PASSWORD: ${RADIUS_DB_PASS}
@@ -303,6 +354,10 @@ services:
     image: dotmac_sub-genieacs:1.2.13
     container_name: dotmac_sub_genieacs
     restart: unless-stopped
+    mem_limit: 2g
+    mem_reservation: 1g
+    cpus: 2.0
+    pids_limit: 384
     ports:
     - 7547:7547
     - 7557:7557
@@ -322,6 +377,10 @@ services:
     image: mongo:4.4
     container_name: dotmac_sub_genieacs_mongodb
     restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    pids_limit: 256
     environment:
       MONGO_INITDB_ROOT_USERNAME: genieacs
       MONGO_INITDB_ROOT_PASSWORD: ${GENIEACS_MONGODB_PASSWORD}
@@ -333,6 +392,10 @@ services:
     image: victoriametrics/victoria-metrics:v1.96.0
     container_name: dotmac_sub_victoriametrics
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    pids_limit: 64
     ports:
     - 8428:8428
     volumes:
@@ -346,6 +409,10 @@ services:
     image: grafana/loki:3.0.0
     container_name: dotmac_sub_loki
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    pids_limit: 96
     ports:
     - 3100:3100
     volumes:
@@ -362,8 +429,13 @@ services:
     image: grafana/promtail:3.0.0
     container_name: dotmac_sub_promtail
     restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 64
     volumes:
     - ./config/promtail/promtail-config.yml:/etc/promtail/config.yml:ro
+    - promtail_positions:/positions
     - /var/run/docker.sock:/var/run/docker.sock:ro
     - /var/lib/docker/containers:/var/lib/docker/containers:ro
     command: -config.file=/etc/promtail/config.yml
@@ -375,6 +447,10 @@ services:
     image: grafana/grafana:10.3.1
     container_name: dotmac_sub_grafana
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 96
     ports:
     - 3001:3000
     environment:
@@ -399,6 +475,10 @@ services:
     build: .
     container_name: dotmac_sub_bandwidth_poller
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 1.0
+    pids_limit: 96
     environment:
       DATABASE_URL: postgresql+psycopg://postgres:${POSTGRES_PASSWORD}@db:5432/dotmac_sub
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
@@ -445,6 +525,10 @@ services:
     image: quay.io/openbao/openbao:latest
     container_name: dotmac_sub_openbao
     restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 96
     ports:
     - 8200:8200
     environment:
@@ -460,7 +544,104 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
+  # Zabbix Monitoring Stack
+  zabbix-db:
+    image: postgres:16-alpine
+    container_name: dotmac_zabbix_db
+    restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.0
+    pids_limit: 128
+    environment:
+      POSTGRES_DB: zabbix
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+    volumes:
+    - zabbix_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zabbix"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  zabbix-server:
+    image: zabbix/zabbix-server-pgsql:7.0-alpine-latest
+    container_name: dotmac_zabbix_server
+    restart: unless-stopped
+    mem_limit: 1g
+    mem_reservation: 512m
+    cpus: 1.5
+    pids_limit: 256
+    depends_on:
+      zabbix-db:
+        condition: service_healthy
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+      ZBX_STARTPOLLERS: 10
+      ZBX_STARTPINGERS: 5
+    ports:
+    - 10051:10051
+    volumes:
+    - ./config/zabbix/alertscripts:/usr/lib/zabbix/alertscripts:ro
+    - ./config/zabbix/externalscripts:/usr/lib/zabbix/externalscripts:ro
+
+  zabbix-web:
+    image: zabbix/zabbix-web-nginx-pgsql:7.0-alpine-latest
+    container_name: dotmac_zabbix_web
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+    cpus: 0.5
+    pids_limit: 96
+    depends_on:
+    - zabbix-server
+    environment:
+      DB_SERVER_HOST: zabbix-db
+      POSTGRES_USER: zabbix
+      POSTGRES_PASSWORD: ${ZABBIX_DB_PASSWORD}
+      ZBX_SERVER_HOST: zabbix-server
+      PHP_TZ: Africa/Lagos
+    ports:
+    - 8085:8080
+
+  zabbix-agent:
+    image: zabbix/zabbix-agent2:7.0-alpine-latest
+    container_name: dotmac_zabbix_agent
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 64m
+    cpus: 0.5
+    pids_limit: 64
+    environment:
+      ZBX_SERVER_HOST: zabbix-server
+      ZBX_HOSTNAME: dotmac-app-server
+    volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    privileged: true
+
+  # vmagent for scraping Zabbix metrics into VictoriaMetrics
+  vmagent:
+    image: victoriametrics/vmagent:v1.96.0
+    container_name: dotmac_vmagent
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.5
+    pids_limit: 64
+    command:
+    - -promscrape.config=/etc/vmagent/config.yml
+    - -remoteWrite.url=http://victoriametrics:8428/api/v1/write
+    volumes:
+    - ./config/vmagent/config.yml:/etc/vmagent/config.yml:ro
+    depends_on:
+    - victoriametrics
+    - zabbix-server
+
 volumes:
+  zabbix_db_data: null
   openbao_data: null
   dotmac_sub_db_data: null
   nominatim_data: null
@@ -468,6 +649,7 @@ volumes:
   radius_db_data: null
   genieacs_mongodb_data: null
   victoriametrics_data: null
+  promtail_positions: null
   minio_data: null
   loki_data: null
   grafana_data: null
