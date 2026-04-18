@@ -961,13 +961,15 @@ def olt_init_tr069(
     request: Request,
     olt_id: str,
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Create or verify the linked ACS TR-069 profile on the OLT."""
+    from app.services.network.result_adapter import OperationResult
+
     olt = get_olt_or_none(db, olt_id)
     if not olt:
-        return RedirectResponse(
-            f"/admin/network/olts/{olt_id}?error=OLT+not+found", status_code=303
-        )
+        result = OperationResult.error("OLT not found")
+        result.redirect_url = f"/admin/network/olts/{olt_id}"
+        return result.to_response(request)
 
     ok, msg, _profile_id = (
         olt_tr069_admin_service.ensure_tr069_profile_for_linked_acs_audited(
@@ -975,10 +977,10 @@ def olt_init_tr069(
         )
     )
 
-    status = "notice" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?{status}={quote_plus(msg)}", status_code=303
-    )
+    result = OperationResult.ok(msg) if ok else OperationResult.error(msg)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    result.redirect_tab = "tr069"
+    return result.to_response(request)
 
 
 @router.post(
@@ -990,23 +992,21 @@ def olt_firmware_upgrade(
     olt_id: str,
     firmware_image_id: str = Form(""),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     """Trigger firmware upgrade on OLT via SSH."""
+    from app.services.network.result_adapter import OperationResult
+
     if not firmware_image_id:
-        msg = quote_plus("No firmware image selected")
-        return RedirectResponse(
-            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
-            status_code=303,
-        )
+        result = OperationResult.error("No firmware image selected")
+        result.redirect_url = f"/admin/network/olts/{olt_id}"
+        return result.to_response(request)
 
     ok, message = olt_operations_service.trigger_olt_firmware_upgrade(
         db, olt_id, firmware_image_id, request=request
     )
-    status = "success" if ok else "error"
-    return RedirectResponse(
-        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
-        status_code=303,
-    )
+    result = OperationResult.ok(message) if ok else OperationResult.error(message)
+    result.redirect_url = f"/admin/network/olts/{olt_id}"
+    return result.to_response(request)
 
 
 @router.get(
