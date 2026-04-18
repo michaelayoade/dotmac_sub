@@ -35,6 +35,7 @@ from app.models.network import (
     PonPort,
     ServicePortAllocation,
 )
+from app.services.network.olt_ssh_ont._common import normalize_fsp
 
 logging.basicConfig(
     level=logging.INFO,
@@ -145,8 +146,9 @@ def import_service_ports_for_olt(
     pon_ports = list(db.scalars(stmt).all())
 
     for pon_port in pon_ports:
-        fsp = pon_port.name
-        logger.info("  Reading service-ports from %s...", fsp)
+        fsp_raw = pon_port.name
+        fsp = normalize_fsp(fsp_raw)
+        logger.info("  Reading service-ports from %s...", fsp_raw)
 
         try:
             ok, msg, ports = get_service_ports(olt, fsp)

@@ -29,6 +29,28 @@ _SLOW_SEND_CHAR_DELAY = 0.1
 # Regex patterns for validation
 _FSP_RE = re.compile(r"^\d{1,2}/\d{1,2}/\d{1,3}$")
 _SERIAL_RE = re.compile(r"^[A-Za-z0-9\-]+$")
+# Common PON port name prefixes to strip (case-insensitive)
+_FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNORECASE)
+
+
+def normalize_fsp(fsp: str) -> str:
+    """Normalize FSP by stripping common port name prefixes.
+
+    Converts formats like:
+        - "pon-0/2/3" -> "0/2/3"
+        - "gpon-0/1/0" -> "0/1/0"
+        - "xgpon-0/4/1" -> "0/4/1"
+        - "0/2/3" -> "0/2/3" (unchanged)
+
+    Args:
+        fsp: Frame/Slot/Port string, possibly with prefix
+
+    Returns:
+        Normalized FSP without prefix
+    """
+    if not fsp:
+        return fsp
+    return _FSP_PREFIX_RE.sub("", fsp.strip())
 
 
 @dataclass
@@ -118,9 +140,18 @@ def _send_slow(
     channel.send("\n")
 
 
-def _validate_fsp(fsp: str) -> tuple[bool, str]:
-    """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1')."""
-    if not _FSP_RE.match(fsp):
+def _validate_fsp(fsp: str, *, allow_normalize: bool = True) -> tuple[bool, str]:
+    """Validate Frame/Slot/Port format is strictly numeric (e.g. '0/2/1').
+
+    Args:
+        fsp: Frame/Slot/Port string to validate
+        allow_normalize: If True, strip common prefixes before validation
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    check_fsp = normalize_fsp(fsp) if allow_normalize else fsp
+    if not _FSP_RE.match(check_fsp):
         return False, f"Invalid F/S/P format: {fsp!r} (expected digits/digits/digits)"
     return True, ""
 

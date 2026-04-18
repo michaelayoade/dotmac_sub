@@ -42,6 +42,14 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _FSP_PATTERN = re.compile(r"^(\d{1,2})/(\d{1,2})/(\d{1,3})$")
+_FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNORECASE)
+
+
+def _normalize_fsp(fsp: str) -> str:
+    """Normalize FSP by stripping common port name prefixes like 'pon-'."""
+    if not fsp:
+        return fsp
+    return _FSP_PREFIX_RE.sub("", fsp.strip())
 
 
 def _validate_fsp(fsp: str) -> tuple[bool, str]:
@@ -50,7 +58,8 @@ def _validate_fsp(fsp: str) -> tuple[bool, str]:
     Returns:
         Tuple of (is_valid, error_message).
     """
-    if not _FSP_PATTERN.match(fsp):
+    check_fsp = _normalize_fsp(fsp)
+    if not _FSP_PATTERN.match(check_fsp):
         return False, f"Invalid FSP format: {fsp!r} (expected digits/digits/digits)"
     return True, ""
 
@@ -59,7 +68,7 @@ def _get_interface_path(fsp: str) -> str:
     """Extract board/slot from FSP for interface command.
 
     Args:
-        fsp: Frame/Slot/Port (e.g., "0/2/1")
+        fsp: Frame/Slot/Port (e.g., "0/2/1" or "pon-0/2/1")
 
     Returns:
         Board/slot portion (e.g., "0/2")
@@ -67,7 +76,8 @@ def _get_interface_path(fsp: str) -> str:
     Raises:
         ValueError: If FSP format is invalid.
     """
-    match = _FSP_PATTERN.match(fsp)
+    normalized = _normalize_fsp(fsp)
+    match = _FSP_PATTERN.match(normalized)
     if not match:
         raise ValueError(f"Invalid FSP format: {fsp!r}")
     return f"{match.group(1)}/{match.group(2)}"
