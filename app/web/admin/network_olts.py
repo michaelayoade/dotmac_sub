@@ -815,6 +815,105 @@ def _get_authorize_redirect_url(olt_id: str, return_to: str) -> str:
     return f"/admin/network/olts/{olt_id}"
 
 
+@router.post(
+    "/olts/{olt_id}/provision-ont",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_provision_ont(
+    request: Request,
+    olt_id: str,
+    fsp: str = Form(""),
+    serial_number: str = Form(""),
+    profile_id: str = Form(""),
+    force_reauthorize: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Provision an ONT using the coordinated provisioning workflow.
+
+    This uses the ProvisioningCoordinator which handles:
+    1. OLT Registration (ont add, service-ports)
+    2. Management IP configuration
+    3. TR-069 profile binding on OLT
+    4. ACS device binding/discovery
+    5. Config push via ACS (WiFi, LAN, WAN)
+
+    Tries async (Celery) first, falls back to synchronous execution
+    if Celery/Redis is unavailable.
+
+    Args:
+        fsp: Frame/Slot/Port location (e.g., "0/1/0")
+        serial_number: ONT serial number
+        profile_id: Optional provisioning profile ID
+        force_reauthorize: If "true" or "1", delete any existing registration
+            before provisioning on the specified port.
+    """
+    from app.services.network.provisioning_coordinator import (
+        AsyncProvisioningResult,
+        provision_ont_resilient,
+    )
+    from app.services.network.result_adapter import OperationResult
+
+    if not fsp or not serial_number:
+        result = OperationResult.error("Missing port (FSP) or serial number")
+        result.redirect_url = f"/admin/network/olts/{olt_id}"
+        return result.to_response(request)
+
+    # Parse force_reauthorize checkbox value
+    force = str(force_reauthorize or "").lower() in ("true", "1", "on", "yes")
+    # Parse profile_id - empty string means no profile
+    resolved_profile_id = profile_id.strip() if profile_id else None
+
+    logger.info(
+        "provision_ont route: olt_id=%s fsp=%s serial=%s profile_id=%s force=%s",
+        olt_id,
+        fsp,
+        serial_number,
+        resolved_profile_id,
+        force,
+    )
+
+    try:
+        prov_result = provision_ont_resilient(
+            db,
+            olt_id,
+            fsp,
+            serial_number,
+            profile_id=resolved_profile_id,
+            force_reauthorize=force,
+            request=request,
+        )
+
+        # Handle both sync and async results
+        if isinstance(prov_result, AsyncProvisioningResult):
+            # Async queued result
+            if prov_result.queued:
+                op_result = OperationResult.queued(
+                    prov_result.message,
+                    operation_id=prov_result.operation_id,
+                    data={"correlation_key": prov_result.correlation_key},
+                )
+            else:
+                op_result = OperationResult.error(prov_result.message)
+        else:
+            # Sync ProvisioningResult
+            op_result = prov_result.to_operation_result()
+
+    except Exception as exc:
+        db.rollback()
+        logger.error(
+            "Failed to provision ONT olt_id=%s fsp=%s serial=%s: %s",
+            olt_id,
+            fsp,
+            serial_number,
+            exc,
+            exc_info=True,
+        )
+        op_result = OperationResult.error(f"Provisioning failed: {exc}")
+
+    op_result.redirect_url = f"/admin/network/olts/{olt_id}"
+    return op_result.to_response(request, default_redirect=f"/admin/network/olts/{olt_id}")
+
+
 # ---------------------------------------------------------------------------
 # TR-069 ACS profile management
 # ---------------------------------------------------------------------------

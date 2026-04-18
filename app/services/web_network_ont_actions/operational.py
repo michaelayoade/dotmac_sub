@@ -13,6 +13,12 @@ from starlette.requests import Request
 from app.models.network import OLTDevice, OntUnit
 from app.models.tr069 import Tr069CpeDevice
 from app.services.network.ont_actions import ActionResult
+from app.services.network.ont_status_adapter import (
+    OntStatusResult,
+)
+from app.services.network.ont_status_adapter import (
+    get_ont_status as get_adapter_status,
+)
 from app.services.web_network_ont_actions._common import (
     _config_snapshot_service,
     _display_olt_value,
@@ -618,7 +624,12 @@ def reconcile_operational_state(
 
 
 def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
-    """Fetch ONT config/state from OLT side via SSH-backed services."""
+    """Fetch ONT config/state from OLT side via SSH-backed services.
+
+    Uses the ont_status_adapter for unified status resolution (combining
+    SNMP polling data and TR-069 status), with live SSH queries for
+    detailed OLT-side configuration.
+    """
     ont, olt, fsp, ont_id_on_olt = _resolve_return_olt_context(db, ont_id)
     if not ont:
         return ActionResult(success=False, message="ONT not found")
@@ -635,22 +646,47 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
     service_ports_text = ""
 
     try:
-        from app.services.network.olt_ssh_ont import get_ont_status
+        # Use adapter for unified status (combines SNMP + TR-069 cached data)
+        adapter_status: OntStatusResult = get_adapter_status(
+            db, ont, include_optical=True
+        )
 
-        ok, msg, status = get_ont_status(olt, fsp, ont_id_on_olt)
-        if ok and status:
-            status_text = "\n".join(
-                [
-                    f"Serial Number: {_display_olt_value(status.serial_number)}",
-                    f"F/S/P: {fsp}",
-                    f"ONT-ID: {ont_id_on_olt}",
-                    f"Run State: {_display_olt_value(status.run_state)}",
-                    f"Config State: {_display_olt_value(status.config_state)}",
-                    f"Match State: {_display_olt_value(status.match_state)}",
-                ]
-            )
+        # Also fetch live OLT-side details via SSH for complete picture
+        from app.services.network.olt_ssh_ont import get_ont_status as get_ssh_status
+
+        ssh_ok, ssh_msg, ssh_status = get_ssh_status(olt, fsp, ont_id_on_olt)
+
+        if ssh_ok and ssh_status:
+            status_lines = [
+                f"Serial Number: {_display_olt_value(ssh_status.serial_number)}",
+                f"F/S/P: {fsp}",
+                f"ONT-ID: {ont_id_on_olt}",
+                f"Run State: {_display_olt_value(ssh_status.run_state)}",
+                f"Config State: {_display_olt_value(ssh_status.config_state)}",
+                f"Match State: {_display_olt_value(ssh_status.match_state)}",
+            ]
+            # Add unified status from adapter
+            status_lines.append(f"Effective Status: {adapter_status.online_status.value}")
+            status_lines.append(f"Status Source: {adapter_status.status_source.value}")
+            status_lines.append(f"ACS Status: {adapter_status.acs_status.value}")
+            if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
+                metrics = adapter_status.optical_metrics
+                if metrics.olt_rx_dbm is not None:
+                    status_lines.append(f"OLT RX Power: {metrics.olt_rx_dbm} dBm")
+                if metrics.onu_rx_dbm is not None:
+                    status_lines.append(f"ONU RX Power: {metrics.onu_rx_dbm} dBm")
+                if metrics.onu_tx_dbm is not None:
+                    status_lines.append(f"ONU TX Power: {metrics.onu_tx_dbm} dBm")
+            status_text = "\n".join(status_lines)
         else:
-            status_text = msg
+            # SSH failed but we may still have adapter status
+            status_lines = [
+                f"SSH Query: {ssh_msg}",
+                f"Effective Status: {adapter_status.online_status.value}",
+                f"Status Source: {adapter_status.status_source.value}",
+                f"ACS Status: {adapter_status.acs_status.value}",
+            ]
+            status_text = "\n".join(status_lines)
     except Exception as exc:
         logger.exception("Failed to read OLT ONT status for ONT %s", ont_id)
         status_text = f"Status read failed: {exc}"
@@ -702,7 +738,11 @@ def fetch_olt_side_config(db: Session, ont_id: str) -> ActionResult:
 
 
 def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
-    """Query the OLT directly for ONT registration state (GPON layer).
+    """Query ONT registration state using the unified status adapter.
+
+    Uses ont_status_adapter for unified status resolution (combining SNMP
+    polling data and TR-069 status), with live SSH query for GPON layer
+    details (run/config/match states).
 
     Returns a dict with success, message, and optional entry data.
     """
@@ -717,23 +757,55 @@ def fetch_olt_status(db: Session, ont_id: str) -> dict[str, Any]:
             "message": "ONT is missing a usable F/S/P or OLT ONT-ID.",
         }
 
-    from app.services.network.olt_ssh_ont import get_ont_status
+    # Get unified status from adapter (combines SNMP + TR-069)
+    adapter_status: OntStatusResult = get_adapter_status(db, ont, include_optical=True)
 
-    ok, msg, status = get_ont_status(olt, fsp, ont_id_on_olt)
-    if not ok or status is None:
-        return {"success": False, "message": msg}
+    # Also get live SSH status for GPON layer details
+    from app.services.network.olt_ssh_ont import get_ont_status as get_ssh_status
+
+    ssh_ok, ssh_msg, ssh_status = get_ssh_status(olt, fsp, ont_id_on_olt)
+
+    # Build response combining both sources
+    entry: dict[str, Any] = {
+        "fsp": fsp,
+        "ont_id": ont_id_on_olt,
+        # Unified status from adapter
+        "effective_status": adapter_status.online_status.value,
+        "status_source": adapter_status.status_source.value,
+        "acs_status": adapter_status.acs_status.value,
+    }
+
+    # Add SSH-based GPON layer details if available
+    if ssh_ok and ssh_status:
+        entry.update({
+            "run_state": ssh_status.run_state,
+            "config_state": ssh_status.config_state,
+            "match_state": ssh_status.match_state,
+            "serial_number": ssh_status.serial_number,
+        })
+    else:
+        entry.update({
+            "run_state": "unknown",
+            "config_state": "unknown",
+            "match_state": "unknown",
+            "serial_number": getattr(ont, "serial_number", None),
+            "ssh_error": ssh_msg,
+        })
+
+    # Add optical metrics from adapter
+    if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
+        metrics = adapter_status.optical_metrics
+        entry["onu_rx_signal_dbm"] = metrics.onu_rx_dbm
+        entry["olt_rx_signal_dbm"] = metrics.olt_rx_dbm
+        entry["onu_tx_signal_dbm"] = metrics.onu_tx_dbm
+        entry["optical_source"] = metrics.source
+    else:
+        # Fallback to cached values on ONT model
+        entry["onu_rx_signal_dbm"] = getattr(ont, "onu_rx_signal_dbm", None)
+        entry["olt_rx_signal_dbm"] = getattr(ont, "olt_rx_signal_dbm", None)
 
     return {
         "success": True,
-        "message": msg,
-        "entry": {
-            "run_state": status.run_state,
-            "config_state": status.config_state,
-            "match_state": status.match_state,
-            "serial_number": status.serial_number,
-            "fsp": fsp,
-            "ont_id": ont_id_on_olt,
-            "onu_rx_signal_dbm": getattr(ont, "onu_rx_signal_dbm", None),
-            "olt_rx_signal_dbm": getattr(ont, "olt_rx_signal_dbm", None),
-        },
+        "message": f"Status retrieved (source: {adapter_status.status_source.value})",
+        "entry": entry,
     }

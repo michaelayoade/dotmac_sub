@@ -17,12 +17,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.requests import Request
 
-from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
+from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice, OntUnit
 from app.services.credential_crypto import decrypt_credential
 from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_monitoring_devices import find_linked_network_device
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.network.ont_status_adapter import (
+    get_ont_status as get_adapter_status,
+)
+from app.services.network.serial_utils import (
+    normalize as normalize_serial,
+)
 from app.services.network.serial_utils import (
     search_candidates as serial_search_candidates,
 )
@@ -692,6 +698,21 @@ def get_ont_status_by_serial(
         "config_state": status.config_state,
         "match_state": status.match_state,
     }
+
+    # Try to find matching ONT record and get unified status from adapter
+    ont_record = _find_ont_by_serial_in_db(db, normalized_serial, olt.id)
+    if ont_record:
+        adapter_status = get_adapter_status(db, ont_record, include_optical=True)
+        payload["effective_status"] = adapter_status.online_status.value
+        payload["status_source"] = adapter_status.status_source.value
+        payload["acs_status"] = adapter_status.acs_status.value
+        if adapter_status.optical_metrics and adapter_status.optical_metrics.has_signal_data:
+            metrics = adapter_status.optical_metrics
+            payload["olt_rx_signal_dbm"] = metrics.olt_rx_dbm
+            payload["onu_rx_signal_dbm"] = metrics.onu_rx_dbm
+            payload["onu_tx_signal_dbm"] = metrics.onu_tx_dbm
+            payload["optical_source"] = metrics.source
+
     message = (
         f"ONT {normalized_serial} is registered on {found.fsp} as ONT-ID "
         f"{found.onu_id} ({payload['run_state']})."
@@ -710,6 +731,29 @@ def get_ont_status_by_serial(
         is_success=True,
     )
     return True, message, payload
+
+
+def _find_ont_by_serial_in_db(
+    db: Session, serial_number: str, olt_id: UUID
+) -> OntUnit | None:
+    """Find an ONT record in the database by serial number and OLT."""
+    normalized = normalize_serial(serial_number)
+    if not normalized:
+        return None
+
+    # Try exact match first
+    stmt = select(OntUnit).where(
+        OntUnit.olt_device_id == olt_id,
+        OntUnit.is_active.is_(True),
+    )
+    onts = db.scalars(stmt).all()
+
+    for ont in onts:
+        ont_serial = normalize_serial(getattr(ont, "serial_number", None))
+        if ont_serial and (ont_serial == normalized or normalized in ont_serial or ont_serial in normalized):
+            return ont
+
+    return None
 
 
 def backup_running_config_ssh(

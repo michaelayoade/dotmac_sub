@@ -29,6 +29,7 @@ from app.models.network import (
 )
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.notification_adapter import broadcast_websocket, notify
 from app.services.network.ont_assignment_alignment import (
     align_ont_assignment_to_authoritative_fsp,
 )
@@ -958,6 +959,44 @@ def authorize_autofind_ont(
             next((step.step for step in result.steps if not step.success), None),
             failure_detail,
         )
+
+        # Send operator notifications
+        try:
+            olt_name = getattr(olt, "name", olt_id) if olt else olt_id
+            if result.success:
+                broadcast_websocket(
+                    event_type="ont_authorization_success",
+                    title="ONT Authorization Successful",
+                    message=f"ONT {serial_number} authorized on {olt_name} port {fsp}",
+                    metadata={
+                        "olt_id": olt_id,
+                        "olt_name": olt_name,
+                        "fsp": fsp,
+                        "serial_number": serial_number,
+                        "ont_unit_id": result.ont_unit_id,
+                        "duration_ms": result.duration_ms,
+                    },
+                )
+            else:
+                notify.alert_operators(
+                    title="ONT Authorization Failed",
+                    message=f"ONT {serial_number} authorization failed on {olt_name} port {fsp}: {failure_detail or result.message}",
+                    severity="warning",
+                    metadata={
+                        "olt_id": olt_id,
+                        "olt_name": olt_name,
+                        "fsp": fsp,
+                        "serial_number": serial_number,
+                        "failure_detail": failure_detail,
+                    },
+                )
+        except Exception as notify_exc:
+            logger.warning(
+                "Failed to send authorization notification for ONT %s: %s",
+                serial_number,
+                notify_exc,
+            )
+
         return result
 
     def _fail(
@@ -1006,6 +1045,48 @@ def authorize_autofind_ont(
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         return _fail("Authorize ONT on OLT", "OLT not found")
+
+    # Validate authorization configuration before proceeding
+    validate_config_started_at = monotonic()
+    from app.services.network.config_validator_adapter import (
+        AuthorizationConfig,
+        validate_authorization_config,
+    )
+
+    auth_config_validation = validate_authorization_config(
+        AuthorizationConfig(
+            serial_number=serial_number,
+            fsp=fsp,
+            force_reauthorize=force_reauthorize,
+        ),
+        db=db,
+        olt=olt,
+    )
+    if not auth_config_validation.is_valid:
+        error_msgs = "; ".join(
+            f"{e.field}: {e.message}" for e in auth_config_validation.errors
+        )
+        return _fail(
+            "Validate authorization config",
+            f"Configuration validation failed: {error_msgs}",
+            step_started_at=validate_config_started_at,
+        )
+    # Log warnings but don't block
+    for warning in auth_config_validation.warnings:
+        logger.warning(
+            "Authorization config warning for %s on %s/%s: %s - %s",
+            serial_number,
+            olt.name,
+            fsp,
+            warning.field,
+            warning.message,
+        )
+    _append_step(
+        "Validate authorization config",
+        True,
+        "Authorization configuration is valid",
+        step_started_at=validate_config_started_at,
+    )
 
     # Check if OLT accepts new ONT authorizations
     from app.services.network.olt_lifecycle import is_olt_accepting_new_onts

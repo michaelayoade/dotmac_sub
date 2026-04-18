@@ -28,6 +28,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
 from app.services.network._common import NasTarget
+from app.services.notification_adapter import broadcast_websocket, notify
 from app.services.network.ont_provisioning.context import (
     OltContext as OltContext,
 )
@@ -2224,6 +2225,47 @@ def provision_with_reconciliation(
         )
 
     _record_step(db, ctx.ont, "provision_reconciled", result)
+
+    # Send operator notifications for provisioning events
+    try:
+        olt_name = getattr(ctx.olt, "name", None) or "OLT"
+        if result.success:
+            broadcast_websocket(
+                event_type="ont_provisioning_success",
+                title="ONT Provisioning Successful",
+                message=f"ONT {ctx.ont.serial_number} provisioned on {olt_name} port {ctx.fsp}",
+                metadata={
+                    "ont_id": ont_id,
+                    "serial_number": ctx.ont.serial_number,
+                    "olt_name": olt_name,
+                    "fsp": ctx.fsp,
+                    "duration_ms": result.duration_ms,
+                    "steps_completed": len(exec_result.steps_completed),
+                },
+            )
+        else:
+            result_data = result.data or {}
+            notify.alert_operators(
+                title="ONT Provisioning Failed",
+                message=f"ONT {ctx.ont.serial_number} provisioning failed on {olt_name}: {result.message}",
+                severity="error",
+                metadata={
+                    "ont_id": ont_id,
+                    "serial_number": ctx.ont.serial_number,
+                    "olt_name": olt_name,
+                    "fsp": ctx.fsp,
+                    "steps_failed": result_data.get("steps_failed", []),
+                    "errors": result_data.get("errors", []),
+                    "rollback_performed": result_data.get("rollback_performed", False),
+                },
+            )
+    except Exception as notify_exc:
+        logger.warning(
+            "Failed to send provisioning notification for ONT %s: %s",
+            ctx.ont.serial_number,
+            notify_exc,
+        )
+
     return result
 
 
