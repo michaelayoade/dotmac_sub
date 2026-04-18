@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 
 from sqlalchemy import text
 
@@ -17,6 +18,15 @@ logger = logging.getLogger(__name__)
 # Advisory lock keys for preventing concurrent task runs
 _PING_REFRESH_LOCK_KEY = 70420701
 _SNMP_REFRESH_LOCK_KEY = 70420702
+_DEFAULT_MAX_WORKERS = 4
+
+
+def _network_monitoring_max_workers() -> int:
+    try:
+        configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", ""))
+    except ValueError:
+        configured = _DEFAULT_MAX_WORKERS
+    return max(1, min(configured or _DEFAULT_MAX_WORKERS, 12))
 
 
 @celery_app.task(name="app.tasks.network_monitoring.refresh_core_device_ping")
@@ -49,7 +59,7 @@ def refresh_core_device_ping() -> dict[str, int]:
             session,
             devices,
             include_snmp=False,
-            max_workers=12,
+            max_workers=_network_monitoring_max_workers(),
         )
         session.commit()
         return summary

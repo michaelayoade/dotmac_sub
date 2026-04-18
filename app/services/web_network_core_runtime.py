@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -23,6 +24,15 @@ from app.models.network_monitoring import (
 from app.services import ping as ping_service
 
 logger = logging.getLogger(__name__)
+
+
+def _bounded_max_workers(max_workers: int) -> int:
+    try:
+        configured = int(os.getenv("NETWORK_MONITORING_MAX_WORKERS", ""))
+    except ValueError:
+        configured = 0
+    effective = configured or max_workers
+    return max(1, min(effective, 12))
 
 
 @dataclass
@@ -63,7 +73,7 @@ def refresh_devices_health(
     if not targets:
         return totals
 
-    workers = max(1, min(max_workers, len(targets)))
+    workers = max(1, min(_bounded_max_workers(max_workers), len(targets)))
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = [
             pool.submit(_refresh_device_health_worker, device_id, do_ping, do_snmp)
