@@ -43,6 +43,15 @@ from app.services.network.serial_utils import (
 
 logger = logging.getLogger(__name__)
 
+
+def _looks_like_uuid(value: object) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
 # Authorization workflow constants — configurable via DomainSettings (provisioning domain).
 # Module-level variables kept for backward compatibility with test patching.
 from app.services.network.provisioning_settings import (
@@ -957,6 +966,15 @@ def authorize_autofind_ont(
     if not olt:
         return _fail("Authorize ONT on OLT", "OLT not found")
 
+    # Acquire advisory lock to prevent concurrent authorization of same serial
+    from app.services.locking import serial_advisory_lock
+
+    if not serial_advisory_lock(db, serial_number, nowait=True):
+        return _fail(
+            "Acquire serial lock",
+            f"Another authorization for {serial_number} is already in progress",
+        )
+
     # Check if OLT accepts new ONT authorizations
     from app.services.network.olt_lifecycle import is_olt_accepting_new_onts
 
@@ -1633,8 +1651,12 @@ def authorize_autofind_ont_and_provision_network(
         )
 
     def _needs_deferred_service_config() -> bool:
-        ont = db.get(OntUnit, result.ont_unit_id)
-        olt = get_olt_or_none(db, olt_id)
+        ont = (
+            db.get(OntUnit, result.ont_unit_id)
+            if _looks_like_uuid(result.ont_unit_id)
+            else None
+        )
+        olt = get_olt_or_none(db, olt_id) if _looks_like_uuid(olt_id) else None
         profile = getattr(ont, "provisioning_profile", None) if ont else None
         if profile is None and ont and getattr(ont, "provisioning_profile_id", None):
             from app.models.network import OntProvisioningProfile
@@ -1740,7 +1762,8 @@ def authorize_autofind_ont_and_provision_network(
         success=True,
         status="success",
         message=(
-            "ONT authorization and OLT network provisioning completed."
+            "ONT authorization and OLT network provisioning completed. "
+            "Next action: configure ONT."
         ),
         provisioning_status=OntProvisioningStatus.provisioned,
     )

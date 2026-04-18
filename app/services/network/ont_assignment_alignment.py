@@ -70,6 +70,7 @@ def align_ont_assignment_to_authoritative_fsp(
             OntAssignment.assigned_at.desc(),
             OntAssignment.created_at.desc(),
         )
+        .with_for_update()
     ).first()
     if active_assignment is not None:
         updated = active_assignment.pon_port_id != pon_port.id
@@ -91,6 +92,7 @@ def align_ont_assignment_to_authoritative_fsp(
             OntAssignment.created_at.desc(),
             OntAssignment.assigned_at.desc(),
         )
+        .with_for_update()
     ).first()
     if latest_assignment is not None:
         latest_assignment.pon_port_id = pon_port.id

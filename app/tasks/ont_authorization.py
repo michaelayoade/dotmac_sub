@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 @celery_app.task(name="app.tasks.ont_authorization.run_post_authorization_follow_up")
 @idempotent_task(
-    key_func=lambda operation_id, ont_unit_id, **kw: f"{ont_unit_id}:{operation_id}"
+    key_func=lambda operation_id, ont_unit_id, **kw: f"{ont_unit_id}"
 )
 def run_post_authorization_follow_up_task(
     operation_id: str,
@@ -79,7 +80,7 @@ def run_post_authorization_follow_up_task(
 @celery_app.task(name="app.tasks.ont_authorization.run_authorize_autofind_ont")
 @idempotent_task(
     key_func=lambda operation_id, olt_id, fsp, serial_number, **kw: (
-        f"{olt_id}:{fsp}:{serial_number}:{operation_id}"
+        f"{olt_id}:{fsp}:{serial_number}"
     )
 )
 def run_authorize_autofind_ont_task(
@@ -168,7 +169,9 @@ def run_authorize_autofind_ont_task(
                 output_payload=payload,
             )
             # Notify UI of success with ONT link info
-            published_status = "warning" if result.status == "warning" else "succeeded"
+            published_status: Literal["succeeded", "warning"] = (
+                "warning" if result.status == "warning" else "succeeded"
+            )
             publish_operation_status(
                 operation_id,
                 published_status,

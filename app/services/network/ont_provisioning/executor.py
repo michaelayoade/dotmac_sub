@@ -16,6 +16,8 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from sqlalchemy.orm import Session
+
 from app.services.network.olt_ssh_session import (
     CliMode,
     OltSession,
@@ -115,11 +117,18 @@ class ProvisioningExecutionResult:
     compensation_log: list[CompensationEntry] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
-    def rollback(self, olt: OLTDevice) -> list[tuple[str, bool, str]]:
+    def rollback(
+        self,
+        olt: OLTDevice,
+        ont_unit_id: str | None = None,
+        db: Session | None = None,
+    ) -> list[tuple[str, bool, str]]:
         """Execute compensation actions in reverse order.
 
         Args:
             olt: The OLT device to connect to.
+            ont_unit_id: Optional ONT unit ID for failure persistence.
+            db: Optional database session for persisting failures.
 
         Returns:
             List of (step_name, success, message) tuples for each compensation.
@@ -128,6 +137,7 @@ class ProvisioningExecutionResult:
             return []
 
         results: list[tuple[str, bool, str]] = []
+        failed_entries: list[tuple[CompensationEntry, str]] = []
 
         try:
             with olt_session(olt) as session:
@@ -153,6 +163,9 @@ class ProvisioningExecutionResult:
                                     "resource_id": entry.resource_id,
                                 },
                             )
+                            failed_entries.append(
+                                (entry, "Compensation command returned failure")
+                            )
                     except Exception as exc:
                         logger.error(
                             "Rollback error: %s - %s: %s",
@@ -166,6 +179,7 @@ class ProvisioningExecutionResult:
                             },
                         )
                         results.append((entry.step_name, False, str(exc)))
+                        failed_entries.append((entry, str(exc)))
 
         except Exception as exc:
             logger.error(
@@ -177,6 +191,14 @@ class ProvisioningExecutionResult:
             for entry in self.compensation_log:
                 if not any(r[0] == entry.step_name for r in results):
                     results.append((entry.step_name, False, f"Connection failed: {exc}"))
+                    failed_entries.append((entry, f"Connection failed: {exc}"))
+
+        # Persist failed compensation entries and emit alert
+        if failed_entries and db is not None:
+            _persist_compensation_failures(
+                db, olt, ont_unit_id, failed_entries, operation_type="provisioning"
+            )
+            _emit_compensation_failure_alert(db, olt, ont_unit_id, failed_entries)
 
         return results
 
@@ -287,8 +309,11 @@ def execute_delta(
     # Execute with single SSH session
     try:
         with olt_session(olt) as session:
+            # Track successfully deleted indices for dependency verification
+            deleted_indices: set[int] = set()
+
             # Execute service port changes
-            for sp_delta in delta.service_port_deltas:
+            for idx, sp_delta in enumerate(delta.service_port_deltas):
                 if sp_delta.action == ProvisioningAction.NOOP:
                     continue
 
@@ -303,10 +328,29 @@ def execute_delta(
                             f"Failed to delete service-port {sp_delta.actual.index}"
                         )
                         return result
+                    # Track successful deletion for dependency verification
+                    deleted_indices.add(idx)
 
                 elif sp_delta.action == ProvisioningAction.CREATE:
                     if not sp_delta.desired:
                         continue
+                    # Verify dependent DELETE succeeded before CREATE
+                    if sp_delta.depends_on_delete_index is not None:
+                        if sp_delta.depends_on_delete_index not in deleted_indices:
+                            result.message = (
+                                f"Cannot create service-port VLAN {sp_delta.desired.vlan_id}: "
+                                f"required DELETE at index {sp_delta.depends_on_delete_index} did not complete"
+                            )
+                            result.steps_failed.append(
+                                f"create_service_port_vlan_{sp_delta.desired.vlan_id}"
+                            )
+                            result.errors.append(result.message)
+                            return result
+                        # Small delay after dependent DELETE for OLT state sync
+                        import time
+
+                        time.sleep(0.5)
+
                     step_result = _execute_create_service_port(
                         session,
                         desired.fsp,
@@ -721,3 +765,91 @@ def _execute_tr069_bind(
     result.steps_failed.append("bind_tr069")
     result.errors.append(f"Failed to bind TR-069 profile: {cmd_result.message}")
     return False
+
+
+# ---------------------------------------------------------------------------
+# Compensation Failure Persistence
+# ---------------------------------------------------------------------------
+
+
+def _persist_compensation_failures(
+    db: Session,
+    olt: OLTDevice,
+    ont_unit_id: str | None,
+    failed_entries: list[tuple[CompensationEntry, str]],
+    operation_type: str = "provisioning",
+) -> None:
+    """Persist failed compensation entries to database for manual resolution.
+
+    Args:
+        db: Database session.
+        olt: The OLT device.
+        ont_unit_id: Optional ONT unit ID.
+        failed_entries: List of (CompensationEntry, error_message) tuples.
+        operation_type: Type of operation (provisioning, deprovision, reconciliation).
+    """
+    from app.models.compensation_failure import CompensationFailure, CompensationStatus
+
+    for entry, error_message in failed_entries:
+        failure = CompensationFailure(
+            ont_unit_id=ont_unit_id,
+            olt_device_id=str(olt.id),
+            operation_type=operation_type,
+            step_name=entry.step_name,
+            undo_commands=entry.undo_commands,
+            description=entry.description,
+            resource_id=entry.resource_id,
+            interface_path=entry.interface_path,
+            error_message=error_message,
+            status=CompensationStatus.pending,
+        )
+        db.add(failure)
+
+    try:
+        db.flush()
+        logger.info(
+            "Persisted %d compensation failure(s) for ONT %s on OLT %s",
+            len(failed_entries),
+            ont_unit_id,
+            olt.name,
+        )
+    except Exception as exc:
+        logger.error(
+            "Failed to persist compensation failures: %s",
+            exc,
+            extra={"event": "compensation_failure_persistence_error"},
+        )
+
+
+def _emit_compensation_failure_alert(
+    db: Session,
+    olt: OLTDevice,
+    ont_unit_id: str | None,
+    failed_entries: list[tuple[CompensationEntry, str]],
+) -> None:
+    """Emit event for compensation failures to alert operators.
+
+    Args:
+        db: Database session.
+        olt: The OLT device.
+        ont_unit_id: Optional ONT unit ID.
+        failed_entries: List of (CompensationEntry, error_message) tuples.
+    """
+    from app.services.events import emit_event
+    from app.services.events.types import EventType
+
+    step_names = [entry.step_name for entry, _ in failed_entries]
+    emit_event(
+        db,
+        EventType.network_alert,
+        {
+            "alert_type": "compensation_failure",
+            "olt_id": str(olt.id),
+            "olt_name": olt.name,
+            "ont_unit_id": ont_unit_id,
+            "failed_steps": step_names,
+            "failure_count": len(failed_entries),
+            "message": f"Provisioning rollback failed for {len(failed_entries)} step(s): {', '.join(step_names)}",
+        },
+        actor="system",
+    )

@@ -102,8 +102,27 @@ def resolve_policy(olt: OLTDevice) -> OltSshPolicy:
             return _POLICIES["huawei_ma5800"]
         if "ma5600" in model:
             return _POLICIES["huawei_ma5600"]
+        # Unknown Huawei model - use MA5800 policy as fallback
+        logger.warning(
+            "Unknown Huawei model '%s', using MA5800 SSH policy as fallback",
+            olt.model,
+        )
+        return _POLICIES["huawei_ma5800"]
+
+    if vendor == "zte":
+        raise ValueError(
+            f"ZTE OLT SSH not implemented. Model: {olt.model!r}. "
+            "Consider SNMP or NETCONF for this vendor."
+        )
+    if vendor == "nokia":
+        raise ValueError(
+            f"Nokia OLT SSH not implemented. Model: {olt.model!r}. "
+            "Consider SNMP or NETCONF for this vendor."
+        )
+
     raise ValueError(
-        f"No SSH driver policy found for vendor={olt.vendor!r}, model={olt.model!r}"
+        f"No SSH policy for vendor={olt.vendor!r}, model={olt.model!r}. "
+        "Supported vendors: Huawei (MA5608T, MA5800, MA5600)"
     )
 
 

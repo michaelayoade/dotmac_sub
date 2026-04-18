@@ -2,7 +2,38 @@
 
 from __future__ import annotations
 
-_CREDENTIAL_KEYWORDS = ("password", "secret", "Password")
+# Keywords to mask in command strings for safe logging
+# Includes various case variants and credential-related terms
+_CREDENTIAL_KEYWORDS = (
+    # Core - lowercase, title, uppercase
+    "password",
+    "Password",
+    "PASSWORD",
+    "secret",
+    "Secret",
+    "SECRET",
+    # Keys and tokens
+    "key",
+    "Key",
+    "KEY",
+    "token",
+    "Token",
+    "TOKEN",
+    # Auth
+    "authorization",
+    "credential",
+    # WiFi
+    "passphrase",
+    "psk",
+    "PSK",
+    "pre-shared-key",
+    # PPPoE
+    "pppoe-password",
+    "ppp-password",
+    # SNMP
+    "community",
+    "Community",
+)
 
 
 def mask_credentials(cmd: str) -> str:

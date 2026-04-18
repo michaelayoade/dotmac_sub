@@ -69,6 +69,15 @@ def persist_authorized_ont_inventory(
             is_active=True,
         )
         db.add(ont)
+    else:
+        # Lock existing ONT before modification to prevent concurrent updates
+        ont = db.scalars(
+            select(OntUnit)
+            .where(OntUnit.id == ont.id)
+            .with_for_update()
+        ).first()
+        if ont is None:
+            return  # ONT was deleted concurrently
 
     ont.is_active = True
     ont.olt_device_id = olt.id

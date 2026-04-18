@@ -102,6 +102,10 @@ from app.models.communication_log import (  # noqa: F401
     CommunicationLog,
     CommunicationStatus,
 )
+from app.models.compensation_failure import (  # noqa: F401
+    CompensationFailure,
+    CompensationStatus,
+)
 from app.models.connector import (  # noqa: F401
     ConnectorAuthType,
     ConnectorConfig,

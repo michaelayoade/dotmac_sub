@@ -158,6 +158,7 @@ class ServicePortDelta:
     desired: DesiredServicePort | None
     actual: ActualServicePort | None
     message: str = ""
+    depends_on_delete_index: int | None = None  # Index of DELETE delta this CREATE depends on
 
 
 @dataclass

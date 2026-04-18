@@ -102,6 +102,11 @@ class EventType(enum.Enum):
     ont_service_port_deleted = "ont.service_port_deleted"
     ont_tr069_bound = "ont.tr069_bound"
 
+    # ONT credential changes (audit events)
+    ont_pppoe_credentials_set = "ont.pppoe_credentials_set"
+    ont_wifi_password_set = "ont.wifi_password_set"
+    ont_wifi_config_updated = "ont.wifi_config_updated"
+
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"

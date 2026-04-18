@@ -57,6 +57,22 @@ def set_wifi_password(
         if ont:
             ont.wifi_password = encrypt_credential(password)
             db.flush()
+        # Emit audit event for credential change
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        emit_event(
+            db,
+            EventType.ont_wifi_password_set,
+            {
+                "ont_id": ont_id,
+                "ont_serial": ont.serial_number if ont else None,
+                "password_set": True,
+                "method": "tr069",
+                "result": "success",
+            },
+            actor=actor_name_from_request(request),
+        )
     _log_action_audit(
         db,
         request=request,
@@ -113,6 +129,26 @@ def set_wifi_config(
                 "channel": channel,
                 "security_mode": security_mode,
             },
+        )
+        # Emit audit event for WiFi config change
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        emit_event(
+            db,
+            EventType.ont_wifi_config_updated,
+            {
+                "ont_id": ont_id,
+                "ont_serial": ont.serial_number if ont else None,
+                "enabled": enabled,
+                "ssid_updated": ssid is not None,
+                "password_set": password is not None,
+                "channel": channel,
+                "security_mode": security_mode,
+                "method": "tr069",
+                "result": "success",
+            },
+            actor=actor_name_from_request(request),
         )
         result = _intent_saved_result(result)
     _log_action_audit(
@@ -298,6 +334,7 @@ def set_pppoe_credentials(
         initiated_by=initiated_by,
     )
     if result.success:
+        ont = None
         try:
             ont = network_service.ont_units.get_including_inactive(
                 db=db, entity_id=ont_id
@@ -317,6 +354,25 @@ def set_pppoe_credentials(
                 "instance_index": instance_index,
                 "wan_vlan": wan_vlan,
             },
+        )
+        # Emit audit event for PPPoE credential change
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        emit_event(
+            db,
+            EventType.ont_pppoe_credentials_set,
+            {
+                "ont_id": ont_id,
+                "ont_serial": ont.serial_number if ont else None,
+                "username_set": bool(username),
+                "password_set": bool(password),
+                "instance_index": instance_index,
+                "wan_vlan": wan_vlan,
+                "method": "tr069",
+                "result": "success",
+            },
+            actor=actor_name_from_request(request),
         )
         result = _intent_saved_result(result)
     waiting = getattr(result, "waiting", False)
@@ -353,6 +409,8 @@ def configure_management_ip(
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if ont is None:
+        return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
     return configure_ont_iphost(
@@ -375,6 +433,8 @@ def bind_tr069_profile(db: Session, ont_id: str, profile_id: int) -> tuple[bool,
     from app.services.web_network_service_ports import _resolve_ont_olt_context
 
     ont, olt, fsp, olt_ont_id = _resolve_ont_olt_context(db, ont_id)
+    if ont is None:
+        return False, "ONT not found"
     if not olt or not fsp or olt_ont_id is None:
         return False, "Cannot resolve OLT context for this ONT"
     ok, message = bind_tr069_server_profile(olt, fsp, olt_ont_id, profile_id)

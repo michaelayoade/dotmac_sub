@@ -87,6 +87,8 @@ def compute_delta(
         elif match_result == ServicePortMatchResult.PARTIAL_MATCH:
             # Port exists but with different tag_transform - needs recreation
             # Note: This is a rare case; typically tag_transform matches
+            # Track the DELETE delta index so CREATE can verify DELETE succeeded
+            delete_delta_index = len(delta.service_port_deltas)
             delta.service_port_deltas.append(
                 ServicePortDelta(
                     action=ProvisioningAction.DELETE,
@@ -102,6 +104,7 @@ def compute_delta(
                     desired=desired_port,
                     actual=None,
                     message=f"Create service-port VLAN {desired_port.vlan_id} GEM {desired_port.gem_index}",
+                    depends_on_delete_index=delete_delta_index,
                 )
             )
             if matched_actual:

@@ -206,3 +206,76 @@ def lock_for_update_or_raise(
     if entity is None:
         raise HTTPException(status_code=404, detail=not_found_message)
     return entity
+
+
+def serial_advisory_lock(
+    db: Session,
+    serial_number: str,
+    *,
+    nowait: bool = False,
+) -> bool:
+    """Acquire PostgreSQL advisory lock for ONT serial number.
+
+    Uses hash-based key to prevent concurrent authorization of same serial.
+    Lock is released on commit/rollback.
+
+    Args:
+        db: SQLAlchemy session.
+        serial_number: ONT serial number to lock.
+        nowait: If True, return False immediately if lock unavailable.
+
+    Returns:
+        True if lock was acquired, False if nowait=True and lock unavailable.
+
+    Note:
+        Falls back to always returning True on non-PostgreSQL databases
+        (e.g., SQLite in tests) where advisory locks are not supported.
+    """
+    import hashlib
+
+    from sqlalchemy import text
+
+    # Normalize serial number for consistent hashing
+    normalized = serial_number.strip().upper().replace("-", "")
+    hash_bytes = hashlib.sha256(normalized.encode()).digest()[:8]
+    lock_key = int.from_bytes(hash_bytes, byteorder="big", signed=True)
+
+    # Check if we're using PostgreSQL (advisory locks only work there)
+    dialect_name = db.bind.dialect.name if db.bind else ""
+    if dialect_name != "postgresql":
+        # SQLite or other databases don't support advisory locks
+        # Return True to allow operation to proceed (no locking in tests)
+        logger.debug(
+            "Advisory lock skipped for %s (non-PostgreSQL database: %s)",
+            serial_number,
+            dialect_name,
+        )
+        return True
+
+    try:
+        if nowait:
+            result = db.execute(
+                text("SELECT pg_try_advisory_xact_lock(:key)"),
+                {"key": lock_key},
+            )
+            acquired = bool(result.scalar())
+            if not acquired:
+                logger.debug(
+                    "Advisory lock not available for serial %s (key=%d)",
+                    serial_number,
+                    lock_key,
+                )
+            return acquired
+        else:
+            db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key})
+            return True
+    except OperationalError as exc:
+        # Handle case where advisory lock function doesn't exist
+        error_msg = str(exc).lower()
+        if "no such function" in error_msg or "pg_try_advisory" in error_msg:
+            logger.debug(
+                "Advisory lock function not available, skipping lock for %s",
+                serial_number,
+            )
+            return True
+        raise
