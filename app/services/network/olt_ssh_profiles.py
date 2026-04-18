@@ -277,6 +277,100 @@ def get_tr069_server_profiles(
         transport.close()
 
 
+def ensure_wan_srvprofile(
+    olt: OLTDevice,
+    *,
+    profile_id: int,
+    profile_name: str,
+    vlan_id: int,
+) -> tuple[bool, str]:
+    """Ensure the Huawei ONT WAN profile used by ``ont wan-config`` exists.
+
+    The PPPoE VLAN is configured per ONT by ``ont ipconfig ... pppoe vlan``.
+    The WAN profile controls routed mode and NAT for the WAN index.
+    """
+    from app.services.network import olt_ssh as core
+
+    def _run_slow(command: str) -> str:
+        from app.services.network.olt_ssh_ont._common import _send_slow
+
+        logger.debug("OLT slow command: %r", command)
+        _send_slow(channel, command)
+        out = core._read_until_prompt(
+            channel,
+            rf"{config_prompt}|<cr>|{core._HUAWEI_OPTIONAL_ARG_PROMPT}",
+            timeout_sec=12,
+        )
+        if core._needs_huawei_command_confirm(out):
+            channel.send("\n")
+            out = core._read_until_prompt(channel, config_prompt, timeout_sec=12)
+        return out
+
+    if profile_id < 1:
+        return False, "WAN service profile ID must be positive."
+    if vlan_id < 1 or vlan_id > 4094:
+        return False, "WAN service profile VLAN must be between 1 and 4094."
+    if not _TR069_PROFILE_NAME_RE.match(profile_name):
+        return (
+            False,
+            "Invalid profile name (alphanumeric, dashes, dots, spaces, max 64 chars)",
+        )
+
+    try:
+        transport, channel, _policy = core._open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+
+    try:
+        channel.send("enable\n")
+        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+
+        config_prompt = r"[#)]\s*$"
+        core._run_huawei_cmd(channel, "config", prompt=config_prompt)
+
+        display_cmd = f"display ont wan-profile profile-id {profile_id}"
+        current = core._run_huawei_cmd(channel, display_cmd, prompt=config_prompt)
+        current_lower = current.lower()
+        if not core.is_error_output(current) and (
+            str(profile_id) in current_lower or profile_name.lower() in current_lower
+        ):
+            core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            return True, f"ONT WAN profile {profile_id} already exists."
+
+        create_cmd = f'ont wan-profile profile-id {profile_id}'
+        output = _run_slow(create_cmd)
+        if core.is_error_output(output):
+            core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+            return False, f"OLT rejected ONT WAN profile create: {output.strip()[-200:]}"
+
+        commands = [
+            "connection-type route",
+            "nat enable",
+            "quit",
+        ]
+        for cmd in commands:
+            output = _run_slow(cmd)
+            if core.is_error_output(output):
+                core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+                return False, f"OLT rejected '{cmd}': {output.strip()[-200:]}"
+
+        verify = core._run_huawei_cmd(channel, display_cmd, prompt=config_prompt)
+        core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+        if core.is_error_output(verify):
+            return False, f"ONT WAN profile verification failed: {verify.strip()[-200:]}"
+        return True, f"ONT WAN profile {profile_id} ready for PPPoE VLAN {vlan_id}."
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error ensuring WAN service profile on OLT %s: %s",
+            olt.name,
+            exc,
+            exc_info=True,
+        )
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
 def create_tr069_server_profile(
     olt: OLTDevice,
     *,

@@ -18,6 +18,10 @@ from app.models.network import (
     PortStatus,
     PortType,
     SplitterPortType,
+    VlanMode,
+    WanConnectionType,
+    WanServiceProvisioningStatus,
+    WanServiceType,
 )
 
 
@@ -429,6 +433,7 @@ class PonPortFields(BaseModel):
     olt_id: UUID
     olt_card_port_id: UUID | None = None
     port_number: int | None = None
+    max_ont_capacity: int | None = Field(default=None, ge=1, le=1024)
     notes: str | None = None
     is_active: bool = True
 
@@ -456,6 +461,7 @@ class PonPortUpdate(BaseModel):
     olt_card_port_id: UUID | None = None
     name: str | None = Field(default=None, min_length=1, max_length=120)
     port_number: int | None = None
+    max_ont_capacity: int | None = Field(default=None, ge=1, le=1024)
     notes: str | None = None
     is_active: bool | None = None
 
@@ -553,6 +559,9 @@ class OntUnitUpdate(BaseModel):
     lan_dhcp_enabled: bool | None = None
     lan_dhcp_start: str | None = Field(default=None, max_length=64)
     lan_dhcp_end: str | None = Field(default=None, max_length=64)
+    # WiFi desired configuration persisted on ONT.
+    wifi_ssid: str | None = Field(default=None, max_length=64)
+    wifi_password: str | None = Field(default=None, max_length=120)
 
 
 class OntUnitRead(OntUnitBase):
@@ -1172,5 +1181,84 @@ class OltSfpModuleRead(OltSfpModuleBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
+    created_at: datetime
+    updated_at: datetime
+
+
+# ---------------------------------------------------------------------------
+# OntWanServiceInstance Schemas
+# ---------------------------------------------------------------------------
+
+
+class OntWanServiceInstanceBase(BaseModel):
+    """Base schema for WAN service instance."""
+
+    ont_id: UUID
+    source_profile_service_id: UUID | None = None
+    service_type: WanServiceType = WanServiceType.internet
+    name: str | None = Field(default=None, max_length=120)
+    priority: int = Field(default=1, ge=1)
+    is_active: bool = True
+    # L2 VLAN
+    vlan_mode: VlanMode = VlanMode.tagged
+    vlan_id: UUID | None = None
+    s_vlan: int | None = Field(default=None, ge=1, le=4094)
+    c_vlan: int | None = Field(default=None, ge=1, le=4094)
+    # L3 connection
+    connection_type: WanConnectionType = WanConnectionType.pppoe
+    nat_enabled: bool = True
+    # PPPoE
+    pppoe_username: str | None = Field(default=None, max_length=200)
+    pppoe_password: str | None = Field(default=None, max_length=500)
+    # Static IP
+    static_ip: str | None = Field(default=None, max_length=64)
+    static_gateway: str | None = Field(default=None, max_length=64)
+    static_dns: str | None = Field(default=None, max_length=200)
+
+
+class OntWanServiceInstanceCreate(OntWanServiceInstanceBase):
+    """Schema for creating a WAN service instance."""
+
+    pass
+
+
+class OntWanServiceInstanceUpdate(BaseModel):
+    """Schema for updating a WAN service instance."""
+
+    ont_id: UUID | None = None
+    source_profile_service_id: UUID | None = None
+    service_type: WanServiceType | None = None
+    name: str | None = Field(default=None, max_length=120)
+    priority: int | None = Field(default=None, ge=1)
+    is_active: bool | None = None
+    # L2 VLAN
+    vlan_mode: VlanMode | None = None
+    vlan_id: UUID | None = None
+    s_vlan: int | None = Field(default=None, ge=1, le=4094)
+    c_vlan: int | None = Field(default=None, ge=1, le=4094)
+    # L3 connection
+    connection_type: WanConnectionType | None = None
+    nat_enabled: bool | None = None
+    # PPPoE
+    pppoe_username: str | None = Field(default=None, max_length=200)
+    pppoe_password: str | None = Field(default=None, max_length=500)
+    # Static IP
+    static_ip: str | None = Field(default=None, max_length=64)
+    static_gateway: str | None = Field(default=None, max_length=64)
+    static_dns: str | None = Field(default=None, max_length=200)
+    # Provisioning state (typically updated by system, not user)
+    provisioning_status: WanServiceProvisioningStatus | None = None
+    last_error: str | None = Field(default=None, max_length=500)
+
+
+class OntWanServiceInstanceRead(OntWanServiceInstanceBase):
+    """Schema for reading a WAN service instance."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    provisioning_status: WanServiceProvisioningStatus
+    last_provisioned_at: datetime | None = None
+    last_error: str | None = None
     created_at: datetime
     updated_at: datetime

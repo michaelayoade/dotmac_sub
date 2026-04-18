@@ -57,11 +57,25 @@ class CRUDManager(ListResponseMixin, Generic[TModel]):
         return entity
 
     @classmethod
-    def create(cls, db, payload):
+    def create(cls, db, payload, *, commit: bool = True):
+        """Create a new entity from the given payload.
+
+        Args:
+            db: Database session.
+            payload: Data to create the entity with (Pydantic model or dict).
+            commit: If True (default), commits the transaction.
+                   If False, only flushes (caller controls transaction).
+
+        Returns:
+            The created entity.
+        """
         model = cls._require_model()
         entity = model(**cls._payload_dict(payload, exclude_unset=False))
         db.add(entity)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(entity)
         return entity
 
@@ -75,19 +89,51 @@ class CRUDManager(ListResponseMixin, Generic[TModel]):
         return cls._get_or_404(db, entity_id, include_inactive=True)
 
     @classmethod
-    def update(cls, db, entity_id: str, payload):
+    def update(cls, db, entity_id: str, payload, *, commit: bool = True):
+        """Update an existing entity with the given payload.
+
+        Args:
+            db: Database session.
+            entity_id: ID of the entity to update.
+            payload: Data to update the entity with (Pydantic model or dict).
+            commit: If True (default), commits the transaction.
+                   If False, only flushes (caller controls transaction).
+
+        Returns:
+            The updated entity.
+
+        Raises:
+            HTTPException: 404 if entity not found.
+        """
         entity = cls._get_or_404(db, entity_id)
         for key, value in cls._payload_dict(payload, exclude_unset=True).items():
             setattr(entity, key, value)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(entity)
         return entity
 
     @classmethod
-    def delete(cls, db, entity_id: str):
+    def delete(cls, db, entity_id: str, *, commit: bool = True):
+        """Delete an entity (soft or hard delete based on configuration).
+
+        Args:
+            db: Database session.
+            entity_id: ID of the entity to delete.
+            commit: If True (default), commits the transaction.
+                   If False, only flushes (caller controls transaction).
+
+        Raises:
+            HTTPException: 404 if entity not found.
+        """
         entity = cls._get_or_404(db, entity_id)
         if cls.soft_delete_field:
             setattr(entity, cls.soft_delete_field, cls.soft_delete_value)
         else:
             db.delete(entity)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()

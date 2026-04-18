@@ -8,6 +8,7 @@ load_dotenv()
 
 @dataclass(frozen=True)
 class Settings:
+    app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
     database_url: str = os.getenv(
         "DATABASE_URL",
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",
@@ -74,7 +75,8 @@ class Settings:
     # Security: Enforce credential encryption in production
     # Set to "true" to require CREDENTIAL_ENCRYPTION_KEY to be configured
     enforce_credential_encryption: bool = os.getenv(
-        "ENFORCE_CREDENTIAL_ENCRYPTION", "false"
+        "ENFORCE_CREDENTIAL_ENCRYPTION",
+        "true" if app_env in {"prod", "production"} else "false",
     ).lower() in ("true", "1", "yes")
 
 

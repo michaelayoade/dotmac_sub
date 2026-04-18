@@ -1213,6 +1213,27 @@ class Parameters(ListResponseMixin):
 
 
 class Jobs(ListResponseMixin):
+    SAFE_REFRESH_ROOTS: dict[str, tuple[str, ...]] = {
+        "Device.": (
+            "Device.DeviceInfo.",
+            "Device.ManagementServer.",
+            "Device.WiFi.",
+            "Device.IP.",
+            "Device.Hosts.",
+            "Device.Ethernet.",
+            "Device.PPP.",
+        ),
+        "InternetGatewayDevice.": (
+            "InternetGatewayDevice.DeviceInfo.",
+            "InternetGatewayDevice.ManagementServer.",
+            "InternetGatewayDevice.WANDevice.1.",
+            "InternetGatewayDevice.LANDevice.1.LANHostConfigManagement.",
+            "InternetGatewayDevice.LANDevice.1.Hosts.",
+            "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.",
+            "InternetGatewayDevice.LANDevice.1.LANEthernetInterfaceConfig.",
+        ),
+    }
+
     @staticmethod
     def create(db: Session, payload: Tr069JobCreate):
         job = Tr069Job(**payload.model_dump())
@@ -1325,8 +1346,23 @@ class Jobs(ListResponseMixin):
             if job.payload:
                 task.update(job.payload)
 
-            # Execute task via GenieACS
-            result = client.create_task(genieacs_device_id, task)
+            # Execute task via GenieACS. Root-level refreshObject tasks are
+            # unreliable on Huawei ONTs; split them into known subtrees and use
+            # the client helper so the parameter tree is seeded first.
+            if job.command == "refreshObject":
+                object_name = str(task.get("objectName") or "").strip()
+                object_names = list(
+                    Jobs.SAFE_REFRESH_ROOTS.get(object_name, (object_name,))
+                )
+                results = []
+                for object_path in object_names:
+                    if object_path:
+                        results.append(
+                            client.refresh_object(genieacs_device_id, object_path)
+                        )
+                result = {"refreshObject": results}
+            else:
+                result = client.create_task(genieacs_device_id, task)
 
             # Check for error indicators in the response
             # GenieACS returns HTTP 202 even when device is offline or unreachable,
@@ -1661,6 +1697,29 @@ def _build_acs_provision_script(
         script_lines.append(
             f'declare(root + ".ManagementServer.Password", {{value: now}}, {{value: {js_string(cwmp_password)}}});'
         )
+
+    script_lines.extend(
+        [
+            "",
+            "// Mirror each inform into DotMac so local ACS timestamps stay current.",
+            "function dotmacRead(path) {",
+            "  try {",
+            "    const result = declare(path, {value: 1});",
+            "    return result.value && result.value[0] !== undefined ? result.value[0] : null;",
+            "  } catch (e) {",
+            "    return null;",
+            "  }",
+            "}",
+            'try {',
+            '  const serial = dotmacRead(root + ".DeviceInfo.SerialNumber");',
+            '  const oui = dotmacRead(root + ".DeviceInfo.ManufacturerOUI");',
+            '  const productClass = dotmacRead(root + ".DeviceInfo.ProductClass");',
+            '  ext("dotmac-webhook", "informWebhook", null, serial, "periodic", oui, productClass);',
+            "} catch (e) {",
+            '  log("DotMac inform webhook skipped: " + e.message);',
+            "}",
+        ]
+    )
 
     return "\n".join(script_lines)
 

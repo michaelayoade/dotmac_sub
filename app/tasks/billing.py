@@ -1,13 +1,18 @@
 import logging
+from datetime import UTC, datetime
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
 from app.services import billing_automation as billing_automation_service
+from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.billing.run_invoice_cycle")
+@idempotent_task(
+    key_func=lambda: f"billing_cycle:{datetime.now(UTC).strftime('%Y-%m-%d')}"
+)
 def run_invoice_cycle() -> dict[str, int]:
     logger.info("Starting billing invoice cycle")
     session = SessionLocal()
@@ -31,6 +36,9 @@ def run_invoice_cycle() -> dict[str, int]:
 
 
 @celery_app.task(name="app.tasks.billing.mark_invoices_overdue")
+@idempotent_task(
+    key_func=lambda: f"overdue_check:{datetime.now(UTC).strftime('%Y-%m-%d-%H')}"
+)
 def mark_invoices_overdue() -> dict[str, int]:
     """Hourly task: detect past-due invoices and trigger enforcement."""
     logger.info("Starting overdue invoice detection")

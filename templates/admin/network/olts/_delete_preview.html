@@ -1,0 +1,131 @@
+{# HTMX partial: OLT deletion impact preview #}
+
+<div class="space-y-4">
+    <div class="flex items-center gap-3">
+        <div class="flex h-10 w-10 items-center justify-center rounded-lg
+            {% if impact.can_delete %}bg-amber-100 dark:bg-amber-900/30{% else %}bg-rose-100 dark:bg-rose-900/30{% endif %}">
+            <svg class="h-5 w-5 {% if impact.can_delete %}text-amber-600 dark:text-amber-400{% else %}text-rose-600 dark:text-rose-400{% endif %}"
+                 fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                      d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/>
+            </svg>
+        </div>
+        <div>
+            <h3 class="text-lg font-semibold text-slate-900 dark:text-white">
+                Delete OLT: {{ impact.olt_name }}
+            </h3>
+            <p class="text-sm text-slate-500 dark:text-slate-400">
+                {% if impact.can_delete %}
+                Review the impact before confirming deletion
+                {% else %}
+                This OLT cannot be deleted until blocking items are resolved
+                {% endif %}
+            </p>
+        </div>
+    </div>
+
+    {# Blocking reasons #}
+    {% if impact.blocking_reasons %}
+    <div class="rounded-lg border border-rose-200 bg-rose-50 p-4 dark:border-rose-800 dark:bg-rose-900/20">
+        <h4 class="font-medium text-rose-800 dark:text-rose-300 mb-2">
+            <svg class="inline h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+            </svg>
+            Deletion Blocked
+        </h4>
+        <ul class="text-sm text-rose-700 dark:text-rose-400 space-y-1">
+            {% for reason in impact.blocking_reasons %}
+            <li>{{ reason }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# Impact summary #}
+    <div class="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50 overflow-hidden">
+        <div class="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+            <h4 class="font-medium text-slate-900 dark:text-white">Impact Summary</h4>
+        </div>
+        <div class="divide-y divide-slate-200 dark:divide-slate-700">
+            <div class="flex items-center justify-between px-4 py-3">
+                <span class="text-sm text-slate-600 dark:text-slate-400">Active ONTs</span>
+                <span class="text-sm font-medium {% if impact.active_onts > 0 %}text-rose-600 dark:text-rose-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                    {{ impact.active_onts }}
+                </span>
+            </div>
+            <div class="flex items-center justify-between px-4 py-3">
+                <span class="text-sm text-slate-600 dark:text-slate-400">Active Assignments</span>
+                <span class="text-sm font-medium {% if impact.active_assignments > 0 %}text-rose-600 dark:text-rose-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                    {{ impact.active_assignments }}
+                </span>
+            </div>
+            <div class="flex items-center justify-between px-4 py-3">
+                <span class="text-sm text-slate-600 dark:text-slate-400">VLANs to Orphan</span>
+                <span class="text-sm font-medium {% if impact.vlans_to_orphan > 0 %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                    {{ impact.vlans_to_orphan }}
+                </span>
+            </div>
+            <div class="flex items-center justify-between px-4 py-3">
+                <span class="text-sm text-slate-600 dark:text-slate-400">IP Pools to Orphan</span>
+                <span class="text-sm font-medium {% if impact.ip_pools_to_orphan > 0 %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                    {{ impact.ip_pools_to_orphan }}
+                </span>
+            </div>
+            <div class="flex items-center justify-between px-4 py-3">
+                <span class="text-sm text-slate-600 dark:text-slate-400">Provisioning Profiles</span>
+                <span class="text-sm font-medium {% if impact.provisioning_profiles > 0 %}text-amber-600 dark:text-amber-400{% else %}text-slate-900 dark:text-white{% endif %}">
+                    {{ impact.provisioning_profiles }}
+                </span>
+            </div>
+        </div>
+    </div>
+
+    {# Warnings #}
+    {% if impact.warnings %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+        <h4 class="font-medium text-amber-800 dark:text-amber-300 mb-2">
+            <svg class="inline h-4 w-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01"/>
+            </svg>
+            Warnings
+        </h4>
+        <ul class="text-sm text-amber-700 dark:text-amber-400 space-y-1">
+            {% for warning in impact.warnings %}
+            <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# Action buttons #}
+    <div class="flex items-center justify-end gap-3 pt-2">
+        {% if impact.can_delete %}
+        <form method="POST" action="/admin/network/olts/{{ impact.olt_id }}/delete"
+              x-data="{ confirming: false }">
+            <input type="hidden" name="csrf_token" value="{{ request.state.csrf_token }}">
+            <button type="button"
+                    x-show="!confirming"
+                    @click="confirming = true"
+                    class="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-white hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900">
+                Delete OLT
+            </button>
+            <div x-show="confirming" x-cloak class="flex items-center gap-2">
+                <span class="text-sm text-slate-600 dark:text-slate-400">Are you sure?</span>
+                <button type="submit"
+                        class="rounded-lg bg-rose-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-700">
+                    Yes, Delete
+                </button>
+                <button type="button"
+                        @click="confirming = false"
+                        class="rounded-lg bg-slate-200 px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-300 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600">
+                    Cancel
+                </button>
+            </div>
+        </form>
+        {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">
+            Resolve the blocking items above before deletion is allowed.
+        </p>
+        {% endif %}
+    </div>
+</div>

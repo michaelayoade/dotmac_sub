@@ -6,6 +6,7 @@ import logging
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
@@ -146,11 +147,22 @@ class OntWriteService:
                     db, ont_id, pppoe_username, pppoe_password
                 )
                 if not result.success:
-                    logger.warning(
-                        "TR-069 PPPoE set failed for ONT %s: %s", ont_id, result.message
+                    return ActionResult(
+                        success=False,
+                        message=(
+                            "WAN configuration was not saved because PPPoE push failed: "
+                            f"{result.message}"
+                        ),
                     )
             except Exception as exc:
                 logger.warning("TR-069 PPPoE set error for ONT %s: %s", ont_id, exc)
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "WAN configuration was not saved because PPPoE push errored: "
+                        f"{exc}"
+                    ),
+                )
 
         # Persist desired state
         from app.models.network import WanMode
@@ -299,6 +311,7 @@ class OntWriteService:
         try:
             from app.services.network.olt_ssh_service_ports import (
                 create_single_service_port,
+                get_service_ports_for_ont,
             )
 
             success, message = create_single_service_port(
@@ -312,6 +325,40 @@ class OntWriteService:
             )
             if not success:
                 return ActionResult(success=False, message=message)
+            verify_ok, verify_msg, service_ports = get_service_ports_for_ont(
+                ctx.olt,
+                ctx.fsp,
+                ctx.ont_id_on_olt,
+            )
+            if not verify_ok:
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "Service-port command was accepted, but OLT readback failed: "
+                        f"{verify_msg}"
+                    ),
+                )
+            matching_port = next(
+                (
+                    port
+                    for port in service_ports
+                    if port.vlan_id == vlan_id
+                    and port.gem_index == gem_index
+                    and (
+                        not getattr(port, "tag_transform", None)
+                        or getattr(port, "tag_transform", None) == tag_transform
+                    )
+                ),
+                None,
+            )
+            if matching_port is None:
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "Service-port command was accepted, but OLT readback did not "
+                        f"show VLAN {vlan_id} GEM {gem_index} for this ONT."
+                    ),
+                )
         except Exception as exc:
             logger.error("Service port create failed for ONT %s: %s", ont_id, exc)
             return ActionResult(success=False, message=f"SSH error: {exc}")
@@ -329,49 +376,265 @@ class OntWriteService:
         ont_id: str,
         *,
         target_pon_port_id: str,
+        skip_device_ops: bool = False,
     ) -> ActionResult:
-        """Move ONT to different PON port — deactivate old assignment, create new."""
+        """Move ONT to different PON port with device-first operations.
+
+        Flow:
+        1. Capture current service ports for replay
+        2. Delete service ports from old location
+        3. Deauthorize from old port
+        4. Authorize on new port
+        5. Recreate service ports on new location
+        6. Update DB after device operations succeed
+
+        Args:
+            db: Database session
+            ont_id: ONT to move
+            target_pon_port_id: Target PON port UUID
+            skip_device_ops: If True, only update DB (for DB-only cleanup)
+        """
+        from app.services.common import coerce_uuid
+        from app.services.network.device_operation import (
+            DeviceOperationContext,
+            DeviceOperationStep,
+        )
+        from app.services.network.olt_ssh_ont.lifecycle import (
+            authorize_ont,
+            deauthorize_ont,
+        )
+        from app.services.network.olt_ssh_service_ports import (
+            get_service_ports_for_ont,
+        )
+
         ont, err = get_ont_or_error(db, ont_id)
         if err:
             return err
         if ont is None:
             return ActionResult(success=False, message="ONT not found.")
 
-        from app.services.common import coerce_uuid
-
         target_port = db.get(PonPort, coerce_uuid(target_pon_port_id))
         if not target_port:
             return ActionResult(success=False, message="Target PON port not found.")
 
-        # Deactivate current assignment
-        current = db.scalars(
-            select(OntAssignment).where(
+        # Get current OLT context
+        ctx, context_err = _strict_olt_write_context(db, ont_id)
+        if context_err and not skip_device_ops:
+            return context_err
+        if ctx is None and not skip_device_ops:
+            return ActionResult(success=False, message="ONT OLT context is incomplete.")
+
+        # Validate target is on same OLT (cross-OLT move requires different flow)
+        if ctx and target_port.olt_id != ctx.olt.id:
+            return ActionResult(
+                success=False,
+                message="Cross-OLT moves not yet supported. Please deauthorize and re-authorize manually.",
+            )
+
+        # Build target FSP string from PonPort.name (format: "0/2/1")
+        target_fsp = target_port.name
+
+        # Get current assignment for subscriber info
+        current_assignment = db.scalars(
+            select(OntAssignment)
+            .where(
                 OntAssignment.ont_unit_id == ont.id,
                 OntAssignment.active.is_(True),
             )
         ).first()
-        if current:
-            current.active = False
 
-        # Create new assignment
-        new_assignment = OntAssignment(
-            ont_unit_id=ont.id,
-            pon_port_id=target_port.id,
-            subscriber_id=current.subscriber_id if current else None,
-            active=True,
-            assigned_at=datetime.now(UTC),
-            notes="Moved from previous assignment",
+        if skip_device_ops:
+            # DB-only mode - skip device operations
+            return _move_ont_db_only(
+                db, ont, target_port, current_assignment, target_pon_port_id
+            )
+
+        if ctx is None:
+            return ActionResult(success=False, message="ONT OLT context is incomplete.")
+
+        # Capture current service ports for replay
+        _, _, current_ports = get_service_ports_for_ont(
+            ctx.olt, ctx.fsp, ctx.ont_id_on_olt
         )
-        db.add(new_assignment)
-        ont.olt_device_id = target_port.olt_id
-        _set_sync_meta(ont, "manual")
-        db.commit()
+
+        # Resolve authorization profiles from current assignment
+        line_profile_id = getattr(ctx, "line_profile_id", None)
+        service_profile_id = getattr(ctx, "service_profile_id", None)
+
+        # If not available from context, try to get from OLT
+        if line_profile_id is None or service_profile_id is None:
+            from app.services.network.ont_authorization_profiles import (
+                resolve_authorization_profiles,
+            )
+
+            resolved = resolve_authorization_profiles(db, ctx.olt, ont)
+            if resolved:
+                line_profile_id = resolved.get("line_profile_id")
+                service_profile_id = resolved.get("service_profile_id")
+
+        # Create device operation context
+        op = DeviceOperationContext(
+            db,
+            "ont_move",
+            str(ont.id),
+            all_or_nothing=True,
+            initiated_by="ont_write_service",
+            input_payload={
+                "source_fsp": ctx.fsp,
+                "target_fsp": target_fsp,
+                "serial_number": ont.serial_number,
+            },
+        )
+
+        # Closure variables for step functions
+        new_ont_id_on_olt: int | None = None
+
+        # Step 1: Deauthorize from old port
+        def apply_deauthorize() -> tuple[bool, str]:
+            return deauthorize_ont(ctx.olt, ctx.fsp, ctx.ont_id_on_olt)
+
+        def verify_deauthorize() -> tuple[bool, str]:
+            # Verify ONT is no longer on the old port by checking autofind
+            # For now, trust the deauthorize succeeded if no error
+            return True, "ONT deauthorized from old port"
+
+        op.add_step(DeviceOperationStep(
+            name="deauthorize_old",
+            apply_fn=apply_deauthorize,
+            verify_fn=verify_deauthorize,
+            timeout_seconds=30.0,
+        ))
+
+        # Step 2: Authorize on new port
+        def apply_authorize() -> tuple[bool, str]:
+            nonlocal new_ont_id_on_olt
+            if not ont.serial_number:
+                return False, "ONT has no serial number"
+            success, message, assigned_id = authorize_ont(
+                ctx.olt,
+                target_fsp,
+                ont.serial_number,
+                line_profile_id=line_profile_id,
+                service_profile_id=service_profile_id,
+            )
+            if success and assigned_id is not None:
+                new_ont_id_on_olt = assigned_id
+            return success, message
+
+        def verify_authorize() -> tuple[bool, str]:
+            if new_ont_id_on_olt is None:
+                return False, "No ONT-ID assigned on new port"
+            return True, f"ONT authorized on new port (ONT-ID {new_ont_id_on_olt})"
+
+        def rollback_authorize() -> None:
+            if new_ont_id_on_olt is not None:
+                # Try to deauthorize from new port
+                try:
+                    deauthorize_ont(ctx.olt, target_fsp, new_ont_id_on_olt)
+                except Exception as exc:
+                    logger.warning("Rollback deauthorize failed: %s", exc)
+
+        op.add_step(DeviceOperationStep(
+            name="authorize_new",
+            apply_fn=apply_authorize,
+            verify_fn=verify_authorize,
+            rollback_fn=rollback_authorize,
+            timeout_seconds=30.0,
+        ))
+
+        # Step 3: Recreate service ports on new location (if we had any)
+        if current_ports:
+            def apply_service_ports() -> tuple[bool, str]:
+                if new_ont_id_on_olt is None:
+                    return False, "No ONT-ID for service port creation"
+                from app.services.network import olt_ssh as core
+
+                success, message = core.create_service_ports(
+                    ctx.olt, target_fsp, new_ont_id_on_olt, current_ports
+                )
+                return success, message
+
+            def verify_service_ports() -> tuple[bool, str]:
+                if new_ont_id_on_olt is None:
+                    return False, "No ONT-ID for service port verification"
+                ok, msg, new_ports = get_service_ports_for_ont(
+                    ctx.olt, target_fsp, new_ont_id_on_olt
+                )
+                if not ok:
+                    return False, f"Failed to verify service ports: {msg}"
+                if len(new_ports) < len(current_ports):
+                    return False, f"Only {len(new_ports)}/{len(current_ports)} service ports created"
+                return True, f"Created {len(new_ports)} service ports"
+
+            op.add_step(DeviceOperationStep(
+                name="recreate_service_ports",
+                apply_fn=apply_service_ports,
+                verify_fn=verify_service_ports,
+                timeout_seconds=60.0,
+            ))
+
+        # Execute device operations
+        result = op.execute()
+
+        if not result.success:
+            return ActionResult(
+                success=False,
+                message=f"Device operation failed: {result.message}",
+            )
+
+        # Device operations succeeded - update DB
+        try:
+            with db.begin_nested():
+                if current_assignment:
+                    current_assignment.active = False
+
+                new_assignment = OntAssignment(
+                    ont_unit_id=ont.id,
+                    pon_port_id=target_port.id,
+                    subscriber_id=current_assignment.subscriber_id if current_assignment else None,
+                    active=True,
+                    assigned_at=datetime.now(UTC),
+                    notes=f"Moved from {ctx.fsp} to {target_fsp}",
+                )
+                db.add(new_assignment)
+                ont.olt_device_id = target_port.olt_id
+                if new_ont_id_on_olt is not None:
+                    # Update external_id with new ONT-ID for SNMP correlation
+                    vendor_lower = (ctx.olt.vendor or "").lower()
+                    if "huawei" in vendor_lower:
+                        ont.external_id = f"huawei:{target_fsp}.{new_ont_id_on_olt}"
+                _set_sync_meta(ont, "device")
+                db.flush()
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            logger.warning("ONT move DB update conflict for ONT %s: %s", ont_id, exc)
+            return ActionResult(
+                success=False,
+                message="Device moved but DB update failed - manual cleanup required.",
+            )
+        except Exception as exc:
+            db.rollback()
+            logger.error("ONT move DB update failed for ONT %s: %s", ont_id, exc)
+            return ActionResult(
+                success=False,
+                message=f"Device moved but DB update failed: {exc}",
+            )
+
         _emit_ont_event(
             db,
             "ont.moved",
-            {"ont_id": str(ont.id), "target_pon_port_id": target_pon_port_id},
+            {
+                "ont_id": str(ont.id),
+                "source_fsp": ctx.fsp,
+                "target_fsp": target_fsp,
+                "target_pon_port_id": target_pon_port_id,
+            },
         )
-        return ActionResult(success=True, message="ONT moved to new PON port.")
+        return ActionResult(
+            success=True,
+            message=f"ONT moved from {ctx.fsp} to {target_fsp} (ONT-ID {new_ont_id_on_olt}).",
+        )
 
     @staticmethod
     def update_external_id(
@@ -380,18 +643,72 @@ class OntWriteService:
         *,
         external_id: str,
     ) -> ActionResult:
-        """Update ONT external ID used for SNMP polling correlation."""
-        ont, err = get_ont_or_error(db, ont_id)
-        if err:
-            return err
-        if ont is None:
-            return ActionResult(success=False, message="ONT not found.")
+        return update_external_id(db, ont_id, external_id=external_id)
 
-        ont.external_id = external_id
-        _set_sync_meta(ont, "manual")
+
+def _move_ont_db_only(
+    db: Session,
+    ont: OntUnit,
+    target_port: PonPort,
+    current_assignment: OntAssignment | None,
+    target_pon_port_id: str,
+) -> ActionResult:
+    """DB-only ONT move (for cleanup or when device ops not needed)."""
+    try:
+        with db.begin_nested():
+            if current_assignment:
+                current_assignment.active = False
+
+            new_assignment = OntAssignment(
+                ont_unit_id=ont.id,
+                pon_port_id=target_port.id,
+                subscriber_id=current_assignment.subscriber_id if current_assignment else None,
+                active=True,
+                assigned_at=datetime.now(UTC),
+                notes="Moved from previous assignment (DB-only)",
+            )
+            db.add(new_assignment)
+            ont.olt_device_id = target_port.olt_id
+            _set_sync_meta(ont, "manual")
+            db.flush()
         db.commit()
-        db.refresh(ont)
-        return ActionResult(success=True, message="External ID updated.")
+    except IntegrityError as exc:
+        db.rollback()
+        logger.warning("ONT move assignment conflict for ONT %s: %s", ont.id, exc)
+        return ActionResult(
+            success=False,
+            message="ONT already has an active assignment; reload and try again.",
+        )
+    except Exception as exc:
+        db.rollback()
+        logger.error("ONT move failed for ONT %s: %s", ont.id, exc)
+        return ActionResult(success=False, message=f"Move failed: {exc}")
 
+    _emit_ont_event(
+        db,
+        "ont.moved",
+        {"ont_id": str(ont.id), "target_pon_port_id": target_pon_port_id},
+    )
+    return ActionResult(success=True, message="ONT moved to new PON port (DB-only).")
+
+
+def update_external_id(
+    db: Session,
+    ont_id: str,
+    *,
+    external_id: str,
+) -> ActionResult:
+    """Update ONT external ID used for SNMP polling correlation."""
+    ont, err = get_ont_or_error(db, ont_id)
+    if err:
+        return err
+    if ont is None:
+        return ActionResult(success=False, message="ONT not found.")
+
+    ont.external_id = external_id
+    _set_sync_meta(ont, "manual")
+    db.commit()
+    db.refresh(ont)
+    return ActionResult(success=True, message="External ID updated.")
 
 ont_write = OntWriteService()

@@ -6,17 +6,18 @@ and its foreign key is recreated with ``ON DELETE SET NULL`` so that subscriber
 removal no longer cascades into CPE inventory loss.
 
 Revision ID: 026_cpe_subscriber_nullable
-Revises: 025_acs_interval_3600
+Revises: 85f2cdc1eedd
 Create Date: 2026-04-17
 
 """
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
 revision = "026_cpe_subscriber_nullable"
-down_revision = "025_acs_interval_3600"
+down_revision = "85f2cdc1eedd"
 branch_labels = None
 depends_on = None
 
@@ -49,12 +50,14 @@ def upgrade() -> None:
         op.alter_column(
             _TABLE,
             _COLUMN,
-            existing_type=sa.dialects.postgresql.UUID(as_uuid=True),
+            existing_type=postgresql.UUID(as_uuid=True),
             nullable=True,
         )
 
     fk = _find_fk(inspector)
-    needs_fk_recreate = fk is None or fk.get("options", {}).get("ondelete") != "SET NULL"
+    needs_fk_recreate = (
+        fk is None or fk.get("options", {}).get("ondelete") != "SET NULL"
+    )
 
     if fk is not None and needs_fk_recreate:
         op.drop_constraint(fk["name"], _TABLE, type_="foreignkey")
@@ -98,6 +101,6 @@ def downgrade() -> None:
         op.alter_column(
             _TABLE,
             _COLUMN,
-            existing_type=sa.dialects.postgresql.UUID(as_uuid=True),
+            existing_type=postgresql.UUID(as_uuid=True),
             nullable=False,
         )

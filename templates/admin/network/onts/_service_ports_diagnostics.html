@@ -1,0 +1,117 @@
+{# HTMX partial: Service port diagnostics results #}
+
+{% if diagnostics_error %}
+<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 dark:border-rose-900/30 dark:bg-rose-900/10 dark:text-rose-300">
+    <div class="flex items-center gap-2">
+        <svg class="h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+        <span class="font-medium">Diagnostics failed:</span> {{ diagnostics_error }}
+    </div>
+</div>
+{% elif diagnostics %}
+<div class="space-y-4">
+    {# ONT Status Summary #}
+    <div class="rounded-lg border {% if diagnostics.ont_online %}border-emerald-200 bg-emerald-50 dark:border-emerald-900/30 dark:bg-emerald-900/10{% else %}border-rose-200 bg-rose-50 dark:border-rose-900/30 dark:bg-rose-900/10{% endif %} p-4">
+        <h4 class="text-sm font-semibold {% if diagnostics.ont_online %}text-emerald-800 dark:text-emerald-200{% else %}text-rose-800 dark:text-rose-200{% endif %} mb-2 flex items-center gap-2">
+            {% if diagnostics.ont_online %}
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            ONT is Online
+            {% else %}
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+            ONT is Offline
+            {% endif %}
+        </h4>
+        <div class="grid grid-cols-3 gap-4 text-sm {% if diagnostics.ont_online %}text-emerald-700 dark:text-emerald-300{% else %}text-rose-700 dark:text-rose-300{% endif %}">
+            <div>
+                <span class="font-medium">Run State:</span>
+                <span class="uppercase">{{ diagnostics.ont_run_state }}</span>
+            </div>
+            <div>
+                <span class="font-medium">Config State:</span>
+                <span class="uppercase">{{ diagnostics.ont_config_state }}</span>
+            </div>
+            <div>
+                <span class="font-medium">Match State:</span>
+                <span class="uppercase">{{ diagnostics.ont_match_state }}</span>
+            </div>
+        </div>
+    </div>
+
+    {# Warnings #}
+    {% if diagnostics.warnings %}
+    <div class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-900/30 dark:bg-amber-900/10">
+        <h4 class="text-sm font-semibold text-amber-800 dark:text-amber-200 mb-2 flex items-center gap-2">
+            <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+            Issues Detected
+        </h4>
+        <ul class="list-disc list-inside text-sm text-amber-700 dark:text-amber-300 space-y-1">
+            {% for warning in diagnostics.warnings %}
+            <li>{{ warning }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {# Service Port Details #}
+    {% if diagnostics.service_port_details %}
+    <div class="rounded-lg border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        <h4 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Service Port Details</h4>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700 text-sm">
+                <thead>
+                    <tr>
+                        <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Index</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">VLAN</th>
+                        <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">State</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for sp in diagnostics.service_port_details %}
+                    <tr>
+                        <td class="px-3 py-2 font-mono text-slate-900 dark:text-white">{{ sp.index }}</td>
+                        <td class="px-3 py-2 font-mono text-slate-600 dark:text-slate-300">{{ sp.vlan }}</td>
+                        <td class="px-3 py-2">
+                            {% if sp.state == 'up' %}
+                            <span class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Up</span>
+                            {% else %}
+                            <span class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-800 dark:bg-rose-900 dark:text-rose-200">Down</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
+    {# Raw Output (collapsible) #}
+    <details class="rounded-lg border border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-800/50">
+        <summary class="px-4 py-3 text-sm font-medium text-slate-700 dark:text-slate-300 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/50">
+            View Raw OLT Output
+        </summary>
+        <div class="px-4 pb-4 space-y-3">
+            {% for cmd_name, output in diagnostics.raw_outputs.items() %}
+            <div>
+                <h5 class="text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase mb-1">{{ cmd_name | replace('_', ' ') }}</h5>
+                <pre class="text-xs bg-slate-900 text-slate-100 p-3 rounded overflow-x-auto max-h-48">{{ output }}</pre>
+            </div>
+            {% endfor %}
+        </div>
+    </details>
+
+    {# Explanation #}
+    <div class="rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 dark:border-sky-900/30 dark:bg-sky-900/10">
+        <h4 class="text-sm font-semibold text-sky-800 dark:text-sky-200 mb-2">Common Causes of "Down" Service Ports</h4>
+        <ul class="text-sm text-sky-700 dark:text-sky-300 space-y-1 list-disc list-inside">
+            <li><strong>ONT Offline:</strong> If the ONT is offline, all service ports will show Down</li>
+            <li><strong>GEM Port Not Active:</strong> The GEM port binding on the ONT isn't activated in the line/service profile</li>
+            <li><strong>T-CONT/DBA Issue:</strong> Traffic container or bandwidth profile not properly assigned</li>
+            <li><strong>VLAN Mismatch:</strong> Service port VLAN doesn't match what's configured in the ONT profile</li>
+        </ul>
+    </div>
+</div>
+{% else %}
+<div class="text-sm text-slate-500 dark:text-slate-400">
+    No diagnostics data available.
+</div>
+{% endif %}

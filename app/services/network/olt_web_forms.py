@@ -393,13 +393,16 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
     if not onts:
         return stats
 
+    inform_interval = str(server.periodic_inform_interval or 300)
     acs_params: dict[str, str] = {
         "Device.ManagementServer.URL": server.cwmp_url,
         "Device.ManagementServer.PeriodicInformEnable": "true",
-        "Device.ManagementServer.PeriodicInformInterval": "3600",
+        "Device.ManagementServer.PeriodicInformInterval": inform_interval,
         "InternetGatewayDevice.ManagementServer.URL": server.cwmp_url,
         "InternetGatewayDevice.ManagementServer.PeriodicInformEnable": "true",
-        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": "3600",
+        "InternetGatewayDevice.ManagementServer.PeriodicInformInterval": (
+            inform_interval
+        ),
     }
     if server.cwmp_username:
         acs_params["Device.ManagementServer.Username"] = server.cwmp_username
@@ -412,12 +415,18 @@ def _queue_acs_propagation(db: Session, olt: OLTDevice) -> dict[str, int]:
             acs_params["Device.ManagementServer.Password"] = password
             acs_params["InternetGatewayDevice.ManagementServer.Password"] = password
 
+    # Send both TR-098 (InternetGatewayDevice) and TR-181 (Device) parameters.
+    # Devices will ignore unsupported paths, so sending both is safe and avoids
+    # needing to detect the data model before propagation.
+
     for ont in onts:
         stats["attempted"] += 1
         try:
             resolved, reason = resolve_genieacs_with_reason(db, ont)
             if resolved:
                 client, device_id = resolved
+                # Fire and forget: send params without strict verification since
+                # only one data model will apply (device ignores unsupported paths).
                 client.set_parameter_values(device_id, acs_params)
                 logger.info("Propagated ACS config to ONT %s", ont.serial_number)
                 stats["propagated"] += 1

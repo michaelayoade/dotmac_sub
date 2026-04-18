@@ -47,39 +47,74 @@ _WIFI_SECURITY_PATHS = {
 # value — which is also what the post-SPV readback will see.
 _SECURITY_MODE_ALIASES: dict[str, dict[str, str]] = {
     "InternetGatewayDevice": {
+        # No security
         "none": "None",
         "open": "None",
+        # WEP (legacy)
         "wep": "Basic",
         "basic": "Basic",
+        # WPA
         "wpa": "WPA",
         "wpa-personal": "WPA",
+        "wpapsk": "WPA",
+        "wpa-psk": "WPA",
+        # WPA2 (all common variants)
         "wpa2": "11i",
         "wpa2-personal": "11i",
+        "wpa2psk": "11i",
+        "wpa2-psk": "11i",
         "11i": "11i",
+        # WPA + WPA2 mixed
         "wpa-wpa2": "WPAand11i",
         "wpa-wpa2-personal": "WPAand11i",
         "wpa/wpa2": "WPAand11i",
+        "wpa2/wpa": "WPAand11i",
         "wpaand11i": "WPAand11i",
         "mixed": "WPAand11i",
+        # WPA3 (maps to best available - WPA2 on TR-098 devices)
+        "wpa3": "11i",
+        "wpa3-personal": "11i",
+        "wpa3psk": "11i",
+        "wpa3-psk": "11i",
+        "wpa3-sae": "11i",
+        "sae": "11i",
     },
     "Device": {
+        # No security
         "none": "None",
         "open": "None",
+        # WEP (legacy)
         "wep": "WEP-128",
         "wep-64": "WEP-64",
         "wep-128": "WEP-128",
+        # WPA
         "wpa": "WPA-Personal",
         "wpa-personal": "WPA-Personal",
+        "wpapsk": "WPA-Personal",
+        "wpa-psk": "WPA-Personal",
+        # WPA2 (all common variants)
         "wpa2": "WPA2-Personal",
         "wpa2-personal": "WPA2-Personal",
+        "wpa2psk": "WPA2-Personal",
+        "wpa2-psk": "WPA2-Personal",
+        # WPA + WPA2 mixed
         "wpa-wpa2": "WPA-WPA2-Personal",
         "wpa-wpa2-personal": "WPA-WPA2-Personal",
         "wpa/wpa2": "WPA-WPA2-Personal",
+        "wpa2/wpa": "WPA-WPA2-Personal",
         "mixed": "WPA-WPA2-Personal",
+        # WPA3
         "wpa3": "WPA3-Personal",
         "wpa3-personal": "WPA3-Personal",
+        "wpa3psk": "WPA3-Personal",
+        "wpa3-psk": "WPA3-Personal",
+        "wpa3-sae": "WPA3-Personal",
+        "sae": "WPA3-Personal",
+        # WPA2 + WPA3 mixed
         "wpa2-wpa3": "WPA2-WPA3-Personal",
         "wpa2-wpa3-personal": "WPA2-WPA3-Personal",
+        "wpa2/wpa3": "WPA2-WPA3-Personal",
+        "wpa3/wpa2": "WPA2-WPA3-Personal",
     },
 }
 

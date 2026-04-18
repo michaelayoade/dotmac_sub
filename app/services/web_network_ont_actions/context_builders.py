@@ -49,7 +49,7 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
     from app.services.network import ont_web_forms as ont_web_forms_service
     from app.services.network.ont_service_intent import (
         build_service_intent,
-        load_latest_ont_plan,
+        load_ont_plan_for_ont,
     )
 
     ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
@@ -99,11 +99,10 @@ def unified_config_context(db: Session, ont_id: str) -> dict[str, object]:
                 or getattr(assignment.subscriber, "full_name", "")
                 or ""
             ).strip()
-    ont_plan = load_latest_ont_plan(
-        db, subscription_id=getattr(subscription, "id", None)
-    )
+    ont_plan = load_ont_plan_for_ont(db, ont_id=ont_id)
     service_intent = build_service_intent(
         ont,
+        db=db,
         subscriber_info=subscriber_info,
         ont_plan=ont_plan,
     )

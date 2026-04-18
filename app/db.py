@@ -1,10 +1,14 @@
 from collections.abc import Generator
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
+
+if TYPE_CHECKING:
+    from app.services.unit_of_work import UnitOfWork
 
 
 class Base(DeclarativeBase):
@@ -71,3 +75,38 @@ def task_session() -> Generator[Session, None, None]:
         raise
     finally:
         db.close()
+
+
+def get_uow() -> Generator["UnitOfWork", None, None]:
+    """FastAPI dependency for unit-of-work pattern with auto-commit.
+
+    Provides a UnitOfWork that automatically commits on successful request
+    completion and rolls back on exception. Use this for routes that need
+    explicit transaction control.
+
+    Unlike get_db(), this dependency:
+    - Auto-commits on success (no need to call db.commit() in services)
+    - Services should use flush() instead of commit()
+    - Provides clear transaction boundary semantics
+
+    Example:
+        from app.db import get_uow
+        from app.services.unit_of_work import UnitOfWork
+
+        @router.post("/items")
+        def create_item(
+            data: ItemCreate,
+            uow: UnitOfWork = Depends(get_uow),
+        ):
+            with uow:
+                item = item_service.create(uow.session, data)
+                return item
+    """
+    from app.services.unit_of_work import UnitOfWork
+
+    session = SessionLocal()
+    try:
+        uow = UnitOfWork(session, auto_commit=True)
+        yield uow
+    finally:
+        session.close()

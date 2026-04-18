@@ -23,6 +23,10 @@ from app.models.network import (
 )
 from app.services.network.ont_provisioning.context import resolve_olt_context
 from app.services.network.ont_provisioning.result import StepResult
+from app.services.network.ont_status_transitions import (
+    set_authorization_status,
+    set_provisioning_status,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +93,9 @@ class OntAuthorizationService:
                 verify_ont_authorized,
             )
 
-            ctx.ont.authorization_status = OntAuthorizationStatus.pending
+            set_authorization_status(
+                ctx.ont, OntAuthorizationStatus.pending, strict=False
+            )
             if olt_ont_id is not None:
                 ctx.ont.external_id = str(olt_ont_id)
 
@@ -107,21 +113,29 @@ class OntAuthorizationService:
                         ont_id=olt_ont_id,
                     )
                     if not match_ok:
-                        ctx.ont.provisioning_status = (
-                            OntProvisioningStatus.drift_detected
+                        set_provisioning_status(
+                            ctx.ont,
+                            OntProvisioningStatus.drift_detected,
+                            strict=False,
                         )
                         db.flush()
                         return StepResult(
                             "authorize", False, match_msg, critical=True
                         )
-                ctx.ont.authorization_status = OntAuthorizationStatus.authorized
+                set_authorization_status(
+                    ctx.ont, OntAuthorizationStatus.authorized, strict=False
+                )
                 db.flush()
                 logger.info(
                     "ONT %s authorized on OLT %s (ONT-ID %s)",
                     ctx.ont.serial_number, ctx.olt.name, olt_ont_id,
                 )
             else:
-                ctx.ont.provisioning_status = OntProvisioningStatus.drift_detected
+                set_provisioning_status(
+                    ctx.ont,
+                    OntProvisioningStatus.drift_detected,
+                    strict=False,
+                )
                 db.flush()
                 logger.warning(
                     "ONT %s authorization write accepted on OLT %s but verification failed: %s",
@@ -165,7 +179,9 @@ class OntAuthorizationService:
                 verify_ont_absent,
             )
 
-            ctx.ont.authorization_status = OntAuthorizationStatus.pending
+            set_authorization_status(
+                ctx.ont, OntAuthorizationStatus.pending, strict=False
+            )
             verification = verify_ont_absent(
                 ctx.olt,
                 fsp=ctx.fsp,
@@ -173,14 +189,20 @@ class OntAuthorizationService:
                 serial_number=ctx.ont.serial_number,
             )
             if verification.success:
-                ctx.ont.authorization_status = OntAuthorizationStatus.deauthorized
+                set_authorization_status(
+                    ctx.ont, OntAuthorizationStatus.deauthorized, strict=False
+                )
                 db.flush()
                 logger.info(
                     "ONT %s deauthorized from OLT %s",
                     ctx.ont.serial_number, ctx.olt.name,
                 )
             else:
-                ctx.ont.provisioning_status = OntProvisioningStatus.drift_detected
+                set_provisioning_status(
+                    ctx.ont,
+                    OntProvisioningStatus.drift_detected,
+                    strict=False,
+                )
                 db.flush()
                 logger.warning(
                     "ONT %s deauthorization write accepted on OLT %s but verification failed: %s",

@@ -291,6 +291,101 @@ class TestWaitTr069Bootstrap:
         mark_failed.assert_called_once()
 
 
+class TestApplySavedServiceConfig:
+    """Test deferred TR-069 service config behavior."""
+
+    def test_missing_pppoe_password_is_needs_input_not_failure(self, db_session) -> None:
+        from app.models.network import OntUnit
+        from app.services.network.ont_provision_steps import apply_saved_service_config
+
+        ont = OntUnit(serial_number="TEST-SVC-NEEDS-INPUT", pppoe_username="cust")
+        db_session.add(ont)
+        db_session.commit()
+        db_session.refresh(ont)
+
+        # Mock capability probing to return a capable device (has PPP WAN)
+        mock_cap_result = SimpleNamespace(
+            success=True,
+            message="Capabilities probed",
+            data={
+                "data_model": "InternetGatewayDevice",
+                "has_ppp_wan": True,
+                "supports_tr069_set_ppp_credentials": True,
+            },
+        )
+        with (
+            patch(
+                "app.services.network.ont_service_intent.load_ont_plan_for_ont",
+                return_value={"push_pppoe_tr069": {"username": "cust"}},
+            ),
+            patch(
+                "app.services.network.ont_action_network.probe_wan_capabilities",
+                return_value=mock_cap_result,
+            ),
+        ):
+            result = apply_saved_service_config(db_session, str(ont.id))
+
+        assert result.success is True
+        assert result.step_name == "apply_saved_service_config"
+        assert result.data is not None
+        assert result.data["needs_input"] == ["PPPoE username and password are required."]
+        # Steps now includes capability probing
+        assert any(
+            s["step"] == "probe_wan_capabilities" and s["success"]
+            for s in result.data["steps"]
+        )
+
+
+class TestStaticManagementIpReservation:
+    """Test static management IP reservation before reconciled provisioning."""
+
+    def test_reserves_first_available_pool_address_and_updates_cache(
+        self, db_session
+    ) -> None:
+        from app.models.network import (
+            IpPool,
+            IPVersion,
+            MgmtIpMode,
+            OntProvisioningProfile,
+            OntUnit,
+        )
+        from app.services.network.ont_provision_steps import (
+            _ensure_static_management_ip_from_profile,
+        )
+
+        pool = IpPool(
+            name=f"mgmt-{uuid.uuid4().hex[:8]}",
+            ip_version=IPVersion.ipv4,
+            cidr="192.0.2.0/29",
+            gateway="192.0.2.1",
+            is_active=True,
+        )
+        db_session.add(pool)
+        db_session.flush()
+        profile = OntProvisioningProfile(
+            name=f"static-mgmt-{uuid.uuid4().hex[:8]}",
+            mgmt_ip_mode=MgmtIpMode.static_ip,
+            mgmt_ip_pool_id=pool.id,
+        )
+        ont = OntUnit(serial_number="TEST-STATIC-MGMT")
+        db_session.add_all([profile, ont])
+        db_session.commit()
+        db_session.refresh(pool)
+        db_session.refresh(profile)
+        db_session.refresh(ont)
+
+        ok, message = _ensure_static_management_ip_from_profile(
+            db_session, ont, profile
+        )
+        db_session.commit()
+
+        assert ok is True
+        assert "Reserved static management IP 192.0.2.2" in message
+        assert ont.mgmt_ip_address == "192.0.2.2"
+        assert pool.next_available_ip == "192.0.2.3"
+        assert pool.available_count == 4
+
+
 class TestPushPppoeOmci:
     """Test push_pppoe_omci step."""
 

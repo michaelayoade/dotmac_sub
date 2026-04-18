@@ -51,6 +51,10 @@ class OltCliCommandRequest(BaseModel):
     command: str = Field(min_length=1, max_length=500)
 
 
+class OltOntStatusBySerialRequest(BaseModel):
+    serial_number: str = Field(min_length=1, max_length=64)
+
+
 # ── Read schemas ───────────────────────────────────────────────────────
 
 

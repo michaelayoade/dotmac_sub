@@ -825,9 +825,36 @@ def save_provision_settings(
         lan_dhcp_enabled=dhcp_enabled_value,
         lan_dhcp_start=dhcp_start_value,
         lan_dhcp_end=dhcp_end_value,
+        wifi_ssid=wifi_ssid_value,
+        wifi_password=encrypt_credential(wifi_password_value)
+        if wifi_password_value
+        else None,
     )
     try:
-        for key, value in payload.model_dump(exclude_unset=True).items():
+        payload_values = payload.model_dump(exclude_unset=True)
+        if not any(
+            value is not None
+            for value in [
+                lan_ip_value,
+                lan_subnet_value,
+                dhcp_enabled_value,
+                dhcp_start_value,
+                dhcp_end_value,
+            ]
+        ):
+            for key in [
+                "lan_gateway_ip",
+                "lan_subnet_mask",
+                "lan_dhcp_enabled",
+                "lan_dhcp_start",
+                "lan_dhcp_end",
+            ]:
+                payload_values.pop(key, None)
+        if wifi_ssid_value is None:
+            payload_values.pop("wifi_ssid", None)
+        if wifi_password_value is None:
+            payload_values.pop("wifi_password", None)
+        for key, value in payload_values.items():
             setattr(ont, key, value)
         profile_uuid = coerce_uuid(profile_id_value)
         if profile_uuid is not None:

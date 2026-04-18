@@ -37,7 +37,7 @@ ENCRYPTED_MODEL_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     "AccessCredential": ("secret_hash",),
     "OLTDevice": ("ssh_password", "snmp_ro_community", "snmp_rw_community"),
-    "OntUnit": ("pppoe_password",),
+    "OntUnit": ("pppoe_password", "wifi_password"),
     "OntProfileWanService": ("pppoe_static_password",),
     "Tr069AcsServer": ("cwmp_password", "connection_request_password"),
     "WebhookEndpoint": ("secret",),
@@ -222,8 +222,12 @@ def encrypt_credential(value: str | None) -> str | None:
     if not value:
         return value
 
-    # Don't double-encrypt
-    if is_encrypted(value):
+    # Don't double-encrypt, but do not preserve plaintext once enforcement is active.
+    if value.startswith("enc:"):
+        return value
+    if value.startswith("plain:"):
+        if _encryption_key_required:
+            return encrypt_credential_with_key(value[6:], get_encryption_key())
         return value
 
     return encrypt_credential_with_key(value, get_encryption_key())

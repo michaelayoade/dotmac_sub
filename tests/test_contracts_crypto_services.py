@@ -35,6 +35,7 @@ from app.services.audit_helpers import (
 from app.services.contracts import contract_signatures
 from app.services.credential_crypto import (
     ENCRYPTED_CREDENTIAL_FIELDS,
+    decrypt_credential_with_key,
     decrypt_credential,
     encrypt_credential,
     encrypt_nas_credentials,
@@ -116,6 +117,17 @@ class TestCredentialCrypto:
     def test_decrypt_plain_prefix(self):
         result = decrypt_credential("plain:my-password")
         assert result == "my-password"
+
+    def test_encrypt_plain_prefix_reencrypts_when_enforced(self):
+        key = Fernet.generate_key()
+        with (
+            patch("app.services.credential_crypto.get_encryption_key", return_value=key),
+            patch("app.services.credential_crypto._encryption_key_required", True),
+        ):
+            result = encrypt_credential("plain:my-password")
+
+        assert result.startswith("enc:")
+        assert decrypt_credential_with_key(result, key) == "my-password"
 
     def test_decrypt_legacy_no_prefix(self):
         result = decrypt_credential("legacy-password-no-prefix")

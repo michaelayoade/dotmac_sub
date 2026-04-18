@@ -345,14 +345,17 @@ class ProvisioningEnforcement:
         Args:
             db: Database session.
             ont_ids: OntUnit IDs to re-push PPPoE credentials for.
-            credentials: Optional access-credential provider used as a
-                fallback when the ONT's own ``pppoe_password`` field is
-                empty or cannot be decrypted. When ``None`` (standalone
-                mode), the fallback lookup is skipped and ONTs without
-                a usable stored password are counted as skipped.
+            Optional access-credential provider used as a fallback when
+            the ONT's own ``pppoe_password`` field is empty or cannot be
+            decrypted. When omitted, the full application attempts to
+            wire the default AccessCredential-backed adapter lazily. If
+            that bridge is unavailable, standalone mode skips the fallback.
         """
         from app.services.credential_crypto import decrypt_credential
         from app.services.network.ont_action_network import set_pppoe_credentials
+
+        if credentials is None:
+            credentials = _default_credential_provider(db)
 
         pushed = 0
         failed = 0
@@ -857,3 +860,12 @@ def _resolve_access_credential_password(
             exc_info=True,
         )
         return ""
+
+
+def _default_credential_provider(db: Session) -> PppoeCredentialProvider | None:
+    """Return the full-app AccessCredential adapter when it is available."""
+    try:
+        from app.services.network_credential_bridge import AccessCredentialAdapter
+    except ImportError:  # pragma: no cover - standalone deployments
+        return None
+    return AccessCredentialAdapter(db)

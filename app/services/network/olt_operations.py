@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
+import re
 import uuid
-import hashlib
 from datetime import UTC, datetime
 from difflib import unified_diff
 from pathlib import Path
@@ -22,6 +23,9 @@ from app.services.network import olt_ssh as olt_ssh_service
 from app.services.network.olt_inventory import get_olt_or_none
 from app.services.network.olt_monitoring_devices import find_linked_network_device
 from app.services.network.olt_web_audit import log_olt_audit_event
+from app.services.network.serial_utils import (
+    search_candidates as serial_search_candidates,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +41,6 @@ _CLI_ALLOWED_PREFIXES: list[str] = [
 ]
 
 _CLI_BLOCKED_PATTERNS: list[str] = [
-    "config",
     "reset",
     "reboot",
     "shutdown",
@@ -49,6 +52,17 @@ _CLI_BLOCKED_PATTERNS: list[str] = [
     "startup",
     "format",
 ]
+
+
+def _normalize_ont_status_serial(serial_number: str) -> tuple[str | None, str | None]:
+    serial = str(serial_number or "").replace("-", "").strip().upper()
+    if not serial:
+        return None, "ONT serial number is required"
+    if len(serial) > 64:
+        return None, "ONT serial number is too long"
+    if not re.fullmatch(r"[A-Z0-9]+", serial):
+        return None, "ONT serial number may only contain letters, numbers, and dashes"
+    return serial, None
 
 
 def olt_backup_base_dir() -> Path:
@@ -483,7 +497,7 @@ def validate_cli_command(command: str) -> str | None:
 
     cmd_lower = cmd.lower()
     for pattern in _CLI_BLOCKED_PATTERNS:
-        if pattern in cmd_lower:
+        if cmd_lower.startswith(pattern):
             return f"Command contains blocked keyword: {pattern}"
 
     if not any(cmd_lower.startswith(prefix) for prefix in _CLI_ALLOWED_PREFIXES):
@@ -533,6 +547,163 @@ def execute_cli_command(
         is_success=ok,
     )
     return ok, message, output
+
+
+def fetch_running_config_ssh_preview(
+    db: Session, olt_id: str, *, request: Request | None = None
+) -> tuple[bool, str, str]:
+    """Fetch full running config through SSH without storing a backup snapshot."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", ""
+
+    ok, message, config_text = olt_ssh_service.fetch_running_config_ssh(olt)
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="get_ssh_running_config",
+        entity_id=olt_id,
+        metadata={
+            "result": "success" if ok else "error",
+            "message": message,
+            "bytes": len(config_text.encode()) if config_text else 0,
+        },
+        status_code=200 if ok else 500,
+        is_success=ok,
+    )
+    return ok, message, config_text
+
+
+def get_ont_status_by_serial(
+    db: Session,
+    olt_id: str,
+    serial_number: str,
+    *,
+    request: Request | None = None,
+) -> tuple[bool, str, dict[str, object]]:
+    """Lookup an ONT by serial on an OLT, then read its full OLT-side status."""
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        return False, "OLT not found", {}
+
+    normalized_serial, error = _normalize_ont_status_serial(serial_number)
+    if error or not normalized_serial:
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="get_ont_status_by_serial",
+            entity_id=olt_id,
+            metadata={
+                "result": "error",
+                "message": error or "Invalid ONT serial number",
+                "serial_number": str(serial_number or "").strip(),
+            },
+            status_code=400,
+            is_success=False,
+        )
+        return False, error or "Invalid ONT serial number", {}
+
+    from app.services.network import olt_ssh_ont as olt_ssh_ont_service
+
+    lookup_serial = normalized_serial
+    find_msg = ""
+    found = None
+    for candidate in serial_search_candidates(normalized_serial):
+        candidate_serial, candidate_error = _normalize_ont_status_serial(candidate)
+        if candidate_error or not candidate_serial:
+            continue
+        find_ok, find_msg, found = olt_ssh_ont_service.find_ont_by_serial(
+            olt, candidate_serial
+        )
+        if not find_ok:
+            log_olt_audit_event(
+                db,
+                request=request,
+                action="get_ont_status_by_serial",
+                entity_id=olt_id,
+                metadata={
+                    "result": "error",
+                    "message": find_msg,
+                    "serial_number": normalized_serial,
+                    "lookup_serial": candidate_serial,
+                },
+                status_code=500,
+                is_success=False,
+            )
+            return False, find_msg, {}
+        if found is not None:
+            lookup_serial = candidate_serial
+            break
+
+    if found is None:
+        message = find_msg or f"ONT {normalized_serial} is not registered on {olt.name}"
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="get_ont_status_by_serial",
+            entity_id=olt_id,
+            metadata={
+                "result": "error",
+                "message": message,
+                "serial_number": normalized_serial,
+                "lookup_serial": lookup_serial,
+            },
+            status_code=404,
+            is_success=False,
+        )
+        return False, message, {}
+
+    status_ok, status_msg, status = olt_ssh_ont_service.get_ont_status(
+        olt, found.fsp, found.onu_id
+    )
+    if not status_ok or status is None:
+        log_olt_audit_event(
+            db,
+            request=request,
+            action="get_ont_status_by_serial",
+            entity_id=olt_id,
+            metadata={
+                "result": "error",
+                "message": status_msg,
+                "serial_number": normalized_serial,
+                "lookup_serial": lookup_serial,
+                "fsp": found.fsp,
+                "ont_id": found.onu_id,
+            },
+            status_code=500,
+            is_success=False,
+        )
+        return False, status_msg, {}
+
+    payload: dict[str, object] = {
+        "requested_serial": normalized_serial,
+        "lookup_serial": lookup_serial,
+        "registered_serial": found.real_serial,
+        "status_serial": status.serial_number,
+        "fsp": found.fsp,
+        "ont_id": found.onu_id,
+        "run_state": status.run_state or found.run_state,
+        "config_state": status.config_state,
+        "match_state": status.match_state,
+    }
+    message = (
+        f"ONT {normalized_serial} is registered on {found.fsp} as ONT-ID "
+        f"{found.onu_id} ({payload['run_state']})."
+    )
+    log_olt_audit_event(
+        db,
+        request=request,
+        action="get_ont_status_by_serial",
+        entity_id=olt_id,
+        metadata={
+            "result": "success",
+            "message": message,
+            **payload,
+        },
+        status_code=200,
+        is_success=True,
+    )
+    return True, message, payload
 
 
 def backup_running_config_ssh(

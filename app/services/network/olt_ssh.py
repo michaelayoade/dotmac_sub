@@ -713,6 +713,191 @@ def upgrade_firmware(
         transport.close()
 
 
+@dataclass
+class FirmwareInfo:
+    """Firmware version information from OLT."""
+
+    current_version: str | None = None
+    standby_version: str | None = None
+    running_board: str | None = None
+    standby_board: str | None = None
+    uptime: str | None = None
+    has_dual_image: bool = False
+
+
+def _parse_firmware_info(output: str) -> FirmwareInfo:
+    """Parse firmware version information from 'display version' output."""
+    info = FirmwareInfo()
+    lines = output.splitlines()
+
+    for line in lines:
+        line_lower = line.lower()
+
+        # Look for version patterns
+        if "version" in line_lower and "software" in line_lower:
+            # Huawei: VRP (R) software, Version X.XXX
+            match = re.search(r"Version\s+(\S+)", line, re.IGNORECASE)
+            if match:
+                info.current_version = match.group(1)
+
+        # Look for uptime
+        if "uptime" in line_lower:
+            match = re.search(r"uptime[:\s]+(.+)$", line, re.IGNORECASE)
+            if match:
+                info.uptime = match.group(1).strip()
+
+        # Look for board information
+        if "board" in line_lower and ("main" in line_lower or "master" in line_lower):
+            info.running_board = line.strip()
+        if "board" in line_lower and ("standby" in line_lower or "slave" in line_lower):
+            info.standby_board = line.strip()
+            info.has_dual_image = True
+
+        # Look for standby version
+        if "standby" in line_lower and "version" in line_lower:
+            match = re.search(r"Version[:\s]+(\S+)", line, re.IGNORECASE)
+            if match:
+                info.standby_version = match.group(1)
+                info.has_dual_image = True
+
+    return info
+
+
+def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
+    """Get current and standby firmware versions from OLT via 'display version'.
+
+    Args:
+        olt: The OLT device.
+
+    Returns:
+        Tuple of (success, message, FirmwareInfo).
+    """
+    try:
+        transport, channel, policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}", FirmwareInfo()
+
+    try:
+        channel.send("enable\n")
+        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        channel.send("screen-length 0 temporary\n")
+        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+
+        output = _run_huawei_paged_cmd(
+            channel,
+            "display version",
+            prompt=policy.prompt_regex,
+            timeout_sec=30,
+        )
+
+        info = _parse_firmware_info(output)
+
+        if not info.current_version:
+            return False, "Could not parse firmware version from output", info
+
+        message = f"Running: {info.current_version}"
+        if info.standby_version:
+            message += f", Standby: {info.standby_version}"
+
+        logger.info(
+            "Retrieved firmware info from OLT %s: %s",
+            olt.name,
+            message,
+        )
+        return True, message, info
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error getting firmware info from OLT %s: %s", olt.name, exc, exc_info=True
+        )
+        return False, f"Error: {exc}", FirmwareInfo()
+    finally:
+        transport.close()
+
+
+def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
+    """Switch to standby/backup firmware image.
+
+    This issues 'startup system-software' to swap the active and standby images.
+    The OLT will boot to the previous image on next reboot.
+
+    Args:
+        olt: The OLT device.
+
+    Returns:
+        Tuple of (success, message).
+    """
+    try:
+        transport, channel, policy = _open_shell(olt)
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"Connection failed: {exc}"
+
+    try:
+        channel.send("enable\n")
+        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+
+        # First check if we have dual image support
+        ok, msg, info = get_firmware_info(olt)
+        if not info.has_dual_image:
+            return False, "OLT does not appear to have dual-image support"
+        if not info.standby_version:
+            return False, "No standby firmware version available for rollback"
+
+        channel.send("screen-length 0 temporary\n")
+        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+
+        # Switch startup system software to standby
+        # Huawei: startup system-software slave (or backup/standby depending on model)
+        cmd = "startup system-software"
+        output = _run_huawei_cmd(channel, cmd, prompt=r"#\s*$|y/n|\[Y/N\]")
+
+        # Handle confirmation prompt
+        if re.search(r"y/n|\[Y/N\]", output, re.IGNORECASE):
+            channel.send("y\n")
+            output += _read_until_prompt(channel, policy.prompt_regex, timeout_sec=15)
+
+        if is_error_output(output):
+            logger.warning(
+                "Firmware rollback failed on OLT %s: %s", olt.name, output.strip()[-200:]
+            )
+            return False, f"Rollback command failed: {output.strip()[-200:]}"
+
+        logger.info(
+            "Firmware rollback initiated on OLT %s: switching from %s to %s",
+            olt.name,
+            info.current_version,
+            info.standby_version,
+        )
+        return (
+            True,
+            f"Rollback scheduled: will boot to {info.standby_version} on next reboot",
+        )
+    except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
+        logger.error(
+            "Error during firmware rollback on OLT %s: %s", olt.name, exc, exc_info=True
+        )
+        return False, f"Error: {exc}"
+    finally:
+        transport.close()
+
+
+def test_reachability(olt: OLTDevice, timeout_sec: int = 10) -> tuple[bool, str]:
+    """Test if OLT is reachable via SSH.
+
+    Args:
+        olt: The OLT device.
+        timeout_sec: Connection timeout in seconds.
+
+    Returns:
+        Tuple of (reachable, message).
+    """
+    try:
+        transport, channel, policy = _open_shell(olt)
+        transport.close()
+        return True, f"OLT {olt.name} is reachable via SSH"
+    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        return False, f"OLT {olt.name} is not reachable: {exc}"
+
+
 def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
     """Fetch the full running configuration from an OLT via SSH.
 
@@ -727,8 +912,12 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         channel.send("enable\n")
         _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
 
-        channel.send("display current-configuration\n")
-        output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=60)
+        output = _run_huawei_paged_cmd(
+            channel,
+            "display current-configuration",
+            prompt=policy.prompt_regex,
+            timeout_sec=60,
+        )
 
         # Strip echoed command and trailing prompt
         lines = output.splitlines()
@@ -1050,6 +1239,9 @@ from app.services.network.olt_ssh_profiles import (
 )
 from app.services.network.olt_ssh_profiles import (
     create_tr069_server_profile as create_tr069_server_profile,
+)
+from app.services.network.olt_ssh_profiles import (
+    ensure_wan_srvprofile as ensure_wan_srvprofile,
 )
 from app.services.network.olt_ssh_profiles import (
     get_line_profiles as get_line_profiles,

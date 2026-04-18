@@ -33,10 +33,25 @@ def return_to_inventory_for_web(
 ) -> ActionResult:
     """Return ONT to inventory with route-friendly not-found handling."""
     try:
-        network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
+        ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return ActionResult(success=False, message="ONT not found")
-    return return_to_inventory(db, ont_id, request=request)
+    from app.services.network.ont_inventory import return_ont_to_inventory
+
+    result = return_ont_to_inventory(db, ont_id)
+    _log_action_audit(
+        db,
+        request=request,
+        action="return_to_inventory",
+        ont_id=ont.id,
+        metadata={
+            "serial_number": ont.serial_number,
+            "success": result.success,
+        },
+        status_code=200 if result.success else 400,
+        is_success=result.success,
+    )
+    return result
 
 
 def _cleanup_olt_state_for_return(

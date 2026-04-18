@@ -352,6 +352,149 @@ def _extract_group(
     return result
 
 
+def _is_management_wan_service(item: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(item.get(key) or "")
+        for key in ("Name", "X_HW_SERVICELIST", "ServiceList", "ConnectionType")
+    ).lower()
+    return "tr069" in text or "management" in text or "mgmt" in text
+
+
+def _extract_numbered_objects(parent: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(parent, dict):
+        return []
+    rows: list[dict[str, Any]] = []
+    for key in sorted((k for k in parent if str(k).isdigit()), key=lambda item: int(str(item))):
+        value = parent.get(key)
+        if isinstance(value, dict):
+            row = dict(value)
+            row["_instance"] = key
+            rows.append(row)
+    return rows
+
+
+def _extract_connection_row(obj: dict[str, Any], *, kind: str, wcd_index: str) -> dict[str, Any]:
+    row = {
+        "kind": kind,
+        "wcd_index": wcd_index,
+        "instance": str(obj.get("_instance") or "1"),
+    }
+    for field in (
+        "Name",
+        "ConnectionType",
+        "ConnectionStatus",
+        "ExternalIPAddress",
+        "Username",
+        "Uptime",
+        "DNSServers",
+        "DefaultGateway",
+        "X_HW_SERVICELIST",
+        "X_HW_VLAN",
+    ):
+        row[field] = _unwrap_tr069_value(obj.get(field))
+    return row
+
+
+def _extract_igd_wan_group(device: dict[str, Any]) -> dict[str, Any] | None:
+    wcd_parent = (
+        device.get("InternetGatewayDevice", {})
+        .get("WANDevice", {})
+        .get("1", {})
+        .get("WANConnectionDevice")
+    )
+    connections: list[dict[str, Any]] = []
+    for wcd in _extract_numbered_objects(wcd_parent):
+        wcd_index = str(wcd.get("_instance") or "")
+        for ppp in _extract_numbered_objects(wcd.get("WANPPPConnection")):
+            connections.append(_extract_connection_row(ppp, kind="ppp", wcd_index=wcd_index))
+        for ip_conn in _extract_numbered_objects(wcd.get("WANIPConnection")):
+            connections.append(_extract_connection_row(ip_conn, kind="ip", wcd_index=wcd_index))
+
+    ppp_connections = [item for item in connections if item.get("kind") == "ppp"]
+    if ppp_connections:
+        selected = next(
+            (
+                item
+                for item in ppp_connections
+                if item.get("ConnectionStatus")
+                or item.get("Username")
+                or item.get("ExternalIPAddress")
+            ),
+            ppp_connections[0],
+        )
+        return {
+            "Connection Type": selected.get("ConnectionType") or "PPPoE",
+            "WAN IP": selected.get("ExternalIPAddress"),
+            "Username": selected.get("Username"),
+            "Status": selected.get("ConnectionStatus"),
+            "Uptime": selected.get("Uptime"),
+            "DNS Servers": selected.get("DNSServers"),
+            "Gateway": selected.get("DefaultGateway"),
+            "WAN Instance": f"{selected.get('wcd_index')}.{selected.get('instance')}",
+            "WAN Service": selected.get("Name") or selected.get("X_HW_SERVICELIST"),
+        }
+
+    routed_ip_connections = [
+        item
+        for item in connections
+        if item.get("kind") == "ip" and not _is_management_wan_service(item)
+    ]
+    if routed_ip_connections:
+        selected = next(
+            (
+                item
+                for item in routed_ip_connections
+                if item.get("ConnectionStatus") or item.get("ExternalIPAddress")
+            ),
+            routed_ip_connections[0],
+        )
+        return {
+            "Connection Type": selected.get("ConnectionType") or "IP",
+            "WAN IP": selected.get("ExternalIPAddress"),
+            "Username": None,
+            "Status": selected.get("ConnectionStatus"),
+            "Uptime": selected.get("Uptime"),
+            "DNS Servers": selected.get("DNSServers"),
+            "Gateway": selected.get("DefaultGateway"),
+            "WAN Instance": f"{selected.get('wcd_index')}.{selected.get('instance')}",
+            "WAN Service": selected.get("Name") or selected.get("X_HW_SERVICELIST"),
+        }
+
+    management_connections = [
+        item for item in connections if item.get("kind") == "ip" and _is_management_wan_service(item)
+    ]
+    if management_connections:
+        selected = management_connections[0]
+        return {
+            "Connection Type": "Management",
+            "WAN IP": None,
+            "Username": None,
+            "Status": None,
+            "Uptime": None,
+            "DNS Servers": None,
+            "Gateway": None,
+            "Management WAN IP": selected.get("ExternalIPAddress"),
+            "Management WAN Status": selected.get("ConnectionStatus"),
+            "WAN Instance": f"{selected.get('wcd_index')}.{selected.get('instance')}",
+            "WAN Service": selected.get("Name") or selected.get("X_HW_SERVICELIST"),
+        }
+    return None
+
+
+def _extract_wan_group(
+    client: GenieACSClient,
+    device: dict[str, Any],
+    *,
+    db: Session | None = None,
+    vendor: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    igd_wan = _extract_igd_wan_group(device)
+    if igd_wan is not None:
+        return igd_wan
+    return _extract_group(client, device, "wan", db=db, vendor=vendor, model=model)
+
+
 def _extract_object_instances(
     device: dict[str, Any],
     base_path: str,
@@ -561,8 +704,8 @@ class OntTR069:
         summary.system = _extract_group(
             client, device, "system", db=db, vendor=ont_vendor, model=ont_model
         )
-        summary.wan = _extract_group(
-            client, device, "wan", db=db, vendor=ont_vendor, model=ont_model
+        summary.wan = _extract_wan_group(
+            client, device, db=db, vendor=ont_vendor, model=ont_model
         )
         summary.lan = _extract_group(
             client, device, "lan", db=db, vendor=ont_vendor, model=ont_model

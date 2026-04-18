@@ -44,6 +44,7 @@ class DeviceStatus(enum.Enum):
     active = "active"
     inactive = "inactive"
     maintenance = "maintenance"
+    draining = "draining"  # Blocks new ONT authorizations, preserves existing service
     retired = "retired"
 
 
@@ -262,6 +263,14 @@ class OntProvisioningStatus(enum.Enum):
     unprovisioned = "unprovisioned"
     provisioned = "provisioned"
     drift_detected = "drift_detected"
+    failed = "failed"
+
+
+class WanServiceProvisioningStatus(enum.Enum):
+    """Provisioning state of an individual WAN service instance."""
+
+    pending = "pending"
+    provisioned = "provisioned"
     failed = "failed"
 
 
@@ -872,6 +881,7 @@ class PonPort(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     description: Mapped[str | None] = mapped_column(String(255))
     port_number: Mapped[int | None] = mapped_column(Integer)
+    max_ont_capacity: Mapped[int | None] = mapped_column(Integer)
     notes: Mapped[str | None] = mapped_column(Text)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -1001,7 +1011,11 @@ class OltSfpModule(Base):
 class OntUnit(Base):
     __tablename__ = "ont_units"
     __table_args__ = (
-        UniqueConstraint("serial_number", name="uq_ont_units_serial_number"),
+        UniqueConstraint(
+            "olt_device_id",
+            "serial_number",
+            name="uq_ont_units_olt_serial_number",
+        ),
         Index(
             "uq_ont_units_olt_external_id",
             "olt_device_id",
@@ -1218,10 +1232,20 @@ class OntUnit(Base):
     )
     tr069_acs_server = relationship("Tr069AcsServer")
     provisioning_profile = relationship("OntProvisioningProfile")
+    wan_service_instances = relationship(
+        "OntWanServiceInstance",
+        back_populates="ont",
+        cascade="all, delete-orphan",
+        order_by="OntWanServiceInstance.priority",
+    )
 
 
 class OntAssignment(Base):
     __tablename__ = "ont_assignments"
+    # Partial unique index for PostgreSQL only: ensures only one active assignment
+    # per ONT. SQLite ignores postgresql_where, creating a full unique constraint
+    # which breaks tests that create multiple assignments per ONT. Real deployments
+    # use PostgreSQL which respects the partial index.
     __table_args__ = (
         Index(
             "ix_ont_assignments_active_unit",
@@ -2073,6 +2097,116 @@ class OntProfileWanService(Base):
     profile = relationship("OntProvisioningProfile", back_populates="wan_services")
 
 
+class OntWanServiceInstance(Base):
+    """Per-ONT WAN service instance with resolved credentials and VLANs.
+
+    Bridges the gap between profile templates (OntProfileWanService) and
+    actual device configuration. Each instance holds:
+    - Resolved VLAN IDs (not just tags)
+    - Actual PPPoE credentials (resolved from templates)
+    - Per-service provisioning state
+
+    This enables:
+    - Multi-WAN support at instance level (internet + IPTV + VoIP)
+    - Grouped L2/L3 provisioning (VLAN + connection + credentials together)
+    - Independent service state tracking
+    """
+
+    __tablename__ = "ont_wan_service_instances"
+    __table_args__ = (
+        Index(
+            "ix_ont_wan_service_instances_ont_type",
+            "ont_id",
+            "service_type",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ont_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_units.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    source_profile_service_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ont_profile_wan_services.id", ondelete="SET NULL"),
+        doc="Original profile service this was instantiated from (if any)",
+    )
+
+    # Service identity
+    service_type: Mapped[WanServiceType] = mapped_column(
+        Enum(WanServiceType, name="wanservicetype", create_constraint=False),
+        nullable=False,
+        default=WanServiceType.internet,
+    )
+    name: Mapped[str | None] = mapped_column(String(120))
+    priority: Mapped[int] = mapped_column(Integer, default=1)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # L2: VLAN configuration (resolved at instantiation)
+    vlan_mode: Mapped[VlanMode] = mapped_column(
+        Enum(VlanMode, name="vlanmode", create_constraint=False),
+        nullable=False,
+        default=VlanMode.tagged,
+    )
+    vlan_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("vlans.id", ondelete="SET NULL"),
+        doc="Resolved VLAN record (from profile s_vlan tag or explicit assignment)",
+    )
+    s_vlan: Mapped[int | None] = mapped_column(Integer, doc="Service VLAN tag")
+    c_vlan: Mapped[int | None] = mapped_column(Integer, doc="Customer VLAN tag (QinQ)")
+
+    # L3: Connection configuration
+    connection_type: Mapped[WanConnectionType] = mapped_column(
+        Enum(WanConnectionType, name="wanconnectiontype", create_constraint=False),
+        nullable=False,
+        default=WanConnectionType.pppoe,
+    )
+    nat_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    # PPPoE credentials (resolved from template, actual values)
+    pppoe_username: Mapped[str | None] = mapped_column(String(200))
+    pppoe_password: Mapped[str | None] = mapped_column(
+        String(500), doc="Encrypted PPPoE password"
+    )
+
+    # Static IP (when connection_type = static)
+    static_ip: Mapped[str | None] = mapped_column(String(64))
+    static_gateway: Mapped[str | None] = mapped_column(String(64))
+    static_dns: Mapped[str | None] = mapped_column(String(200))
+
+    # Provisioning state
+    provisioning_status: Mapped[WanServiceProvisioningStatus] = mapped_column(
+        Enum(
+            WanServiceProvisioningStatus,
+            name="wanserviceprovisioningstatus",
+            create_constraint=False,
+        ),
+        nullable=False,
+        default=WanServiceProvisioningStatus.pending,
+    )
+    last_provisioned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    # Relationships
+    ont = relationship("OntUnit", back_populates="wan_service_instances")
+    source_profile_service = relationship("OntProfileWanService")
+    vlan = relationship("Vlan", foreign_keys=[vlan_id])
+
+
 class VendorModelCapability(Base):
     """Global hardware capability catalog for ONT/ONU vendor models.
 
@@ -2263,3 +2397,92 @@ class OntConfigSnapshot(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
     )
+
+
+class VendorSnmpConfig(Base):
+    """Per-vendor/model SNMP configuration for OLT polling.
+
+    Allows customization of SNMP walk strategy, timeouts, and OID overrides
+    on a per-vendor or per-model basis. Supports priority-based resolution
+    where more specific configurations (vendor+model) take precedence.
+    """
+
+    __tablename__ = "vendor_snmp_configs"
+    __table_args__ = (
+        UniqueConstraint("vendor", "model", name="uq_vendor_snmp_config"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    vendor: Mapped[str] = mapped_column(String(120), nullable=False)
+    model: Mapped[str | None] = mapped_column(String(120))
+
+    # Walk strategy: "single" (snmpwalk) or "bulk" (snmpbulkwalk)
+    walk_strategy: Mapped[str] = mapped_column(String(20), default="single")
+    walk_timeout_seconds: Mapped[int] = mapped_column(Integer, default=90)
+    walk_max_repetitions: Mapped[int] = mapped_column(Integer, default=50)
+
+    # OID overrides (JSON dict mapping metric name to OID)
+    oid_overrides: Mapped[dict | None] = mapped_column(JSON)
+
+    # Signal scale factor override
+    signal_scale: Mapped[float | None] = mapped_column(Float)
+
+    priority: Mapped[int] = mapped_column(Integer, default=0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class SignalThresholdOverride(Base):
+    """Per-OLT or per-model signal threshold overrides.
+
+    Allows customization of warning/critical thresholds on a per-OLT
+    or per-model basis. Either olt_device_id or model_pattern can be
+    set, but not both (enforced by check constraint).
+    """
+
+    __tablename__ = "signal_threshold_overrides"
+    __table_args__ = (
+        CheckConstraint(
+            "NOT (olt_device_id IS NOT NULL AND model_pattern IS NOT NULL)",
+            name="ck_threshold_override_scope",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+
+    # Scope: either specific OLT OR model pattern (not both)
+    olt_device_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("olt_devices.id", ondelete="CASCADE")
+    )
+    model_pattern: Mapped[str | None] = mapped_column(String(120))
+
+    # Threshold values (NULL = inherit from global)
+    warning_threshold_dbm: Mapped[float | None] = mapped_column(Float)
+    critical_threshold_dbm: Mapped[float | None] = mapped_column(Float)
+
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+    )
+
+    olt_device = relationship("OLTDevice")

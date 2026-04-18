@@ -143,10 +143,15 @@ class ProvisioningExecutionResult:
                                 "Rollback: %s - %s", entry.step_name, entry.description
                             )
                         else:
-                            logger.warning(
+                            logger.error(
                                 "Rollback failed: %s - %s",
                                 entry.step_name,
                                 entry.description,
+                                extra={
+                                    "event": "provisioning_compensation_failed",
+                                    "step": entry.step_name,
+                                    "resource_id": entry.resource_id,
+                                },
                             )
                     except Exception as exc:
                         logger.error(
@@ -154,11 +159,20 @@ class ProvisioningExecutionResult:
                             entry.step_name,
                             entry.description,
                             exc,
+                            extra={
+                                "event": "provisioning_compensation_error",
+                                "step": entry.step_name,
+                                "resource_id": entry.resource_id,
+                            },
                         )
                         results.append((entry.step_name, False, str(exc)))
 
         except Exception as exc:
-            logger.error("Failed to establish rollback connection: %s", exc)
+            logger.error(
+                "Failed to establish rollback connection: %s",
+                exc,
+                extra={"event": "provisioning_compensation_connection_failed"},
+            )
             # Return error for all remaining entries
             for entry in self.compensation_log:
                 if not any(r[0] == entry.step_name for r in results):
@@ -249,6 +263,8 @@ def execute_delta(
             validation_errors.append(f"Optical: {delta.optical_budget_message}")
         if not delta.mgmt_vlan_trunked:
             validation_errors.append(f"VLAN: {delta.mgmt_vlan_message}")
+        if not delta.service_vlans_ok:
+            validation_errors.append(f"Service VLANs: {delta.service_vlans_message}")
         if not delta.ip_index_valid:
             validation_errors.append(f"IP Index: {delta.ip_index_message}")
 
@@ -555,6 +571,24 @@ def _execute_management_ip_config(
     if mgmt_config.ip_mode == "dhcp":
         cmd = f"ont iphost {olt_ont_id} ip-index 0 ip-address dhcp vlan {mgmt_config.vlan_tag}"
     else:
+        missing = [
+            name
+            for name, value in {
+                "ip_address": mgmt_config.ip_address,
+                "subnet": mgmt_config.subnet,
+                "gateway": mgmt_config.gateway,
+            }.items()
+            if not value
+        ]
+        if missing:
+            message = (
+                "Static management IP config is incomplete: "
+                + ", ".join(missing)
+            )
+            result.steps_failed.append("configure_management_ip")
+            result.errors.append(message)
+            logger.error(message)
+            return False
         cmd = f"ont iphost {olt_ont_id} ip-index 0 ip-address {mgmt_config.ip_address} mask {mgmt_config.subnet} gateway {mgmt_config.gateway} vlan {mgmt_config.vlan_tag}"
 
     # Enter interface mode

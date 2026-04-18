@@ -104,6 +104,7 @@ from app.tasks.zabbix_ingestion import (
 
 __all__ = [
     "cleanup_old_operations",
+    "verify_nin_task",
     "sync_gis_sources",
     "run_batch_geocode_job",
     "run_import_job",

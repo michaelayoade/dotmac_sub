@@ -417,6 +417,64 @@ def olt_run_cli_command(
     )
 
 
+def _olt_status_by_serial_html(
+    *, ok: bool, message: str, status: dict[str, object]
+) -> HTMLResponse:
+    import html as html_mod
+
+    escaped_msg = html_mod.escape(message)
+    if not ok:
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 '
+            f'dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{escaped_msg}</div>'
+        )
+
+    rows = [
+        ("Requested Serial", status.get("requested_serial")),
+        ("Lookup Serial", status.get("lookup_serial")),
+        ("Registered Serial", status.get("registered_serial")),
+        ("Status Serial", status.get("status_serial")),
+        ("F/S/P", status.get("fsp")),
+        ("ONT-ID", status.get("ont_id")),
+        ("Run State", status.get("run_state")),
+        ("Config State", status.get("config_state")),
+        ("Match State", status.get("match_state")),
+    ]
+    row_html = "".join(
+        "<tr>"
+        f'<th class="px-3 py-2 text-left text-xs font-semibold uppercase text-slate-500 dark:text-slate-400">{html_mod.escape(label)}</th>'
+        f'<td class="px-3 py-2 font-mono text-sm text-slate-900 dark:text-slate-100">{html_mod.escape(str(value or "-"))}</td>'
+        "</tr>"
+        for label, value in rows
+    )
+    return HTMLResponse(
+        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
+        f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">{escaped_msg}</div>'
+        f'<div class="overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">'
+        f'<table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">'
+        f'<tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-800 dark:bg-slate-900">{row_html}</tbody>'
+        f"</table></div>"
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/ont-status-by-serial",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_ont_status_by_serial(
+    request: Request,
+    olt_id: str,
+    serial_number: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Lookup an ONT by serial on this OLT and return full OLT-side status."""
+    ok, message, status = olt_operations_service.get_ont_status_by_serial(
+        db, olt_id, serial_number, request=request
+    )
+    return _olt_status_by_serial_html(ok=ok, message=message, status=status)
+
+
 @router.post(
     "/olts/{olt_id}/test-ssh",
     dependencies=[Depends(require_permission("network:write"))],
@@ -496,6 +554,36 @@ def olt_netconf_get_config(
 
 
 @router.post(
+    "/olts/{olt_id}/ssh-get-config",
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_ssh_get_config(
+    request: Request, olt_id: str, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Fetch OLT running config via SSH/CLI and return as formatted HTML."""
+    import html as html_mod
+
+    ok, message, config_text = olt_operations_service.fetch_running_config_ssh_preview(
+        db, olt_id, request=request
+    )
+    escaped_msg = html_mod.escape(message)
+    if not ok:
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 '
+            f'dark:border-red-900/30 dark:bg-red-900/10 dark:text-red-300">{escaped_msg}</div>'
+        )
+
+    escaped_config = html_mod.escape(config_text)
+    return HTMLResponse(
+        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700 '
+        f'dark:border-emerald-900/30 dark:bg-emerald-900/10 dark:text-emerald-300 mb-3">'
+        f'{escaped_msg}. Retrieved over SSH CLI.</div>'
+        f'<pre class="rounded-lg bg-slate-900 p-4 text-xs font-mono text-emerald-400 overflow-x-auto '
+        f'max-h-[600px] overflow-y-auto whitespace-pre-wrap">{escaped_config}</pre>'
+    )
+
+
+@router.post(
     "/olts/{olt_id}/sync-onts",
     dependencies=[Depends(require_permission("network:write"))],
 )
@@ -560,7 +648,7 @@ def olt_repair_pon_ports_get_fallback(olt_id: str) -> RedirectResponse:
 
 @router.post(
     "/olts/{olt_id}/autofind",
-    dependencies=[Depends(require_permission("network:read"))],
+    dependencies=[Depends(require_permission("network:write"))],
 )
 def olt_autofind_scan(
     request: Request, olt_id: str, db: Session = Depends(get_db)
@@ -1120,3 +1208,210 @@ def olt_tr069_profiles(
     context = _base_context(request, db, active_page="olts")
     context.update(data)
     return templates.TemplateResponse("admin/network/olts/_profiles_tab.html", context)
+
+
+# ---------------------------------------------------------------------------
+# OLT Lifecycle Management
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/olts/{olt_id}/delete-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_delete_preview(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Return HTML partial with deletion impact summary."""
+    from app.services.network import olt_lifecycle as olt_lifecycle_service
+
+    impact = olt_lifecycle_service.get_deletion_impact(db, olt_id)
+    if not impact:
+        return HTMLResponse(
+            '<div class="text-rose-600 dark:text-rose-400">OLT not found</div>',
+            status_code=404,
+        )
+    context = _base_context(request, db, active_page="olts")
+    context["impact"] = impact
+    return templates.TemplateResponse(
+        "admin/network/olts/_delete_preview.html", context
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/set-draining",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_set_draining(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Set OLT to draining status, blocking new ONT authorizations."""
+    from app.services.network import olt_lifecycle as olt_lifecycle_service
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    actor = getattr(user, "username", "admin") if user else "admin"
+
+    ok, message = olt_lifecycle_service.set_draining(db, olt_id, actor=actor)
+    if ok:
+        db.commit()
+    else:
+        db.rollback()
+
+    status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/set-active",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_set_active(
+    request: Request,
+    olt_id: str,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Restore OLT to active status, allowing new ONT authorizations."""
+    from app.services.network import olt_lifecycle as olt_lifecycle_service
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    actor = getattr(user, "username", "admin") if user else "admin"
+
+    ok, message = olt_lifecycle_service.set_active(db, olt_id, actor=actor)
+    if ok:
+        db.commit()
+    else:
+        db.rollback()
+
+    status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/firmware-preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:read"))],
+)
+def olt_firmware_upgrade_preview(
+    request: Request,
+    olt_id: str,
+    firmware_image_id: str = Form(""),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Dry-run: show current version, target version, compatibility check."""
+    import html as html_mod
+
+    from app.services.network import olt_firmware as olt_firmware_service
+
+    if not firmware_image_id:
+        return HTMLResponse(
+            '<div class="text-rose-600 dark:text-rose-400">No firmware image selected</div>',
+            status_code=400,
+        )
+
+    result = olt_firmware_service.get_firmware_preview(db, olt_id, firmware_image_id)
+
+    if not result.success:
+        escaped_msg = html_mod.escape(result.message)
+        return HTMLResponse(
+            f'<div class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700 '
+            f'dark:border-rose-800 dark:bg-rose-900/20 dark:text-rose-400">{escaped_msg}</div>'
+        )
+
+    escaped_current = html_mod.escape(result.current_version or "Unknown")
+    escaped_target = html_mod.escape(result.target_version or "Unknown")
+
+    return HTMLResponse(
+        f'<div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm '
+        f'dark:border-emerald-800 dark:bg-emerald-900/20">'
+        f'<div class="font-semibold text-emerald-800 dark:text-emerald-300 mb-2">Firmware Upgrade Preview</div>'
+        f'<div class="text-emerald-700 dark:text-emerald-400">'
+        f'<span class="font-medium">Current:</span> {escaped_current}<br>'
+        f'<span class="font-medium">Target:</span> {escaped_target}'
+        f'</div>'
+        f'</div>'
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/firmware-upgrade-verified",
+    dependencies=[Depends(require_permission("network:write"))],
+)
+def olt_firmware_upgrade_verified(
+    request: Request,
+    olt_id: str,
+    firmware_image_id: str = Form(""),
+    verify_after: str = Form("true"),
+    async_mode: str = Form("true"),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Trigger firmware upgrade with verification (optionally async)."""
+    if not firmware_image_id:
+        msg = quote_plus("No firmware image selected")
+        return RedirectResponse(
+            f"/admin/network/olts/{olt_id}?sync_status=error&sync_message={msg}",
+            status_code=303,
+        )
+
+    do_verify = verify_after.lower() in ("true", "1", "on", "yes")
+    do_async = async_mode.lower() in ("true", "1", "on", "yes")
+
+    if do_async:
+        # Queue background task
+        from app.celery_app import enqueue_celery_task
+        from app.tasks.olt_firmware import upgrade_firmware_task
+
+        try:
+            enqueue_celery_task(
+                upgrade_firmware_task,
+                args=[olt_id, firmware_image_id],
+                kwargs={"verify_after": do_verify},
+                correlation_id=f"firmware_upgrade:{olt_id}",
+                source="admin_network_olts",
+            )
+            message = "Firmware upgrade queued. This may take several minutes."
+            status = "success"
+        except Exception as exc:
+            logger.error(
+                "Failed to queue firmware upgrade for OLT %s: %s",
+                olt_id,
+                exc,
+                exc_info=True,
+            )
+            message = f"Failed to queue upgrade: {exc}"
+            status = "error"
+    else:
+        # Run synchronously (may timeout for large upgrades)
+        from app.services.network import olt_firmware as olt_firmware_service
+
+        result = olt_firmware_service.upgrade_with_verification_audited(
+            db,
+            olt_id,
+            firmware_image_id,
+            dry_run=False,
+            verify_after=do_verify,
+            request=request,
+        )
+        message = result.message
+        status = "success" if result.success else "error"
+        if result.success:
+            db.commit()
+        else:
+            db.rollback()
+
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?sync_status={status}&sync_message={quote_plus(message)}",
+        status_code=303,
+    )

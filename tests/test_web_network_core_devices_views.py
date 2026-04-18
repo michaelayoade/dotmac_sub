@@ -141,6 +141,79 @@ def test_ont_detail_page_data_hides_synthetic_serial(db_session):
     assert payload["display_serial_label"] == "-"
 
 
+def test_ont_detail_page_data_exposes_connected_customer_device_count_from_snapshot(
+    db_session,
+):
+    ont = OntUnit(
+        serial_number="ONT-LAN-HOSTS",
+        is_active=True,
+        observed_lan_hosts=9,
+        observed_wifi_clients=8,
+        tr069_last_snapshot={
+            "wireless": {"Connected Clients": "2"},
+            "lan_hosts": [
+                {
+                    "HostName": "phone",
+                    "IPAddress": "192.168.1.10",
+                    "MACAddress": "AA:BB:CC:00:00:01",
+                    "Active": "true",
+                },
+                {
+                    "HostName": "laptop",
+                    "IPAddress": "192.168.1.11",
+                    "MACAddress": "AA:BB:CC:00:00:02",
+                    "Active": "1",
+                },
+                {
+                    "HostName": "old-device",
+                    "IPAddress": "192.168.1.12",
+                    "MACAddress": "AA:BB:CC:00:00:03",
+                    "Active": "false",
+                },
+            ]
+        },
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["connected_customer_devices"] == 2
+    assert payload["connected_wifi_clients"] == 2
+
+
+def test_ont_detail_page_data_falls_back_to_observed_lan_hosts(db_session):
+    ont = OntUnit(
+        serial_number="ONT-LAN-HOSTS-FALLBACK",
+        is_active=True,
+        observed_lan_hosts=4,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["connected_customer_devices"] == 4
+
+
+def test_ont_detail_page_data_uses_wifi_clients_when_host_count_missing(db_session):
+    ont = OntUnit(
+        serial_number="ONT-WIFI-CLIENTS-FALLBACK",
+        is_active=True,
+        observed_wifi_clients=3,
+    )
+    db_session.add(ont)
+    db_session.commit()
+
+    payload = core_devices_views.ont_detail_page_data(db_session, str(ont.id))
+
+    assert payload is not None
+    assert payload["connected_customer_devices"] == 3
+    assert payload["connected_wifi_clients"] == 3
+
+
 def test_ont_detail_page_data_uses_recent_acs_inform_for_effective_online_status(
     db_session,
 ):

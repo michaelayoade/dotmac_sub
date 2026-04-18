@@ -11,7 +11,7 @@ import re
 import shutil
 from datetime import UTC, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.network import (
@@ -26,6 +26,7 @@ from app.models.network import (
     OnuOnlineStatus,
     PollStatus,
     PonPort,
+    SignalThresholdOverride,
 )
 from app.models.network_monitoring import NetworkDevice
 from app.services.credential_crypto import decrypt_credential
@@ -125,8 +126,30 @@ def classify_signal(
     return SIGNAL_QUALITY_CRITICAL
 
 
-def get_signal_thresholds(db: Session) -> tuple[float, float]:
-    """Load signal thresholds from settings, falling back to defaults."""
+def get_signal_thresholds(
+    db: Session,
+    *,
+    olt: OLTDevice | None = None,
+) -> tuple[float, float]:
+    """Load signal thresholds with per-OLT/model override support.
+
+    Resolution order:
+    1. Per-OLT override (if olt is provided and has an override)
+    2. Per-model override (if olt is provided and model has an override)
+    3. Global settings
+    4. Hardcoded defaults
+
+    Args:
+        db: Database session
+        olt: Optional OLT device for per-device override lookup
+    """
+    # Check for per-OLT or per-model overrides if OLT is provided
+    if olt:
+        override_thresholds = _get_threshold_override(db, olt)
+        if override_thresholds:
+            return override_thresholds
+
+    # Fall back to global settings
     try:
         from app.models.domain_settings import SettingDomain
         from app.services.settings_spec import resolve_value
@@ -143,6 +166,67 @@ def get_signal_thresholds(db: Session) -> tuple[float, float]:
     except Exception as exc:
         logger.warning("Failed to load signal thresholds, using defaults: %s", exc)
         return DEFAULT_WARN_THRESHOLD, DEFAULT_CRIT_THRESHOLD
+
+
+def _get_threshold_override(
+    db: Session,
+    olt: OLTDevice,
+) -> tuple[float, float] | None:
+    """Check for per-OLT or per-model threshold overrides.
+
+    Returns:
+        Tuple of (warning, critical) thresholds, or None if no override found.
+    """
+    try:
+        # 1. Check for per-OLT override
+        override = db.scalars(
+            select(SignalThresholdOverride)
+            .where(SignalThresholdOverride.olt_device_id == olt.id)
+            .where(SignalThresholdOverride.is_active.is_(True))
+        ).first()
+
+        if override and override.warning_threshold_dbm is not None:
+            logger.debug(
+                "Using per-OLT threshold override for %s: warn=%.1f crit=%.1f",
+                olt.name,
+                override.warning_threshold_dbm,
+                override.critical_threshold_dbm or DEFAULT_CRIT_THRESHOLD,
+            )
+            return (
+                override.warning_threshold_dbm,
+                override.critical_threshold_dbm or DEFAULT_CRIT_THRESHOLD,
+            )
+
+        # 2. Check for per-model override
+        if olt.model:
+            override = db.scalars(
+                select(SignalThresholdOverride)
+                .where(SignalThresholdOverride.model_pattern.ilike(f"%{olt.model}%"))
+                .where(SignalThresholdOverride.olt_device_id.is_(None))
+                .where(SignalThresholdOverride.is_active.is_(True))
+            ).first()
+
+            if override and override.warning_threshold_dbm is not None:
+                logger.debug(
+                    "Using per-model threshold override for %s (model=%s): warn=%.1f crit=%.1f",
+                    olt.name,
+                    olt.model,
+                    override.warning_threshold_dbm,
+                    override.critical_threshold_dbm or DEFAULT_CRIT_THRESHOLD,
+                )
+                return (
+                    override.warning_threshold_dbm,
+                    override.critical_threshold_dbm or DEFAULT_CRIT_THRESHOLD,
+                )
+
+    except Exception as exc:
+        logger.warning(
+            "Failed to check threshold overrides for OLT %s: %s",
+            olt.name,
+            exc,
+        )
+
+    return None
 
 
 # Delta threshold: alert if signal changes by more than this amount between polls
@@ -511,6 +595,7 @@ def poll_olt_ont_signals(
     if not community:
         logger.warning("OLT %s has no SNMP community configured, skipping", olt.name)
         return {"polled": 0, "updated": 0, "errors": 0, "skipped": 1}
+    poll_started_at = datetime.now(UTC)
 
     # P0: Validate SNMP parameters early to fail fast on invalid input
     from app.services.network.olt_polling_parsers import (
@@ -707,7 +792,7 @@ def poll_olt_ont_signals(
         readings=readings,
         assignments=assignments,
     )
-    warn_thresh, crit_thresh = get_signal_thresholds(db)
+    warn_thresh, crit_thresh = get_signal_thresholds(db, olt=olt)
     alert_cooldown_sec = _get_alert_cooldown_seconds(db)
     offline_poll_threshold = _get_offline_poll_threshold(db)
     status_transitions: list[tuple[OntUnit, str, dict]] = []
@@ -856,9 +941,24 @@ def poll_olt_ont_signals(
             else:
                 continue
 
-            db.execute(
-                update(OntUnit).where(OntUnit.id == ont.id).values(**update_values)
+            update_result = db.execute(
+                update(OntUnit)
+                .where(OntUnit.id == ont.id)
+                .where(
+                    or_(
+                        OntUnit.signal_updated_at.is_(None),
+                        OntUnit.signal_updated_at <= poll_started_at,
+                    )
+                )
+                .values(**update_values)
             )
+            if update_result.rowcount == 0:
+                logger.info(
+                    "Skipping stale ONT signal update for %s from OLT %s",
+                    ont.id,
+                    olt.id,
+                )
+                continue
             updated += 1
 
             # Track status transitions and signal degradation for events

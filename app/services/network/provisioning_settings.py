@@ -47,6 +47,7 @@ class ProvisioningDefaults:
 
     # Enforcement
     stale_runtime_hours: int = 24
+    olt_write_mode_enabled: bool = False
 
 
 DEFAULTS = ProvisioningDefaults()
@@ -63,6 +64,7 @@ SETTING_KEYS = {
     "force_reauthorize_autofind_attempts": DEFAULTS.force_reauthorize_autofind_attempts,
     "force_reauthorize_retry_delay_sec": DEFAULTS.force_reauthorize_retry_delay_sec,
     "stale_runtime_hours": DEFAULTS.stale_runtime_hours,
+    "olt_write_mode_enabled": DEFAULTS.olt_write_mode_enabled,
 }
 
 
@@ -145,6 +147,16 @@ def get_float_setting(db: Session | None, key: str, default: float | None = None
         return default if default is not None else float(SETTING_KEYS.get(key, 0.0))
 
 
+def get_bool_setting(db: Session | None, key: str, default: bool | None = None) -> bool:
+    """Get a boolean provisioning setting."""
+    value = get_setting(db, key, default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on"}
+    return bool(value)
+
+
 # Convenience functions for specific settings
 def get_tr069_bootstrap_timeout(db: Session | None = None) -> int:
     """Get TR-069 bootstrap polling timeout in seconds."""
@@ -184,3 +196,8 @@ def get_force_reauthorize_retry_delay(db: Session | None = None) -> float:
 def get_stale_runtime_hours(db: Session | None = None) -> int:
     """Get stale runtime data threshold in hours."""
     return get_int_setting(db, "stale_runtime_hours")
+
+
+def get_olt_write_mode_enabled(db: Session | None = None) -> bool:
+    """Return whether provisioning may execute OLT write commands."""
+    return get_bool_setting(db, "olt_write_mode_enabled")

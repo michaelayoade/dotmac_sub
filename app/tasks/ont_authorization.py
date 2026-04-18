@@ -6,11 +6,15 @@ import logging
 
 from app.celery_app import celery_app
 from app.db import SessionLocal
+from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
 
 
 @celery_app.task(name="app.tasks.ont_authorization.run_post_authorization_follow_up")
+@idempotent_task(
+    key_func=lambda operation_id, ont_unit_id, **kw: f"{ont_unit_id}:{operation_id}"
+)
 def run_post_authorization_follow_up_task(
     operation_id: str,
     ont_unit_id: str,
@@ -53,6 +57,7 @@ def run_post_authorization_follow_up_task(
                     message,
                     output_payload=payload,
                 )
+            db.commit()
             return {"success": success, "message": message, "steps": steps}
         except Exception as exc:
             logger.error(
@@ -62,6 +67,7 @@ def run_post_authorization_follow_up_task(
                 exc_info=True,
             )
             network_operations.mark_failed(db, operation_id, str(exc))
+            db.commit()
             raise
     except Exception:
         db.rollback()
@@ -71,6 +77,11 @@ def run_post_authorization_follow_up_task(
 
 
 @celery_app.task(name="app.tasks.ont_authorization.run_authorize_autofind_ont")
+@idempotent_task(
+    key_func=lambda operation_id, olt_id, fsp, serial_number, **kw: (
+        f"{olt_id}:{fsp}:{serial_number}:{operation_id}"
+    )
+)
 def run_authorize_autofind_ont_task(
     operation_id: str,
     olt_id: str,
@@ -91,11 +102,39 @@ def run_authorize_autofind_ont_task(
     start_time = None
     try:
         import time
+
         start_time = time.time()
 
         # Get OLT name for notifications
         olt = db.get(OLTDevice, olt_id)
         olt_name = olt.name if olt else None
+
+        from app.models.network_operation import (
+            NetworkOperation,
+            NetworkOperationStatus,
+        )
+
+        operation = db.get(NetworkOperation, operation_id)
+        if operation is None:
+            logger.warning(
+                "Skipping ONT authorization task for missing operation %s",
+                operation_id,
+            )
+            return {"success": False, "message": "Operation not found"}
+        if operation.status in (
+            NetworkOperationStatus.succeeded,
+            NetworkOperationStatus.failed,
+            NetworkOperationStatus.canceled,
+        ):
+            logger.info(
+                "Skipping ONT authorization task for terminal operation %s (%s)",
+                operation_id,
+                operation.status.value,
+            )
+            return {
+                "success": operation.status == NetworkOperationStatus.succeeded,
+                "message": f"Operation already {operation.status.value}",
+            }
 
         network_operations.mark_running(db, operation_id)
         db.commit()
@@ -121,16 +160,18 @@ def run_authorize_autofind_ont_task(
         payload = result.to_dict()
         duration_ms = int((time.time() - start_time) * 1000) if start_time else None
 
-        if result.success:
+        operation_succeeded = result.success
+        if operation_succeeded:
             network_operations.mark_succeeded(
                 db,
                 operation_id,
                 output_payload=payload,
             )
             # Notify UI of success with ONT link info
+            published_status = "warning" if result.status == "warning" else "succeeded"
             publish_operation_status(
                 operation_id,
-                "succeeded",
+                published_status,
                 result.message,
                 target_id=olt_id,
                 target_name=olt_name,

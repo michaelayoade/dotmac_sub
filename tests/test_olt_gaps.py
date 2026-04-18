@@ -7,6 +7,7 @@ and multi-vendor signal parsing.
 
 import hashlib
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.models.network import (
@@ -16,12 +17,14 @@ from app.models.network import (
 )
 from app.schemas.network import OLTDeviceCreate, OLTDeviceUpdate
 from app.services.events.types import EventType
+from app.services.network.olt_operations import validate_cli_command
 from app.services.network.olt_polling import (
     _derive_offline_reason,
     _parse_online_status,
     _parse_signal_value,
     classify_signal,
 )
+from app.services.network.olt_ssh_ont._common import OntStatusEntry, RegisteredOntEntry
 
 # ---------------------------------------------------------------------------
 # 1. Event type definitions
@@ -50,6 +53,166 @@ class TestOltEventTypes:
 
     def test_ont_signal_degraded_event_exists(self) -> None:
         assert EventType.ont_signal_degraded.value == "ont.signal_degraded"
+
+
+class TestOltCliValidation:
+    """Verify read-only OLT CLI commands needed by the UI remain allowed."""
+
+    def test_display_current_configuration_is_allowed(self) -> None:
+        assert validate_cli_command("display current-configuration") is None
+
+    def test_config_mode_is_rejected(self) -> None:
+        assert validate_cli_command("config") is not None
+
+
+class TestOltOntStatusBySerial:
+    """Verify OLT-level ONT status lookup can start from a serial number."""
+
+    def test_lookup_by_serial_chains_to_full_ont_status(
+        self, db_session, monkeypatch
+    ) -> None:
+        from app.services.network import olt_operations
+
+        calls: list[tuple[str, object]] = []
+        olt = SimpleNamespace(id=uuid.uuid4(), name="OLT-A")
+
+        def _find_ont_by_serial(_olt, serial_number):
+            calls.append(("find", serial_number))
+            return (
+                True,
+                "found",
+                RegisteredOntEntry(
+                    fsp="0/1/6",
+                    onu_id=5,
+                    real_serial=serial_number,
+                    run_state="online",
+                ),
+            )
+
+        def _get_ont_status(_olt, fsp, ont_id):
+            calls.append(("status", (fsp, ont_id)))
+            return (
+                True,
+                "ONT status retrieved",
+                OntStatusEntry(
+                    serial_number="HWTC28201B9A",
+                    run_state="online",
+                    config_state="normal",
+                    match_state="match",
+                ),
+            )
+
+        monkeypatch.setattr(olt_operations, "get_olt_or_none", lambda *_args: olt)
+        monkeypatch.setattr(
+            olt_operations, "log_olt_audit_event", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.find_ont_by_serial",
+            _find_ont_by_serial,
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_ont_status",
+            _get_ont_status,
+        )
+
+        ok, message, status = olt_operations.get_ont_status_by_serial(
+            db_session, str(olt.id), "4857544328201B9A"
+        )
+
+        assert ok is True
+        assert "0/1/6" in message
+        assert status["requested_serial"] == "4857544328201B9A"
+        assert status["lookup_serial"] == "4857544328201B9A"
+        assert status["fsp"] == "0/1/6"
+        assert status["ont_id"] == 5
+        assert status["run_state"] == "online"
+        assert status["config_state"] == "normal"
+        assert status["match_state"] == "match"
+        assert calls == [
+            ("find", "4857544328201B9A"),
+            ("status", ("0/1/6", 5)),
+        ]
+
+    def test_lookup_by_hex_serial_tries_huawei_display_serial_variant(
+        self, db_session, monkeypatch
+    ) -> None:
+        from app.services.network import olt_operations
+
+        calls: list[tuple[str, object]] = []
+        olt = SimpleNamespace(id=uuid.uuid4(), name="OLT-A")
+
+        def _find_ont_by_serial(_olt, serial_number):
+            calls.append(("find", serial_number))
+            if serial_number == "4857544328201B9A":
+                return True, "not found", None
+            return (
+                True,
+                "found",
+                RegisteredOntEntry(
+                    fsp="0/1/6",
+                    onu_id=5,
+                    real_serial=serial_number,
+                    run_state="online",
+                ),
+            )
+
+        def _get_ont_status(_olt, fsp, ont_id):
+            calls.append(("status", (fsp, ont_id)))
+            return (
+                True,
+                "ONT status retrieved",
+                OntStatusEntry(
+                    serial_number="HWTC28201B9A",
+                    run_state="online",
+                    config_state="normal",
+                    match_state="match",
+                ),
+            )
+
+        monkeypatch.setattr(olt_operations, "get_olt_or_none", lambda *_args: olt)
+        monkeypatch.setattr(
+            olt_operations, "log_olt_audit_event", lambda *_args, **_kwargs: None
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.find_ont_by_serial",
+            _find_ont_by_serial,
+        )
+        monkeypatch.setattr(
+            "app.services.network.olt_ssh_ont.get_ont_status",
+            _get_ont_status,
+        )
+
+        ok, _message, status = olt_operations.get_ont_status_by_serial(
+            db_session, str(olt.id), "4857544328201B9A"
+        )
+
+        assert ok is True
+        assert status["requested_serial"] == "4857544328201B9A"
+        assert status["lookup_serial"] == "HWTC28201B9A"
+        assert calls == [
+            ("find", "4857544328201B9A"),
+            ("find", "HWTC28201B9A"),
+            ("status", ("0/1/6", 5)),
+        ]
+
+    def test_lookup_by_serial_rejects_unsafe_serial(
+        self, db_session, monkeypatch
+    ) -> None:
+        from app.services.network import olt_operations
+
+        olt = SimpleNamespace(id=uuid.uuid4(), name="OLT-A")
+        monkeypatch.setattr(olt_operations, "get_olt_or_none", lambda *_args: olt)
+        monkeypatch.setattr(
+            olt_operations, "log_olt_audit_event", lambda *_args, **_kwargs: None
+        )
+
+        ok, message, status = olt_operations.get_ont_status_by_serial(
+            db_session, str(olt.id), "4857544328201B9A;reboot"
+        )
+
+        assert ok is False
+        assert "may only contain" in message
+        assert status == {}
 
 # ---------------------------------------------------------------------------
 # 2. OLT CRUD emits events

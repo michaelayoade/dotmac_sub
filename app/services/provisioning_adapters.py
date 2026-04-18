@@ -12,6 +12,7 @@ from ncclient import manager
 
 from app.models.provisioning import ProvisioningVendor
 from app.services.genieacs import GenieACSClient
+from app.services.network.ont_action_common import set_and_verify
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -351,9 +352,26 @@ class GenieACSProvisioner(Provisioner, ListResponseMixin):
             parameters = merged_parameters
 
         if parameters:
-            result = client.set_parameter_values(
-                device_id, parameters, connection_request=connection_request
-            )
+            if connection_request:
+                expected_parameters = config.get("expected_parameters")
+                if expected_parameters is None:
+                    expected_parameters = {
+                        path: value
+                        for path, value in parameters.items()
+                        if not str(path).lower().endswith("password")
+                    }
+                result = set_and_verify(
+                    client,
+                    device_id,
+                    parameters,
+                    expected=expected_parameters,
+                )
+            else:
+                # Preserve explicit queued/offline provisioning semantics:
+                # verification requires an immediate connection request.
+                result = client.set_parameter_values(
+                    device_id, parameters, connection_request=False
+                )
             results.append({"task": "setParameterValues", "result": result})
         if get_parameters:
             result = client.get_parameter_values(

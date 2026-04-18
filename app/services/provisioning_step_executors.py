@@ -271,6 +271,7 @@ def execute_push_tr069_wan_config(
         # Build WAN parameters based on mode
         from app.services.genieacs import GenieACSError
         from app.services.network.ont_action_common import build_tr069_params
+        from app.services.network.ont_action_common import set_and_verify
 
         params: dict[str, str] = {}
         if wan_mode == "pppoe":
@@ -295,7 +296,7 @@ def execute_push_tr069_wan_config(
 
         if params:
             tr069_params = build_tr069_params(root, params)
-            client.set_parameter_values(device_id, tr069_params)
+            set_and_verify(client, device_id, tr069_params)
 
         logger.info("TR-069 WAN config pushed: mode=%s, vlan=%s", wan_mode, wan_vlan)
         return ProvisioningResult(

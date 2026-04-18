@@ -37,9 +37,171 @@ def _plan_section(ont_plan: dict[str, Any], step: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _active_profile_wan_services(ont: object, db: Session | None = None) -> list[object]:
+    profile_id = getattr(ont, "provisioning_profile_id", None)
+    if db is not None and profile_id:
+        from app.models.network import OntProfileWanService
+
+        return list(
+            db.scalars(
+                select(OntProfileWanService)
+                .where(OntProfileWanService.profile_id == profile_id)
+                .where(OntProfileWanService.is_active.is_(True))
+                .order_by(OntProfileWanService.priority, OntProfileWanService.name)
+            ).all()
+        )
+
+    profile = getattr(ont, "provisioning_profile", None)
+    services = getattr(profile, "wan_services", None) or []
+    return [service for service in services if getattr(service, "is_active", False)]
+
+
+def _active_wan_service_instances(ont: object, db: Session | None = None) -> list[object]:
+    """Get active WAN service instances for an ONT (Phase 2+3 architecture)."""
+    ont_id = getattr(ont, "id", None)
+    if db is not None and ont_id:
+        from app.models.network import OntWanServiceInstance
+
+        return list(
+            db.scalars(
+                select(OntWanServiceInstance)
+                .where(OntWanServiceInstance.ont_id == ont_id)
+                .where(OntWanServiceInstance.is_active.is_(True))
+                .order_by(OntWanServiceInstance.priority, OntWanServiceInstance.name)
+            ).all()
+        )
+
+    # Fallback to relationship if db not provided
+    instances = getattr(ont, "wan_service_instances", None) or []
+    return [inst for inst in instances if getattr(inst, "is_active", False)]
+
+
+def _format_wan_service_instances(instances: list[object]) -> list[dict[str, Any]]:
+    """Format WAN service instances for display in the UI."""
+    result = []
+    for inst in instances:
+        service_type = _enum_value(getattr(inst, "service_type", None)) or "unknown"
+        name = getattr(inst, "name", None) or service_type.title()
+        connection_type = _enum_value(getattr(inst, "connection_type", None)) or "pppoe"
+        provisioning_status = _enum_value(getattr(inst, "provisioning_status", None)) or "pending"
+
+        # Build VLAN display
+        s_vlan = getattr(inst, "s_vlan", None)
+        c_vlan = getattr(inst, "c_vlan", None)
+        vlan = getattr(inst, "vlan", None)
+        vlan_tag = getattr(vlan, "tag", None) if vlan else s_vlan
+
+        vlan_display = "Not set"
+        if vlan_tag:
+            vlan_display = f"VLAN {vlan_tag}"
+            if c_vlan:
+                vlan_display += f" (C-VLAN {c_vlan})"
+
+        # Build credentials display
+        pppoe_username = getattr(inst, "pppoe_username", None)
+        credentials_display = pppoe_username if pppoe_username else "Not set"
+
+        result.append({
+            "id": str(getattr(inst, "id", "")),
+            "name": name,
+            "service_type": service_type,
+            "connection_type": connection_type.replace("_", " ").title(),
+            "vlan": vlan_display,
+            "pppoe_username": credentials_display,
+            "nat_enabled": getattr(inst, "nat_enabled", True),
+            "provisioning_status": provisioning_status,
+            "last_provisioned_at": getattr(inst, "last_provisioned_at", None),
+            "last_error": getattr(inst, "last_error", None),
+        })
+    return result
+
+
+def _service_label(service: object) -> str:
+    return _value(
+        getattr(service, "name", None) or _enum_value(getattr(service, "service_type", None)),
+        "Service",
+    )
+
+
+def _profile_service_vlans(services: list[object]) -> str:
+    labels: list[str] = []
+    for service in services:
+        service_name = _service_label(service)
+        s_vlan = getattr(service, "s_vlan", None)
+        c_vlan = getattr(service, "c_vlan", None)
+        vlan_parts = []
+        if s_vlan:
+            vlan_parts.append(f"S-VLAN {s_vlan}")
+        if c_vlan:
+            vlan_parts.append(f"C-VLAN {c_vlan}")
+        if vlan_parts:
+            labels.append(f"{service_name}: {', '.join(vlan_parts)}")
+    return "; ".join(labels)
+
+
+def _profile_service_gems(services: list[object]) -> str:
+    labels = [
+        f"{_service_label(service)}: GEM {gem_port_id}"
+        for service in services
+        if (gem_port_id := getattr(service, "gem_port_id", None))
+    ]
+    return "; ".join(labels)
+
+
+def _profile_service_tag_modes(services: list[object]) -> str:
+    labels = []
+    for service in services:
+        vlan_mode = _enum_value(getattr(service, "vlan_mode", None))
+        if vlan_mode:
+            labels.append(f"{_service_label(service)}: {vlan_mode}")
+    return "; ".join(labels)
+
+
+def _service_port_value(
+    service_port_plan: dict[str, Any],
+    keys: tuple[str, ...],
+    profile_value: object | None,
+    fallback_value: object | None = None,
+) -> str:
+    for key in keys:
+        value = service_port_plan.get(key)
+        if value not in (None, "", []):
+            return _value(value)
+    if profile_value not in (None, "", []):
+        return _value(profile_value)
+    return _value(fallback_value)
+
+
+def _profile_wifi_plan(ont: object, db: Session | None = None) -> dict[str, object]:
+    profile = None
+    profile_id = getattr(ont, "provisioning_profile_id", None)
+    if db is not None and profile_id:
+        from app.models.network import OntProvisioningProfile
+
+        profile = db.get(OntProvisioningProfile, profile_id)
+    if profile is None:
+        profile = getattr(ont, "provisioning_profile", None)
+    if profile is None:
+        return {}
+    return {
+        "enabled": getattr(profile, "wifi_enabled", None),
+        "ssid": getattr(profile, "wifi_ssid_template", None),
+        "channel": getattr(profile, "wifi_channel", None),
+        "security_mode": getattr(profile, "wifi_security_mode", None),
+    }
+
+
+def _first_present(*values: object) -> object | None:
+    for value in values:
+        if value not in (None, "", []):
+            return value
+    return None
+
+
 def build_service_intent(
     ont: object,
     *,
+    db: Session | None = None,
     subscriber_info: dict[str, object] | None = None,
     ont_plan: dict[str, Any] | None = None,
 ) -> dict[str, object]:
@@ -55,21 +217,63 @@ def build_service_intent(
     mgmt_plan = _plan_section(ont_plan, "configure_management_ip")
     wan_plan = _plan_section(ont_plan, "configure_wan_tr069")
     lan_plan_from_order = _plan_section(ont_plan, "configure_lan_tr069")
-    # LAN config is now stored directly on ONT; fall back to service order for
-    # backwards compatibility with in-flight orders
-    lan_plan = lan_plan_from_order or {
-        "lan_ip": getattr(ont, "lan_gateway_ip", None),
-        "lan_subnet": getattr(ont, "lan_subnet_mask", None),
-        "dhcp_enabled": getattr(ont, "lan_dhcp_enabled", None),
-        "dhcp_start": getattr(ont, "lan_dhcp_start", None),
-        "dhcp_end": getattr(ont, "lan_dhcp_end", None),
+    lan_plan = {
+        "lan_ip": _first_present(
+            getattr(ont, "lan_gateway_ip", None),
+            lan_plan_from_order.get("lan_ip"),
+        ),
+        "lan_subnet": _first_present(
+            getattr(ont, "lan_subnet_mask", None),
+            lan_plan_from_order.get("lan_subnet"),
+        ),
+        "dhcp_enabled": _first_present(
+            getattr(ont, "lan_dhcp_enabled", None),
+            lan_plan_from_order.get("dhcp_enabled"),
+        ),
+        "dhcp_start": _first_present(
+            getattr(ont, "lan_dhcp_start", None),
+            lan_plan_from_order.get("dhcp_start"),
+        ),
+        "dhcp_end": _first_present(
+            getattr(ont, "lan_dhcp_end", None),
+            lan_plan_from_order.get("dhcp_end"),
+        ),
     }
-    wifi_plan = _plan_section(ont_plan, "configure_wifi_tr069")
+    wifi_plan_from_order = _plan_section(ont_plan, "configure_wifi_tr069")
+    profile_wifi_plan = _profile_wifi_plan(ont, db)
+    wifi_plan = {
+        "enabled": _first_present(
+            getattr(ont, "wifi_enabled", None),
+            wifi_plan_from_order.get("enabled"),
+            profile_wifi_plan.get("enabled"),
+        ),
+        "ssid": _first_present(
+            getattr(ont, "wifi_ssid", None),
+            wifi_plan_from_order.get("ssid"),
+            profile_wifi_plan.get("ssid"),
+        ),
+        "channel": _first_present(
+            getattr(ont, "wifi_channel", None),
+            wifi_plan_from_order.get("channel"),
+            profile_wifi_plan.get("channel"),
+        ),
+        "security_mode": _first_present(
+            getattr(ont, "wifi_security_mode", None),
+            wifi_plan_from_order.get("security_mode"),
+            profile_wifi_plan.get("security_mode"),
+        ),
+    }
     service_port_plan = _plan_section(ont_plan, "create_service_port")
-    pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069")
+    profile_wan_services = _active_profile_wan_services(ont, db)
+    profile_service_vlans = _profile_service_vlans(profile_wan_services)
+    profile_service_gems = _profile_service_gems(profile_wan_services)
+    profile_service_tag_modes = _profile_service_tag_modes(profile_wan_services)
+    pppoe_plan = _plan_section(ont_plan, "push_pppoe_tr069") or _plan_section(
+        ont_plan, "push_pppoe_omci"
+    )
 
     onu_mode = _enum_value(getattr(ont, "onu_mode", None))
-    wan_mode = _enum_value(getattr(ont, "wan_mode", None)) or wan_plan.get("wan_mode")
+    wan_mode = wan_plan.get("wan_mode") or _enum_value(getattr(ont, "wan_mode", None))
     mgmt_ip_mode = (
         _enum_value(getattr(ont, "mgmt_ip_mode", None))
         or mgmt_plan.get("ip_mode")
@@ -83,6 +287,27 @@ def build_service_intent(
     static_dns = wan_plan.get("dns_servers")
 
     internet_method = "Bridge" if onu_mode == "bridging" else _value(wan_mode, "Not set")
+    normalized_wan_mode = str(wan_mode or "").strip().lower()
+    internet_rows = [
+        {
+            "label": "Internet VLAN",
+            "value": _vlan_label(getattr(ont, "wan_vlan", None))
+            if getattr(ont, "wan_vlan", None) is not None
+            else _value(wan_plan.get("wan_vlan") or pppoe_plan.get("vlan_id")),
+        },
+        {"label": "ONU Mode", "value": _value(onu_mode).replace("_", " ").title()},
+        {"label": "WAN Method", "value": internet_method.replace("_", " ").title()},
+    ]
+    if normalized_wan_mode == "pppoe":
+        internet_rows.append({"label": "PPPoE User", "value": _value(pppoe_username)})
+    elif normalized_wan_mode in {"static", "static_ip"}:
+        internet_rows.extend(
+            [
+                {"label": "Static IP", "value": _value(static_ip)},
+                {"label": "Gateway", "value": _value(static_gateway)},
+                {"label": "DNS", "value": _value(static_dns)},
+            ]
+        )
 
     sections = [
         {
@@ -106,14 +331,7 @@ def build_service_intent(
             "key": "internet",
             "title": "Internet Service",
             "description": "How subscriber traffic is delivered.",
-            "rows": [
-                {"label": "Internet VLAN", "value": _vlan_label(getattr(ont, "wan_vlan", None))},
-                {"label": "ONU Mode", "value": _value(onu_mode).replace("_", " ").title()},
-                {"label": "WAN Method", "value": internet_method.replace("_", " ").title()},
-                {"label": "PPPoE User", "value": _value(pppoe_username)},
-                {"label": "Static IP", "value": _value(static_ip)},
-                {"label": "Gateway / DNS", "value": " / ".join(v for v in [_value(static_gateway, ""), _value(static_dns, "")] if v) or "Not set"},
-            ],
+            "rows": internet_rows,
         },
         {
             "key": "lan",
@@ -162,9 +380,31 @@ def build_service_intent(
             "title": "OLT Service Path",
             "description": "OLT-side forwarding, VLAN, and rate policy.",
             "rows": [
-                {"label": "Service VLAN", "value": _value(service_port_plan.get("vlan_id") or service_port_plan.get("vlan"))},
-                {"label": "GEM Index", "value": _value(service_port_plan.get("gem_index"))},
-                {"label": "Tag Transform", "value": _value(service_port_plan.get("tag_transform"))},
+                {
+                    "label": "Service VLAN",
+                    "value": _service_port_value(
+                        service_port_plan,
+                        ("vlan_id", "vlan"),
+                        profile_service_vlans,
+                        _vlan_label(getattr(ont, "wan_vlan", None)),
+                    ),
+                },
+                {
+                    "label": "GEM Index",
+                    "value": _service_port_value(
+                        service_port_plan,
+                        ("gem_index", "gem_port_id"),
+                        profile_service_gems,
+                    ),
+                },
+                {
+                    "label": "Tag Transform",
+                    "value": _service_port_value(
+                        service_port_plan,
+                        ("tag_transform", "vlan_mode"),
+                        profile_service_tag_modes,
+                    ),
+                },
                 {
                     "label": "Subscriber",
                     "value": _value(subscriber_info.get("name")),
@@ -179,10 +419,17 @@ def build_service_intent(
         for row in section["rows"]
         if row["value"] == "Not set"
     )
+
+    # Include WAN service instances if available (Phase 2+3 architecture)
+    wan_service_instances = _active_wan_service_instances(ont, db)
+    formatted_instances = _format_wan_service_instances(wan_service_instances)
+
     return {
         "sections": sections,
         "missing_count": missing,
         "is_complete": missing == 0,
+        "wan_service_instances": formatted_instances,
+        "has_wan_instances": len(formatted_instances) > 0,
     }
 
 

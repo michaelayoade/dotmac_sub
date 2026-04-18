@@ -134,6 +134,15 @@
                             {{ subscriber_info.name }}
                         </a>
                         {% endif %}
+                        {% if connected_customer_devices is not none %}
+                        <span class="inline-flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2.5 py-1.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-700/10 dark:bg-emerald-500/10 dark:text-emerald-300 dark:ring-emerald-500/20">
+                            <svg class="h-3.5 w-3.5 text-emerald-500 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+                            {{ connected_customer_devices }} connected device{{ '' if connected_customer_devices == 1 else 's' }}
+                            {% if connected_wifi_clients is not none %}
+                            <span class="text-emerald-600/70 dark:text-emerald-300/70">({{ connected_wifi_clients }} WiFi)</span>
+                            {% endif %}
+                        </span>
+                        {% endif %}
                         {% if subscriber_info.get('plan_name') %}
                         <span class="inline-flex items-center gap-1.5 rounded-lg bg-teal-50 px-2.5 py-1.5 text-xs font-medium text-teal-700 ring-1 ring-inset ring-teal-700/10 dark:bg-teal-500/10 dark:text-teal-300 dark:ring-teal-500/20">
                             <svg class="h-3.5 w-3.5 text-teal-500 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"/></svg>
@@ -514,20 +523,20 @@
                     hx-target="#device-status-content"
                     hx-swap="innerHTML"
                     @click="activeTab = 'device-status'; $el.dataset.loaded = '1'"
-                    @mouseenter="openTabTooltip($el, 'Device Status')"
+                    @mouseenter="openTabTooltip($el, 'Service Intent')"
                     @mouseleave="closeTabTooltip()"
-                    @focus="openTabTooltip($el, 'Device Status')"
+                    @focus="openTabTooltip($el, 'Service Intent')"
                     @blur="closeTabTooltip()"
                     role="tab"
                     :aria-selected="activeTab === 'device-status'"
                     :tabindex="activeTab === 'device-status' ? 0 : -1"
-                    aria-label="Device Status"
+                    aria-label="Service Intent"
                     id="tab-device-status"
                     aria-controls="panel-device-status"
                     :class="activeTab === 'device-status' ? 'border-blue-500 text-blue-600 dark:text-blue-400' : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'"
                     class="flex items-center gap-1.5 sm:gap-2 border-b-2 px-2 sm:px-3 py-3 text-sm font-medium transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 min-w-[44px] justify-center sm:justify-start">
                 <svg class="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"/></svg>
-                <span class="whitespace-nowrap">Device Status</span>
+                <span class="whitespace-nowrap">Service Intent</span>
             </button>
         </nav>
         <div x-show="showTabTooltip"
@@ -1093,8 +1102,8 @@
                     <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (wan_mode_value or '—') | replace('_', ' ') | title }}</dd>
                 </div>
                 <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Mode</dt><dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ (ont.observed_lan_mode or '—') | replace('_', ' ') | title }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_wifi_clients if ont.observed_wifi_clients is not none else '—' }}</dd></div>
-                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">LAN Hosts</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ ont.observed_lan_hosts if ont.observed_lan_hosts is not none else '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">WiFi Clients</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ connected_wifi_clients if connected_wifi_clients is not none else '—' }}</dd></div>
+                <div><dt class="text-xs font-medium uppercase text-slate-500 dark:text-slate-400">Customer Devices</dt><dd class="mt-1 text-sm tabular-nums text-slate-900 dark:text-white">{{ connected_customer_devices if connected_customer_devices is not none else '—' }}</dd></div>
             </dl>
             <div class="mt-3 text-xs text-slate-500 dark:text-slate-400">
                 Runtime updated: {{ ont.observed_runtime_updated_at.strftime('%Y-%m-%d %H:%M') if ont.observed_runtime_updated_at else '—' }}

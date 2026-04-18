@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.exc import ProgrammingError
@@ -21,6 +22,7 @@ from app.models.tr069 import (
     Tr069JobStatus,
     Tr069Session,
 )
+from app.services.task_idempotency import idempotent_task
 
 logger = logging.getLogger(__name__)
 
@@ -124,9 +126,21 @@ def sync_all_acs_devices() -> dict[str, int]:
 
 
 @celery_app.task(name="app.tasks.tr069.wait_for_ont_bootstrap")
-def wait_for_ont_bootstrap(ont_id: str, operation_id: str | None = None) -> dict[str, object]:
+@idempotent_task(
+    key_func=lambda ont_id, operation_id=None, **kw: (
+        f"{ont_id}:{operation_id or 'no-op'}"
+    )
+)
+def wait_for_ont_bootstrap(
+    ont_id: str,
+    operation_id: str | None = None,
+    service_retry_count: int = 0,
+) -> dict[str, object]:
     """Wait for an ONT to become resolvable in GenieACS after TR-069 binding."""
-    from app.services.network.ont_provision_steps import wait_tr069_bootstrap
+    from app.services.network.ont_provision_steps import (
+        apply_saved_service_config,
+        wait_tr069_bootstrap,
+    )
     from app.services.network_operations import network_operations
 
     logger.info("Starting TR-069 bootstrap wait for ONT %s", ont_id)
@@ -136,32 +150,66 @@ def wait_for_ont_bootstrap(ont_id: str, operation_id: str | None = None) -> dict
             network_operations.mark_running(db, operation_id)
             db.commit()
 
-        result = wait_tr069_bootstrap(db, ont_id)
-        db.rollback()
+        result = wait_tr069_bootstrap(db, ont_id, allow_blocking=True)
+        apply_result = None
+        if result.success:
+            apply_result = apply_saved_service_config(db, ont_id)
+        service_waiting = bool(apply_result.waiting) if apply_result else False
         payload = {
             "step_name": result.step_name,
-            "success": result.success,
+            "success": result.success
+            and (apply_result.success if apply_result else True)
+            and not service_waiting,
             "message": result.message,
             "duration_ms": result.duration_ms,
-            "waiting": result.waiting,
+            "waiting": result.waiting or service_waiting,
             "data": result.data or {},
         }
+        if apply_result is not None:
+            payload["service_config"] = {
+                "step_name": apply_result.step_name,
+                "success": apply_result.success,
+                "message": apply_result.message,
+                "duration_ms": apply_result.duration_ms,
+                "waiting": apply_result.waiting,
+                "skipped": apply_result.skipped,
+                "data": apply_result.data or {},
+            }
+            if apply_result.message:
+                payload["message"] = f"{result.message} {apply_result.message}"
 
         if operation_id:
-            if result.success:
+            if payload["success"]:
                 network_operations.mark_succeeded(
                     db,
                     operation_id,
                     output_payload=payload,
                 )
+            elif payload["waiting"] and service_retry_count < 3:
+                network_operations.mark_waiting(
+                    db,
+                    operation_id,
+                    str(payload["message"]),
+                )
+                from app.celery_app import enqueue_celery_task
+
+                enqueue_celery_task(
+                    "app.tasks.tr069.wait_for_ont_bootstrap",
+                    args=[ont_id, operation_id, service_retry_count + 1],
+                    correlation_id=f"tr069_bootstrap:{ont_id}",
+                    source="ont_provision_step_retry",
+                    countdown=60,
+                )
             else:
                 network_operations.mark_failed(
                     db,
                     operation_id,
-                    result.message,
+                    str(payload["message"]),
                     output_payload=payload,
                 )
             db.commit()
+        else:
+            db.rollback()
 
         return payload
     except Exception as exc:
@@ -457,6 +505,11 @@ def _emit_job_event(db, emit_event, event_type, job: Tr069Job) -> None:
 
 
 @celery_app.task(name="app.tasks.tr069.execute_bulk_action")
+@idempotent_task(
+    key_func=lambda device_ids, action, params=None: (
+        f"{action}:{','.join(sorted(device_ids[:5]))}:{len(device_ids)}"
+    )
+)
 def execute_bulk_action(
     device_ids: list[str],
     action: str,
@@ -488,7 +541,9 @@ def execute_bulk_action(
                 device_id = coerce_uuid(device_id_str)
                 device = db.get(Tr069CpeDevice, device_id)
                 if not device:
-                    logger.warning("TR-069 device %s not found, skipping", device_id_str)
+                    logger.warning(
+                        "TR-069 device %s not found, skipping", device_id_str
+                    )
                     skipped += 1
                     continue
 
@@ -540,7 +595,7 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
         "refresh": {
             "name": "Refresh Parameters",
             "command": "refreshObject",
-            "payload": {"objectName": "Device."},
+            "payload": {"objectName": "InternetGatewayDevice."},
         },
         "reboot": {
             "name": "Reboot Device",
@@ -557,7 +612,9 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
     if action in job_definitions:
         defn = job_definitions[action]
         payload = Tr069JobCreate(
-            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            device_id=device_id
+            if isinstance(device_id, UUID)
+            else UUID(str(device_id)),
             name=defn["name"],
             command=defn["command"],
             payload=defn["payload"],
@@ -572,7 +629,9 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
             logger.warning("config_push requires parameter_path")
             return None
         payload = Tr069JobCreate(
-            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            device_id=device_id
+            if isinstance(device_id, UUID)
+            else UUID(str(device_id)),
             name="Config Push",
             command="setParameterValues",
             payload={
@@ -594,7 +653,9 @@ def _create_bulk_job(db, device_id, action: str, params: dict) -> Tr069Job | Non
         if params.get("filename"):
             task_payload["filename"] = params["filename"]
         payload = Tr069JobCreate(
-            device_id=device_id if isinstance(device_id, UUID) else UUID(str(device_id)),
+            device_id=device_id
+            if isinstance(device_id, UUID)
+            else UUID(str(device_id)),
             name="Firmware Update",
             command="download",
             payload=task_payload,
@@ -717,8 +778,113 @@ def refresh_ont_runtime_data(batch_size: int = 50) -> dict[str, int]:
         db.close()
 
 
+@celery_app.task(name="app.tasks.tr069.cleanup_stale_genieacs_tasks")
+def cleanup_stale_genieacs_tasks(
+    max_age_hours: int = 6,
+    dry_run: bool = False,
+) -> dict[str, int]:
+    """Clean up stale pending tasks and faults from GenieACS.
+
+    Tasks stuck in pending state for longer than max_age_hours are deleted,
+    along with their associated faults. This prevents blocking inform loops
+    caused by permanently failing tasks (e.g., invalid parameter values).
+
+    Args:
+        max_age_hours: Delete tasks older than this (default 6 hours).
+        dry_run: If True, report what would be deleted without deleting.
+
+    Returns:
+        Stats: {tasks_deleted, faults_deleted, servers_processed, errors}.
+    """
+    from app.services.genieacs import GenieACSClient, GenieACSError
+
+    logger.info(
+        "Starting GenieACS stale task cleanup (max_age=%dh, dry_run=%s)",
+        max_age_hours,
+        dry_run,
+    )
+    db = SessionLocal()
+    try:
+        servers = list(
+            db.scalars(
+                select(Tr069AcsServer).where(Tr069AcsServer.is_active.is_(True))
+            ).all()
+        )
+        if not servers:
+            return {
+                "tasks_deleted": 0,
+                "faults_deleted": 0,
+                "servers_processed": 0,
+                "errors": 0,
+            }
+
+        total_tasks = 0
+        total_faults = 0
+        errors = 0
+
+        for server in servers:
+            if not server.base_url:
+                continue
+            try:
+                client = GenieACSClient(server.base_url)
+
+                # Delete stale tasks
+                result = client.delete_stale_tasks(
+                    older_than=timedelta(hours=max_age_hours),
+                    dry_run=dry_run,
+                )
+                total_tasks += (
+                    result.get("deleted", 0)
+                    if not dry_run
+                    else result.get("matched", 0)
+                )
+
+                # Clear associated faults for stale tasks
+                if not dry_run:
+                    faults = client.list_faults()
+                    now = datetime.now(UTC)
+                    cutoff = now - timedelta(hours=max_age_hours)
+                    for fault in faults:
+                        ts_str = fault.get("timestamp", "")
+                        if not ts_str:
+                            continue
+                        try:
+                            fault_time = datetime.fromisoformat(
+                                ts_str.replace("Z", "+00:00")
+                            )
+                            if fault_time < cutoff:
+                                fault_id = fault.get("_id", "")
+                                if fault_id:
+                                    client.delete_fault(fault_id)
+                                    total_faults += 1
+                        except (ValueError, GenieACSError) as exc:
+                            logger.debug("Fault cleanup error: %s", exc)
+
+            except GenieACSError as exc:
+                logger.warning(
+                    "GenieACS cleanup failed for server %s: %s", server.name, exc
+                )
+                errors += 1
+
+        logger.info(
+            "GenieACS cleanup complete: %d tasks, %d faults deleted from %d servers (%d errors)",
+            total_tasks,
+            total_faults,
+            len(servers),
+            errors,
+        )
+        return {
+            "tasks_deleted": total_tasks,
+            "faults_deleted": total_faults,
+            "servers_processed": len(servers),
+            "errors": errors,
+        }
+    finally:
+        db.close()
+
+
 @celery_app.task(name="app.tasks.tr069.scrape_genieacs_metrics")
-def scrape_genieacs_metrics() -> dict[str, int]:
+def scrape_genieacs_metrics() -> dict[str, Any]:
     """Scrape GenieACS NBI and emit fleet metrics to VictoriaMetrics.
 
     Metrics:
@@ -728,6 +894,7 @@ def scrape_genieacs_metrics() -> dict[str, int]:
       tr069_online_silent_total                 — ONTs OLT-online but ACS-silent >15min
     """
     import os
+
     import httpx
 
     from app.models.network import OntUnit, OnuOnlineStatus
@@ -737,15 +904,13 @@ def scrape_genieacs_metrics() -> dict[str, int]:
     now = datetime.now(UTC)
 
     lines: list[str] = []
-    stats = {"pending": 0, "faults": 0, "online_silent": 0, "cpes": 0}
+    stats: dict[str, Any] = {"pending": 0, "faults": 0, "online_silent": 0, "cpes": 0}
 
     try:
         with httpx.Client(base_url=nbi_url, timeout=15) as client:
             tasks = client.get("/tasks/?query=%7B%7D").json()
             faults = client.get("/faults/?query=%7B%7D").json()
-            devices = client.get(
-                "/devices/?projection=_id,_lastInform"
-            ).json()
+            devices = client.get("/devices/?projection=_id,_lastInform").json()
     except Exception as exc:
         logger.warning("GenieACS scrape failed: %s", exc)
         return {"error": str(exc)}
@@ -767,7 +932,7 @@ def scrape_genieacs_metrics() -> dict[str, int]:
         else:
             task_buckets["gt_6h"] += 1
     for bucket, count in task_buckets.items():
-        lines.append(f"tr069_pending_tasks{{age_bucket=\"{bucket}\"}} {count}")
+        lines.append(f'tr069_pending_tasks{{age_bucket="{bucket}"}} {count}')
     stats["pending"] = sum(task_buckets.values())
 
     # faults by code
@@ -776,12 +941,18 @@ def scrape_genieacs_metrics() -> dict[str, int]:
         code = str(f.get("code", "unknown"))
         fault_codes[code] = fault_codes.get(code, 0) + 1
     for code, count in fault_codes.items():
-        safe_code = code.replace("\"", "").replace("\\", "")
-        lines.append(f"tr069_faults{{code=\"{safe_code}\"}} {count}")
+        safe_code = code.replace('"', "").replace("\\", "")
+        lines.append(f'tr069_faults{{code="{safe_code}"}} {count}')
     stats["faults"] = sum(fault_codes.values())
 
     # CPE inform age buckets
-    inform_buckets = {"fresh_1h": 0, "stale_6h": 0, "very_stale_24h": 0, "offline_gt_24h": 0, "never": 0}
+    inform_buckets = {
+        "fresh_1h": 0,
+        "stale_6h": 0,
+        "very_stale_24h": 0,
+        "offline_gt_24h": 0,
+        "never": 0,
+    }
     silent_ids: set[str] = set()
     for d in devices:
         li = d.get("_lastInform")
@@ -790,7 +961,9 @@ def scrape_genieacs_metrics() -> dict[str, int]:
             silent_ids.add(d["_id"])
             continue
         try:
-            age = (now - datetime.fromisoformat(li.replace("Z", "+00:00"))).total_seconds()
+            age = (
+                now - datetime.fromisoformat(li.replace("Z", "+00:00"))
+            ).total_seconds()
         except Exception:
             continue
         if age <= 3600:
@@ -804,14 +977,15 @@ def scrape_genieacs_metrics() -> dict[str, int]:
         if age > 900:
             silent_ids.add(d["_id"])
     for bucket, count in inform_buckets.items():
-        lines.append(f"tr069_cpe_inform_age{{bucket=\"{bucket}\"}} {count}")
+        lines.append(f'tr069_cpe_inform_age{{bucket="{bucket}"}} {count}')
     stats["cpes"] = len(devices)
 
     # online-silent: ONT online per OLT but ACS silent >15min
     db = SessionLocal()
     try:
         online_serials = {
-            s for s, in db.execute(
+            s
+            for (s,) in db.execute(
                 select(OntUnit.serial_number).where(
                     OntUnit.is_active.is_(True),
                     OntUnit.online_status == OnuOnlineStatus.online,
@@ -831,6 +1005,9 @@ def scrape_genieacs_metrics() -> dict[str, int]:
 
     logger.info(
         "GenieACS metrics scrape: pending=%d faults=%d cpes=%d online_silent=%d",
-        stats["pending"], stats["faults"], stats["cpes"], stats["online_silent"],
+        stats["pending"],
+        stats["faults"],
+        stats["cpes"],
+        stats["online_silent"],
     )
     return stats
