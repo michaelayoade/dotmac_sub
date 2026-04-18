@@ -17,7 +17,6 @@ from app.services import web_network_ont_charts as web_network_ont_charts_servic
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
 from app.services.auth_dependencies import require_permission
 from app.services.network.action_logging import log_network_action_result
-from app.services.network.ont_action_common import ActionResult
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -607,61 +606,20 @@ def ont_set_wan_config(
     form = parse_form_data_sync(request)
     vlan_raw = _form_str(form, "wan_vlan").strip()
     instance_raw = _form_str(form, "instance_index", "1").strip()
-    wan_mode = _form_str(form, "wan_mode", "pppoe").strip() or "pppoe"
-    pppoe_username = _form_str(form, "pppoe_username").strip()
-    pppoe_password = _form_str(form, "pppoe_password").strip()
-    wan_vlan = int(vlan_raw) if vlan_raw.isdigit() else None
-    instance_index = int(instance_raw) if instance_raw.isdigit() else 1
-    result = web_network_ont_actions_service.configure_wan_config(
+    result = web_network_ont_actions_service.configure_wan_with_pppoe(
         db,
         ont_id,
-        wan_mode=wan_mode,
-        wan_vlan=wan_vlan,
+        wan_mode=_form_str(form, "wan_mode", "pppoe").strip() or "pppoe",
+        wan_vlan=int(vlan_raw) if vlan_raw.isdigit() else None,
         ip_address=_form_str(form, "ip_address").strip() or None,
         subnet_mask=_form_str(form, "subnet_mask").strip() or None,
         gateway=_form_str(form, "gateway").strip() or None,
         dns_servers=_form_str(form, "dns_servers").strip() or None,
-        instance_index=instance_index,
+        instance_index=int(instance_raw) if instance_raw.isdigit() else 1,
+        pppoe_username=_form_str(form, "pppoe_username").strip() or None,
+        pppoe_password=_form_str(form, "pppoe_password").strip() or None,
         request=request,
     )
-    wan_result = result
-    if result.success and wan_mode == "pppoe" and (pppoe_username or pppoe_password):
-        if not (pppoe_username and pppoe_password):
-            return _action_json_response(
-                success=False,
-                message=(
-                    f"{wan_result.message} PPPoE credential push requires both "
-                    "username and password."
-                ),
-                action="Set WAN Config",
-                request=request,
-                ont_id=ont_id,
-            )
-        credential_result = web_network_ont_actions_service.set_pppoe_credentials(
-            db,
-            ont_id,
-            pppoe_username,
-            pppoe_password,
-            instance_index=instance_index,
-            wan_vlan=wan_vlan,
-            request=request,
-        )
-        result = ActionResult(
-            success=wan_result.success and credential_result.success,
-            message=(
-                f"WAN service: {wan_result.message} PPPoE credentials: "
-                f"{credential_result.message}"
-            ),
-            data={
-                "wan": wan_result.data,
-                "pppoe_credentials": credential_result.data,
-            },
-            waiting=(
-                (wan_result.waiting or credential_result.waiting)
-                and wan_result.success
-                and credential_result.success
-            ),
-        )
     return _action_result_response(
         result=result,
         request=request,

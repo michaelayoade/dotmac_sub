@@ -296,6 +296,97 @@ def configure_wan_config(
     return result
 
 
+def configure_wan_with_pppoe(
+    db: Session,
+    ont_id: str,
+    *,
+    wan_mode: str,
+    wan_vlan: int | None = None,
+    ip_address: str | None = None,
+    subnet_mask: str | None = None,
+    gateway: str | None = None,
+    dns_servers: str | None = None,
+    instance_index: int = 1,
+    pppoe_username: str | None = None,
+    pppoe_password: str | None = None,
+    request: Request | None = None,
+) -> ActionResult:
+    """Configure WAN settings and optionally push PPPoE credentials.
+
+    This method orchestrates WAN configuration and PPPoE credential push
+    as a single logical operation. For PPPoE mode, if credentials are
+    provided, both username and password must be supplied.
+    """
+    # First configure the WAN settings
+    wan_result = configure_wan_config(
+        db,
+        ont_id,
+        wan_mode=wan_mode,
+        wan_vlan=wan_vlan,
+        ip_address=ip_address,
+        subnet_mask=subnet_mask,
+        gateway=gateway,
+        dns_servers=dns_servers,
+        instance_index=instance_index,
+        request=request,
+    )
+
+    # If WAN config failed or no PPPoE credentials provided, return WAN result
+    if not wan_result.success:
+        return wan_result
+
+    # Check if PPPoE credentials should be pushed
+    has_username = bool(pppoe_username)
+    has_password = bool(pppoe_password)
+
+    if wan_mode != "pppoe" or (not has_username and not has_password):
+        return wan_result
+
+    # For PPPoE mode with credentials, both must be provided
+    if has_username != has_password:
+        return ActionResult(
+            success=False,
+            message=(
+                f"{wan_result.message} PPPoE credential push requires both "
+                "username and password."
+            ),
+            data={"wan": wan_result.data},
+            waiting=False,
+        )
+
+    # Push PPPoE credentials
+    credential_result = set_pppoe_credentials(
+        db,
+        ont_id,
+        pppoe_username,
+        pppoe_password,
+        instance_index=instance_index,
+        wan_vlan=wan_vlan,
+        request=request,
+    )
+
+    # Combine results
+    combined_success = wan_result.success and credential_result.success
+    combined_waiting = (
+        (wan_result.waiting or credential_result.waiting)
+        and wan_result.success
+        and credential_result.success
+    )
+
+    return ActionResult(
+        success=combined_success,
+        message=(
+            f"WAN service: {wan_result.message} "
+            f"PPPoE credentials: {credential_result.message}"
+        ),
+        data={
+            "wan": wan_result.data,
+            "pppoe_credentials": credential_result.data,
+        },
+        waiting=combined_waiting,
+    )
+
+
 def set_pppoe_credentials(
     db: Session,
     ont_id: str,
